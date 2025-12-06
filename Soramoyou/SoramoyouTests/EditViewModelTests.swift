@@ -245,3 +245,4 @@ class MockFirestoreService: FirestoreServiceProtocol {
     func searchPosts(hashtag: String?, color: String?, timeOfDay: TimeOfDay?, skyType: SkyType?, colorThreshold: Double?) async throws -> [Post] { return [] }
 }
 
+

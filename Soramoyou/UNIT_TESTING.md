@@ -260,3 +260,4 @@ xcodebuild test -scheme Soramoyou -destination 'platform=iOS Simulator,name=iPho
 2. **非同期テスト**: `async/await`を使用するテストは`XCTest`の非同期テスト機能を使用
 3. **メインスレッド**: ViewModelのテストは`@MainActor`を使用してメインスレッドで実行
 
+

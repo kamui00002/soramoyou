@@ -151,3 +151,4 @@ Firebase Consoleの「Storage」>「ルール」タブで、ルールのシミ�
 - **Phase 2**: プライベート投稿の画像を非公開にする場合、Storage Rulesを更新
 - **Phase 2**: フォロワー投稿の画像をフォロワーのみ閲覧可能にする場合、Storage Rulesを更新
 
+

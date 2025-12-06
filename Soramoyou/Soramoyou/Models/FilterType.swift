@@ -37,3 +37,4 @@ enum FilterType: String, Codable, CaseIterable {
     }
 }
 
+

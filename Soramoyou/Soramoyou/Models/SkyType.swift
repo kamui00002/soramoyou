@@ -27,3 +27,4 @@ enum SkyType: String, Codable, CaseIterable {
     }
 }
 
+

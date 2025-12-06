@@ -191,3 +191,4 @@ class MockFirestoreServiceForSearch: FirestoreServiceProtocol {
     func searchBySkyType(_ skyType: SkyType) async throws -> [Post] { return [] }
 }
 
+

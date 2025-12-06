@@ -122,3 +122,4 @@ Firebase Consoleの「Firestore Database」>「ルール」タブで、ルール
 - **Phase 2**: フォロワー機能実装後、フォロワー投稿の読み取りルールを更新
 - **Phase 2**: いいね・コメント機能実装後、関連するSecurity Rulesを追加
 
+

@@ -160,3 +160,4 @@ func testRealFirebaseIntegration() async throws {
 3. **メインスレッド**: ViewModelのテストは`@MainActor`を使用してメインスレッドで実行
 4. **モックの制限**: モックを使用したテストは、実際のサービスとの動作の違いに注意が必要です
 
+
