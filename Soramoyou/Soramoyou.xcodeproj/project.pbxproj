@@ -18,24 +18,12 @@
 
 /* Begin PBXFileReference section */
 		E051C9D62EE497CA00CC78AB /* Soramoyou.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Soramoyou.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		9E295B769DDC4DEDAEA4B422 /* SoramoyouTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SoramoyouTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		D75B7B7367A04B24A51DB57D /* SoramoyouUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SoramoyouUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E051C9D82EE497CA00CC78AB /* Soramoyou */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Soramoyou;
-		sourceTree = "<group>";
-		};
-		15100AD28C534F9C82F6D431 /* SoramoyouTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = SoramoyouTests;
-			sourceTree = "<group>";
-		};
-		C4C7346B3CA447068651AC19 /* SoramoyouUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = SoramoyouUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -55,21 +43,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-
-		C4476676F5AF4E39B23CCEB0 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		A2FA2534D652402F81FF60E6 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};/* End PBXFrameworksBuildPhase section */
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		E051C9CD2EE497CA00CC78AB = {
@@ -77,9 +51,6 @@
 			children = (
 				E051C9D82EE497CA00CC78AB /* Soramoyou */,
 				E051C9D72EE497CA00CC78AB /* Products */,
-			
-			E3DC2D138EA64B428ED35917 /* SoramoyouTests */,
-			7F90913E791E4798AC8EBEEC /* SoramoyouUITests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -123,89 +94,6 @@
 			productReference = E051C9D62EE497CA00CC78AB /* Soramoyou.app */;
 			productType = "com.apple.product-type.application";
 		};
-
-		D65E897595FD46559102C241 /* SoramoyouTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = D064B775833C4F35A3E852B2 /* Build configuration list for PBXNativeTarget "SoramoyouTests" */;
-			buildPhases = (
-				218BEDD08B9744AEA5F739DE /* Sources */,
-				C4476676F5AF4E39B23CCEB0 /* Frameworks */,
-				561D4C6202C243E882823307 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				6018FFB8ADA042908F7F3561 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				15100AD28C534F9C82F6D431 /* SoramoyouTests */,
-			);
-			name = SoramoyouTests;
-			packageProductDependencies = (
-				E051CA482EE49ACB00CC78AB /* FirebaseAuth */,
-				E051CA4C2EE49ACB00CC78AB /* FirebaseFirestore */,
-				E051CA4A2EE49ACB00CC78AB /* FirebaseCrashlytics */,
-				E051CA462EE49ACB00CC78AB /* FirebaseAnalytics */,
-				E051CA4F2EE49B0200CC78AB /* Kingfisher */,
-				E051CA522EE49B3400CC78AB /* GoogleMobileAds */,
-			);
-			productName = SoramoyouTests;
-			productReference = 9E295B769DDC4DEDAEA4B422 /* SoramoyouTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
-		82858D45CB874FB9BF73607B /* SoramoyouUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 5927E52BAAFD423682C7DFBF /* Build configuration list for PBXNativeTarget "SoramoyouUITests" */;
-			buildPhases = (
-				105BD88A4878414A926B8CCC /* Sources */,
-				A2FA2534D652402F81FF60E6 /* Frameworks */,
-				60999F5E201C4CD2B7E9BA9D /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				3D251E6A679B43888CFCAB37 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				C4C7346B3CA447068651AC19 /* SoramoyouUITests */,
-			);
-			name = SoramoyouUITests;
-			packageProductDependencies = (
-			);
-			productName = SoramoyouUITests;
-			productReference = D75B7B7367A04B24A51DB57D /* SoramoyouUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
-/* Begin PBXContainerItemProxy section */
-		6018FFB8ADA042908F7F3561 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = E051C9CE2EE497CA00CC78AB /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = E051C9D52EE497CA00CC78AB;
-			remoteInfo = Soramoyou;
-		};
-		3D251E6A679B43888CFCAB37 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = E051C9CE2EE497CA00CC78AB /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = E051C9D52EE497CA00CC78AB;
-			remoteInfo = Soramoyou;
-		};
-/* End PBXContainerItemProxy section */
-
-/* Begin PBXTargetDependency section */
-		6018FFB8ADA042908F7F3561 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = E051C9D52EE497CA00CC78AB /* Soramoyou */;
-			targetProxy = 6018FFB8ADA042908F7F3561 /* PBXContainerItemProxy */;
-		};
-		3D251E6A679B43888CFCAB37 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = E051C9D52EE497CA00CC78AB /* Soramoyou */;
-			targetProxy = 3D251E6A679B43888CFCAB37 /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
-
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -218,16 +106,7 @@
 				TargetAttributes = {
 					E051C9D52EE497CA00CC78AB = {
 						CreatedOnToolsVersion = 26.0;
-					
-			D65E897595FD46559102C241 = {
-				CreatedOnToolsVersion = 26.0;
-				TestTargetID = E051C9D52EE497CA00CC78AB;
-			};
-			82858D45CB874FB9BF73607B = {
-				CreatedOnToolsVersion = 26.0;
-				TestTargetID = E051C9D52EE497CA00CC78AB;
-			};
-			};
+					};
 				};
 			};
 			buildConfigurationList = E051C9D12EE497CA00CC78AB /* Build configuration list for PBXProject "Soramoyou" */;
@@ -250,8 +129,6 @@
 			projectRoot = "";
 			targets = (
 				E051C9D52EE497CA00CC78AB /* Soramoyou */,
-				D65E897595FD46559102C241 /* SoramoyouTests */,
-				82858D45CB874FB9BF73607B /* SoramoyouUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -264,21 +141,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-
-		561D4C6202C243E882823307 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		60999F5E201C4CD2B7E9BA9D /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};/* End PBXResourcesBuildPhase section */
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		E051C9D22EE497CA00CC78AB /* Sources */ = {
@@ -288,21 +151,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-
-		218BEDD08B9744AEA5F739DE /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		105BD88A4878414A926B8CCC /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};/* End PBXSourcesBuildPhase section */
+/* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
 		E051C9DF2EE497CB00CC78AB /* Debug */ = {
@@ -490,95 +339,7 @@
 			};
 			name = Release;
 		};
-
-		30D27324CFAB4333AA1F5852 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = B7F79FDM78;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.SoramoyouTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Soramoyou.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Soramoyou";
-			};
-			name = Debug;
-		};
-		94D843ECDA29482CB196640F /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = B7F79FDM78;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-			);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.SoramoyouTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Soramoyou.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Soramoyou";
-			};
-			name = Release;
-		};
-		3C6313E5E9FF4C6E904BA9EC /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = B7F79FDM78;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-			);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.SoramoyouUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Soramoyou;
-			};
-			name = Debug;
-		};
-		7BE628781A6F47989ED1E5BA /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = B7F79FDM78;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-			);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.SoramoyouUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Soramoyou;
-			};
-			name = Release;
-		};/* End XCBuildConfiguration section */
+/* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
 		E051C9D12EE497CA00CC78AB /* Build configuration list for PBXProject "Soramoyou" */ = {
@@ -599,25 +360,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-
-		D064B775833C4F35A3E852B2 /* Build configuration list for PBXNativeTarget "SoramoyouTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				30D27324CFAB4333AA1F5852 /* Debug */,
-				94D843ECDA29482CB196640F /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		5927E52BAAFD423682C7DFBF /* Build configuration list for PBXNativeTarget "SoramoyouUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				3C6313E5E9FF4C6E904BA9EC /* Debug */,
-				7BE628781A6F47989ED1E5BA /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};/* End XCConfigurationList section */
+/* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
 		E051CA432EE49ACB00CC78AB /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
