@@ -7,6 +7,7 @@
 
 import Foundation
 import FirebaseAuth
+import FirebaseFirestore
 
 struct User: Identifiable, Codable {
     let id: String
@@ -64,5 +65,98 @@ struct User: Identifiable, Codable {
         self.createdAt = Date()
         self.updatedAt = Date()
     }
+    
+    // MARK: - Firestore Mapping
+    
+    /// Firestoreドキュメントデータに変換
+    func toFirestoreData() -> [String: Any] {
+        var data: [String: Any] = [
+            "userId": id,
+            "createdAt": Timestamp(date: createdAt),
+            "updatedAt": Timestamp(date: updatedAt)
+        ]
+        
+        if let email = email {
+            data["email"] = email
+        }
+        
+        if let displayName = displayName {
+            data["displayName"] = displayName
+        }
+        
+        if let photoURL = photoURL {
+            data["photoURL"] = photoURL
+        }
+        
+        if let bio = bio {
+            data["bio"] = bio
+        }
+        
+        if let customEditTools = customEditTools {
+            data["customEditTools"] = customEditTools
+        }
+        
+        if let customEditToolsOrder = customEditToolsOrder {
+            data["customEditToolsOrder"] = customEditToolsOrder
+        }
+        
+        data["followersCount"] = followersCount
+        data["followingCount"] = followingCount
+        data["postsCount"] = postsCount
+        
+        return data
+    }
+    
+    /// Firestoreドキュメントデータから初期化
+    init(from documentData: [String: Any]) throws {
+        guard let userId = documentData["userId"] as? String else {
+            throw UserModelError.missingUserId
+        }
+        
+        self.id = userId
+        self.email = documentData["email"] as? String
+        self.displayName = documentData["displayName"] as? String
+        self.photoURL = documentData["photoURL"] as? String
+        self.bio = documentData["bio"] as? String
+        self.customEditTools = documentData["customEditTools"] as? [String]
+        self.customEditToolsOrder = documentData["customEditToolsOrder"] as? [String]
+        self.followersCount = documentData["followersCount"] as? Int ?? 0
+        self.followingCount = documentData["followingCount"] as? Int ?? 0
+        self.postsCount = documentData["postsCount"] as? Int ?? 0
+        
+        // TimestampからDateに変換
+        if let createdAtTimestamp = documentData["createdAt"] as? Timestamp {
+            self.createdAt = createdAtTimestamp.dateValue()
+        } else {
+            self.createdAt = Date()
+        }
+        
+        if let updatedAtTimestamp = documentData["updatedAt"] as? Timestamp {
+            self.updatedAt = updatedAtTimestamp.dateValue()
+        } else {
+            self.updatedAt = Date()
+        }
+    }
+    
+    /// Firestore DocumentSnapshotから初期化
+    init?(from document: DocumentSnapshot) {
+        guard let data = document.data() else {
+            return nil
+        }
+        
+        do {
+            try self.init(from: data)
+        } catch {
+            return nil
+        }
+    }
 }
+
+// MARK: - UserModelError
+
+enum UserModelError: Error {
+    case missingUserId
+    case invalidData
+}
+
 

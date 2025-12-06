@@ -135,3 +135,4 @@ service firebase.storage {
 - `GoogleService-Info.plist`は`.gitignore`に追加済みです。Gitにコミットしないでください。
 - セキュリティルールは本番環境では適切に設定してください（テストモードは開発時のみ使用）。
 
+

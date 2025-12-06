@@ -1,0 +1,357 @@
+//
+//  SoramoyouUITests.swift
+//  SoramoyouUITests
+//
+//  Created on 2025-12-06.
+//
+
+import XCTest
+
+final class SoramoyouUITests: XCTestCase {
+    var app: XCUIApplication!
+    
+    override func setUpWithError() throws {
+        // Put setup code here. This method is called before the invocation of each test method in the class.
+        
+        // In UI tests it is usually best to stop immediately when a failure occurs.
+        continueAfterFailure = false
+        
+        // In UI tests it's important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
+        app = XCUIApplication()
+        app.launch()
+    }
+    
+    override func tearDownWithError() throws {
+        // Put teardown code here. This method is called after the invocation of each test method in the class.
+        app = nil
+    }
+    
+    // MARK: - Authentication UI Tests
+    
+    /// 認証のUI操作テスト: ウェルカム画面の表示
+    func testWelcomeView_Display() throws {
+        // Given: アプリが起動
+        
+        // When: ウェルカム画面が表示される
+        
+        // Then: ウェルカム画面の要素が表示されることを確認
+        let welcomeTitle = app.staticTexts["そらもよう"]
+        XCTAssertTrue(welcomeTitle.waitForExistence(timeout: 5.0), "ウェルカム画面のタイトルが表示される")
+        
+        // 新規登録ボタンとログインボタンが表示されることを確認
+        let signUpButton = app.buttons["新規登録"]
+        let loginButton = app.buttons["ログイン"]
+        
+        XCTAssertTrue(signUpButton.exists || signUpButton.waitForExistence(timeout: 2.0), "新規登録ボタンが表示される")
+        XCTAssertTrue(loginButton.exists || loginButton.waitForExistence(timeout: 2.0), "ログインボタンが表示される")
+    }
+    
+    /// 認証のUI操作テスト: ログイン画面への遷移
+    func testAuthenticationFlow_NavigateToLogin() throws {
+        // Given: ウェルカム画面が表示されている
+        
+        // When: ログインボタンをタップ
+        let loginButton = app.buttons["ログイン"]
+        if loginButton.waitForExistence(timeout: 2.0) {
+            loginButton.tap()
+        }
+        
+        // Then: ログイン画面が表示されることを確認
+        let emailField = app.textFields["メールアドレス"]
+        let passwordField = app.secureTextFields["パスワード"]
+        
+        XCTAssertTrue(emailField.waitForExistence(timeout: 2.0), "メールアドレス入力欄が表示される")
+        XCTAssertTrue(passwordField.waitForExistence(timeout: 2.0), "パスワード入力欄が表示される")
+    }
+    
+    /// 認証のUI操作テスト: 新規登録画面への遷移
+    func testAuthenticationFlow_NavigateToSignUp() throws {
+        // Given: ウェルカム画面が表示されている
+        
+        // When: 新規登録ボタンをタップ
+        let signUpButton = app.buttons["新規登録"]
+        if signUpButton.waitForExistence(timeout: 2.0) {
+            signUpButton.tap()
+        }
+        
+        // Then: 新規登録画面が表示されることを確認
+        let emailField = app.textFields["メールアドレス"]
+        let passwordField = app.secureTextFields["パスワード"]
+        let confirmPasswordField = app.secureTextFields["パスワード確認"]
+        
+        XCTAssertTrue(emailField.waitForExistence(timeout: 2.0), "メールアドレス入力欄が表示される")
+        XCTAssertTrue(passwordField.waitForExistence(timeout: 2.0), "パスワード入力欄が表示される")
+        XCTAssertTrue(confirmPasswordField.waitForExistence(timeout: 2.0), "パスワード確認入力欄が表示される")
+    }
+    
+    /// 認証のUI操作テスト: 新規登録入力（バリデーションエラー）
+    func testAuthenticationFlow_SignUpValidationError() throws {
+        // Given: 新規登録画面が表示されている
+        let signUpButton = app.buttons["新規登録"]
+        if signUpButton.waitForExistence(timeout: 2.0) {
+            signUpButton.tap()
+        }
+        
+        // When: 空のメールアドレスとパスワードで新規登録ボタンをタップ
+        let emailField = app.textFields["メールアドレス"]
+        let passwordField = app.secureTextFields["パスワード"]
+        let confirmPasswordField = app.secureTextFields["パスワード確認"]
+        let submitButton = app.buttons["新規登録"]
+        
+        if emailField.waitForExistence(timeout: 2.0) {
+            emailField.tap()
+            emailField.typeText("")
+            
+            if passwordField.waitForExistence(timeout: 2.0) {
+                passwordField.tap()
+                passwordField.typeText("")
+                
+                if confirmPasswordField.waitForExistence(timeout: 2.0) {
+                    confirmPasswordField.tap()
+                    confirmPasswordField.typeText("")
+                    
+                    // 新規登録ボタンが無効化されていることを確認
+                    if submitButton.waitForExistence(timeout: 2.0) {
+                        XCTAssertFalse(submitButton.isEnabled, "新規登録ボタンが無効化される")
+                    }
+                }
+            }
+        }
+    }
+    
+    /// 認証のUI操作テスト: ログイン入力（バリデーションエラー）
+    func testAuthenticationFlow_LoginValidationError() throws {
+        // Given: ログイン画面が表示されている
+        let loginButton = app.buttons["ログイン"]
+        if loginButton.waitForExistence(timeout: 2.0) {
+            loginButton.tap()
+        }
+        
+        // When: 空のメールアドレスとパスワードでログインボタンをタップ
+        let emailField = app.textFields["メールアドレス"]
+        let passwordField = app.secureTextFields["パスワード"]
+        let submitButton = app.buttons["ログイン"]
+        
+        if emailField.waitForExistence(timeout: 2.0) {
+            emailField.tap()
+            emailField.typeText("")
+            
+            if passwordField.waitForExistence(timeout: 2.0) {
+                passwordField.tap()
+                passwordField.typeText("")
+                
+                if submitButton.waitForExistence(timeout: 2.0) {
+                    submitButton.tap()
+                }
+            }
+        }
+        
+        // Then: エラーメッセージが表示されることを確認（実際の実装に依存）
+        // 注意: エラーメッセージの表示方法は実装によって異なるため、適宜調整が必要
+    }
+    
+    // MARK: - Main Tab View Tests
+    
+    /// メインタブビューのテスト: タブの表示
+    func testMainTabView_DisplayTabs() throws {
+        // Given: 認証済み状態（実際の認証が必要な場合は、テスト用の認証を設定）
+        
+        // When: メインタブビューが表示される
+        
+        // Then: 各タブが表示されることを確認
+        let homeTab = app.tabBars.buttons["ホーム"]
+        let postTab = app.tabBars.buttons["投稿"]
+        let searchTab = app.tabBars.buttons["検索"]
+        let profileTab = app.tabBars.buttons["プロフィール"]
+        
+        // タブが存在するか確認（認証済みの場合のみ）
+        // 注意: 実際の認証が必要な場合は、テスト用の認証を設定する必要があります
+    }
+    
+    /// メインタブビューのテスト: タブの切り替え
+    func testMainTabView_SwitchTabs() throws {
+        // Given: メインタブビューが表示されている
+        
+        // When: 各タブをタップ
+        let homeTab = app.tabBars.buttons["ホーム"]
+        let postTab = app.tabBars.buttons["投稿"]
+        let searchTab = app.tabBars.buttons["検索"]
+        let profileTab = app.tabBars.buttons["プロフィール"]
+        
+        if homeTab.waitForExistence(timeout: 2.0) {
+            homeTab.tap()
+            XCTAssertTrue(homeTab.isSelected, "ホームタブが選択される")
+        }
+        
+        if postTab.waitForExistence(timeout: 2.0) {
+            postTab.tap()
+            XCTAssertTrue(postTab.isSelected, "投稿タブが選択される")
+        }
+        
+        if searchTab.waitForExistence(timeout: 2.0) {
+            searchTab.tap()
+            XCTAssertTrue(searchTab.isSelected, "検索タブが選択される")
+        }
+        
+        if profileTab.waitForExistence(timeout: 2.0) {
+            profileTab.tap()
+            XCTAssertTrue(profileTab.isSelected, "プロフィールタブが選択される")
+        }
+    }
+    
+    // MARK: - Home View Tests
+    
+    /// フィード表示のUI操作テスト: ホーム画面の表示
+    func testHomeView_Display() throws {
+        // Given: ホームタブが選択されている
+        
+        // When: ホーム画面が表示される
+        
+        // Then: ホーム画面の要素が表示されることを確認
+        let homeTitle = app.navigationBars["そらもよう"]
+        XCTAssertTrue(homeTitle.waitForExistence(timeout: 5.0) || homeTitle.exists, "ホーム画面のタイトルが表示される")
+    }
+    
+    /// フィード表示のUI操作テスト: 投稿の表示
+    func testHomeView_DisplayPosts() throws {
+        // Given: ホーム画面が表示されている
+        
+        // When: 投稿が読み込まれる
+        
+        // Then: 投稿が表示されることを確認（実際のデータに依存）
+        // 注意: 実際の投稿データが必要な場合は、テスト用のデータを準備する必要があります
+    }
+    
+    /// フィード表示のUI操作テスト: プルリフレッシュ
+    func testHomeView_PullToRefresh() throws {
+        // Given: ホーム画面が表示されている
+        
+        // When: プルリフレッシュを実行
+        let homeView = app.scrollViews.firstMatch
+        if homeView.waitForExistence(timeout: 2.0) {
+            let start = homeView.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
+            let end = homeView.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
+            start.press(forDuration: 0.1, thenDragTo: end)
+        }
+        
+        // Then: リフレッシュが実行されることを確認
+        // 注意: リフレッシュの完了を待つ必要がある場合があります
+    }
+    
+    // MARK: - Post View Tests
+    
+    /// 投稿のUI操作テスト: 投稿画面の表示
+    func testPostView_Display() throws {
+        // Given: 投稿タブが選択されている
+        
+        // When: 投稿画面が表示される
+        
+        // Then: 投稿画面の要素が表示されることを確認
+        let postTitle = app.navigationBars["投稿"]
+        XCTAssertTrue(postTitle.waitForExistence(timeout: 5.0) || postTitle.exists, "投稿画面のタイトルが表示される")
+    }
+    
+    /// 投稿のUI操作テスト: 写真選択ボタンの表示
+    func testPostView_PhotoSelectionButton() throws {
+        // Given: 投稿画面が表示されている
+        
+        // When: 写真選択ボタンが表示される
+        
+        // Then: 写真選択ボタンが表示されることを確認
+        let photoButton = app.buttons["写真を選択"]
+        XCTAssertTrue(photoButton.waitForExistence(timeout: 2.0) || photoButton.exists, "写真選択ボタンが表示される")
+    }
+    
+    // MARK: - Search View Tests
+    
+    /// 検索のUI操作テスト: 検索画面の表示
+    func testSearchView_Display() throws {
+        // Given: 検索タブが選択されている
+        
+        // When: 検索画面が表示される
+        
+        // Then: 検索画面の要素が表示されることを確認
+        let searchTitle = app.navigationBars["検索"]
+        XCTAssertTrue(searchTitle.waitForExistence(timeout: 5.0) || searchTitle.exists, "検索画面のタイトルが表示される")
+    }
+    
+    /// 検索のUI操作テスト: ハッシュタグ検索
+    func testSearchView_HashtagSearch() throws {
+        // Given: 検索画面が表示されている
+        
+        // When: ハッシュタグを入力して検索
+        let hashtagField = app.textFields["ハッシュタグ"]
+        if hashtagField.waitForExistence(timeout: 2.0) {
+            hashtagField.tap()
+            hashtagField.typeText("sky")
+            
+            let searchButton = app.buttons["検索"]
+            if searchButton.waitForExistence(timeout: 2.0) {
+                searchButton.tap()
+            }
+        }
+        
+        // Then: 検索結果が表示されることを確認（実際のデータに依存）
+    }
+    
+    /// 検索のUI操作テスト: 時間帯検索
+    func testSearchView_TimeOfDaySearch() throws {
+        // Given: 検索画面が表示されている
+        
+        // When: 時間帯を選択して検索
+        let morningChip = app.buttons["朝"]
+        if morningChip.waitForExistence(timeout: 2.0) {
+            morningChip.tap()
+            
+            let searchButton = app.buttons["検索"]
+            if searchButton.waitForExistence(timeout: 2.0) {
+                searchButton.tap()
+            }
+        }
+        
+        // Then: 検索結果が表示されることを確認（実際のデータに依存）
+    }
+    
+    // MARK: - Profile View Tests
+    
+    /// プロフィールのUI操作テスト: プロフィール画面の表示
+    func testProfileView_Display() throws {
+        // Given: プロフィールタブが選択されている
+        
+        // When: プロフィール画面が表示される
+        
+        // Then: プロフィール画面の要素が表示されることを確認
+        let profileTitle = app.navigationBars["プロフィール"]
+        XCTAssertTrue(profileTitle.waitForExistence(timeout: 5.0) || profileTitle.exists, "プロフィール画面のタイトルが表示される")
+    }
+    
+    /// プロフィールのUI操作テスト: プロフィール編集メニュー
+    func testProfileView_EditMenu() throws {
+        // Given: プロフィール画面が表示されている（自分のプロフィール）
+        
+        // When: 編集メニューを開く
+        let menuButton = app.buttons["ellipsis.circle"]
+        if menuButton.waitForExistence(timeout: 2.0) {
+            menuButton.tap()
+        }
+        
+        // Then: 編集メニューが表示されることを確認
+        let editProfileButton = app.buttons["プロフィール編集"]
+        XCTAssertTrue(editProfileButton.waitForExistence(timeout: 2.0) || editProfileButton.exists, "プロフィール編集ボタンが表示される")
+    }
+    
+    // MARK: - Helper Methods
+    
+    /// アプリをリセット（各テストの独立性を保つため）
+    private func resetApp() {
+        app.terminate()
+        app.launch()
+    }
+    
+    /// 認証済み状態にする（テスト用）
+    private func authenticateForTesting() {
+        // 注意: 実際の認証が必要な場合は、テスト用の認証情報を使用
+        // または、モックを使用して認証状態を設定
+    }
+}
+

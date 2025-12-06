@@ -29,8 +29,23 @@ struct LoginView: View {
                 
                 if !errorMessage.isEmpty {
                     Section {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
+                            Text(errorMessage)
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
+                
+                if let authError = authViewModel.errorMessage, !authError.isEmpty {
+                    Section {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
+                            Text(authError)
+                                .foregroundColor(.red)
+                        }
                     }
                 }
                 
@@ -76,4 +91,5 @@ struct LoginView_Previews: PreviewProvider {
             .environmentObject(AuthViewModel())
     }
 }
+
 
