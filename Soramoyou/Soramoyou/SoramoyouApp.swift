@@ -28,14 +28,8 @@ struct SoramoyouApp: App {
     
     /// Crashlyticsの設定
     private func setupCrashlytics() {
-        // デバッグビルドではCrashlyticsを無効化（オプション）
-        #if DEBUG
-        // デバッグモードではCrashlyticsを無効化しない（開発中もエラーを記録）
-        #endif
-        
-        // カスタムキーを設定
-        Crashlytics.crashlytics().setCustomValue("iOS", forKey: "platform")
-        Crashlytics.crashlytics().setCustomValue(Bundle.main.bundleVersion ?? "unknown", forKey: "app_version")
+        // CrashlyticsはFirebaseApp.configure()で自動的に有効化される
+        // 追加の設定が必要な場合はここに記述
     }
     
     var body: some Scene {
@@ -45,5 +39,3 @@ struct SoramoyouApp: App {
         }
     }
 }
-
-
