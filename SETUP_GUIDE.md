@@ -64,13 +64,30 @@
 
 ### 1.3 テストターゲットにテストファイルを追加
 
+⚠️ **重要**: この手順を実行する前に、Xcodeでテストターゲットを作成する必要があります。詳細は`ADD_TEST_TARGETS.md`を参照してください。
+
+**テストターゲットが既に作成されている場合:**
+
 1. **SoramoyouTestsターゲットに追加**
-   - `Soramoyou/SoramoyouTests/`フォルダ内のすべてのテストファイルを追加
-   - ターゲット: `SoramoyouTests`を選択
+   - プロジェクトナビゲーターで`SoramoyouTests`グループを右クリック
+   - "Add Files to Soramoyou..."を選択
+   - `Soramoyou/SoramoyouTests/`フォルダを選択
+   - ✅ "Copy items if needed"のチェックを外す（既に同じディレクトリにあるため）
+   - ✅ "Create groups"を選択
+   - ✅ "Add to targets: SoramoyouTests"にチェックを入れる
+   - "Finish"をクリック
 
 2. **SoramoyouUITestsターゲットに追加**
-   - `Soramoyou/SoramoyouUITests/`フォルダ内のテストファイルを追加
-   - ターゲット: `SoramoyouUITests`を選択
+   - プロジェクトナビゲーターで`SoramoyouUITests`グループを右クリック
+   - "Add Files to Soramoyou..."を選択
+   - `Soramoyou/SoramoyouUITests/SoramoyouUITests.swift`を選択
+   - ✅ "Copy items if needed"のチェックを外す
+   - ✅ "Create groups"を選択
+   - ✅ "Add to targets: SoramoyouUITests"にチェックを入れる
+   - "Finish"をクリック
+
+**テストターゲットがまだ作成されていない場合:**
+- まず`ADD_TEST_TARGETS.md`の手順に従ってテストターゲットを作成してください
 
 ## ステップ2: Swift Package Managerで依存関係を追加
 
@@ -118,8 +135,19 @@
    - "General"タブ > "Frameworks, Libraries, and Embedded Content"
    - 追加したパッケージが表示されていることを確認
 
-2. **テストターゲットにも追加**
-   - `SoramoyouTests`ターゲットにも同様に依存関係を追加
+2. **テストターゲットにも追加（テストターゲット作成後）**
+   - ⚠️ **注意**: この手順は、ステップ1.3でテストターゲットを作成した後に実行してください
+   - `SoramoyouTests`ターゲットを選択
+   - "General"タブ > "Frameworks, Libraries, and Embedded Content"
+   - "+"ボタンをクリックして、メインターゲットと同じパッケージ依存関係を追加:
+     - FirebaseAuth
+     - FirebaseFirestore
+     - FirebaseStorage
+     - FirebaseCrashlytics
+     - FirebaseAnalytics
+     - Kingfisher
+     - GoogleMobileAds
+   - `SoramoyouUITests`ターゲットにも同様に依存関係を追加（必要に応じて）
 
 ## ステップ3: Firebaseプロジェクトの設定
 
