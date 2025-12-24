@@ -11,7 +11,7 @@ import FirebaseAnalytics
 import os.log
 
 /// ロギングとモニタリングサービス
-class LoggingService {
+class LoggingService: LoggingServiceProtocol {
     static let shared = LoggingService()
     
     private let logger = Logger(subsystem: "com.soramoyou", category: "LoggingService")
@@ -154,19 +154,18 @@ class LoggingService {
     }
     
     /// ユーザーIDを設定
-    func setUserID(_ userID: String?) {
-        // ユーザーIDは機密情報ではないが、念のため検証
-        guard let userID = userID, !userID.isEmpty else {
+    func setUserId(_ userId: String) {
+        guard !userId.isEmpty else {
             Analytics.setUserID(nil)
             Crashlytics.crashlytics().setUserID(nil)
             return
         }
-        
-        Analytics.setUserID(userID)
-        Crashlytics.crashlytics().setUserID(userID)
-        
+
+        Analytics.setUserID(userId)
+        Crashlytics.crashlytics().setUserID(userId)
+
         // ログにも記録
-        logger.info("User ID set: \(userID)")
+        logger.info("User ID set: \(userId)")
     }
     
     // MARK: - Sanitization
