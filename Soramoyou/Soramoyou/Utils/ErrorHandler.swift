@@ -18,7 +18,10 @@ enum ErrorCategory {
 /// エラーの分類と処理を行う統一的なエラーハンドラー
 struct ErrorHandler {
     private static let logger = Logger(subsystem: "com.soramoyou", category: "ErrorHandler")
-    
+
+    /// ロギングサービス（テストでのモック注入を可能にするため）
+    static var loggingService: LoggingServiceProtocol = LoggingService.shared
+
     /// エラーを分類
     static func categorize(_ error: Error) -> ErrorCategory {
         // AuthError: ユーザーエラー
@@ -142,15 +145,15 @@ struct ErrorHandler {
         case .systemError:
             logger.error("\(logMessage)")
             // Crashlyticsにシステムエラーを記録
-            LoggingService.shared.recordError(error, context: context, userId: userId)
+            loggingService.recordError(error, context: context, userId: userId)
         case .businessError:
             logger.warning("\(logMessage)")
             // Crashlyticsにビジネスロジックエラーを記録（非致命的）
-            LoggingService.shared.recordNonFatalError(error, context: context, userId: userId)
+            loggingService.recordNonFatalError(error, context: context, userId: userId)
         }
-        
+
         // Firebase Analyticsにエラーイベントを記録
-        LoggingService.shared.logErrorEvent(error, context: context, category: category)
+        loggingService.logErrorEvent(error, context: context, category: category)
     }
     
     /// リトライ可能かどうかを判定
@@ -197,7 +200,7 @@ struct ErrorHandler {
                 
                 // 成功した場合、リトライ統計を記録
                 if attempt > 1 {
-                    LoggingService.shared.logRetryEvent(
+                    loggingService.logRetryEvent(
                         operation: operationName,
                         attempt: attempt,
                         success: true
@@ -211,7 +214,7 @@ struct ErrorHandler {
                 // リトライ不可能なエラーの場合は即座にthrow
                 guard isRetryable(error) else {
                     // リトライ不可能なエラーの場合も統計を記録
-                    LoggingService.shared.logRetryEvent(
+                    loggingService.logRetryEvent(
                         operation: operationName,
                         attempt: attempt,
                         success: false,
@@ -223,16 +226,16 @@ struct ErrorHandler {
                 // 最後の試行の場合はエラーをthrow
                 guard attempt < maxAttempts else {
                     // すべての試行が失敗した場合、リトライ統計を記録
-                    LoggingService.shared.logNetworkRetryStats(
+                    loggingService.logNetworkRetryStats(
                         operation: operationName,
                         totalAttempts: maxAttempts,
                         success: false
                     )
                     break
                 }
-                
+
                 // リトライイベントを記録
-                LoggingService.shared.logRetryEvent(
+                loggingService.logRetryEvent(
                     operation: operationName,
                     attempt: attempt,
                     success: false,

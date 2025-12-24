@@ -36,34 +36,57 @@ protocol ImageServiceProtocol {
 
 class ImageService: ImageServiceProtocol {
     private let context: CIContext
-    
+
+    // MARK: - Constants
+
+    private enum Constants {
+        // サイズ制限
+        static let analysisImageSize: CGFloat = 512          // 分析用画像サイズ（512x512）
+        static let thumbnailSize: CGFloat = 512              // サムネイルサイズ
+        static let maxFileSize: Int = 5 * 1024 * 1024       // 最大ファイルサイズ（5MB）
+
+        // 圧縮品質
+        static let minCompressionQuality: CGFloat = 0.5      // 最小圧縮品質
+        static let compressionQualityStep: CGFloat = 0.1     // 品質調整ステップ
+
+        // フィルター強度
+        static let defaultFilterIntensity: Float = 0.5       // デフォルトフィルター強度
+
+        // 色温度
+        static let minColorTemperature: Int = 2000           // 最小色温度（K）
+        static let maxColorTemperature: Int = 10000          // 最大色温度（K）
+        static let baseColorTemperature: Double = 6500       // 基準色温度
+        static let colorTemperatureRange: Double = 2000      // 色温度調整範囲
+
+        // McCamy's formula定数
+        static let mccamyConstantR: Double = 0.3320
+        static let mccamyConstantB: Double = 0.1858
+
+        // Sky detection閾値
+        static let lowBrightnessThreshold: Double = 0.3
+        static let highSaturationThreshold: Double = 0.5
+    }
+
     init(context: CIContext = CIContext()) {
         self.context = context
     }
-    
+
     // MARK: - Filter
     
     func applyFilter(_ filter: FilterType, to image: UIImage) async throws -> UIImage {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                do {
-                    guard let ciImage = CIImage(image: image) else {
-                        throw ImageServiceError.invalidImage
-                    }
-                    
-                    let filteredImage = try await self.processFilter(filter, on: ciImage)
-                    
-                    guard let cgImage = self.context.createCGImage(filteredImage, from: filteredImage.extent) else {
-                        throw ImageServiceError.processingFailed
-                    }
-                    
-                    let result = UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
-                    continuation.resume(returning: result)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+        return try await Task.detached(priority: .userInitiated) {
+            guard let ciImage = CIImage(image: image) else {
+                throw ImageServiceError.invalidImage
             }
-        }
+
+            let filteredImage = try await self.processFilter(filter, on: ciImage)
+
+            guard let cgImage = self.context.createCGImage(filteredImage, from: filteredImage.extent) else {
+                throw ImageServiceError.processingFailed
+            }
+
+            return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+        }.value
     }
     
     private func processFilter(_ filter: FilterType, on ciImage: CIImage) async throws -> CIImage {
@@ -139,13 +162,13 @@ class ImageService: ImageServiceProtocol {
         // セピア調
         let sepiaFilter = CIFilter.sepiaTone()
         sepiaFilter.inputImage = result
-        sepiaFilter.intensity = 0.5
+        sepiaFilter.intensity = Constants.defaultFilterIntensity
         result = sepiaFilter.outputImage ?? result
         
         // ビネット効果
         let vignetteFilter = CIFilter.vignette()
         vignetteFilter.inputImage = result
-        vignetteFilter.intensity = 0.5
+        vignetteFilter.intensity = Constants.defaultFilterIntensity
         vignetteFilter.radius = 1.0
         result = vignetteFilter.outputImage ?? result
         
@@ -180,26 +203,19 @@ class ImageService: ImageServiceProtocol {
     // MARK: - Edit Tools
     
     func applyEditTool(_ tool: EditTool, value: Float, to image: UIImage) async throws -> UIImage {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                do {
-                    guard let ciImage = CIImage(image: image) else {
-                        throw ImageServiceError.invalidImage
-                    }
-                    
-                    let editedImage = try await self.processEditTool(tool, value: value, on: ciImage)
-                    
-                    guard let cgImage = self.context.createCGImage(editedImage, from: editedImage.extent) else {
-                        throw ImageServiceError.processingFailed
-                    }
-                    
-                    let result = UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
-                    continuation.resume(returning: result)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+        return try await Task.detached(priority: .userInitiated) {
+            guard let ciImage = CIImage(image: image) else {
+                throw ImageServiceError.invalidImage
             }
-        }
+
+            let editedImage = try await self.processEditTool(tool, value: value, on: ciImage)
+
+            guard let cgImage = self.context.createCGImage(editedImage, from: editedImage.extent) else {
+                throw ImageServiceError.processingFailed
+            }
+
+            return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+        }.value
     }
     
     private func processEditTool(_ tool: EditTool, value: Float, on ciImage: CIImage) async throws -> CIImage {
@@ -279,7 +295,7 @@ class ImageService: ImageServiceProtocol {
         let filter = CIFilter.temperatureAndTint()
         filter.inputImage = image
         filter.neutral = CIVector(x: 6500, y: 0)
-        filter.targetNeutral = CIVector(x: 6500 + Double(value * 2000), y: 0)
+        filter.targetNeutral = CIVector(x: Constants.baseColorTemperature + Double(value) * Constants.colorTemperatureRange, y: 0)
         return filter.outputImage ?? image
     }
     
@@ -302,91 +318,83 @@ class ImageService: ImageServiceProtocol {
     // MARK: - Edit Settings
     
     func applyEditSettings(_ settings: EditSettings, to image: UIImage) async throws -> UIImage {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                do {
-                    // autoreleasepoolで中間オブジェクトを適切に解放
-                    let finalImage = try autoreleasepool {
-                        guard let ciImage = CIImage(image: image) else {
-                            throw ImageServiceError.invalidImage
-                        }
-
-                        var result = ciImage
-
-                        // フィルターを適用（autoreleasepoolで囲む）
-                        if let filter = settings.appliedFilter {
-                            result = try autoreleasepool {
-                                try await self.processFilter(filter, on: result)
-                            }
-                        }
-
-                        // 編集ツールを順次適用（各ツールごとにautoreleasepoolで囲む）
-                        if let brightness = settings.brightness {
-                            result = autoreleasepool {
-                                self.applyBrightness(brightness, to: result)
-                            }
-                        }
-                        if let contrast = settings.contrast {
-                            result = autoreleasepool {
-                                self.applyContrast(contrast, to: result)
-                            }
-                        }
-                        if let saturation = settings.saturation {
-                            result = autoreleasepool {
-                                self.applySaturation(saturation, to: result)
-                            }
-                        }
-                        if let exposure = settings.exposure {
-                            result = autoreleasepool {
-                                self.applyExposure(exposure, to: result)
-                            }
-                        }
-                        if let highlight = settings.highlight {
-                            result = autoreleasepool {
-                                self.applyHighlight(highlight, to: result)
-                            }
-                        }
-                        if let shadow = settings.shadow {
-                            result = autoreleasepool {
-                                self.applyShadow(shadow, to: result)
-                            }
-                        }
-                        if let warmth = settings.warmth {
-                            result = autoreleasepool {
-                                self.applyWarmth(warmth, to: result)
-                            }
-                        }
-                        if let sharpness = settings.sharpness {
-                            result = autoreleasepool {
-                                self.applySharpness(sharpness, to: result)
-                            }
-                        }
-                        if let vignette = settings.vignette {
-                            result = autoreleasepool {
-                                self.applyVignette(vignette, to: result)
-                            }
-                        }
-
-                        guard let cgImage = self.context.createCGImage(result, from: result.extent) else {
-                            throw ImageServiceError.processingFailed
-                        }
-
-                        return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
-                    }
-
-                    continuation.resume(returning: finalImage)
-                } catch {
-                    continuation.resume(throwing: error)
+        return try await Task.detached(priority: .userInitiated) {
+            // autoreleasepoolで中間オブジェクトを適切に解放
+            return try autoreleasepool {
+                guard let ciImage = CIImage(image: image) else {
+                    throw ImageServiceError.invalidImage
                 }
+
+                var result = ciImage
+
+                // フィルターを適用（autoreleasepoolで囲む）
+                if let filter = settings.appliedFilter {
+                    result = try autoreleasepool {
+                        try await self.processFilter(filter, on: result)
+                    }
+                }
+
+                // 編集ツールを順次適用（各ツールごとにautoreleasepoolで囲む）
+                if let brightness = settings.brightness {
+                    result = autoreleasepool {
+                        self.applyBrightness(brightness, to: result)
+                    }
+                }
+                if let contrast = settings.contrast {
+                    result = autoreleasepool {
+                        self.applyContrast(contrast, to: result)
+                    }
+                }
+                if let saturation = settings.saturation {
+                    result = autoreleasepool {
+                        self.applySaturation(saturation, to: result)
+                    }
+                }
+                if let exposure = settings.exposure {
+                    result = autoreleasepool {
+                        self.applyExposure(exposure, to: result)
+                    }
+                }
+                if let highlight = settings.highlight {
+                    result = autoreleasepool {
+                        self.applyHighlight(highlight, to: result)
+                    }
+                }
+                if let shadow = settings.shadow {
+                    result = autoreleasepool {
+                        self.applyShadow(shadow, to: result)
+                    }
+                }
+                if let warmth = settings.warmth {
+                    result = autoreleasepool {
+                        self.applyWarmth(warmth, to: result)
+                    }
+                }
+                if let sharpness = settings.sharpness {
+                    result = autoreleasepool {
+                        self.applySharpness(sharpness, to: result)
+                    }
+                }
+                if let vignette = settings.vignette {
+                    result = autoreleasepool {
+                        self.applyVignette(vignette, to: result)
+                    }
+                }
+
+                guard let cgImage = self.context.createCGImage(result, from: result.extent) else {
+                    throw ImageServiceError.processingFailed
+                }
+
+                return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
             }
-        }
+        }.value
     }
     
     // MARK: - Preview
     
     func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
         // まずサムネイルサイズにリサイズ
-        let thumbnailSize = CGSize(width: 512, height: 512)
+        let thumbnailSize = CGSize(width: Constants.thumbnailSize, height: Constants.thumbnailSize)
         let resizedImage = try await resizeImage(image, maxSize: thumbnailSize)
         
         // 編集設定を適用
@@ -396,98 +404,83 @@ class ImageService: ImageServiceProtocol {
     // MARK: - Compression & Resize
     
     func resizeImage(_ image: UIImage, maxSize: CGSize) async throws -> UIImage {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                let size = image.size
-                let aspectRatio = size.width / size.height
-                
-                var newSize: CGSize
-                if size.width > size.height {
-                    // 横長
-                    if size.width > maxSize.width {
-                        newSize = CGSize(width: maxSize.width, height: maxSize.width / aspectRatio)
-                    } else {
-                        newSize = size
-                    }
+        return try await Task.detached(priority: .userInitiated) {
+            let size = image.size
+            let aspectRatio = size.width / size.height
+
+            var newSize: CGSize
+            if size.width > size.height {
+                // 横長
+                if size.width > maxSize.width {
+                    newSize = CGSize(width: maxSize.width, height: maxSize.width / aspectRatio)
                 } else {
-                    // 縦長または正方形
-                    if size.height > maxSize.height {
-                        newSize = CGSize(width: maxSize.height * aspectRatio, height: maxSize.height)
-                    } else {
-                        newSize = size
-                    }
+                    newSize = size
                 }
-                
-                let renderer = UIGraphicsImageRenderer(size: newSize)
-                let resizedImage = renderer.image { _ in
-                    image.draw(in: CGRect(origin: .zero, size: newSize))
+            } else {
+                // 縦長または正方形
+                if size.height > maxSize.height {
+                    newSize = CGSize(width: maxSize.height * aspectRatio, height: maxSize.height)
+                } else {
+                    newSize = size
                 }
-                
-                continuation.resume(returning: resizedImage)
             }
-        }
+
+            let renderer = UIGraphicsImageRenderer(size: newSize)
+            return renderer.image { _ in
+                image.draw(in: CGRect(origin: .zero, size: newSize))
+            }
+        }.value
     }
     
     func compressImage(_ image: UIImage, quality: CGFloat) async throws -> Data {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                guard let imageData = image.jpegData(compressionQuality: quality) else {
-                    continuation.resume(throwing: ImageServiceError.compressionFailed)
-                    return
-                }
-                
-                // ファイルサイズが5MBを超える場合は品質を下げて再圧縮
-                let maxSize: Int = 5 * 1024 * 1024 // 5MB
-                if imageData.count > maxSize {
-                    var currentQuality = quality
-                    var compressedData = imageData
-                    
-                    while compressedData.count > maxSize && currentQuality > 0.5 {
-                        currentQuality -= 0.1
-                        if let newData = image.jpegData(compressionQuality: currentQuality) {
-                            compressedData = newData
-                        } else {
-                            break
-                        }
-                    }
-                    
-                    continuation.resume(returning: compressedData)
-                } else {
-                    continuation.resume(returning: imageData)
-                }
+        return try await Task.detached(priority: .userInitiated) {
+            guard let imageData = image.jpegData(compressionQuality: quality) else {
+                throw ImageServiceError.compressionFailed
             }
-        }
+
+            // ファイルサイズが5MBを超える場合は品質を下げて再圧縮
+            if imageData.count > Constants.maxFileSize {
+                var currentQuality = quality
+                var compressedData = imageData
+
+                while compressedData.count > Constants.maxFileSize && currentQuality > Constants.minCompressionQuality {
+                    currentQuality -= Constants.compressionQualityStep
+                    if let newData = image.jpegData(compressionQuality: currentQuality) {
+                        compressedData = newData
+                    } else {
+                        break
+                    }
+                }
+
+                return compressedData
+            } else {
+                return imageData
+            }
+        }.value
     }
     
     // MARK: - Analysis
     
     func extractColors(_ image: UIImage, maxCount: Int) async throws -> [String] {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                do {
-                    guard let ciImage = CIImage(image: image) else {
-                        throw ImageServiceError.invalidImage
-                    }
-                    
-                    // 画像をリサイズして処理を高速化（最大512x512）
-                    let resizedImage = try await self.resizeImage(image, maxSize: CGSize(width: 512, height: 512))
-                    guard let resizedCIImage = CIImage(image: resizedImage) else {
-                        throw ImageServiceError.invalidImage
-                    }
-                    
-                    // 色抽出用のフィルター
-                    let filter = CIFilter.areaAverage()
-                    filter.inputImage = resizedCIImage
-                    filter.extent = resizedCIImage.extent
-                    
-                    // K-means風の色抽出（簡易版）
-                    let colors = try await self.extractDominantColors(from: resizedCIImage, maxCount: maxCount)
-                    continuation.resume(returning: colors)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+        return try await Task.detached(priority: .userInitiated) {
+            guard let ciImage = CIImage(image: image) else {
+                throw ImageServiceError.invalidImage
             }
-        }
+
+            // 画像をリサイズして処理を高速化
+            let resizedImage = try await self.resizeImage(image, maxSize: CGSize(width: Constants.analysisImageSize, height: Constants.analysisImageSize))
+            guard let resizedCIImage = CIImage(image: resizedImage) else {
+                throw ImageServiceError.invalidImage
+            }
+
+            // 色抽出用のフィルター
+            let filter = CIFilter.areaAverage()
+            filter.inputImage = resizedCIImage
+            filter.extent = resizedCIImage.extent
+
+            // K-means風の色抽出（簡易版）
+            return try await self.extractDominantColors(from: resizedCIImage, maxCount: maxCount)
+        }.value
     }
     
     private func extractDominantColors(from ciImage: CIImage, maxCount: Int) async throws -> [String] {
@@ -553,104 +546,89 @@ class ImageService: ImageServiceProtocol {
     }
     
     func calculateColorTemperature(_ image: UIImage) async throws -> Int {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                do {
-                    guard let ciImage = CIImage(image: image) else {
-                        throw ImageServiceError.invalidImage
-                    }
-                    
-                    // 画像をリサイズして処理を高速化
-                    let resizedImage = try await self.resizeImage(image, maxSize: CGSize(width: 512, height: 512))
-                    guard let resizedCIImage = CIImage(image: resizedImage) else {
-                        throw ImageServiceError.invalidImage
-                    }
-                    
-                    // 平均色を取得
-                    let filter = CIFilter.areaAverage()
-                    filter.inputImage = resizedCIImage
-                    filter.extent = resizedCIImage.extent
-                    
-                    guard let outputImage = filter.outputImage,
-                          let cgImage = self.context.createCGImage(outputImage, from: resizedCIImage.extent) else {
-                        throw ImageServiceError.processingFailed
-                    }
-                    
-                    // CGImageからRGB値を取得
-                    let colorSpace = CGColorSpaceCreateDeviceRGB()
-                    let bytesPerPixel = 4
-                    let bytesPerRow = bytesPerPixel
-                    var pixelData = [UInt8](repeating: 0, count: bytesPerPixel)
-                    
-                    guard let pixelContext = CGContext(
-                        data: &pixelData,
-                        width: 1,
-                        height: 1,
-                        bitsPerComponent: 8,
-                        bytesPerRow: bytesPerRow,
-                        space: colorSpace,
-                        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-                    ) else {
-                        throw ImageServiceError.processingFailed
-                    }
-                    
-                    pixelContext.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-                    
-                    let r = Double(pixelData[0]) / 255.0
-                    let g = Double(pixelData[1]) / 255.0
-                    let b = Double(pixelData[2]) / 255.0
-                    
-                    // RGBから色温度を計算（簡易版）
-                    // McCamy's formulaを使用
-                    let n = (r - 0.3320) / (0.1858 - b)
-                    let colorTemperature = 449.0 * pow(n, 3.0) + 3525.0 * pow(n, 2.0) + 6823.3 * n + 5520.33
-                    
-                    // 範囲を制限（2000K〜10000K）
-                    let clampedTemperature = max(2000, min(10000, Int(colorTemperature)))
-                    continuation.resume(returning: clampedTemperature)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+        return try await Task.detached(priority: .userInitiated) {
+            guard let ciImage = CIImage(image: image) else {
+                throw ImageServiceError.invalidImage
             }
-        }
+
+            // 画像をリサイズして処理を高速化
+            let resizedImage = try await self.resizeImage(image, maxSize: CGSize(width: Constants.analysisImageSize, height: Constants.analysisImageSize))
+            guard let resizedCIImage = CIImage(image: resizedImage) else {
+                throw ImageServiceError.invalidImage
+            }
+
+            // 平均色を取得
+            let filter = CIFilter.areaAverage()
+            filter.inputImage = resizedCIImage
+            filter.extent = resizedCIImage.extent
+
+            guard let outputImage = filter.outputImage,
+                  let cgImage = self.context.createCGImage(outputImage, from: resizedCIImage.extent) else {
+                throw ImageServiceError.processingFailed
+            }
+
+            // CGImageからRGB値を取得
+            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            let bytesPerPixel = 4
+            let bytesPerRow = bytesPerPixel
+            var pixelData = [UInt8](repeating: 0, count: bytesPerPixel)
+
+            guard let pixelContext = CGContext(
+                data: &pixelData,
+                width: 1,
+                height: 1,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ) else {
+                throw ImageServiceError.processingFailed
+            }
+
+            pixelContext.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+
+            let r = Double(pixelData[0]) / 255.0
+            let g = Double(pixelData[1]) / 255.0
+            let b = Double(pixelData[2]) / 255.0
+
+            // RGBから色温度を計算（簡易版）
+            // McCamy's formulaを使用
+            let n = (r - Constants.mccamyConstantR) / (Constants.mccamyConstantB - b)
+            let colorTemperature = 449.0 * pow(n, 3.0) + 3525.0 * pow(n, 2.0) + 6823.3 * n + 5520.33
+
+            // 範囲を制限
+            return max(Constants.minColorTemperature, min(Constants.maxColorTemperature, Int(colorTemperature)))
+        }.value
     }
     
     func detectSkyType(_ image: UIImage) async throws -> SkyType {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                do {
-                    guard let ciImage = CIImage(image: image) else {
-                        throw ImageServiceError.invalidImage
-                    }
-                    
-                    // 画像をリサイズして処理を高速化
-                    let resizedImage = try await self.resizeImage(image, maxSize: CGSize(width: 512, height: 512))
-                    guard let resizedCIImage = CIImage(image: resizedImage) else {
-                        throw ImageServiceError.invalidImage
-                    }
-                    
-                    // 色温度を取得
-                    let colorTemperature = try await self.calculateColorTemperature(resizedImage)
-                    
-                    // 色分布を分析
-                    let colors = try await self.extractColors(resizedImage, maxCount: 5)
-                    
-                    // HSV色空間での分析
-                    let hsvAnalysis = try await self.analyzeHSV(resizedCIImage)
-                    
-                    // 判定ロジック
-                    let skyType = self.determineSkyType(
-                        colorTemperature: colorTemperature,
-                        colors: colors,
-                        hsvAnalysis: hsvAnalysis
-                    )
-                    
-                    continuation.resume(returning: skyType)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+        return try await Task.detached(priority: .userInitiated) {
+            guard let ciImage = CIImage(image: image) else {
+                throw ImageServiceError.invalidImage
             }
-        }
+
+            // 画像をリサイズして処理を高速化
+            let resizedImage = try await self.resizeImage(image, maxSize: CGSize(width: Constants.analysisImageSize, height: Constants.analysisImageSize))
+            guard let resizedCIImage = CIImage(image: resizedImage) else {
+                throw ImageServiceError.invalidImage
+            }
+
+            // 色温度を取得
+            let colorTemperature = try await self.calculateColorTemperature(resizedImage)
+
+            // 色分布を分析
+            let colors = try await self.extractColors(resizedImage, maxCount: 5)
+
+            // HSV色空間での分析
+            let hsvAnalysis = try await self.analyzeHSV(resizedCIImage)
+
+            // 判定ロジック
+            return self.determineSkyType(
+                colorTemperature: colorTemperature,
+                colors: colors,
+                hsvAnalysis: hsvAnalysis
+            )
+        }.value
     }
     
     private func analyzeHSV(_ ciImage: CIImage) async throws -> (hue: Double, saturation: Double, brightness: Double) {
@@ -732,7 +710,7 @@ class ImageService: ImageServiceProtocol {
         }
         
         // 嵐判定（暗い、コントラストが高い）
-        if brightness < 0.3 && saturation > 0.5 {
+        if brightness < Constants.lowBrightnessThreshold && saturation > Constants.highSaturationThreshold {
             return .storm
         }
         
@@ -751,72 +729,63 @@ class ImageService: ImageServiceProtocol {
     }
     
     func extractEXIFData(_ image: UIImage) async throws -> EXIFData {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                do {
-                    guard let imageData = image.jpegData(compressionQuality: 1.0),
-                          let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil) else {
-                        throw ImageServiceError.invalidImage
-                    }
-                    
-                    guard let metadata = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [String: Any] else {
-                        // EXIF情報がない場合は空のデータを返す
-                        continuation.resume(returning: EXIFData())
-                        return
-                    }
-                    
-                    // EXIF情報を取得
-                    let exifDict = metadata[kCGImagePropertyExifDictionary as String] as? [String: Any]
-                    let tiffDict = metadata[kCGImagePropertyTIFFDictionary as String] as? [String: Any]
-                    
-                    // 撮影時刻
-                    var capturedAt: Date?
-                    if let dateTimeOriginal = exifDict?[kCGImagePropertyExifDateTimeOriginal as String] as? String {
-                        let formatter = DateFormatter()
-                        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
-                        capturedAt = formatter.date(from: dateTimeOriginal)
-                    }
-                    
-                    // カメラモデル
-                    let cameraModel = tiffDict?[kCGImagePropertyTIFFModel as String] as? String
-                    
-                    // ISO感度
-                    let iso = exifDict?[kCGImagePropertyExifISOSpeedRatings as String] as? [Int]
-                    let isoValue = iso?.first
-                    
-                    // シャッタースピード
-                    var shutterSpeed: String?
-                    if let exposureTime = exifDict?[kCGImagePropertyExifExposureTime as String] as? Double {
-                        shutterSpeed = String(format: "1/%.0f", 1.0 / exposureTime)
-                    }
-                    
-                    // 絞り値
-                    var aperture: String?
-                    if let fNumber = exifDict?[kCGImagePropertyExifFNumber as String] as? Double {
-                        aperture = String(format: "f/%.1f", fNumber)
-                    }
-                    
-                    // 焦点距離
-                    var focalLength: String?
-                    if let focalLengthValue = exifDict?[kCGImagePropertyExifFocalLength as String] as? Double {
-                        focalLength = String(format: "%.0fmm", focalLengthValue)
-                    }
-                    
-                    let exifData = EXIFData(
-                        capturedAt: capturedAt,
-                        cameraModel: cameraModel,
-                        iso: isoValue,
-                        shutterSpeed: shutterSpeed,
-                        aperture: aperture,
-                        focalLength: focalLength
-                    )
-                    
-                    continuation.resume(returning: exifData)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
+        return try await Task.detached(priority: .userInitiated) {
+            guard let imageData = image.jpegData(compressionQuality: 1.0),
+                  let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil) else {
+                throw ImageServiceError.invalidImage
             }
-        }
+
+            guard let metadata = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [String: Any] else {
+                // EXIF情報がない場合は空のデータを返す
+                return EXIFData()
+            }
+
+            // EXIF情報を取得
+            let exifDict = metadata[kCGImagePropertyExifDictionary as String] as? [String: Any]
+            let tiffDict = metadata[kCGImagePropertyTIFFDictionary as String] as? [String: Any]
+
+            // 撮影時刻
+            var capturedAt: Date?
+            if let dateTimeOriginal = exifDict?[kCGImagePropertyExifDateTimeOriginal as String] as? String {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+                capturedAt = formatter.date(from: dateTimeOriginal)
+            }
+
+            // カメラモデル
+            let cameraModel = tiffDict?[kCGImagePropertyTIFFModel as String] as? String
+
+            // ISO感度
+            let iso = exifDict?[kCGImagePropertyExifISOSpeedRatings as String] as? [Int]
+            let isoValue = iso?.first
+
+            // シャッタースピード
+            var shutterSpeed: String?
+            if let exposureTime = exifDict?[kCGImagePropertyExifExposureTime as String] as? Double {
+                shutterSpeed = String(format: "1/%.0f", 1.0 / exposureTime)
+            }
+
+            // 絞り値
+            var aperture: String?
+            if let fNumber = exifDict?[kCGImagePropertyExifFNumber as String] as? Double {
+                aperture = String(format: "f/%.1f", fNumber)
+            }
+
+            // 焦点距離
+            var focalLength: String?
+            if let focalLengthValue = exifDict?[kCGImagePropertyExifFocalLength as String] as? Double {
+                focalLength = String(format: "%.0fmm", focalLengthValue)
+            }
+
+            return EXIFData(
+                capturedAt: capturedAt,
+                cameraModel: cameraModel,
+                iso: isoValue,
+                shutterSpeed: shutterSpeed,
+                aperture: aperture,
+                focalLength: focalLength
+            )
+        }.value
     }
 }
 

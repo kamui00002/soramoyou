@@ -184,8 +184,8 @@ class EditViewModel: ObservableObject {
         
         // 新しいタスクを作成
         previewTask = Task {
-            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms待機
-            
+            try? await Task.sleep(nanoseconds: 400_000_000) // 400ms待機（ユーザー体験と処理負荷のバランス）
+
             guard !Task.isCancelled else { return }
             await generatePreview()
         }

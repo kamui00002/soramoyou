@@ -33,8 +33,7 @@ class ProfileViewModel: ObservableObject {
     private let userId: String?
     private let firestoreService: FirestoreServiceProtocol
     private let storageService: StorageServiceProtocol
-    private var cancellables = Set<AnyCancellable>()
-    
+
     // 自分のプロフィールかどうか
     var isOwnProfile: Bool {
         guard let userId = userId,

@@ -319,23 +319,34 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
     
-    /// RGB距離を計算して投稿をフィルタリング
+    /// RGB距離を計算して投稿をフィルタリング（最適化版）
     private func filterPostsByColorDistance(posts: [Post], targetColor: String, threshold: Double) -> [Post] {
         guard let targetRGB = hexToRGB(targetColor) else {
             return posts
         }
-        
+
+        // 全ての色をRGBに事前変換してキャッシュ
+        var colorCache: [String: (r: Double, g: Double, b: Double)] = [:]
+
         return posts.filter { post in
             guard let skyColors = post.skyColors else {
                 return false
             }
-            
+
             // 投稿の色のいずれかが閾値以内の距離にあるかチェック
             return skyColors.contains { color in
-                guard let colorRGB = hexToRGB(color) else {
-                    return false
+                // キャッシュから取得、なければ変換してキャッシュに保存
+                let colorRGB: (r: Double, g: Double, b: Double)
+                if let cached = colorCache[color] {
+                    colorRGB = cached
+                } else {
+                    guard let rgb = hexToRGB(color) else {
+                        return false
+                    }
+                    colorCache[color] = rgb
+                    colorRGB = rgb
                 }
-                
+
                 let distance = calculateRGBDistance(targetRGB, colorRGB)
                 return distance <= threshold
             }

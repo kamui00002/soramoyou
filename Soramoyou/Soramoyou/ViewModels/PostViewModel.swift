@@ -190,40 +190,68 @@ class PostViewModel: ObservableObject {
         }
     }
     
-    /// 画像をアップロード
+    /// 画像をアップロード（並列処理）
     private func uploadImages() async throws -> [(url: String, thumbnail: String?)] {
-        var imageURLs: [(url: String, thumbnail: String?)] = []
         let totalImages = Double(editedImages.count)
-        
-        for (index, image) in editedImages.enumerated() {
-            // 画像を圧縮・リサイズ
-            let resizedImage = try await imageService.resizeImage(
-                image,
-                maxSize: CGSize(width: 2048, height: 2048)
-            )
-            
-            let compressedData = try await imageService.compressImage(resizedImage, quality: 0.85)
-            guard let compressedImage = UIImage(data: compressedData) else {
-                throw PostViewModelError.imageCompressionFailed
+
+        // TaskGroupで並列アップロード
+        return try await withThrowingTaskGroup(of: (index: Int, url: String, thumbnail: String?, imagePath: String, thumbnailPath: String).self) { group in
+            // 各画像のアップロードタスクを追加
+            for (index, image) in editedImages.enumerated() {
+                group.addTask {
+                    // 画像を圧縮・リサイズ
+                    let resizedImage = try await self.imageService.resizeImage(
+                        image,
+                        maxSize: CGSize(width: 2048, height: 2048)
+                    )
+
+                    let compressedData = try await self.imageService.compressImage(resizedImage, quality: 0.85)
+                    guard let compressedImage = UIImage(data: compressedData) else {
+                        throw PostViewModelError.imageCompressionFailed
+                    }
+
+                    // 画像をアップロード
+                    let imagePath = "posts/\(self.userId!)/\(UUID().uuidString).jpg"
+                    let imageURL = try await self.storageService.uploadImage(compressedImage, path: imagePath)
+
+                    // サムネイルをアップロード
+                    let thumbnailBasePath = "\(self.userId!)/\(UUID().uuidString).jpg"
+                    let thumbnailURL = try await self.storageService.uploadThumbnail(compressedImage, path: thumbnailBasePath)
+                    let thumbnailPath = "thumbnails/\(thumbnailBasePath)"
+
+                    return (
+                        index: index,
+                        url: imageURL.absoluteString,
+                        thumbnail: thumbnailURL.absoluteString,
+                        imagePath: imagePath,
+                        thumbnailPath: thumbnailPath
+                    )
+                }
             }
-            
-            // 画像をアップロード
-            let imagePath = "posts/\(userId!)/\(UUID().uuidString).jpg"
-            let imageURL = try await storageService.uploadImage(compressedImage, path: imagePath)
-            uploadedImageURLs.append(imagePath)
-            
-            // サムネイルをアップロード（StorageServiceが自動的にthumbnails/を追加するため、元のパスを渡す）
-            let thumbnailBasePath = "\(userId!)/\(UUID().uuidString).jpg"
-            let thumbnailURL = try await storageService.uploadThumbnail(compressedImage, path: thumbnailBasePath)
-            uploadedThumbnailURLs.append("thumbnails/\(thumbnailBasePath)")
-            
-            imageURLs.append((url: imageURL.absoluteString, thumbnail: thumbnailURL.absoluteString))
-            
-            // 進捗を更新
-            uploadProgress = Double(index + 1) / totalImages * 0.9 // 90%まで（残り10%はFirestore保存）
+
+            // 結果を収集
+            var results: [(index: Int, url: String, thumbnail: String?, imagePath: String, thumbnailPath: String)] = []
+            var completedCount = 0
+
+            for try await result in group {
+                results.append(result)
+                completedCount += 1
+
+                // アップロード済みパスを記録（ロールバック用）
+                await MainActor.run {
+                    uploadedImageURLs.append(result.imagePath)
+                    uploadedThumbnailURLs.append(result.thumbnailPath)
+                    // 進捗を更新
+                    uploadProgress = Double(completedCount) / totalImages * 0.9 // 90%まで
+                }
+            }
+
+            // インデックス順にソート
+            results.sort { $0.index < $1.index }
+
+            // 結果を返す（インデックスは除外）
+            return results.map { (url: $0.url, thumbnail: $0.thumbnail) }
         }
-        
-        return imageURLs
     }
     
     /// 投稿データを作成
