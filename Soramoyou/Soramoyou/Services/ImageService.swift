@@ -305,51 +305,75 @@ class ImageService: ImageServiceProtocol {
         return try await withCheckedThrowingContinuation { continuation in
             Task.detached(priority: .userInitiated) {
                 do {
-                    guard let ciImage = CIImage(image: image) else {
-                        throw ImageServiceError.invalidImage
+                    // autoreleasepoolで中間オブジェクトを適切に解放
+                    let finalImage = try autoreleasepool {
+                        guard let ciImage = CIImage(image: image) else {
+                            throw ImageServiceError.invalidImage
+                        }
+
+                        var result = ciImage
+
+                        // フィルターを適用（autoreleasepoolで囲む）
+                        if let filter = settings.appliedFilter {
+                            result = try autoreleasepool {
+                                try await self.processFilter(filter, on: result)
+                            }
+                        }
+
+                        // 編集ツールを順次適用（各ツールごとにautoreleasepoolで囲む）
+                        if let brightness = settings.brightness {
+                            result = autoreleasepool {
+                                self.applyBrightness(brightness, to: result)
+                            }
+                        }
+                        if let contrast = settings.contrast {
+                            result = autoreleasepool {
+                                self.applyContrast(contrast, to: result)
+                            }
+                        }
+                        if let saturation = settings.saturation {
+                            result = autoreleasepool {
+                                self.applySaturation(saturation, to: result)
+                            }
+                        }
+                        if let exposure = settings.exposure {
+                            result = autoreleasepool {
+                                self.applyExposure(exposure, to: result)
+                            }
+                        }
+                        if let highlight = settings.highlight {
+                            result = autoreleasepool {
+                                self.applyHighlight(highlight, to: result)
+                            }
+                        }
+                        if let shadow = settings.shadow {
+                            result = autoreleasepool {
+                                self.applyShadow(shadow, to: result)
+                            }
+                        }
+                        if let warmth = settings.warmth {
+                            result = autoreleasepool {
+                                self.applyWarmth(warmth, to: result)
+                            }
+                        }
+                        if let sharpness = settings.sharpness {
+                            result = autoreleasepool {
+                                self.applySharpness(sharpness, to: result)
+                            }
+                        }
+                        if let vignette = settings.vignette {
+                            result = autoreleasepool {
+                                self.applyVignette(vignette, to: result)
+                            }
+                        }
+
+                        guard let cgImage = self.context.createCGImage(result, from: result.extent) else {
+                            throw ImageServiceError.processingFailed
+                        }
+
+                        return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
                     }
-                    
-                    var result = ciImage
-                    
-                    // フィルターを適用
-                    if let filter = settings.appliedFilter {
-                        result = try await self.processFilter(filter, on: result)
-                    }
-                    
-                    // 編集ツールを順次適用
-                    if let brightness = settings.brightness {
-                        result = self.applyBrightness(brightness, to: result)
-                    }
-                    if let contrast = settings.contrast {
-                        result = self.applyContrast(contrast, to: result)
-                    }
-                    if let saturation = settings.saturation {
-                        result = self.applySaturation(saturation, to: result)
-                    }
-                    if let exposure = settings.exposure {
-                        result = self.applyExposure(exposure, to: result)
-                    }
-                    if let highlight = settings.highlight {
-                        result = self.applyHighlight(highlight, to: result)
-                    }
-                    if let shadow = settings.shadow {
-                        result = self.applyShadow(shadow, to: result)
-                    }
-                    if let warmth = settings.warmth {
-                        result = self.applyWarmth(warmth, to: result)
-                    }
-                    if let sharpness = settings.sharpness {
-                        result = self.applySharpness(sharpness, to: result)
-                    }
-                    if let vignette = settings.vignette {
-                        result = self.applyVignette(vignette, to: result)
-                    }
-                    
-                    guard let cgImage = self.context.createCGImage(result, from: result.extent) else {
-                        throw ImageServiceError.processingFailed
-                    }
-                    
-                    let finalImage = UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+
                     continuation.resume(returning: finalImage)
                 } catch {
                     continuation.resume(throwing: error)

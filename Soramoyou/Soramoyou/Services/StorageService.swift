@@ -147,45 +147,40 @@ class StorageService: StorageServiceProtocol {
                   let progress = snapshot.progress else {
                 return
             }
-            
+
             let fractionCompleted = Double(progress.completedUnitCount) / Double(progress.totalUnitCount)
-            
+
             self.progressStreamsQueue.async {
                 if let continuation = self.progressStreams[path] {
                     continuation.yield(fractionCompleted)
                 }
             }
         }
-        
+
         // 完了時にストリームを終了
         uploadTask.observe(.success) { [weak self] _ in
-            guard let self = self else { return }
-            
-            self.progressStreamsQueue.async {
-                if let continuation = self.progressStreams[path] {
-                    continuation.yield(1.0)
-                    continuation.finish()
-                    self.progressStreams.removeValue(forKey: path)
-                }
-            }
+            self?.cleanupProgressObserver(for: path, finalProgress: 1.0)
         }
-        
+
         // エラー時にストリームを終了
         uploadTask.observe(.failure) { [weak self] _ in
-            guard let self = self else { return }
-            
-            self.progressStreamsQueue.async {
-                if let continuation = self.progressStreams[path] {
-                    continuation.finish()
-                    self.progressStreams.removeValue(forKey: path)
-                }
-            }
+            self?.cleanupProgressObserver(for: path)
+        }
+
+        // 一時停止時にストリームを終了
+        uploadTask.observe(.pause) { [weak self] _ in
+            self?.cleanupProgressObserver(for: path)
         }
     }
-    
-    private func cleanupProgressObserver(for path: String) {
-        progressStreamsQueue.async {
+
+    private func cleanupProgressObserver(for path: String, finalProgress: Double? = nil) {
+        progressStreamsQueue.async { [weak self] in
+            guard let self = self else { return }
             if let continuation = self.progressStreams[path] {
+                // 最終進捗を送信（指定されている場合）
+                if let finalProgress = finalProgress {
+                    continuation.yield(finalProgress)
+                }
                 continuation.finish()
                 self.progressStreams.removeValue(forKey: path)
             }

@@ -32,7 +32,7 @@ struct RetryableOperation {
         operationName: String? = nil
     ) async throws -> T {
         let operationName = operationName ?? "unknown_operation"
-        
+
         do {
             return try await operation()
         } catch {
@@ -40,9 +40,12 @@ struct RetryableOperation {
             guard error.isRetryable else {
                 throw error
             }
-            
+
+            // 最初の試行をカウントに含めるため、残りの試行回数を計算
+            let remainingAttempts = max(1, maxAttempts - 1)
+
             return try await ErrorHandler.retry(
-                maxAttempts: maxAttempts,
+                maxAttempts: remainingAttempts,
                 initialDelay: initialDelay,
                 operation: operation,
                 operationName: operationName
