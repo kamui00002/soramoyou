@@ -1,0 +1,95 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ===== Helper Functions =====
+
+    // ユーザーが認証済みかチェック
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // リクエストユーザーのUID
+    function currentUserId() {
+      return request.auth.uid;
+    }
+
+    // ファイルの所有者かチェック
+    function isOwner(userId) {
+      return isAuthenticated() && currentUserId() == userId;
+    }
+
+    // 画像ファイルかチェック（JPEG, PNG, WEBP, HEIC）
+    function isImage() {
+      return request.resource.contentType.matches('image/.*')
+        && request.resource.contentType in [
+          'image/jpeg',
+          'image/jpg',
+          'image/png',
+          'image/webp',
+          'image/heic'
+        ];
+    }
+
+    // ファイルサイズのチェック（最大5MB）
+    function isValidSize() {
+      return request.resource.size <= 5 * 1024 * 1024; // 5MB
+    }
+
+    // ===== Images Storage =====
+    // パス: images/{userId}/{postId}/{filename}
+
+    match /images/{userId}/{postId}/{filename} {
+      // 読み取り: 誰でも可能（公開投稿の画像を表示するため）
+      allow read: if true;
+
+      // 書き込み: 認証済みユーザーのみ、自分のuserIdパスのみ、画像ファイル、サイズ制限
+      allow write: if isOwner(userId)
+        && isImage()
+        && isValidSize();
+
+      // 削除: 自分のuserIdパスのみ
+      allow delete: if isOwner(userId);
+    }
+
+    // ===== Thumbnails Storage =====
+    // パス: thumbnails/images/{userId}/{postId}/{filename}
+
+    match /thumbnails/images/{userId}/{postId}/{filename} {
+      // 読み取り: 誰でも可能（サムネイル表示のため）
+      allow read: if true;
+
+      // 書き込み: 認証済みユーザーのみ、自分のuserIdパスのみ、画像ファイル、サイズ制限
+      allow write: if isOwner(userId)
+        && isImage()
+        && isValidSize();
+
+      // 削除: 自分のuserIdパスのみ
+      allow delete: if isOwner(userId);
+    }
+
+    // ===== Profile Images Storage (Phase 2用の準備) =====
+    // パス: profile_images/{userId}/{filename}
+
+    match /profile_images/{userId}/{filename} {
+      // 読み取り: 誰でも可能
+      allow read: if true;
+
+      // 書き込み: 認証済みユーザーのみ、自分のuserIdパスのみ、画像ファイル、サイズ制限（最大2MB）
+      allow write: if isOwner(userId)
+        && isImage()
+        && request.resource.size <= 2 * 1024 * 1024; // 2MB
+
+      // 削除: 自分のuserIdパスのみ
+      allow delete: if isOwner(userId);
+    }
+
+    // ===== Deny All Other Access =====
+
+    // その他のパスへのアクセスを禁止
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

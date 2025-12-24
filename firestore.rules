@@ -1,0 +1,167 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===== Helper Functions =====
+
+    // ユーザーが認証済みかチェック
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // リクエストユーザーのUID
+    function currentUserId() {
+      return request.auth.uid;
+    }
+
+    // ドキュメントの所有者かチェック
+    function isOwner(userId) {
+      return isAuthenticated() && currentUserId() == userId;
+    }
+
+    // データ検証: 必須フィールドが存在するか
+    function hasRequiredFields(data, fields) {
+      return fields.toSet().difference(data.keys().toSet()).size() == 0;
+    }
+
+    // データ検証: 文字列の長さ制限
+    function isValidStringLength(value, maxLength) {
+      return value is string && value.size() <= maxLength;
+    }
+
+    // データ検証: 配列の長さ制限
+    function isValidArrayLength(value, maxLength) {
+      return value is list && value.size() <= maxLength;
+    }
+
+    // ===== Users Collection =====
+
+    match /users/{userId} {
+      // 読み取り: 認証済みユーザーなら誰でも可能（プロフィール表示のため）
+      allow read: if isAuthenticated();
+
+      // 作成: 自分のドキュメントのみ、必須フィールドをチェック
+      allow create: if isOwner(userId)
+        && hasRequiredFields(request.resource.data, ['userId', 'createdAt', 'updatedAt'])
+        && request.resource.data.userId == userId
+        && request.resource.data.followersCount == 0
+        && request.resource.data.followingCount == 0
+        && request.resource.data.postsCount == 0;
+
+      // 更新: 自分のドキュメントのみ、userIdとcreatedAtは変更不可
+      allow update: if isOwner(userId)
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['userId', 'createdAt']));
+
+      // 削除: 禁止（ユーザー削除は管理コンソールまたはFirebase Authenticationで処理）
+      allow delete: if false;
+    }
+
+    // ===== Posts Collection =====
+
+    match /posts/{postId} {
+      // 読み取り: publicな投稿は誰でも、それ以外は投稿者のみ
+      allow read: if resource.data.visibility == 'public'
+        || (isAuthenticated() && resource.data.userId == currentUserId());
+
+      // 作成: 認証済みユーザーのみ、必須フィールドとデータ検証
+      allow create: if isAuthenticated()
+        && hasRequiredFields(request.resource.data, ['postId', 'userId', 'images', 'visibility', 'createdAt', 'updatedAt'])
+        && request.resource.data.postId == postId
+        && request.resource.data.userId == currentUserId()
+        && request.resource.data.likesCount == 0
+        && request.resource.data.commentsCount == 0
+        && request.resource.data.images is list
+        && request.resource.data.images.size() > 0
+        && request.resource.data.images.size() <= 10
+        && request.resource.data.visibility in ['public', 'private', 'followers']
+        && (
+          !('caption' in request.resource.data)
+          || isValidStringLength(request.resource.data.caption, 2000)
+        )
+        && (
+          !('hashtags' in request.resource.data)
+          || isValidArrayLength(request.resource.data.hashtags, 30)
+        )
+        && (
+          !('skyColors' in request.resource.data)
+          || isValidArrayLength(request.resource.data.skyColors, 5)
+        );
+
+      // 更新: 投稿者のみ、postId/userId/createdAtは変更不可
+      allow update: if isOwner(resource.data.userId)
+        && request.resource.data.postId == resource.data.postId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['postId', 'userId', 'createdAt']))
+        && (
+          !('caption' in request.resource.data)
+          || isValidStringLength(request.resource.data.caption, 2000)
+        )
+        && (
+          !('hashtags' in request.resource.data)
+          || isValidArrayLength(request.resource.data.hashtags, 30)
+        )
+        && (
+          !('skyColors' in request.resource.data)
+          || isValidArrayLength(request.resource.data.skyColors, 5)
+        );
+
+      // 削除: 投稿者のみ
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // ===== Drafts Collection =====
+
+    match /drafts/{draftId} {
+      // 読み取り: 自分の下書きのみ
+      allow read: if isAuthenticated()
+        && resource.data.userId == currentUserId();
+
+      // 作成: 自分の下書きのみ、必須フィールドをチェック
+      allow create: if isAuthenticated()
+        && hasRequiredFields(request.resource.data, ['draftId', 'userId', 'images', 'visibility', 'createdAt', 'updatedAt'])
+        && request.resource.data.draftId == draftId
+        && request.resource.data.userId == currentUserId()
+        && request.resource.data.images is list
+        && request.resource.data.images.size() > 0
+        && request.resource.data.images.size() <= 10
+        && request.resource.data.visibility in ['public', 'private', 'followers']
+        && (
+          !('caption' in request.resource.data)
+          || isValidStringLength(request.resource.data.caption, 2000)
+        )
+        && (
+          !('hashtags' in request.resource.data)
+          || isValidArrayLength(request.resource.data.hashtags, 30)
+        );
+
+      // 更新: 自分の下書きのみ、draftId/userId/createdAtは変更不可
+      allow update: if isOwner(resource.data.userId)
+        && request.resource.data.draftId == resource.data.draftId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['draftId', 'userId', 'createdAt']))
+        && (
+          !('caption' in request.resource.data)
+          || isValidStringLength(request.resource.data.caption, 2000)
+        )
+        && (
+          !('hashtags' in request.resource.data)
+          || isValidArrayLength(request.resource.data.hashtags, 30)
+        );
+
+      // 削除: 自分の下書きのみ
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // ===== Deny All Other Access =====
+
+    // その他のコレクションへのアクセスを禁止
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
