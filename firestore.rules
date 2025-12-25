@@ -1,0 +1,50 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      // Anyone can read user profiles
+      allow read: if true;
+
+      // Only authenticated users can create their own profile
+      allow create: if isOwner(userId);
+
+      // Only the owner can update or delete their profile
+      allow update, delete: if isOwner(userId);
+    }
+
+    // Posts collection
+    match /posts/{postId} {
+      // Public posts can be read by anyone
+      // Private/followers posts require ownership check
+      allow read: if resource.data.visibility == 'public'
+                  || isOwner(resource.data.userId);
+
+      // Only authenticated users can create posts
+      // Must set userId to their own UID
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid;
+
+      // Only the owner can update or delete their posts
+      allow update, delete: if isOwner(resource.data.userId);
+    }
+
+    // Drafts collection
+    match /drafts/{draftId} {
+      // Only the owner can read, create, update, or delete drafts
+      allow read, write: if isOwner(resource.data.userId)
+                         || (request.resource.data.userId == request.auth.uid);
+    }
+  }
+}

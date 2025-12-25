@@ -34,3 +34,5 @@ struct EXIFData: Codable, Equatable {
 }
 
 
+
+

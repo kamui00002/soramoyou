@@ -82,3 +82,5 @@ git checkout HEAD -- Soramoyou/Soramoyou.xcodeproj/project.pbxproj
 - テストターゲットの追加はXcodeのGUIを使用する
 - 重要な変更の前にバックアップを取る
 
+
+

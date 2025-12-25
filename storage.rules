@@ -1,0 +1,66 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isImageFile() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isValidSize() {
+      // Max 5MB
+      return request.resource.size < 5 * 1024 * 1024;
+    }
+
+    // User profile images
+    match /users/{userId}/profile/{imageId} {
+      // Only authenticated users can read profile images
+      allow read: if isAuthenticated();
+
+      // Only the owner can upload/delete their profile images
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Post images - public
+    match /posts/{userId}/public/{imageId} {
+      // Anyone can read public images
+      allow read: if true;
+
+      // Only authenticated owner can upload public images
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Post images - followers only
+    match /posts/{userId}/followers/{imageId} {
+      // Only authenticated users can read followers-only images
+      allow read: if isAuthenticated();
+
+      // Only the owner can upload followers-only images
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Post images - private
+    match /posts/{userId}/private/{imageId} {
+      // Only the owner can read private images
+      allow read: if isOwner(userId);
+
+      // Only the owner can upload private images
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Draft images
+    match /drafts/{userId}/{imageId} {
+      // Only the owner can read/write draft images
+      allow read, write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+  }
+}
