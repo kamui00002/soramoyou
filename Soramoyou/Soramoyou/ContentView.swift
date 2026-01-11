@@ -8,17 +8,26 @@
 import SwiftUI
 
 struct ContentView: View {
+    @EnvironmentObject var authViewModel: AuthViewModel
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        Group {
+            if authViewModel.isAuthenticated {
+                // ログイン済み: メイン画面を表示
+                MainTabView()
+            } else {
+                // 未ログイン: ウェルカム画面を表示
+                WelcomeView()
+            }
         }
-        .padding()
+        .onAppear {
+            // 認証状態を確認
+            authViewModel.checkAuthState()
+        }
     }
 }
 
 #Preview {
     ContentView()
+        .environmentObject(AuthViewModel())
 }
