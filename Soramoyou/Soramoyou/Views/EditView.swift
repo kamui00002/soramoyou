@@ -28,7 +28,18 @@ struct EditView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                Color.black.ignoresSafeArea()
+                // 空のグラデーション背景（上部）
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.68, green: 0.85, blue: 0.90),
+                        Color(red: 0.53, green: 0.81, blue: 0.98),
+                        Color(red: 0.39, green: 0.58, blue: 0.93),
+                        Color.black
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
                 
                 VStack(spacing: 0) {
                     // 画像プレビュー
@@ -40,11 +51,13 @@ struct EditView: View {
             }
             .navigationTitle("編集")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("キャンセル") {
                         dismiss()
                     }
+                    .foregroundColor(.white)
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -64,6 +77,7 @@ struct EditView: View {
                         }
                     }
                     .disabled(viewModel.isLoading)
+                    .foregroundColor(.white)
                 }
             }
             .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
@@ -97,6 +111,9 @@ struct EditView: View {
     
     private var imagePreviewView: some View {
         ZStack {
+            // 暗い背景で画像を見やすく
+            Color.black.opacity(0.3)
+            
             if viewModel.isLoading {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -125,7 +142,7 @@ struct EditView: View {
                             .font(.title2)
                             .foregroundColor(.white)
                             .padding()
-                            .background(Color.black.opacity(0.5))
+                            .background(.white.opacity(0.2))
                             .clipShape(Circle())
                     }
                     .disabled(viewModel.currentImageIndex == 0)
@@ -139,7 +156,7 @@ struct EditView: View {
                             .font(.title2)
                             .foregroundColor(.white)
                             .padding()
-                            .background(Color.black.opacity(0.5))
+                            .background(.white.opacity(0.2))
                             .clipShape(Circle())
                     }
                     .disabled(viewModel.currentImageIndex >= viewModel.originalImages.count - 1)
@@ -156,7 +173,7 @@ struct EditView: View {
                         .foregroundColor(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(Color.black.opacity(0.6))
+                        .background(.white.opacity(0.2))
                         .cornerRadius(12)
                         .padding(.bottom, 100)
                 }
@@ -172,7 +189,7 @@ struct EditView: View {
             filterSelectionView
             
             Divider()
-                .background(Color.gray.opacity(0.3))
+                .background(.white.opacity(0.3))
             
             // 編集ツール選択
             toolSelectionView
@@ -182,7 +199,10 @@ struct EditView: View {
                 toolSliderView(tool: tool)
             }
         }
-        .background(Color(UIColor.systemBackground))
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 0)
+        )
     }
     
     // MARK: - Filter Selection View
@@ -191,6 +211,7 @@ struct EditView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("フィルター")
                 .font(.headline)
+                .foregroundColor(.primary)
                 .padding(.horizontal)
                 .padding(.top, 8)
             
@@ -232,6 +253,7 @@ struct EditView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("編集ツール")
                 .font(.headline)
+                .foregroundColor(.primary)
                 .padding(.horizontal)
                 .padding(.top, 8)
             
@@ -267,6 +289,7 @@ struct EditView: View {
             HStack {
                 Text(tool.displayName)
                     .font(.headline)
+                    .foregroundColor(.primary)
                 
                 Spacer()
                 
@@ -283,7 +306,7 @@ struct EditView: View {
             
             HStack {
                 Image(systemName: "minus")
-                    .foregroundColor(.gray)
+                    .foregroundColor(.secondary)
                 
                 Slider(
                     value: Binding(
@@ -296,14 +319,15 @@ struct EditView: View {
                     ),
                     in: -1.0...1.0
                 )
+                .tint(.blue)
                 
                 Image(systemName: "plus")
-                    .foregroundColor(.gray)
+                    .foregroundColor(.secondary)
             }
             .padding(.horizontal)
             .padding(.bottom, 8)
         }
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(.ultraThinMaterial)
     }
 }
 

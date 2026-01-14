@@ -19,21 +19,36 @@ struct PostView: View {
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                ZStack {
-                    if viewModel.selectedImages.isEmpty {
-                        // 写真選択画面
-                        photoSelectionView
-                    } else {
-                        // 選択された写真のプレビュー
-                        photoPreviewView
+            ZStack {
+                // 空のグラデーション背景
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.68, green: 0.85, blue: 0.90),
+                        Color(red: 0.53, green: 0.81, blue: 0.98),
+                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    ZStack {
+                        if viewModel.selectedImages.isEmpty {
+                            // 写真選択画面
+                            photoSelectionView
+                        } else {
+                            // 選択された写真のプレビュー
+                            photoPreviewView
+                        }
                     }
+                    
+                    // 画面下部に固定表示されるバナー広告
+                    BannerAdContainer()
                 }
-                
-                // 画面下部に固定表示されるバナー広告
-                BannerAdContainer()
             }
             .navigationTitle("投稿")
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .sheet(isPresented: $viewModel.isShowingImagePicker) {
                 ImagePicker(
                     selectedImages: $viewModel.selectedImages,
@@ -76,15 +91,16 @@ struct PostView: View {
         VStack(spacing: 24) {
             Image(systemName: "photo.on.rectangle")
                 .font(.system(size: 60))
-                .foregroundColor(.gray)
+                .foregroundColor(.white.opacity(0.8))
             
             Text("写真を選択")
                 .font(.title2)
                 .fontWeight(.semibold)
+                .foregroundColor(.white)
             
             Text("空の写真を選択して投稿しましょう")
                 .font(.body)
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
             
@@ -99,19 +115,26 @@ struct PostView: View {
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(Color.blue)
-                .cornerRadius(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(.white.opacity(0.25))
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(.white.opacity(0.5), lineWidth: 1)
+                        )
+                )
+                .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
             }
             .padding(.horizontal)
             
             VStack(spacing: 8) {
                 Text("選択可能な枚数")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.8))
                 
                 Text(authViewModel.isAuthenticated ? "最大10枚" : "最大3枚（ログインで10枚まで）")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.8))
             }
             .padding(.top)
         }
@@ -154,8 +177,15 @@ struct PostView: View {
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(Color.blue)
-                        .cornerRadius(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(.white.opacity(0.25))
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .stroke(.white.opacity(0.5), lineWidth: 1)
+                                )
+                        )
+                        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
                     }
                     .disabled(viewModel.isLoading || viewModel.selectedImages.isEmpty)
                     
@@ -164,7 +194,7 @@ struct PostView: View {
                     }) {
                         Text("選択をクリア")
                             .font(.body)
-                            .foregroundColor(.red)
+                            .foregroundColor(.white.opacity(0.9))
                     }
                     
                     Button(action: {
@@ -172,7 +202,7 @@ struct PostView: View {
                     }) {
                         Text("写真を追加")
                             .font(.body)
-                            .foregroundColor(.blue)
+                            .foregroundColor(.white)
                     }
                     .disabled(viewModel.selectedImages.count >= maxSelectionCount)
                 }
