@@ -14,31 +14,51 @@ struct HomeView: View {
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                ZStack {
-                    if viewModel.isLoading && viewModel.posts.isEmpty {
-                        // 初回読み込み中
-                        ProgressView("読み込み中...")
-                    } else if viewModel.posts.isEmpty {
-                        // 投稿がない場合
-                        VStack(spacing: 16) {
-                            Image(systemName: "photo.on.rectangle")
-                                .font(.system(size: 60))
-                                .foregroundColor(.gray)
-                            Text("投稿がありません")
-                                .font(.headline)
-                                .foregroundColor(.secondary)
+            ZStack {
+                // 空のグラデーション背景
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.68, green: 0.85, blue: 0.90),
+                        Color(red: 0.53, green: 0.81, blue: 0.98),
+                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    ZStack {
+                        if viewModel.isLoading && viewModel.posts.isEmpty {
+                            // 初回読み込み中
+                            VStack {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                Text("読み込み中...")
+                                    .foregroundColor(.white)
+                            }
+                        } else if viewModel.posts.isEmpty {
+                            // 投稿がない場合
+                            VStack(spacing: 16) {
+                                Image(systemName: "photo.on.rectangle")
+                                    .font(.system(size: 60))
+                                    .foregroundColor(.white.opacity(0.8))
+                                Text("投稿がありません")
+                                    .font(.headline)
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                        } else {
+                            // フィード表示
+                            feedView
                         }
-                    } else {
-                        // フィード表示
-                        feedView
                     }
+
+                    // 画面下部に固定表示されるバナー広告
+                    BannerAdContainer()
                 }
-                
-                // 画面下部に固定表示されるバナー広告
-                BannerAdContainer()
             }
             .navigationTitle("そらもよう")
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .refreshable {
                 await viewModel.refresh()
             }
@@ -176,8 +196,12 @@ struct PostCard: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
         }
-        .background(Color(UIColor.secondarySystemBackground))
-        .cornerRadius(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.white.opacity(0.85))
+                .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+        )
+        .cornerRadius(16)
     }
 }
 
