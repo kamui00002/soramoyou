@@ -14,30 +14,37 @@ class AuthViewModel: ObservableObject {
     @Published var isAuthenticated = false
     @Published var currentUser: User?
     @Published var errorMessage: String?
-    
+    @Published var isGuest = false
+
     private let authService: AuthServiceProtocol
-    private var cancellables = Set<AnyCancellable>()
+    private var authStateTask: Task<Void, Never>?
     
     init(authService: AuthServiceProtocol = AuthService()) {
         self.authService = authService
-        
+
         // 初期認証状態の確認（自動ログイン）
         checkAuthState()
-        
-        // 認証状態の監視
-        Task {
-            await observeAuthState()
+
+        // 認証状態の監視（メモリリーク防止のため weak self を使用）
+        authStateTask = Task { [weak self] in
+            guard let self = self else { return }
+            await self.observeAuthState()
         }
+    }
+
+    deinit {
+        // Taskをキャンセルしてリソースを解放
+        authStateTask?.cancel()
     }
     
     func signIn(email: String, password: String) async throws {
         errorMessage = nil
-        
+
         do {
             let user = try await authService.signIn(email: email, password: password)
             currentUser = user
             isAuthenticated = true
-            
+
             // ユーザーIDをLoggingServiceに設定
             LoggingService.shared.setUserID(user.id)
         } catch {
@@ -51,12 +58,12 @@ class AuthViewModel: ObservableObject {
     
     func signUp(email: String, password: String) async throws {
         errorMessage = nil
-        
+
         do {
             let user = try await authService.signUp(email: email, password: password)
             currentUser = user
             isAuthenticated = true
-            
+
             // ユーザーIDをLoggingServiceに設定
             LoggingService.shared.setUserID(user.id)
         } catch {
@@ -67,15 +74,40 @@ class AuthViewModel: ObservableObject {
             throw error
         }
     }
-    
+
+    func signInAnonymously() async throws {
+        errorMessage = nil
+
+        do {
+            let user = try await authService.signInAnonymously()
+            currentUser = user
+            isAuthenticated = true
+
+            LoggingService.shared.setUserID(user.id)
+        } catch {
+            ErrorHandler.logError(error, context: "AuthViewModel.signInAnonymously")
+            errorMessage = error.userFriendlyMessage
+            throw error
+        }
+    }
+
+    /// ゲストモードで閲覧（Firebase認証なし）
+    func enterGuestMode() {
+        errorMessage = nil
+        currentUser = nil
+        isAuthenticated = false
+        isGuest = true
+        LoggingService.shared.setUserID(nil)
+    }
+
     func signOut() async throws {
         errorMessage = nil
-        
+
         do {
             try await authService.signOut()
             currentUser = nil
             isAuthenticated = false
-            
+
             // ユーザーIDをLoggingServiceからクリア
             LoggingService.shared.setUserID(nil)
         } catch {
@@ -92,13 +124,13 @@ class AuthViewModel: ObservableObject {
         if let user = authService.currentUser() {
             currentUser = user
             isAuthenticated = true
-            
+
             // ユーザーIDをLoggingServiceに設定
             LoggingService.shared.setUserID(user.id)
         } else {
             currentUser = nil
             isAuthenticated = false
-            
+
             // ユーザーIDをLoggingServiceからクリア
             LoggingService.shared.setUserID(nil)
         }
@@ -108,7 +140,7 @@ class AuthViewModel: ObservableObject {
         for await user in authService.observeAuthState() {
             currentUser = user
             isAuthenticated = user != nil
-            
+
             // ユーザーIDをLoggingServiceに設定/クリア
             if let user = user {
                 LoggingService.shared.setUserID(user.id)
@@ -118,5 +150,3 @@ class AuthViewModel: ObservableObject {
         }
     }
 }
-
-

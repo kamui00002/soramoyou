@@ -78,8 +78,8 @@ class ProfileViewModel: ObservableObject {
         
         do {
             // リトライ可能な操作として実行
-            let fetchedUser = try await RetryableOperation.executeIfRetryable {
-                try await firestoreService.fetchUser(userId: userId)
+            let fetchedUser = try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.fetchUser(userId: userId)
             }
             user = fetchedUser
             
@@ -151,8 +151,8 @@ class ProfileViewModel: ObservableObject {
         
         do {
             // リトライ可能な操作として実行
-            let posts = try await RetryableOperation.executeIfRetryable {
-                try await firestoreService.fetchUserPosts(
+            let posts = try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.fetchUserPosts(
                     userId: userId,
                     limit: 50,
                     lastDocument: nil
@@ -198,16 +198,16 @@ class ProfileViewModel: ObservableObject {
                    let url = URL(string: existingPhotoURL) {
                     // Storageから画像を削除
                     let path = "users/\(userId)/profile.jpg"
-                    try? await RetryableOperation.executeIfRetryable {
-                        try await storageService.deleteImage(path: path)
+                    try? await RetryableOperation.executeIfRetryable { [self] in
+                        try await self.storageService.deleteImage(path: path)
                     }
                 }
                 photoURL = nil
             } else if let profileImage = editingProfileImage {
                 // 新しい画像をアップロード（リトライ可能）
                 let imagePath = "users/\(userId)/profile.jpg"
-                let uploadedURL = try await RetryableOperation.executeIfRetryable {
-                    try await storageService.uploadImage(profileImage, path: imagePath)
+                let uploadedURL = try await RetryableOperation.executeIfRetryable { [self] in
+                    try await self.storageService.uploadImage(profileImage, path: imagePath)
                 }
                 photoURL = uploadedURL.absoluteString
             }
@@ -219,8 +219,8 @@ class ProfileViewModel: ObservableObject {
             updatedUser.updatedAt = Date()
             
             // Firestoreに更新（リトライ可能）
-            let savedUser = try await RetryableOperation.executeIfRetryable {
-                try await firestoreService.updateUser(updatedUser)
+            let savedUser = try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.updateUser(updatedUser)
             }
             user = savedUser
             
@@ -260,10 +260,10 @@ class ProfileViewModel: ObservableObject {
             let toolsOrder = selectedTools.map { $0.rawValue }
             
             // リトライ可能な操作として実行
-            try await RetryableOperation.executeIfRetryable {
-                try await firestoreService.updateEditTools(
+            try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.updateEditTools(
                     userId: userId,
-                    tools: selectedTools,
+                    tools: self.selectedTools,
                     order: toolsOrder
                 )
             }
@@ -327,4 +327,3 @@ class ProfileViewModel: ObservableObject {
         return displayNameValid && bioValid
     }
 }
-

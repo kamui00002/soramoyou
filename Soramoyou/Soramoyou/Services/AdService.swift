@@ -6,18 +6,20 @@
 //
 
 import Foundation
+import UIKit
 import GoogleMobileAds
 import Combine
 import os.log
 
 protocol AdServiceProtocol {
     func initialize() async
-    func loadBannerAd(adUnitID: String) async throws -> GADBannerView
-    func getBannerAdSize() -> GADAdSize
+    func loadBannerAd(adUnitID: String) async throws -> BannerView
+    func getBannerAdSize() -> AdSize
 }
 
 class AdService: NSObject, AdServiceProtocol {
     static let shared = AdService()
+    static let isAdsEnabled = false
     
     private var isInitialized = false
     private let logger = Logger(subsystem: "com.soramoyou", category: "AdService")
@@ -33,12 +35,16 @@ class AdService: NSObject, AdServiceProtocol {
     
     /// AdMob SDKを初期化
     func initialize() async {
+        guard Self.isAdsEnabled else {
+            logger.info("AdMob initialization is disabled")
+            return
+        }
         guard !isInitialized else {
             return
         }
         
         await MainActor.run {
-            GADMobileAds.sharedInstance().start(completionHandler: { [weak self] status in
+            MobileAds.shared.start(completionHandler: { [weak self] status in
                 guard let self = self else { return }
                 
                 self.isInitialized = true
@@ -55,7 +61,10 @@ class AdService: NSObject, AdServiceProtocol {
     // MARK: - Load Banner Ad
     
     /// バナー広告を読み込む
-    func loadBannerAd(adUnitID: String) async throws -> GADBannerView {
+    func loadBannerAd(adUnitID: String) async throws -> BannerView {
+        guard Self.isAdsEnabled else {
+            throw AdServiceError.adsDisabled
+        }
         // 初期化されていない場合は初期化を試みる
         if !isInitialized {
             await initialize()
@@ -64,12 +73,12 @@ class AdService: NSObject, AdServiceProtocol {
         }
         
         return await MainActor.run {
-            let bannerView = GADBannerView(adSize: getBannerAdSize())
+            let bannerView = BannerView(adSize: getBannerAdSize())
             bannerView.adUnitID = adUnitID
             bannerView.delegate = self
             
             // 広告を読み込む
-            let request = GADRequest()
+            let request = Request()
             bannerView.load(request)
             
             return bannerView
@@ -77,47 +86,54 @@ class AdService: NSObject, AdServiceProtocol {
     }
     
     /// バナー広告のサイズを取得
-    func getBannerAdSize() -> GADAdSize {
-        // 画面幅に合わせたバナー広告サイズを取得
-        return GADCurrentOrientationAnchoredAdaptiveBannerAdSizeWithWidth(UIScreen.main.bounds.width)
+    func getBannerAdSize() -> AdSize {
+        // 標準バナーサイズ（SDK互換性優先）
+        return AdSizeBanner
     }
 }
 
-// MARK: - GADBannerViewDelegate
+// MARK: - BannerViewDelegate
 
-extension AdService: GADBannerViewDelegate {
+extension AdService: BannerViewDelegate {
     /// 広告が正常に読み込まれたとき
-    func bannerViewDidReceiveAd(_ bannerView: GADBannerView) {
+    func bannerViewDidReceiveAd(_ bannerView: BannerView) {
         logger.info("Banner ad loaded successfully: \(bannerView.adUnitID ?? "unknown")")
     }
     
     /// 広告の読み込みに失敗したとき
-    func bannerView(_ bannerView: GADBannerView, didFailToReceiveAdWithError error: Error) {
+    func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
         // エラーをログに記録するが、アプリの動作には影響を与えない
         logger.error("Banner ad failed to load: \(error.localizedDescription)")
     }
     
     /// 広告が表示されたとき
-    func bannerViewDidRecordImpression(_ bannerView: GADBannerView) {
+    func bannerViewDidRecordImpression(_ bannerView: BannerView) {
         logger.info("Banner ad impression recorded: \(bannerView.adUnitID ?? "unknown")")
     }
     
     /// 広告がクリックされたとき
-    func bannerViewWillPresentScreen(_ bannerView: GADBannerView) {
+    func bannerViewWillPresentScreen(_ bannerView: BannerView) {
         logger.info("Banner ad clicked: \(bannerView.adUnitID ?? "unknown")")
     }
     
     /// 広告画面が閉じられたとき
-    func bannerViewWillDismissScreen(_ bannerView: GADBannerView) {
+    func bannerViewWillDismissScreen(_ bannerView: BannerView) {
         logger.info("Banner ad screen will dismiss: \(bannerView.adUnitID ?? "unknown")")
     }
     
     /// 広告画面が閉じられたとき
-    func bannerViewDidDismissScreen(_ bannerView: GADBannerView) {
+    func bannerViewDidDismissScreen(_ bannerView: BannerView) {
         logger.info("Banner ad screen dismissed: \(bannerView.adUnitID ?? "unknown")")
     }
 }
 
+enum AdServiceError: LocalizedError {
+    case adsDisabled
 
-
-
+    var errorDescription: String? {
+        switch self {
+        case .adsDisabled:
+            return "広告が無効化されています"
+        }
+    }
+}

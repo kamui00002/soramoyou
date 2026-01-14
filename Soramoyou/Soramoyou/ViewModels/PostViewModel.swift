@@ -154,13 +154,17 @@ class PostViewModel: ObservableObject {
         errorMessage = nil
         uploadedImageURLs = []
         uploadedThumbnailURLs = []
+
+        defer {
+            isUploading = false
+        }
         
         do {
             // 1. 画像をアップロード（リトライ可能）
             let imageURLs = try await RetryableOperation.executeIfRetryable(
                 operationName: "PostViewModel.uploadImages"
-            ) {
-                try await uploadImages()
+            ) { [self] in
+                try await self.uploadImages()
             }
             
             // 2. Firestoreに投稿データを保存
@@ -169,8 +173,8 @@ class PostViewModel: ObservableObject {
             // 3. 投稿を保存（リトライ可能）
             _ = try await RetryableOperation.executeIfRetryable(
                 operationName: "PostViewModel.createPost"
-            ) {
-                try await firestoreService.createPost(post)
+            ) { [self] in
+                try await self.firestoreService.createPost(post)
             }
             
             isPostSaved = true
@@ -185,8 +189,6 @@ class PostViewModel: ObservableObject {
             // ユーザーフレンドリーなメッセージを設定
             errorMessage = error.userFriendlyMessage
             throw error
-        } finally {
-            isUploading = false
         }
     }
     
@@ -380,4 +382,3 @@ enum PostViewModelError: LocalizedError {
         }
     }
 }
-

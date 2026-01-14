@@ -14,42 +14,108 @@ struct LoginView: View {
     @State private var password = ""
     @State private var errorMessage = ""
     @State private var isLoading = false
-    
+
     var body: some View {
-        NavigationView {
-            Form {
-                Section {
-                    TextField("メールアドレス", text: $email)
-                        .textContentType(.emailAddress)
-                        .autocapitalization(.none)
-                    
-                    SecureField("パスワード", text: $password)
-                        .textContentType(.password)
+        SkyBackgroundView(showClouds: true) {
+            VStack(spacing: 0) {
+                // ヘッダー
+                HStack {
+                    Spacer()
+                    Button("キャンセル") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                    .padding()
                 }
-                
-                if !errorMessage.isEmpty {
-                    Section {
+
+                Spacer()
+
+                // タイトル
+                VStack(spacing: 12) {
+                    Image(systemName: "person.circle.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.white.opacity(0.9))
+
+                    Text("ログイン")
+                        .font(.system(size: 32, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                }
+                .padding(.bottom, 40)
+
+                // フォーム
+                VStack(spacing: 16) {
+                    // メールアドレス入力
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("メールアドレス")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white.opacity(0.8))
+
+                        TextField("example@email.com", text: $email)
+                            .textContentType(.emailAddress)
+                            .autocapitalization(.none)
+                            .keyboardType(.emailAddress)
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(.white.opacity(0.2))
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(.white.opacity(0.3), lineWidth: 1)
+                                    )
+                            )
+                            .foregroundColor(.white)
+                    }
+
+                    // パスワード入力
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("パスワード")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white.opacity(0.8))
+
+                        SecureField("パスワード", text: $password)
+                            .textContentType(.password)
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(.white.opacity(0.2))
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(.white.opacity(0.3), lineWidth: 1)
+                                    )
+                            )
+                            .foregroundColor(.white)
+                    }
+
+                    // エラーメッセージ
+                    if !errorMessage.isEmpty {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.red)
                             Text(errorMessage)
-                                .foregroundColor(.red)
                         }
+                        .font(.system(size: 14))
+                        .foregroundColor(.red)
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(.white.opacity(0.9))
+                        )
                     }
-                }
-                
-                if let authError = authViewModel.errorMessage, !authError.isEmpty {
-                    Section {
+
+                    if let authError = authViewModel.errorMessage, !authError.isEmpty {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.red)
                             Text(authError)
-                                .foregroundColor(.red)
                         }
+                        .font(.system(size: 14))
+                        .foregroundColor(.red)
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(.white.opacity(0.9))
+                        )
                     }
-                }
-                
-                Section {
+
+                    // ログインボタン
                     Button(action: {
                         Task {
                             isLoading = true
@@ -63,23 +129,24 @@ struct LoginView: View {
                             isLoading = false
                         }
                     }) {
-                        if isLoading {
-                            ProgressView()
-                        } else {
-                            Text("ログイン")
+                        HStack {
+                            if isLoading {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            } else {
+                                Text("ログイン")
+                            }
                         }
                     }
+                    .buttonStyle(GlassButtonStyle(isPrimary: true))
                     .disabled(isLoading || email.isEmpty || password.isEmpty)
+                    .opacity(email.isEmpty || password.isEmpty ? 0.6 : 1.0)
+                    .padding(.top, 8)
                 }
-            }
-            .navigationTitle("ログイン")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("キャンセル") {
-                        dismiss()
-                    }
-                }
+                .padding(.horizontal, 32)
+
+                Spacer()
+                Spacer()
             }
         }
     }
@@ -91,5 +158,3 @@ struct LoginView_Previews: PreviewProvider {
             .environmentObject(AuthViewModel())
     }
 }
-
-

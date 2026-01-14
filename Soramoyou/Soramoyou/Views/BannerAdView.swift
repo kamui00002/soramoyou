@@ -29,7 +29,7 @@ struct BannerAdView: UIViewControllerRepresentable {
 
 class BannerAdViewController: UIViewController {
     let adUnitID: String
-    private var bannerView: GADBannerView?
+    private var bannerView: BannerView?
     
     init(adUnitID: String) {
         self.adUnitID = adUnitID
@@ -60,7 +60,7 @@ class BannerAdViewController: UIViewController {
         }
     }
     
-    private func setupBannerView(_ bannerView: GADBannerView) {
+    private func setupBannerView(_ bannerView: BannerView) {
         view.addSubview(bannerView)
         bannerView.translatesAutoresizingMaskIntoConstraints = false
         

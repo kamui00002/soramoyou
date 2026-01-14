@@ -54,9 +54,8 @@ struct ImagePicker: UIViewControllerRepresentable {
                 for result in results {
                     if result.itemProvider.canLoadObject(ofClass: UIImage.self) {
                         do {
-                            if let image = try await result.itemProvider.loadObject(ofClass: UIImage.self) as? UIImage {
-                                loadedImages.append(image)
-                            }
+                            let image = try await self.loadImage(from: result.itemProvider)
+                            loadedImages.append(image)
                         } catch {
                             print("画像の読み込みに失敗しました: \(error)")
                         }
@@ -66,6 +65,22 @@ struct ImagePicker: UIViewControllerRepresentable {
                 await MainActor.run {
                     self.parent.selectedImages = loadedImages
                     self.parent.onSelectionComplete?()
+                }
+            }
+        }
+
+        private func loadImage(from provider: NSItemProvider) async throws -> UIImage {
+            return try await withCheckedThrowingContinuation { continuation in
+                provider.loadObject(ofClass: UIImage.self) { object, error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    if let image = object as? UIImage {
+                        continuation.resume(returning: image)
+                    } else {
+                        continuation.resume(throwing: PhotoSelectionError.validationFailed)
+                    }
                 }
             }
         }
@@ -181,4 +196,3 @@ enum PhotoSelectionError: LocalizedError {
         }
     }
 }
-

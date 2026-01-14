@@ -11,6 +11,7 @@ import FirebaseAuth
 protocol AuthServiceProtocol {
     func signIn(email: String, password: String) async throws -> User
     func signUp(email: String, password: String) async throws -> User
+    func signInAnonymously() async throws -> User
     func signOut() async throws
     func currentUser() -> User?
     func observeAuthState() -> AsyncStream<User?>
@@ -56,12 +57,44 @@ class AuthService: AuthServiceProtocol {
             throw mapFirebaseError(error)
         }
     }
+
+    func signInAnonymously() async throws -> User {
+        do {
+            let result = try await Auth.auth().signInAnonymously()
+            return User(from: result.user)
+        } catch {
+            throw mapFirebaseError(error)
+        }
+    }
     
     func signOut() async throws {
         do {
             try Auth.auth().signOut()
         } catch {
             throw mapFirebaseError(error)
+        }
+    }
+
+    func currentUser() -> User? {
+        guard let firebaseUser = Auth.auth().currentUser else {
+            return nil
+        }
+        return User(from: firebaseUser)
+    }
+
+    func observeAuthState() -> AsyncStream<User?> {
+        AsyncStream { continuation in
+            let listener = Auth.auth().addStateDidChangeListener { _, firebaseUser in
+                if let firebaseUser = firebaseUser {
+                    continuation.yield(User(from: firebaseUser))
+                } else {
+                    continuation.yield(nil)
+                }
+            }
+
+            continuation.onTermination = { @Sendable _ in
+                Auth.auth().removeStateDidChangeListener(listener)
+            }
         }
     }
     
@@ -129,29 +162,3 @@ enum AuthError: LocalizedError {
         }
     }
 }
-    
-    func currentUser() -> User? {
-        guard let firebaseUser = Auth.auth().currentUser else {
-            return nil
-        }
-        return User(from: firebaseUser)
-    }
-    
-    func observeAuthState() -> AsyncStream<User?> {
-        AsyncStream { continuation in
-            let listener = Auth.auth().addStateDidChangeListener { _, firebaseUser in
-                if let firebaseUser = firebaseUser {
-                    continuation.yield(User(from: firebaseUser))
-                } else {
-                    continuation.yield(nil)
-                }
-            }
-            
-            continuation.onTermination = { @Sendable _ in
-                Auth.auth().removeStateDidChangeListener(listener)
-            }
-        }
-    }
-}
-
-

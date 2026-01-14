@@ -41,13 +41,13 @@ class SearchViewModel: ObservableObject {
             let colorQuery = selectedColor
             
             // 複合検索を実行（リトライ可能）
-            let results = try await RetryableOperation.executeIfRetryable {
-                try await firestoreService.searchPosts(
+            let results = try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.searchPosts(
                     hashtag: hashtagQuery,
                     color: colorQuery,
-                    timeOfDay: selectedTimeOfDay,
-                    skyType: selectedSkyType,
-                    colorThreshold: colorQuery != nil ? colorThreshold : nil
+                    timeOfDay: self.selectedTimeOfDay,
+                    skyType: self.selectedSkyType,
+                    colorThreshold: colorQuery != nil ? self.colorThreshold : nil
                 )
             }
             
@@ -118,4 +118,3 @@ class SearchViewModel: ObservableObject {
         !hashtag.isEmpty || selectedColor != nil || selectedTimeOfDay != nil || selectedSkyType != nil
     }
 }
-

@@ -56,6 +56,8 @@
 	<string>投稿に位置情報を追加するために、位置情報へのアクセスが必要です。</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>投稿に位置情報を追加するために、位置情報へのアクセスが必要です。</string>
+	<key>GADApplicationIdentifier</key>
+	<string>ca-app-pub-3940256099942544~1458002511</string>
 </dict>
 </plist>
 

@@ -3,7 +3,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ============================================
     // Helper functions
+    // ============================================
+
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -12,39 +15,104 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Users collection
-    match /users/{userId} {
-      // Anyone can read user profiles
-      allow read: if true;
+    // ============================================
+    // Data Validation functions
+    // ============================================
 
-      // Only authenticated users can create their own profile
-      allow create: if isOwner(userId);
-
-      // Only the owner can update or delete their profile
-      allow update, delete: if isOwner(userId);
+    // キャプションの長さ検証（最大2000文字）
+    function isValidCaption(caption) {
+      return caption == null || caption.size() <= 2000;
     }
 
+    // ハッシュタグの検証（最大30個）
+    function isValidHashtags(hashtags) {
+      return hashtags == null || hashtags.size() <= 30;
+    }
+
+    // 可視性の検証
+    function isValidVisibility(visibility) {
+      return visibility in ['public', 'followers', 'private'];
+    }
+
+    // 投稿データの検証
+    function isValidPost() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['userId', 'images', 'visibility', 'createdAt'])
+             && isValidCaption(data.get('caption', null))
+             && isValidHashtags(data.get('hashtags', null))
+             && isValidVisibility(data.visibility)
+             && data.images.size() >= 1
+             && data.images.size() <= 10;
+    }
+
+    // ============================================
+    // Users collection
+    // ============================================
+    match /users/{userId} {
+      // 認証済みユーザーのみプロフィールを読み取り可能
+      // （プライバシー保護のため）
+      allow read: if isAuthenticated();
+
+      // 新規ユーザーのみ自分のプロフィールを作成可能
+      allow create: if isOwner(userId)
+                    && request.resource.data.keys().hasAll(['id', 'email', 'createdAt']);
+
+      // 所有者のみ更新・削除可能
+      // idとemailは変更不可
+      allow update: if isOwner(userId)
+                    && request.resource.data.id == resource.data.id
+                    && request.resource.data.email == resource.data.email;
+
+      allow delete: if isOwner(userId);
+    }
+
+    // ============================================
     // Posts collection
+    // ============================================
     match /posts/{postId} {
-      // Public posts can be read by anyone
-      // Private/followers posts require ownership check
+      // 読み取り権限
+      // - public: 誰でも読み取り可能
+      // - followers: 認証済みユーザーのみ（将来的にはフォロワーチェックを追加）
+      // - private: 所有者のみ
       allow read: if resource.data.visibility == 'public'
+                  || (resource.data.visibility == 'followers' && isAuthenticated())
                   || isOwner(resource.data.userId);
 
-      // Only authenticated users can create posts
-      // Must set userId to their own UID
+      // 作成権限: 認証済みユーザーのみ、自分のIDで作成
       allow create: if isAuthenticated()
-                    && request.resource.data.userId == request.auth.uid;
+                    && request.resource.data.userId == request.auth.uid
+                    && isValidPost();
 
-      // Only the owner can update or delete their posts
-      allow update, delete: if isOwner(resource.data.userId);
+      // 更新・削除権限: 所有者のみ
+      // userIdは変更不可
+      allow update: if isOwner(resource.data.userId)
+                    && request.resource.data.userId == resource.data.userId
+                    && isValidPost();
+
+      allow delete: if isOwner(resource.data.userId);
     }
 
+    // ============================================
     // Drafts collection
+    // ============================================
     match /drafts/{draftId} {
-      // Only the owner can read, create, update, or delete drafts
-      allow read, write: if isOwner(resource.data.userId)
-                         || (request.resource.data.userId == request.auth.uid);
+      // 読み取り: 所有者のみ（下書きは完全にプライベート）
+      allow read: if isAuthenticated()
+                  && resource.data.userId == request.auth.uid;
+
+      // 作成: 認証済みユーザーのみ、自分のIDで作成
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['id', 'userId', 'createdAt']);
+
+      // 更新: 所有者のみ、userIdは変更不可
+      allow update: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.userId == resource.data.userId;
+
+      // 削除: 所有者のみ
+      allow delete: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid;
     }
   }
 }

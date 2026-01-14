@@ -112,8 +112,8 @@ class EditViewModel: ObservableObject {
         
         do {
             // リトライ可能な操作として実行
-            let user = try await RetryableOperation.executeIfRetryable {
-                try await firestoreService.fetchUser(userId: userId)
+            let user = try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.fetchUser(userId: userId)
             }
             
             // 装備ツールを取得
@@ -256,4 +256,3 @@ enum EditViewModelError: LocalizedError {
         }
     }
 }
-

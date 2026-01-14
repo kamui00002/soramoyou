@@ -14,16 +14,59 @@
 		E051CA4D2EE49ACB00CC78AB /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA4C2EE49ACB00CC78AB /* FirebaseFirestore */; };
 		E051CA502EE49B0200CC78AB /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA4F2EE49B0200CC78AB /* Kingfisher */; };
 		E051CA532EE49B3400CC78AB /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA522EE49B3400CC78AB /* GoogleMobileAds */; };
+		E051CA542EE49B3500CC78AB /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA552EE49B3500CC78AB /* FirebaseStorage */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		TEST0001000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E051C9CE2EE497CA00CC78AB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E051C9D52EE497CA00CC78AB;
+			remoteInfo = Soramoyou;
+		};
+		TEST0002000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E051C9CE2EE497CA00CC78AB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E051C9D52EE497CA00CC78AB;
+			remoteInfo = Soramoyou;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		E051C9D62EE497CA00CC78AB /* Soramoyou.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Soramoyou.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		TEST1001000000000001 /* SoramoyouTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SoramoyouTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		TEST2001000000000001 /* SoramoyouUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SoramoyouUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		E051C9D82EE497CA00CC78AC /* Exceptions for "Soramoyou" folder in "Soramoyou" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = E051C9D52EE497CA00CC78AB /* Soramoyou */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E051C9D82EE497CA00CC78AB /* Soramoyou */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				E051C9D82EE497CA00CC78AC /* Exceptions for "Soramoyou" folder in "Soramoyou" target */,
+			);
 			path = Soramoyou;
+			sourceTree = "<group>";
+		};
+		TEST1002000000000001 /* SoramoyouTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SoramoyouTests;
+			sourceTree = "<group>";
+		};
+		TEST2002000000000001 /* SoramoyouUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SoramoyouUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -40,6 +83,21 @@
 				E051CA4D2EE49ACB00CC78AB /* FirebaseFirestore in Frameworks */,
 				E051CA452EE49ACB00CC78AB /* FirebaseAI in Frameworks */,
 				E051CA532EE49B3400CC78AB /* GoogleMobileAds in Frameworks */,
+				E051CA542EE49B3500CC78AB /* FirebaseStorage in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		TEST1003000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		TEST2003000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -50,6 +108,8 @@
 			isa = PBXGroup;
 			children = (
 				E051C9D82EE497CA00CC78AB /* Soramoyou */,
+				TEST1002000000000001 /* SoramoyouTests */,
+				TEST2002000000000001 /* SoramoyouUITests */,
 				E051C9D72EE497CA00CC78AB /* Products */,
 			);
 			sourceTree = "<group>";
@@ -58,6 +118,8 @@
 			isa = PBXGroup;
 			children = (
 				E051C9D62EE497CA00CC78AB /* Soramoyou.app */,
+				TEST1001000000000001 /* SoramoyouTests.xctest */,
+				TEST2001000000000001 /* SoramoyouUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -89,10 +151,53 @@
 				E051CA4C2EE49ACB00CC78AB /* FirebaseFirestore */,
 				E051CA4F2EE49B0200CC78AB /* Kingfisher */,
 				E051CA522EE49B3400CC78AB /* GoogleMobileAds */,
+				E051CA552EE49B3500CC78AB /* FirebaseStorage */,
 			);
 			productName = Soramoyou;
 			productReference = E051C9D62EE497CA00CC78AB /* Soramoyou.app */;
 			productType = "com.apple.product-type.application";
+		};
+		TEST1000000000000001 /* SoramoyouTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = TEST1004000000000001 /* Build configuration list for PBXNativeTarget "SoramoyouTests" */;
+			buildPhases = (
+				TEST1005000000000001 /* Sources */,
+				TEST1003000000000001 /* Frameworks */,
+				TEST1006000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				TEST1007000000000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				TEST1002000000000001 /* SoramoyouTests */,
+			);
+			name = SoramoyouTests;
+			productName = SoramoyouTests;
+			productReference = TEST1001000000000001 /* SoramoyouTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		TEST2000000000000001 /* SoramoyouUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = TEST2004000000000001 /* Build configuration list for PBXNativeTarget "SoramoyouUITests" */;
+			buildPhases = (
+				TEST2005000000000001 /* Sources */,
+				TEST2003000000000001 /* Frameworks */,
+				TEST2006000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				TEST2007000000000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				TEST2002000000000001 /* SoramoyouUITests */,
+			);
+			name = SoramoyouUITests;
+			productName = SoramoyouUITests;
+			productReference = TEST2001000000000001 /* SoramoyouUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -106,6 +211,14 @@
 				TargetAttributes = {
 					E051C9D52EE497CA00CC78AB = {
 						CreatedOnToolsVersion = 26.0;
+					};
+					TEST1000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = E051C9D52EE497CA00CC78AB;
+					};
+					TEST2000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = E051C9D52EE497CA00CC78AB;
 					};
 				};
 			};
@@ -129,12 +242,28 @@
 			projectRoot = "";
 			targets = (
 				E051C9D52EE497CA00CC78AB /* Soramoyou */,
+				TEST1000000000000001 /* SoramoyouTests */,
+				TEST2000000000000001 /* SoramoyouUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		E051C9D42EE497CA00CC78AB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		TEST1006000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		TEST2006000000000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -151,7 +280,34 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		TEST1005000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		TEST2005000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		TEST1007000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E051C9D52EE497CA00CC78AB /* Soramoyou */;
+			targetProxy = TEST0001000000000001 /* PBXContainerItemProxy */;
+		};
+		TEST2007000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E051C9D52EE497CA00CC78AB /* Soramoyou */;
+			targetProxy = TEST0002000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		E051C9DF2EE497CB00CC78AB /* Debug */ = {
@@ -207,7 +363,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -265,7 +421,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -285,6 +441,7 @@
 				DEVELOPMENT_TEAM = B7F79FDM78;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Soramoyou/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -298,10 +455,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.Soramoyou;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -317,6 +471,7 @@
 				DEVELOPMENT_TEAM = B7F79FDM78;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Soramoyou/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -330,12 +485,83 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.Soramoyou;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		TEST1008000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = B7F79FDM78;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.SoramoyouTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Soramoyou.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Soramoyou";
+			};
+			name = Debug;
+		};
+		TEST1009000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = B7F79FDM78;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.SoramoyouTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Soramoyou.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Soramoyou";
+			};
+			name = Release;
+		};
+		TEST2008000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = B7F79FDM78;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.SoramoyouUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Soramoyou;
+			};
+			name = Debug;
+		};
+		TEST2009000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = B7F79FDM78;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.SoramoyouUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Soramoyou;
 			};
 			name = Release;
 		};
@@ -356,6 +582,24 @@
 			buildConfigurations = (
 				E051C9E22EE497CB00CC78AB /* Debug */,
 				E051C9E32EE497CB00CC78AB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		TEST1004000000000001 /* Build configuration list for PBXNativeTarget "SoramoyouTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				TEST1008000000000001 /* Debug */,
+				TEST1009000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		TEST2004000000000001 /* Build configuration list for PBXNativeTarget "SoramoyouUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				TEST2008000000000001 /* Debug */,
+				TEST2009000000000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -424,6 +668,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E051CA512EE49B3400CC78AB /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */;
 			productName = GoogleMobileAds;
+		};
+		E051CA552EE49B3500CC78AB /* FirebaseStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E051CA432EE49ACB00CC78AB /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseStorage;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

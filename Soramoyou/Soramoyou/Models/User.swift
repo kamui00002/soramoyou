@@ -12,9 +12,9 @@ import FirebaseFirestore
 struct User: Identifiable, Codable {
     let id: String
     let email: String?
-    let displayName: String?
-    let photoURL: String?
-    let bio: String?
+    var displayName: String?
+    var photoURL: String?
+    var bio: String?
     var customEditTools: [String]?
     var customEditToolsOrder: [String]?
     var followersCount: Int
@@ -158,5 +158,4 @@ enum UserModelError: Error {
     case missingUserId
     case invalidData
 }
-
 

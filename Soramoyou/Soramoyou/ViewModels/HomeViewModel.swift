@@ -39,8 +39,8 @@ class HomeViewModel: ObservableObject {
             // リトライ可能な操作として実行
             let result = try await RetryableOperation.executeIfRetryable(
                 operationName: "HomeViewModel.fetchPosts"
-            ) {
-                try await firestoreService.fetchPostsWithSnapshot(limit: pageSize, lastDocument: nil)
+            ) { [self] in
+                try await self.firestoreService.fetchPostsWithSnapshot(limit: self.pageSize, lastDocument: nil)
             }
             posts = result.posts
             lastDocument = result.lastDocument
@@ -70,8 +70,8 @@ class HomeViewModel: ObservableObject {
             // リトライ可能な操作として実行
             let result = try await RetryableOperation.executeIfRetryable(
                 operationName: "HomeViewModel.loadMorePosts"
-            ) {
-                try await firestoreService.fetchPostsWithSnapshot(limit: pageSize, lastDocument: lastDocument)
+            ) { [self] in
+                try await self.firestoreService.fetchPostsWithSnapshot(limit: self.pageSize, lastDocument: self.lastDocument)
             }
             
             if result.posts.isEmpty {
@@ -105,4 +105,3 @@ class HomeViewModel: ObservableObject {
         return try await firestoreService.fetchPost(postId: postId)
     }
 }
-

@@ -35,8 +35,8 @@ class DraftsViewModel: ObservableObject {
         
         do {
             // リトライ可能な操作として実行
-            drafts = try await RetryableOperation.executeIfRetryable {
-                try await firestoreService.fetchDrafts(userId: userId)
+            drafts = try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.fetchDrafts(userId: userId)
             }
         } catch {
             // エラーをログに記録
@@ -57,8 +57,8 @@ class DraftsViewModel: ObservableObject {
         
         do {
             // リトライ可能な操作として実行
-            try await RetryableOperation.executeIfRetryable {
-                try await firestoreService.deleteDraft(draftId: draft.id)
+            try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.deleteDraft(draftId: draft.id)
             }
             // ローカルのリストからも削除
             drafts.removeAll { $0.id == draft.id }
@@ -72,4 +72,3 @@ class DraftsViewModel: ObservableObject {
         isLoading = false
     }
 }
-

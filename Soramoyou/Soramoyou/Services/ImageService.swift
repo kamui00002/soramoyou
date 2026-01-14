@@ -579,7 +579,9 @@ class ImageService: ImageServiceProtocol {
                     // RGBから色温度を計算（簡易版）
                     // McCamy's formulaを使用
                     let n = (r - 0.3320) / (0.1858 - b)
-                    let colorTemperature = 449.0 * pow(n, 3.0) + 3525.0 * pow(n, 2.0) + 6823.3 * n + 5520.33
+                    let nSquared = n * n
+                    let nCubed = nSquared * n
+                    let colorTemperature = (449.0 * nCubed) + (3525.0 * nSquared) + (6823.3 * n) + 5520.33
                     
                     // 範囲を制限（2000K〜10000K）
                     let clampedTemperature = max(2000, min(10000, Int(colorTemperature)))
@@ -817,4 +819,3 @@ enum ImageServiceError: LocalizedError {
         }
     }
 }
-

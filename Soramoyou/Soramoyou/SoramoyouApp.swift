@@ -21,8 +21,10 @@ struct SoramoyouApp: App {
         setupCrashlytics()
         
         // AdMob SDKを初期化（非同期で実行、アプリの起動をブロックしない）
-        Task {
-            await AdService.shared.initialize()
+        if AdService.isAdsEnabled {
+            Task {
+                await AdService.shared.initialize()
+            }
         }
     }
     
