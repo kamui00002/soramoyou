@@ -16,35 +16,83 @@ struct ProfileEditView: View {
     
     var body: some View {
         NavigationView {
-            Form {
-                // プロフィール画像セクション
-                Section {
-                    profileImageSection
-                }
-                
-                // 表示名セクション
-                Section(header: Text("表示名")) {
-                    TextField("表示名", text: $viewModel.editingDisplayName)
-                        .textInputAutocapitalization(.never)
-                }
-                
-                // 自己紹介セクション
-                Section(header: Text("自己紹介")) {
-                    TextEditor(text: $viewModel.editingBio)
-                        .frame(minHeight: 100)
-                }
-                
-                // バリデーションメッセージ
-                if !viewModel.isValidProfileEdit {
-                    Section {
-                        Text("表示名は50文字以内、自己紹介は200文字以内で入力してください")
-                            .font(.caption)
-                            .foregroundColor(.red)
+            ZStack {
+                // 空のグラデーション背景
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.68, green: 0.85, blue: 0.90),
+                        Color(red: 0.53, green: 0.81, blue: 0.98),
+                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 24) {
+                        // プロフィール画像セクション
+                        profileImageSection
+                        
+                        // 表示名セクション
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("表示名")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            TextField("表示名", text: $viewModel.editingDisplayName)
+                                .textInputAutocapitalization(.never)
+                                .padding()
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(.white.opacity(0.2))
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(.white.opacity(0.4), lineWidth: 1)
+                                        )
+                                )
+                                .foregroundColor(.primary)
+                        }
+                        
+                        // 自己紹介セクション
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("自己紹介")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            TextEditor(text: $viewModel.editingBio)
+                                .frame(minHeight: 100)
+                                .padding(8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(.white.opacity(0.2))
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(.white.opacity(0.4), lineWidth: 1)
+                                        )
+                                )
+                                .foregroundColor(.primary)
+                                .scrollContentBackground(.hidden)
+                        }
+                        
+                        // バリデーションメッセージ
+                        if !viewModel.isValidProfileEdit {
+                            Text("表示名は50文字以内、自己紹介は200文字以内で入力してください")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .padding()
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(.white.opacity(0.9))
+                                )
+                        }
                     }
+                    .padding()
                 }
             }
             .navigationTitle("プロフィール編集")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("キャンセル") {
@@ -52,6 +100,7 @@ struct ProfileEditView: View {
                         resetEditingValues()
                         dismiss()
                     }
+                    .foregroundColor(.white)
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -61,6 +110,7 @@ struct ProfileEditView: View {
                         }
                     }
                     .disabled(!viewModel.isValidProfileEdit || viewModel.isLoading)
+                    .foregroundColor(.white)
                 }
             }
             .sheet(isPresented: $showingImagePicker) {
@@ -107,22 +157,23 @@ struct ProfileEditView: View {
                         .placeholder {
                             Image(systemName: "person.circle.fill")
                                 .font(.system(size: 80))
-                                .foregroundColor(.gray)
+                                .foregroundColor(.white.opacity(0.6))
                         }
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                 } else {
                     Image(systemName: "person.circle.fill")
                         .font(.system(size: 80))
-                        .foregroundColor(.gray)
+                        .foregroundColor(.white.opacity(0.6))
                 }
             }
             .frame(width: 100, height: 100)
             .clipShape(Circle())
             .overlay(
                 Circle()
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 2)
+                    .stroke(.white.opacity(0.4), lineWidth: 2)
             )
+            .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
             
             // 画像変更ボタン
             Button(action: {
@@ -133,6 +184,17 @@ struct ProfileEditView: View {
                     Text("画像を変更")
                 }
                 .font(.body)
+                .foregroundColor(.white)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(.white.opacity(0.2))
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(.white.opacity(0.4), lineWidth: 1)
+                        )
+                )
             }
             
             // 画像を削除ボタン（既存の画像がある場合）
@@ -143,7 +205,7 @@ struct ProfileEditView: View {
                 }) {
                     Text("画像を削除")
                         .font(.body)
-                        .foregroundColor(.red)
+                        .foregroundColor(.white.opacity(0.8))
                 }
             }
         }

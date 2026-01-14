@@ -29,31 +29,51 @@ struct ProfileView: View {
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                ZStack {
-                    if viewModel.isLoading && viewModel.user == nil {
-                        // 初回読み込み中
-                        ProgressView("読み込み中...")
-                    } else if let user = viewModel.user {
-                        // プロフィール表示
-                        profileContent(user: user)
-                    } else {
-                        // ユーザー情報が取得できない場合
-                        VStack(spacing: 16) {
-                            Image(systemName: "person.circle")
-                                .font(.system(size: 60))
-                                .foregroundColor(.gray)
-                            Text("プロフィール情報を取得できませんでした")
-                                .font(.headline)
-                                .foregroundColor(.secondary)
+            ZStack {
+                // 空のグラデーション背景
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.68, green: 0.85, blue: 0.90),
+                        Color(red: 0.53, green: 0.81, blue: 0.98),
+                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    ZStack {
+                        if viewModel.isLoading && viewModel.user == nil {
+                            // 初回読み込み中
+                            VStack {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                Text("読み込み中...")
+                                    .foregroundColor(.white)
+                            }
+                        } else if let user = viewModel.user {
+                            // プロフィール表示
+                            profileContent(user: user)
+                        } else {
+                            // ユーザー情報が取得できない場合
+                            VStack(spacing: 16) {
+                                Image(systemName: "person.circle")
+                                    .font(.system(size: 60))
+                                    .foregroundColor(.white.opacity(0.6))
+                                Text("プロフィール情報を取得できませんでした")
+                                    .font(.headline)
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
                         }
                     }
+                    
+                    // 画面下部に固定表示されるバナー広告
+                    BannerAdContainer()
                 }
-                
-                // 画面下部に固定表示されるバナー広告
-                BannerAdContainer()
             }
             .navigationTitle("プロフィール")
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if viewModel.isOwnProfile {
@@ -83,6 +103,7 @@ struct ProfileView: View {
                             }
                         } label: {
                             Image(systemName: "ellipsis.circle")
+                                .foregroundColor(.white)
                         }
                     } else {
                         // 他ユーザーのプロフィールの場合、表示モード切り替えのみ
@@ -97,6 +118,7 @@ struct ProfileView: View {
                             }
                         } label: {
                             Image(systemName: "ellipsis.circle")
+                                .foregroundColor(.white)
                         }
                     }
                 }
@@ -145,6 +167,7 @@ struct ProfileView: View {
                 profileInfoSection(user: user)
                 
                 Divider()
+                    .background(.white.opacity(0.3))
                 
                 // 投稿一覧セクション
                 postsSection
@@ -165,18 +188,19 @@ struct ProfileView: View {
                 Text(displayName)
                     .font(.title2)
                     .fontWeight(.bold)
+                    .foregroundColor(.white)
             } else {
                 Text("ユーザー")
                     .font(.title2)
                     .fontWeight(.bold)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.8))
             }
             
             // 自己紹介
             if let bio = user.bio {
                 Text(bio)
                     .font(.body)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.9))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
             }
@@ -195,7 +219,7 @@ struct ProfileView: View {
                     .placeholder {
                         Image(systemName: "person.circle.fill")
                             .font(.system(size: 100))
-                            .foregroundColor(.gray)
+                            .foregroundColor(.white.opacity(0.6))
                     }
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -203,12 +227,13 @@ struct ProfileView: View {
                     .clipShape(Circle())
                     .overlay(
                         Circle()
-                            .stroke(Color.gray.opacity(0.3), lineWidth: 2)
+                            .stroke(Color.white.opacity(0.4), lineWidth: 2)
                     )
+                    .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
             } else {
                 Image(systemName: "person.circle.fill")
                     .font(.system(size: 100))
-                    .foregroundColor(.gray)
+                    .foregroundColor(.white.opacity(0.6))
             }
         }
     }
@@ -222,9 +247,10 @@ struct ProfileView: View {
                 Text("\(user.postsCount)")
                     .font(.title3)
                     .fontWeight(.bold)
+                    .foregroundColor(.white)
                 Text("投稿")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.8))
             }
             
             // フォロワー数
@@ -232,9 +258,10 @@ struct ProfileView: View {
                 Text("\(user.followersCount)")
                     .font(.title3)
                     .fontWeight(.bold)
+                    .foregroundColor(.white)
                 Text("フォロワー")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.8))
             }
             
             // フォロー数
@@ -242,12 +269,22 @@ struct ProfileView: View {
                 Text("\(user.followingCount)")
                     .font(.title3)
                     .fontWeight(.bold)
+                    .foregroundColor(.white)
                 Text("フォロー中")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.8))
             }
         }
         .padding(.vertical)
+        .padding(.horizontal, 24)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.white.opacity(0.15))
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(.white.opacity(0.3), lineWidth: 1)
+                )
+        )
     }
     
     // MARK: - Posts Section
@@ -258,11 +295,13 @@ struct ProfileView: View {
             HStack {
                 Text("投稿")
                     .font(.headline)
+                    .foregroundColor(.white)
                 
                 Spacer()
                 
                 if viewModel.isLoadingPosts {
                     ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(0.8)
                 }
             }
@@ -280,10 +319,10 @@ struct ProfileView: View {
         VStack(spacing: 16) {
             Image(systemName: "photo.on.rectangle")
                 .font(.system(size: 60))
-                .foregroundColor(.gray)
+                .foregroundColor(.white.opacity(0.6))
             Text(viewModel.isOwnProfile ? "まだ投稿がありません" : "投稿がありません")
                 .font(.headline)
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.8))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)

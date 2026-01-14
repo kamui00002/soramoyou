@@ -17,9 +17,26 @@ struct DraftsView: View {
     var body: some View {
         NavigationView {
             ZStack {
+                // 空のグラデーション背景
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.68, green: 0.85, blue: 0.90),
+                        Color(red: 0.53, green: 0.81, blue: 0.98),
+                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
                 if viewModel.isLoading && viewModel.drafts.isEmpty {
                     // 初回読み込み中
-                    ProgressView("読み込み中...")
+                    VStack {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        Text("読み込み中...")
+                            .foregroundColor(.white)
+                    }
                 } else if viewModel.drafts.isEmpty {
                     // 下書きがない場合
                     emptyDraftsView
@@ -29,10 +46,12 @@ struct DraftsView: View {
                 }
             }
             .navigationTitle("下書き")
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if !viewModel.drafts.isEmpty {
                         EditButton()
+                            .foregroundColor(.white)
                     }
                 }
             }
@@ -80,37 +99,49 @@ struct DraftsView: View {
         VStack(spacing: 16) {
             Image(systemName: "doc.text")
                 .font(.system(size: 60))
-                .foregroundColor(.gray)
+                .foregroundColor(.white.opacity(0.6))
             Text("下書きがありません")
                 .font(.headline)
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.8))
             Text("投稿画面で下書きを保存できます")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.7))
         }
     }
     
     // MARK: - Drafts List
     
     private var draftsList: some View {
-        List {
-            ForEach(viewModel.drafts) { draft in
-                DraftRow(draft: draft)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        selectedDraft = draft
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            draftToDelete = draft
-                            showingDeleteConfirmation = true
-                        } label: {
-                            Label("削除", systemImage: "trash")
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                ForEach(viewModel.drafts) { draft in
+                    DraftRow(draft: draft)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(.white.opacity(0.2))
+                                .background(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(.white.opacity(0.3), lineWidth: 1)
+                                )
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedDraft = draft
                         }
-                    }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                draftToDelete = draft
+                                showingDeleteConfirmation = true
+                            } label: {
+                                Label("削除", systemImage: "trash")
+                            }
+                        }
+                }
             }
+            .padding()
         }
-        .listStyle(PlainListStyle())
     }
 }
 

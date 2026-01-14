@@ -46,44 +46,65 @@ struct PostInfoView: View {
     
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(spacing: 24) {
-                    // 編集済み画像がない場合は生成中表示
-                    if viewModel.editedImages.isEmpty {
-                        ProgressView("画像を生成中...")
+            ZStack {
+                // 空のグラデーション背景
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.68, green: 0.85, blue: 0.90),
+                        Color(red: 0.53, green: 0.81, blue: 0.98),
+                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 24) {
+                        // 編集済み画像がない場合は生成中表示
+                        if viewModel.editedImages.isEmpty {
+                            VStack {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                Text("画像を生成中...")
+                                    .foregroundColor(.white)
+                            }
                             .padding()
-                    } else {
-                        // 編集済み写真のプレビュー
-                        photoPreviewSection
+                        } else {
+                            // 編集済み写真のプレビュー
+                            photoPreviewSection
+                        }
+                        
+                        // キャプション入力
+                        captionSection
+                        
+                        // ハッシュタグ表示
+                        hashtagSection
+                        
+                        // 位置情報
+                        locationSection
+                        
+                        // 自動抽出された情報
+                        extractedInfoSection
+                        
+                        // 公開設定
+                        visibilitySection
+                        
+                        // アクションボタン
+                        actionButtons
                     }
-                    
-                    // キャプション入力
-                    captionSection
-                    
-                    // ハッシュタグ表示
-                    hashtagSection
-                    
-                    // 位置情報
-                    locationSection
-                    
-                    // 自動抽出された情報
-                    extractedInfoSection
-                    
-                    // 公開設定
-                    visibilitySection
-                    
-                    // アクションボタン
-                    actionButtons
+                    .padding()
                 }
-                .padding()
             }
             .navigationTitle("投稿情報")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("キャンセル") {
                         dismiss()
                     }
+                    .foregroundColor(.white)
                 }
             }
             .sheet(isPresented: $showMapView) {
@@ -155,6 +176,7 @@ struct PostInfoView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("写真プレビュー")
                 .font(.headline)
+                .foregroundColor(.white)
             
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
@@ -164,7 +186,8 @@ struct PostInfoView: View {
                             .aspectRatio(contentMode: .fill)
                             .frame(width: 100, height: 100)
                             .clipped()
-                            .cornerRadius(8)
+                            .cornerRadius(12)
+                            .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 3)
                     }
                 }
             }
@@ -177,6 +200,7 @@ struct PostInfoView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("キャプション")
                 .font(.headline)
+                .foregroundColor(.white)
             
             TextEditor(text: Binding(
                 get: { viewModel.caption },
@@ -184,16 +208,20 @@ struct PostInfoView: View {
             ))
             .frame(height: 100)
             .padding(8)
-            .background(Color(UIColor.secondarySystemBackground))
-            .cornerRadius(8)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.white.opacity(0.2))
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(.white.opacity(0.4), lineWidth: 1)
+                    )
             )
+            .foregroundColor(.primary)
+            .scrollContentBackground(.hidden)
             
             Text("ハッシュタグは「#」で始まる単語で自動的に抽出されます")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.8))
         }
     }
     
@@ -203,11 +231,12 @@ struct PostInfoView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("ハッシュタグ")
                 .font(.headline)
+                .foregroundColor(.white)
             
             if viewModel.hashtags.isEmpty {
                 Text("ハッシュタグはありません")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.7))
             } else {
                 FlowLayout(spacing: 8) {
                     ForEach(viewModel.hashtags, id: \.self) { hashtag in
@@ -215,8 +244,8 @@ struct PostInfoView: View {
                             .font(.caption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(Color.blue.opacity(0.1))
-                            .foregroundColor(.blue)
+                            .background(.white.opacity(0.2))
+                            .foregroundColor(.white)
                             .cornerRadius(12)
                     }
                 }
@@ -230,31 +259,39 @@ struct PostInfoView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("位置情報")
                 .font(.headline)
+                .foregroundColor(.white)
             
             if let location = viewModel.location {
                 VStack(alignment: .leading, spacing: 8) {
                     if let landmark = location.landmark {
                         Text("ランドマーク: \(landmark)")
                             .font(.body)
+                            .foregroundColor(.white)
                     }
                     if let city = location.city, let prefecture = location.prefecture {
                         Text("\(prefecture) \(city)")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.white.opacity(0.8))
                     }
                     Text("緯度: \(location.latitude, specifier: "%.6f"), 経度: \(location.longitude, specifier: "%.6f")")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.white.opacity(0.7))
                     
                     Button("位置情報を変更") {
                         showLocationPicker = true
                     }
                     .font(.caption)
-                    .foregroundColor(.blue)
+                    .foregroundColor(.white)
                 }
                 .padding()
-                .background(Color(UIColor.secondarySystemBackground))
-                .cornerRadius(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.white.opacity(0.15))
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(.white.opacity(0.3), lineWidth: 1)
+                        )
+                )
             } else {
                 Button(action: {
                     Task {
@@ -266,11 +303,17 @@ struct PostInfoView: View {
                         Text("位置情報を追加")
                     }
                     .font(.body)
-                    .foregroundColor(.blue)
+                    .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(Color.blue.opacity(0.1))
-                    .cornerRadius(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.white.opacity(0.15))
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(.white.opacity(0.3), lineWidth: 1)
+                            )
+                    )
                 }
             }
             
@@ -282,11 +325,17 @@ struct PostInfoView: View {
                     Text("地図からランドマークを選択")
                 }
                 .font(.body)
-                .foregroundColor(.blue)
+                .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.white.opacity(0.15))
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(.white.opacity(0.3), lineWidth: 1)
+                        )
+                )
             }
         }
     }
@@ -299,15 +348,17 @@ struct PostInfoView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("自動抽出された情報")
                         .font(.headline)
+                        .foregroundColor(.white)
                     
                     VStack(alignment: .leading, spacing: 12) {
                         // 撮影時刻
                         if let capturedAt = info.capturedAt {
                             HStack {
                                 Image(systemName: "camera")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.white.opacity(0.8))
                                 Text("撮影時刻: \(formatDate(capturedAt))")
                                     .font(.body)
+                                    .foregroundColor(.white)
                             }
                         }
                         
@@ -315,9 +366,10 @@ struct PostInfoView: View {
                         if let timeOfDay = info.timeOfDay {
                             HStack {
                                 Image(systemName: "clock")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.white.opacity(0.8))
                                 Text("時間帯: \(timeOfDay.displayName)")
                                     .font(.body)
+                                    .foregroundColor(.white)
                             }
                         }
                         
@@ -325,9 +377,10 @@ struct PostInfoView: View {
                         if let skyType = info.skyType {
                             HStack {
                                 Image(systemName: "cloud")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.white.opacity(0.8))
                                 Text("空の種類: \(skyType.displayName)")
                                     .font(.body)
+                                    .foregroundColor(.white)
                             }
                         }
                         
@@ -335,9 +388,10 @@ struct PostInfoView: View {
                         if let colorTemperature = info.colorTemperature {
                             HStack {
                                 Image(systemName: "thermometer")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.white.opacity(0.8))
                                 Text("色温度: \(colorTemperature)K")
                                     .font(.body)
+                                    .foregroundColor(.white)
                             }
                         }
                         
@@ -346,7 +400,7 @@ struct PostInfoView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("主要色")
                                     .font(.subheadline)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.white.opacity(0.8))
                                 
                                 HStack(spacing: 12) {
                                     ForEach(info.skyColors.prefix(5), id: \.self) { colorHex in
@@ -357,8 +411,14 @@ struct PostInfoView: View {
                         }
                     }
                     .padding()
-                    .background(Color(UIColor.secondarySystemBackground))
-                    .cornerRadius(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.white.opacity(0.15))
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(.white.opacity(0.3), lineWidth: 1)
+                            )
+                    )
                 }
             }
         }
@@ -378,6 +438,7 @@ struct PostInfoView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("公開設定")
                 .font(.headline)
+                .foregroundColor(.white)
             
             Picker("公開設定", selection: $viewModel.visibility) {
                 ForEach(Visibility.allCases, id: \.self) { visibility in
@@ -385,6 +446,10 @@ struct PostInfoView: View {
                 }
             }
             .pickerStyle(SegmentedPickerStyle())
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.white.opacity(0.2))
+            )
         }
     }
     
@@ -414,14 +479,21 @@ struct PostInfoView: View {
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(viewModel.isUploading ? Color.gray : Color.blue)
-                .cornerRadius(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(.white.opacity(viewModel.isUploading ? 0.15 : 0.25))
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(.white.opacity(0.5), lineWidth: 1)
+                        )
+                )
+                .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
             }
             .disabled(viewModel.isUploading)
             
             if viewModel.isUploading {
                 ProgressView(value: viewModel.uploadProgress)
-                    .progressViewStyle(LinearProgressViewStyle())
+                    .progressViewStyle(LinearProgressViewStyle(tint: .white))
             }
             
             Button(action: {
@@ -436,7 +508,7 @@ struct PostInfoView: View {
             }) {
                 Text("下書き保存")
                     .font(.body)
-                    .foregroundColor(.blue)
+                    .foregroundColor(.white.opacity(0.9))
             }
             .disabled(viewModel.isUploading)
         }

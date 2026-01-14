@@ -14,21 +14,37 @@ struct SearchView: View {
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
+            ZStack {
+                // 空のグラデーション背景
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.68, green: 0.85, blue: 0.90),
+                        Color(red: 0.53, green: 0.81, blue: 0.98),
+                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
                 VStack(spacing: 0) {
-                    // 検索条件セクション
-                    searchCriteriaSection
+                    VStack(spacing: 0) {
+                        // 検索条件セクション
+                        searchCriteriaSection
+                        
+                        Divider()
+                            .background(.white.opacity(0.3))
+                        
+                        // 検索結果セクション
+                        searchResultsSection
+                    }
                     
-                    Divider()
-                    
-                    // 検索結果セクション
-                    searchResultsSection
+                    // 画面下部に固定表示されるバナー広告
+                    BannerAdContainer()
                 }
-                
-                // 画面下部に固定表示されるバナー広告
-                BannerAdContainer()
             }
             .navigationTitle("検索")
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
@@ -74,10 +90,21 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("ハッシュタグ")
                 .font(.headline)
+                .foregroundColor(.white)
             
             HStack {
                 TextField("ハッシュタグを入力（#なし）", text: $viewModel.hashtag)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .textFieldStyle(.plain)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.white.opacity(0.2))
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(.white.opacity(0.4), lineWidth: 1)
+                            )
+                    )
+                    .foregroundColor(.white)
                     .onSubmit {
                         Task {
                             await viewModel.performSearch()
@@ -89,7 +116,7 @@ struct SearchView: View {
                         viewModel.hashtag = ""
                     }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.gray)
+                            .foregroundColor(.white.opacity(0.7))
                     }
                 }
             }
@@ -102,6 +129,7 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("色")
                 .font(.headline)
+                .foregroundColor(.white)
             
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
@@ -144,13 +172,13 @@ struct SearchView: View {
                         .frame(width: 20, height: 20)
                     Text("選択中: \(selectedColor)")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.white.opacity(0.8))
                     
                     Button("クリア") {
                         viewModel.selectedColor = nil
                     }
                     .font(.caption)
-                    .foregroundColor(.blue)
+                    .foregroundColor(.white)
                 }
             }
         }
@@ -162,6 +190,7 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("時間帯")
                 .font(.headline)
+                .foregroundColor(.white)
             
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
@@ -192,6 +221,7 @@ struct SearchView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("空の種類")
                 .font(.headline)
+                .foregroundColor(.white)
             
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
@@ -238,8 +268,15 @@ struct SearchView: View {
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(viewModel.isLoading ? Color.gray : Color.blue)
-                .cornerRadius(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(.white.opacity(viewModel.isLoading || !viewModel.hasSearchCriteria ? 0.15 : 0.25))
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(.white.opacity(0.4), lineWidth: 1)
+                        )
+                )
+                .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
             }
             .disabled(viewModel.isLoading || !viewModel.hasSearchCriteria)
             
@@ -249,7 +286,7 @@ struct SearchView: View {
                 }) {
                     Text("検索条件をクリア")
                         .font(.body)
-                        .foregroundColor(.red)
+                        .foregroundColor(.white.opacity(0.8))
                 }
             }
         }
@@ -260,16 +297,21 @@ struct SearchView: View {
     private var searchResultsSection: some View {
         Group {
             if viewModel.isLoading && viewModel.searchResults.isEmpty {
-                ProgressView("検索中...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    Text("検索中...")
+                        .foregroundColor(.white)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.searchResults.isEmpty && viewModel.hasSearchCriteria {
                 VStack(spacing: 16) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 60))
-                        .foregroundColor(.gray)
+                        .foregroundColor(.white.opacity(0.6))
                     Text("検索結果がありません")
                         .font(.headline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.white.opacity(0.8))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if !viewModel.searchResults.isEmpty {
@@ -288,10 +330,10 @@ struct SearchView: View {
                 VStack(spacing: 16) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 60))
-                        .foregroundColor(.gray)
+                        .foregroundColor(.white.opacity(0.6))
                     Text("検索条件を入力してください")
                         .font(.headline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.white.opacity(0.8))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

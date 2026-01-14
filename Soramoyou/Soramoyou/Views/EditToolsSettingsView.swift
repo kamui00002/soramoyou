@@ -13,73 +13,120 @@ struct EditToolsSettingsView: View {
     
     var body: some View {
         NavigationView {
-            Form {
-                // 選択状況の表示
-                Section(header: Text("選択状況")) {
-                    HStack {
-                        Text("選択数")
-                        Spacer()
-                        Text("\(viewModel.selectedTools.count) / \(viewModel.maxEditTools)")
-                            .foregroundColor(selectionCountColor)
-                    }
-                    
-                    if !viewModel.isValidEditToolsSelection {
-                        Text("編集装備は5個から8個まで選択してください")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                }
-                
-                // 選択されたツール（ドラッグ&ドロップ可能）
-                Section(header: Text("選択された編集装備（ドラッグで順序変更）")) {
-                    if viewModel.selectedTools.isEmpty {
-                        Text("編集装備を選択してください")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(viewModel.selectedTools, id: \.self) { tool in
-                            EditToolRow(
-                                tool: tool,
-                                isSelected: true,
-                                canRemove: viewModel.selectedTools.count > viewModel.minEditTools,
-                                onToggle: {
-                                    viewModel.removeEditTool(tool)
-                                }
+            ZStack {
+                // 空のグラデーション背景
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.68, green: 0.85, blue: 0.90),
+                        Color(red: 0.53, green: 0.81, blue: 0.98),
+                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 24) {
+                        // 選択状況の表示
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("選択状況")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            HStack {
+                                Text("選択数")
+                                    .foregroundColor(.white)
+                                Spacer()
+                                Text("\(viewModel.selectedTools.count) / \(viewModel.maxEditTools)")
+                                    .foregroundColor(selectionCountColor)
+                                    .fontWeight(.bold)
+                            }
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(.white.opacity(0.15))
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(.white.opacity(0.3), lineWidth: 1)
+                                    )
                             )
+                            
+                            if !viewModel.isValidEditToolsSelection {
+                                Text("編集装備は5個から8個まで選択してください")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                                    .padding(.horizontal, 8)
+                            }
                         }
-                        .onMove(perform: viewModel.moveEditTool)
-                    }
-                }
-                
-                // 利用可能なツール一覧
-                Section(header: Text("利用可能な編集装備")) {
-                    let availableTools = viewModel.availableTools.filter { tool in
-                        !viewModel.selectedTools.contains(tool)
-                    }
-                    
-                    if availableTools.isEmpty {
-                        Text("すべての編集装備が選択されています")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(availableTools, id: \.self) { tool in
-                            EditToolRow(
-                                tool: tool,
-                                isSelected: false,
-                                canRemove: false,
-                                onToggle: {
-                                    if viewModel.selectedTools.count < viewModel.maxEditTools {
-                                        viewModel.addEditTool(tool)
+                        
+                        // 選択されたツール
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("選択された編集装備")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            if viewModel.selectedTools.isEmpty {
+                                Text("編集装備を選択してください")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.7))
+                                    .padding()
+                            } else {
+                                LazyVStack(spacing: 8) {
+                                    ForEach(viewModel.selectedTools, id: \.self) { tool in
+                                        EditToolRowGlass(
+                                            tool: tool,
+                                            isSelected: true,
+                                            canRemove: viewModel.selectedTools.count > viewModel.minEditTools,
+                                            onToggle: {
+                                                viewModel.removeEditTool(tool)
+                                            }
+                                        )
                                     }
                                 }
-                            )
-                            .disabled(viewModel.selectedTools.count >= viewModel.maxEditTools)
+                            }
+                        }
+                        
+                        // 利用可能なツール一覧
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("利用可能な編集装備")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            let availableTools = viewModel.availableTools.filter { tool in
+                                !viewModel.selectedTools.contains(tool)
+                            }
+                            
+                            if availableTools.isEmpty {
+                                Text("すべての編集装備が選択されています")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.7))
+                                    .padding()
+                            } else {
+                                LazyVStack(spacing: 8) {
+                                    ForEach(availableTools, id: \.self) { tool in
+                                        EditToolRowGlass(
+                                            tool: tool,
+                                            isSelected: false,
+                                            canRemove: false,
+                                            onToggle: {
+                                                if viewModel.selectedTools.count < viewModel.maxEditTools {
+                                                    viewModel.addEditTool(tool)
+                                                }
+                                            }
+                                        )
+                                        .opacity(viewModel.selectedTools.count >= viewModel.maxEditTools ? 0.5 : 1.0)
+                                    }
+                                }
+                            }
                         }
                     }
+                    .padding()
                 }
             }
             .navigationTitle("編集装備設定")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("キャンセル") {
@@ -87,6 +134,7 @@ struct EditToolsSettingsView: View {
                         viewModel.resetEditTools()
                         dismiss()
                     }
+                    .foregroundColor(.white)
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -96,6 +144,7 @@ struct EditToolsSettingsView: View {
                         }
                     }
                     .disabled(!viewModel.isValidEditToolsSelection || viewModel.isLoading)
+                    .foregroundColor(.white)
                 }
             }
             .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
@@ -121,7 +170,7 @@ struct EditToolsSettingsView: View {
         } else if viewModel.selectedTools.count > viewModel.maxEditTools {
             return .red
         } else {
-            return .primary
+            return .white
         }
     }
     
@@ -134,6 +183,53 @@ struct EditToolsSettingsView: View {
         if viewModel.errorMessage == nil {
             dismiss()
         }
+    }
+}
+
+// MARK: - Edit Tool Row Glass Style
+
+struct EditToolRowGlass: View {
+    let tool: EditTool
+    let isSelected: Bool
+    let canRemove: Bool
+    let onToggle: () -> Void
+    
+    var body: some View {
+        Button(action: onToggle) {
+            HStack {
+                Image(systemName: tool.iconName)
+                    .foregroundColor(.white)
+                    .frame(width: 24)
+                
+                Text(tool.displayName)
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                if isSelected {
+                    if canRemove {
+                        Image(systemName: "minus.circle.fill")
+                            .foregroundColor(.red.opacity(0.8))
+                    } else {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green.opacity(0.8))
+                    }
+                } else {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundColor(.white.opacity(0.8))
+                }
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.white.opacity(isSelected ? 0.25 : 0.15))
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(.white.opacity(isSelected ? 0.4 : 0.3), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
