@@ -87,7 +87,7 @@ struct ProfileView: View {
                             Button(action: {
                                 showingEditTools = true
                             }) {
-                                Label("編集装備設定", systemImage: "wrench.and.screwdriver")
+                                Label("おすすめ編集設定", systemImage: "slider.horizontal.3")
                             }
                             
                             Divider()

@@ -15,6 +15,7 @@ struct EditView: View {
     @State private var showToolSlider = false
     @State private var showPostInfoView = false
     @State private var finalEditedImages: [UIImage] = []
+    @State private var showEditToolsSettings = false
     
     private let userId: String?
     private let originalImages: [UIImage]
@@ -61,24 +62,44 @@ struct EditView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("次へ") {
-                        Task {
-                            // 最終的な編集済み画像を生成してから遷移
-                            do {
-                                let finalImages = try await viewModel.generateFinalImages()
-                                // 編集済み画像を設定
-                                await MainActor.run {
-                                    finalEditedImages = finalImages
-                                    showPostInfoView = true
+                    HStack(spacing: 16) {
+                        // おすすめ編集設定ボタン
+                        Button(action: {
+                            showEditToolsSettings = true
+                        }) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.body)
+                        }
+                        .foregroundColor(.white)
+
+                        // 次へボタン
+                        Button("次へ") {
+                            Task {
+                                // 最終的な編集済み画像を生成してから遷移
+                                do {
+                                    let finalImages = try await viewModel.generateFinalImages()
+                                    // 編集済み画像を設定
+                                    await MainActor.run {
+                                        finalEditedImages = finalImages
+                                        showPostInfoView = true
+                                    }
+                                } catch {
+                                    // エラーは既にviewModel.errorMessageに設定されている
                                 }
-                            } catch {
-                                // エラーは既にviewModel.errorMessageに設定されている
                             }
                         }
+                        .disabled(viewModel.isLoading)
+                        .foregroundColor(.white)
                     }
-                    .disabled(viewModel.isLoading)
-                    .foregroundColor(.white)
                 }
+            }
+            .sheet(isPresented: $showEditToolsSettings) {
+                // 設定画面を閉じた後にツールを再読み込み
+                Task {
+                    await viewModel.loadEquippedTools()
+                }
+            } content: {
+                EditToolsSettingsView()
             }
             .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
                 Button("OK") {

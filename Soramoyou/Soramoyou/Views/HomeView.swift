@@ -57,7 +57,12 @@ struct HomeView: View {
                     BannerAdContainer()
                 }
             }
-            .navigationTitle("そらもよう")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    AppTitleView()
+                }
+            }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .refreshable {
                 await viewModel.refresh()
@@ -462,6 +467,38 @@ struct PostDetailImageView: View {
                         .foregroundColor(.gray)
                 )
         }
+    }
+}
+
+// MARK: - App Title View
+
+struct AppTitleView: View {
+    var body: some View {
+        GradientTitleView(title: "そらもよう", fontSize: 32)
+    }
+}
+
+// MARK: - Gradient Title View (共通コンポーネント)
+
+struct GradientTitleView: View {
+    let title: String
+    var fontSize: CGFloat = 20
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: fontSize, weight: .bold, design: .rounded))
+            .foregroundStyle(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.4, green: 0.6, blue: 0.9),   // 明るい空色
+                        Color(red: 0.3, green: 0.5, blue: 0.85),  // 中間の青
+                        Color(red: 0.5, green: 0.3, blue: 0.8)    // 夕暮れのパープル
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .shadow(color: Color(red: 0.4, green: 0.6, blue: 0.9).opacity(0.3), radius: 4, x: 0, y: 2)
     }
 }
 

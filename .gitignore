@@ -102,6 +102,12 @@ firebase-debug.log
 .env
 .env.local
 
+# macOS
+.DS_Store
+
+# Serena
+.serena/
+
 
 
 
