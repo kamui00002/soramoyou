@@ -142,14 +142,6 @@ struct PostInfoView: View {
             } message: {
                 Text("投稿が完了しました")
             }
-            .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
-                Button("OK") {
-                    viewModel.reset()
-                    dismiss()
-                }
-            } message: {
-                Text("投稿が完了しました")
-            }
             .onAppear {
                 // 編集済み画像がない場合は生成
                 if viewModel.editedImages.isEmpty && !viewModel.selectedImages.isEmpty {
