@@ -107,25 +107,34 @@ class AuthService: AuthServiceProtocol {
     }
     
     private func mapFirebaseError(_ error: Error) -> AuthError {
-        if let authError = error as NSError? {
-            switch authError.code {
-            case 17007: // Email already in use
-                return .emailAlreadyInUse
-            case 17008: // Invalid email
-                return .invalidEmail
-            case 17009: // Wrong password
-                return .wrongPassword
-            case 17010: // User not found
-                return .userNotFound
-            case 17011: // Weak password
-                return .weakPassword
-            case 17020: // Network error
-                return .networkError
-            default:
-                return .unknown(error.localizedDescription)
-            }
+        // Firebase AuthErrorCode列挙型を使用（数値コードより安全で保守性が高い）
+        let nsError = error as NSError
+        guard nsError.domain == AuthErrorDomain,
+              let errorCode = AuthErrorCode(rawValue: nsError.code) else {
+            return .unknown(error.localizedDescription)
         }
-        return .unknown(error.localizedDescription)
+
+        switch errorCode {
+        case .emailAlreadyInUse:
+            return .emailAlreadyInUse
+        case .invalidEmail:
+            return .invalidEmail
+        case .wrongPassword:
+            return .wrongPassword
+        case .userNotFound:
+            return .userNotFound
+        case .weakPassword:
+            return .weakPassword
+        case .networkError:
+            return .networkError
+        case .invalidCredential:
+            // iOS 17以降、wrongPasswordとuserNotFoundはinvalidCredentialに統合
+            return .wrongPassword
+        case .tooManyRequests:
+            return .tooManyRequests
+        default:
+            return .unknown(error.localizedDescription)
+        }
     }
 }
 
@@ -139,8 +148,9 @@ enum AuthError: LocalizedError {
     case wrongPassword
     case userNotFound
     case networkError
+    case tooManyRequests
     case unknown(String)
-    
+
     var errorDescription: String? {
         switch self {
         case .invalidInput:
@@ -157,6 +167,8 @@ enum AuthError: LocalizedError {
             return "このメールアドレスのアカウントが見つかりません"
         case .networkError:
             return "ネットワークエラーが発生しました。接続を確認してください"
+        case .tooManyRequests:
+            return "リクエストが多すぎます。しばらく待ってから再試行してください"
         case .unknown(let message):
             return message
         }

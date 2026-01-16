@@ -63,7 +63,7 @@ struct DraftsView: View {
             .refreshable {
                 await viewModel.loadDrafts()
             }
-            .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
+            .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
                 }
@@ -302,7 +302,7 @@ struct DraftDetailView: View {
                     userId: draft.userId
                 )
             }
-            .alert("エラー", isPresented: .constant(errorMessage != nil)) {
+            .alert("エラー", isPresented: Binding(errorMessage: $errorMessage)) {
                 Button("OK") {
                     errorMessage = nil
                 }
