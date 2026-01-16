@@ -32,7 +32,7 @@ struct ContentView: View {
                 WelcomeView()
             }
         }
-        .alert("エラー", isPresented: .constant(authViewModel.errorMessage != nil)) {
+        .alert("エラー", isPresented: Binding(errorMessage: $authViewModel.errorMessage)) {
             Button("OK") {
                 authViewModel.errorMessage = nil
             }
