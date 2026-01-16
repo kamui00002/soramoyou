@@ -194,37 +194,51 @@ class PostViewModel: ObservableObject {
     
     /// 画像をアップロード
     private func uploadImages() async throws -> [(url: String, thumbnail: String?)] {
+        guard let userId = userId else {
+            throw PostViewModelError.userNotAuthenticated
+        }
+
         var imageURLs: [(url: String, thumbnail: String?)] = []
         let totalImages = Double(editedImages.count)
-        
+
+        // visibility に基づいてサブパスを決定（storage.rules に合わせる）
+        let visibilityPath: String
+        switch visibility {
+        case .public:
+            visibilityPath = "public"
+        case .followers:
+            visibilityPath = "followers"
+        case .private:
+            visibilityPath = "private"
+        }
+
         for (index, image) in editedImages.enumerated() {
             // 画像を圧縮・リサイズ
             let resizedImage = try await imageService.resizeImage(
                 image,
                 maxSize: CGSize(width: 2048, height: 2048)
             )
-            
-            let compressedData = try await imageService.compressImage(resizedImage, quality: 0.85)
-            guard let compressedImage = UIImage(data: compressedData) else {
-                throw PostViewModelError.imageCompressionFailed
-            }
-            
-            // 画像をアップロード
-            let imagePath = "posts/\(userId!)/\(UUID().uuidString).jpg"
-            let imageURL = try await storageService.uploadImage(compressedImage, path: imagePath)
+
+            // 注意: StorageService で再圧縮されるため、ここでは圧縮せずに渡す
+            // （二重圧縮による画質劣化を防ぐ）
+
+            // 画像をアップロード（storage.rules のパス形式: posts/{userId}/{visibility}/{imageId}）
+            let imageId = UUID().uuidString
+            let imagePath = "posts/\(userId)/\(visibilityPath)/\(imageId).jpg"
+            let imageURL = try await storageService.uploadImage(resizedImage, path: imagePath)
             uploadedImageURLs.append(imagePath)
-            
-            // サムネイルをアップロード（StorageServiceが自動的にthumbnails/を追加するため、元のパスを渡す）
-            let thumbnailBasePath = "\(userId!)/\(UUID().uuidString).jpg"
-            let thumbnailURL = try await storageService.uploadThumbnail(compressedImage, path: thumbnailBasePath)
+
+            // サムネイルをアップロード（storage.rules のパス形式: thumbnails/{userId}/{visibility}/{imageId}）
+            let thumbnailBasePath = "\(userId)/\(visibilityPath)/\(imageId)_thumb.jpg"
+            let thumbnailURL = try await storageService.uploadThumbnail(resizedImage, path: thumbnailBasePath)
             uploadedThumbnailURLs.append("thumbnails/\(thumbnailBasePath)")
-            
+
             imageURLs.append((url: imageURL.absoluteString, thumbnail: thumbnailURL.absoluteString))
-            
+
             // 進捗を更新
             uploadProgress = Double(index + 1) / totalImages * 0.9 // 90%まで（残り10%はFirestore保存）
         }
-        
+
         return imageURLs
     }
     
