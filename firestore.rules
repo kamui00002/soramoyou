@@ -72,10 +72,11 @@ service cloud.firestore {
     match /posts/{postId} {
       // 読み取り権限
       // - public: 誰でも読み取り可能
-      // - followers: 認証済みユーザーのみ（将来的にはフォロワーチェックを追加）
+      // - followers: Phase 1では所有者のみ（Phase 2でフォロワーチェックを実装予定）
+      //   TODO: Phase 2で follows コレクションを使ったフォロワー検証を追加
+      //   例: exists(/databases/$(database)/documents/follows/$(request.auth.uid + '_' + resource.data.userId))
       // - private: 所有者のみ
       allow read: if resource.data.visibility == 'public'
-                  || (resource.data.visibility == 'followers' && isAuthenticated())
                   || isOwner(resource.data.userId);
 
       // 作成権限: 認証済みユーザーのみ、自分のIDで作成

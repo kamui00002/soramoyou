@@ -62,5 +62,32 @@ service firebase.storage {
       // Only the owner can read/write draft images
       allow read, write: if isOwner(userId) && isImageFile() && isValidSize();
     }
+
+    // Thumbnail images - public
+    match /thumbnails/{userId}/public/{imageId} {
+      // Anyone can read public thumbnails
+      allow read: if true;
+
+      // Only authenticated owner can upload public thumbnails
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Thumbnail images - followers only
+    match /thumbnails/{userId}/followers/{imageId} {
+      // Only authenticated users can read followers-only thumbnails
+      allow read: if isAuthenticated();
+
+      // Only the owner can upload followers-only thumbnails
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Thumbnail images - private
+    match /thumbnails/{userId}/private/{imageId} {
+      // Only the owner can read private thumbnails
+      allow read: if isOwner(userId);
+
+      // Only the owner can upload private thumbnails
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
   }
 }
