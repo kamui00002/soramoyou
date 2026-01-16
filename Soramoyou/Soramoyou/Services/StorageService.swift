@@ -76,6 +76,7 @@ class StorageService: StorageServiceProtocol {
     // MARK: - Upload Thumbnail
     
     func uploadThumbnail(_ image: UIImage, path: String) async throws -> URL {
+        let thumbnailPath = "thumbnails/\(path)"
         do {
             // サムネイルサイズにリサイズ（最大512x512）
             let thumbnailSize = CGSize(width: 512, height: 512)
@@ -87,7 +88,6 @@ class StorageService: StorageServiceProtocol {
             }
             
             // Storage参照を取得（サムネイル用のパス）
-            let thumbnailPath = "thumbnails/\(path)"
             let storageRef = storage.reference().child(thumbnailPath)
             
             // メタデータを設定
@@ -111,14 +111,16 @@ class StorageService: StorageServiceProtocol {
             
             return downloadURL
         } catch let error as StorageServiceError {
-            cleanupProgressObserver(for: path)
+            // 注意: サムネイルパスを使用してクリーンアップ（修正済み）
+            cleanupProgressObserver(for: thumbnailPath)
             throw error
         } catch {
-            cleanupProgressObserver(for: path)
+            // 注意: サムネイルパスを使用してクリーンアップ（修正済み）
+            cleanupProgressObserver(for: thumbnailPath)
             throw StorageServiceError.uploadFailed(error)
         }
     }
-    
+
     // MARK: - Delete Image
     
     func deleteImage(path: String) async throws {
