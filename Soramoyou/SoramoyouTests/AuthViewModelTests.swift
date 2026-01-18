@@ -145,6 +145,12 @@ class MockAuthService: AuthServiceProtocol {
             continuation.finish()
         }
     }
+
+    func signInAnonymously() async throws -> User {
+        let user = User(id: "anonymous-user-id", email: nil, displayName: "ゲスト")
+        currentUserValue = user
+        return user
+    }
 }
 
 

@@ -66,35 +66,38 @@ struct SearchView: View {
     }
     
     // MARK: - Search Criteria Section
-    
+
     private var searchCriteriaSection: some View {
         ScrollView {
-            VStack(spacing: 24) {
+            VStack(spacing: 16) {
                 // ハッシュタグ入力
                 hashtagInputSection
-                
+
                 // 色選択
                 colorSelectionSection
-                
+
                 // 時間帯選択
                 timeOfDaySelectionSection
-                
+
                 // 空の種類選択
                 skyTypeSelectionSection
-                
+
                 // 検索ボタン
                 searchButton
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.vertical, 12)
         }
+        .frame(maxHeight: 320)
     }
     
     // MARK: - Hashtag Input Section
-    
+
     private var hashtagInputSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("ハッシュタグ")
-                .font(.headline)
+                .font(.subheadline)
+                .fontWeight(.semibold)
                 .foregroundColor(.white)
             
             HStack {
@@ -129,11 +132,12 @@ struct SearchView: View {
     }
     
     // MARK: - Color Selection Section
-    
+
     private var colorSelectionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("色")
-                .font(.headline)
+                .font(.subheadline)
+                .fontWeight(.semibold)
                 .foregroundColor(.white)
             
             ScrollView(.horizontal, showsIndicators: false) {
@@ -190,11 +194,12 @@ struct SearchView: View {
     }
     
     // MARK: - Time Of Day Selection Section
-    
+
     private var timeOfDaySelectionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("時間帯")
-                .font(.headline)
+                .font(.subheadline)
+                .fontWeight(.semibold)
                 .foregroundColor(.white)
             
             ScrollView(.horizontal, showsIndicators: false) {
@@ -221,11 +226,12 @@ struct SearchView: View {
     }
     
     // MARK: - Sky Type Selection Section
-    
+
     private var skyTypeSelectionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("空の種類")
-                .font(.headline)
+                .font(.subheadline)
+                .fontWeight(.semibold)
                 .foregroundColor(.white)
             
             ScrollView(.horizontal, showsIndicators: false) {
@@ -369,20 +375,20 @@ struct ColorSelectionButton: View {
     let hex: String
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 8) {
+            VStack(spacing: 4) {
                 Circle()
                     .fill(hexToColor(hex))
-                    .frame(width: 50, height: 50)
+                    .frame(width: 36, height: 36)
                     .overlay(
                         Circle()
-                            .stroke(isSelected ? Color.blue : Color.gray.opacity(0.3), lineWidth: isSelected ? 3 : 1)
+                            .stroke(isSelected ? Color.blue : Color.gray.opacity(0.3), lineWidth: isSelected ? 2 : 1)
                     )
-                
+
                 Text(name)
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundColor(isSelected ? .blue : .primary)
             }
         }
@@ -409,16 +415,16 @@ struct FilterChip: View {
     let title: String
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.body)
+                .font(.caption)
                 .foregroundColor(isSelected ? .white : .primary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
                 .background(isSelected ? Color.blue : Color.gray.opacity(0.2))
-                .cornerRadius(20)
+                .cornerRadius(16)
         }
     }
 }

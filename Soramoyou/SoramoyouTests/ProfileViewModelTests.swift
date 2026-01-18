@@ -7,8 +7,10 @@
 
 import XCTest
 @testable import Soramoyou
-import FirebaseAuth
+import FirebaseFirestore
+// Note: FirebaseAuth.Userとの競合を避けるため、Userは Soramoyou.User を参照
 
+@MainActor
 final class ProfileViewModelTests: XCTestCase {
     var viewModel: ProfileViewModel!
     var mockFirestoreService: MockFirestoreServiceForProfile!

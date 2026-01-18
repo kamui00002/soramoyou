@@ -140,7 +140,7 @@ class AuthService: AuthServiceProtocol {
 
 // MARK: - AuthError
 
-enum AuthError: LocalizedError {
+enum AuthError: LocalizedError, Equatable {
     case invalidInput
     case invalidEmail
     case weakPassword
@@ -150,6 +150,24 @@ enum AuthError: LocalizedError {
     case networkError
     case tooManyRequests
     case unknown(String)
+
+    static func == (lhs: AuthError, rhs: AuthError) -> Bool {
+        switch (lhs, rhs) {
+        case (.invalidInput, .invalidInput),
+             (.invalidEmail, .invalidEmail),
+             (.weakPassword, .weakPassword),
+             (.emailAlreadyInUse, .emailAlreadyInUse),
+             (.wrongPassword, .wrongPassword),
+             (.userNotFound, .userNotFound),
+             (.networkError, .networkError),
+             (.tooManyRequests, .tooManyRequests):
+            return true
+        case (.unknown(let lhsMessage), .unknown(let rhsMessage)):
+            return lhsMessage == rhsMessage
+        default:
+            return false
+        }
+    }
 
     var errorDescription: String? {
         switch self {

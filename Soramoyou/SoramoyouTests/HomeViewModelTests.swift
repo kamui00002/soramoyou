@@ -9,6 +9,7 @@ import XCTest
 @testable import Soramoyou
 import FirebaseFirestore
 
+@MainActor
 final class HomeViewModelTests: XCTestCase {
     var viewModel: HomeViewModel!
     var mockFirestoreService: MockFirestoreServiceForHome!

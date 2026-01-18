@@ -89,5 +89,32 @@ service firebase.storage {
       // Only the owner can upload private thumbnails
       allow write: if isOwner(userId) && isImageFile() && isValidSize();
     }
+
+    // Original images (unedited) - public
+    match /originals/{userId}/public/{imageId} {
+      // Anyone can read public original images
+      allow read: if true;
+
+      // Only authenticated owner can upload public original images
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Original images (unedited) - followers only
+    match /originals/{userId}/followers/{imageId} {
+      // Only authenticated users can read followers-only original images
+      allow read: if isAuthenticated();
+
+      // Only the owner can upload followers-only original images
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Original images (unedited) - private
+    match /originals/{userId}/private/{imageId} {
+      // Only the owner can read private original images
+      allow read: if isOwner(userId);
+
+      // Only the owner can upload private original images
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
   }
 }

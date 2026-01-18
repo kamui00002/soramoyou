@@ -7,7 +7,9 @@
 
 import XCTest
 @testable import Soramoyou
+import FirebaseFirestore
 
+@MainActor
 final class SearchViewModelTests: XCTestCase {
     var viewModel: SearchViewModel!
     var mockFirestoreService: MockFirestoreServiceForSearch!
