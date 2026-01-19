@@ -28,20 +28,21 @@ struct SearchView: View {
                 .ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    VStack(spacing: 0) {
-                        // 検索条件セクション
-                        searchCriteriaSection
-                        
-                        Divider()
-                            .background(.white.opacity(0.3))
-                        
-                        // 検索結果セクション
+                    // 検索条件セクション
+                    searchCriteriaSection
+
+                    Divider()
+                        .background(.white.opacity(0.3))
+
+                    // 検索結果セクション（検索条件がある場合のみ表示）
+                    if viewModel.hasSearchCriteria || viewModel.isLoading || !viewModel.searchResults.isEmpty {
                         searchResultsSection
                     }
-                    
-                    // 画面下部に固定表示されるバナー広告
+
+                    // バナー広告
                     BannerAdContainer()
                 }
+                .frame(maxHeight: .infinity, alignment: .top)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -88,7 +89,7 @@ struct SearchView: View {
             .padding(.horizontal)
             .padding(.vertical, 12)
         }
-        .frame(maxHeight: 320)
+        .fixedSize(horizontal: false, vertical: true)
     }
     
     // MARK: - Hashtag Input Section
@@ -307,7 +308,13 @@ struct SearchView: View {
     
     private var searchResultsSection: some View {
         Group {
-            if viewModel.isLoading && viewModel.searchResults.isEmpty {
+            if !viewModel.hasSearchCriteria && !viewModel.isLoading && viewModel.searchResults.isEmpty {
+                Text("検索条件を入力してください")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 8)
+            } else if viewModel.isLoading && viewModel.searchResults.isEmpty {
                 VStack {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -337,16 +344,6 @@ struct SearchView: View {
                     }
                     .padding()
                 }
-            } else {
-                VStack(spacing: 16) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 60))
-                        .foregroundColor(.white.opacity(0.6))
-                    Text("検索条件を入力してください")
-                        .font(.headline)
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
