@@ -38,7 +38,8 @@ protocol FirestoreServiceProtocol {
         color: String?,
         timeOfDay: TimeOfDay?,
         skyType: SkyType?,
-        colorThreshold: Double?
+        colorThreshold: Double?,
+        limit: Int
     ) async throws -> [Post]
 }
 
@@ -410,7 +411,8 @@ class FirestoreService: FirestoreServiceProtocol {
         color: String? = nil,
         timeOfDay: TimeOfDay? = nil,
         skyType: SkyType? = nil,
-        colorThreshold: Double? = nil
+        colorThreshold: Double? = nil,
+        limit: Int = 50
     ) async throws -> [Post] {
         do {
             var query: Query = postsCollection
@@ -435,6 +437,7 @@ class FirestoreService: FirestoreServiceProtocol {
             }
             
             query = query.order(by: "createdAt", descending: true)
+                .limit(to: limit)
             
             let snapshot = try await query.getDocuments()
             
@@ -481,4 +484,3 @@ enum FirestoreServiceError: LocalizedError {
         }
     }
 }
-

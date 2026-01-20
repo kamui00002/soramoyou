@@ -474,7 +474,12 @@ struct PostDetailImageView: View {
 
 struct AppTitleView: View {
     var body: some View {
-        GradientTitleView(title: "そらもよう", fontSize: 32)
+        VStack(spacing: 2) {
+            GradientTitleView(title: "そらもよう", fontSize: 28)
+            Text("空を撮る、空を集める")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundColor(.secondary)
+        }
     }
 }
 

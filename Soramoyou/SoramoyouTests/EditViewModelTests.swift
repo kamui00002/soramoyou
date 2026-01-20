@@ -261,9 +261,15 @@ class MockFirestoreService: FirestoreServiceProtocol {
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post] { return [] }
     func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] { return [] }
     func searchBySkyType(_ skyType: SkyType) async throws -> [Post] { return [] }
-    func searchPosts(hashtag: String?, color: String?, timeOfDay: TimeOfDay?, skyType: SkyType?, colorThreshold: Double?) async throws -> [Post] { return [] }
+    func searchPosts(
+        hashtag: String?,
+        color: String?,
+        timeOfDay: TimeOfDay?,
+        skyType: SkyType?,
+        colorThreshold: Double?,
+        limit: Int
+    ) async throws -> [Post] { return [] }
 }
-
 
 
 

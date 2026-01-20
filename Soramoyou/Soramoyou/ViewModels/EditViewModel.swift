@@ -139,7 +139,17 @@ class EditViewModel: ObservableObject {
                 equippedToolsOrder = equippedTools.map { $0.rawValue }
             }
         } catch {
-            // エラーをログに記録
+            // notFoundエラーの場合はユーザードキュメントが未作成なので、デフォルトツールを使用
+            // エラーメッセージは表示しない（正常なケースとして扱う）
+            if let firestoreError = error as? FirestoreServiceError,
+               case .notFound = firestoreError {
+                // ユーザードキュメントが存在しない場合はデフォルトツールを使用
+                equippedTools = [.brightness, .contrast, .saturation, .exposure, .highlight, .shadow, .warmth, .sharpness, .vignette]
+                equippedToolsOrder = equippedTools.map { $0.rawValue }
+                return
+            }
+
+            // その他のエラーの場合はログに記録
             ErrorHandler.logError(error, context: "EditViewModel.loadEquippedTools", userId: userId)
             // エラー時はデフォルトツールを使用
             equippedTools = [.brightness, .contrast, .saturation, .exposure, .highlight, .shadow, .warmth, .sharpness, .vignette]

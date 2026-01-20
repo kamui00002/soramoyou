@@ -115,6 +115,7 @@ struct SearchView: View {
                     )
                     .foregroundColor(.white)
                     .onSubmit {
+                        guard viewModel.hasSearchCriteria else { return }
                         Task {
                             await viewModel.performSearch()
                         }
@@ -300,21 +301,19 @@ struct SearchView: View {
                         .font(.body)
                         .foregroundColor(.white.opacity(0.8))
                 }
+            } else {
+                Text("検索条件を入力してください")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
             }
         }
     }
-    
+
     // MARK: - Search Results Section
     
     private var searchResultsSection: some View {
         Group {
-            if !viewModel.hasSearchCriteria && !viewModel.isLoading && viewModel.searchResults.isEmpty {
-                Text("検索条件を入力してください")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 8)
-            } else if viewModel.isLoading && viewModel.searchResults.isEmpty {
+            if viewModel.isLoading && viewModel.searchResults.isEmpty {
                 VStack {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -431,5 +430,4 @@ struct SearchView_Previews: PreviewProvider {
         SearchView()
     }
 }
-
 
