@@ -1,3 +1,7 @@
+// ⭐️ EditView.swift
+// 編集画面
+// 3タブ構成（フィルター/編集ツール/切り取り）に改善
+// リアルタイムプレビュー対応
 //
 //  EditView.swift
 //  Soramoyou
@@ -10,26 +14,39 @@ import SwiftUI
 struct EditView: View {
     @StateObject private var viewModel: EditViewModel
     @Environment(\.dismiss) private var dismiss
+
+    // MARK: - State
+
+    /// 選択中のタブ
+    @State private var selectedTab: EditTab = .filter
+    /// 選択中のフィルター
     @State private var selectedFilter: FilterType?
+    /// 選択中の編集ツール
     @State private var selectedTool: EditTool?
-    @State private var showToolSlider = false
+    /// スライダーの現在値（リアルタイム用）
+    @State private var sliderValue: Float = 0
+    /// 投稿情報入力画面の表示フラグ
     @State private var showPostInfoView = false
+    /// 最終編集済み画像
     @State private var finalEditedImages: [UIImage] = []
+    /// 編集ツール設定画面の表示フラグ
     @State private var showEditToolsSettings = false
-    
+    /// 回転スライダーの値（リアルタイム用）
+    @State private var rotationSliderValue: Double = 0
+
     private let userId: String?
     private let originalImages: [UIImage]
-    
+
     init(images: [UIImage], userId: String?) {
         self.userId = userId
         self.originalImages = images
         _viewModel = StateObject(wrappedValue: EditViewModel(images: images, userId: userId))
     }
-    
+
     var body: some View {
         NavigationView {
             ZStack {
-                // 空のグラデーション背景（上部）
+                // 空のグラデーション背景
                 LinearGradient(
                     colors: [
                         Color(red: 0.68, green: 0.85, blue: 0.90),
@@ -41,12 +58,12 @@ struct EditView: View {
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
-                
+
                 VStack(spacing: 0) {
                     // 画像プレビュー
                     imagePreviewView
-                    
-                    // 編集コントロール
+
+                    // 編集コントロール（3タブ構成）
                     editControlsView
                 }
             }
@@ -60,10 +77,10 @@ struct EditView: View {
                     }
                     .foregroundColor(.white)
                 }
-                
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
-                        // おすすめ編集設定ボタン
+                        // 編集ツール設定ボタン
                         Button(action: {
                             showEditToolsSettings = true
                         }) {
@@ -75,16 +92,14 @@ struct EditView: View {
                         // 次へボタン
                         Button("次へ") {
                             Task {
-                                // 最終的な編集済み画像を生成してから遷移
                                 do {
                                     let finalImages = try await viewModel.generateFinalImages()
-                                    // 編集済み画像を設定
                                     await MainActor.run {
                                         finalEditedImages = finalImages
                                         showPostInfoView = true
                                     }
                                 } catch {
-                                    // エラーは既にviewModel.errorMessageに設定されている
+                                    // エラーは viewModel.errorMessage に設定
                                 }
                             }
                         }
@@ -94,7 +109,6 @@ struct EditView: View {
                 }
             }
             .sheet(isPresented: $showEditToolsSettings) {
-                // 設定画面を閉じた後にツールを再読み込み
                 Task {
                     await viewModel.loadEquippedTools()
                 }
@@ -127,19 +141,20 @@ struct EditView: View {
             }
         }
     }
-    
+
     // MARK: - Image Preview View
-    
+
     private var imagePreviewView: some View {
         ZStack {
             // 暗い背景で画像を見やすく
             Color.black.opacity(0.3)
-            
-            if viewModel.isLoading {
+
+            if viewModel.isLoading && !viewModel.isEditingRealtime {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
-            } else if let previewImage = viewModel.previewImage {
-                Image(uiImage: previewImage)
+            } else if let displayImage = viewModel.displayPreviewImage {
+                // リアルタイム編集中は高速プレビュー、それ以外は通常プレビュー
+                Image(uiImage: displayImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -152,7 +167,7 @@ struct EditView: View {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
             }
-            
+
             // 複数画像の場合のナビゲーション
             if viewModel.originalImages.count > 1 {
                 HStack {
@@ -167,9 +182,9 @@ struct EditView: View {
                             .clipShape(Circle())
                     }
                     .disabled(viewModel.currentImageIndex == 0)
-                    
+
                     Spacer()
-                    
+
                     Button(action: {
                         viewModel.nextImage()
                     }) {
@@ -184,7 +199,7 @@ struct EditView: View {
                 }
                 .padding()
             }
-            
+
             // 画像インデックス表示
             if viewModel.originalImages.count > 1 {
                 VStack {
@@ -201,41 +216,68 @@ struct EditView: View {
             }
         }
     }
-    
-    // MARK: - Edit Controls View
-    
+
+    // MARK: - Edit Controls View (3タブ構成)
+
     private var editControlsView: some View {
         VStack(spacing: 0) {
-            // フィルター選択
-            filterSelectionView
-            
-            Divider()
-                .background(.white.opacity(0.3))
-            
-            // 編集ツール選択
-            toolSelectionView
-            
-            // スライダー（ツール選択時のみ表示）
-            if showToolSlider, let tool = selectedTool {
-                toolSliderView(tool: tool)
-            }
+            // コンテンツエリア（タブに応じて切り替え）
+            tabContentView
+
+            // タブバー
+            editTabBar
         }
         .background(
             .ultraThinMaterial,
             in: RoundedRectangle(cornerRadius: 0)
         )
     }
-    
-    // MARK: - Filter Selection View
-    
-    private var filterSelectionView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("フィルター")
-                .font(.headline)
-                .foregroundColor(.primary)
-                .padding(.horizontal)
-                .padding(.top, 8)
-            
+
+    // MARK: - Tab Content View
+
+    @ViewBuilder
+    private var tabContentView: some View {
+        switch selectedTab {
+        case .filter:
+            filterContentView
+        case .adjustment:
+            adjustmentContentView
+        case .crop:
+            cropContentView
+        }
+    }
+
+    // MARK: - Edit Tab Bar (3タブ)
+
+    private var editTabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(EditTab.allCases) { tab in
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedTab = tab
+                        // タブ切り替え時にツール選択をリセット
+                        selectedTool = nil
+                    }
+                }) {
+                    VStack(spacing: 4) {
+                        Image(systemName: tab.iconName)
+                            .font(.title3)
+                        Text(tab.displayName)
+                            .font(.caption2)
+                    }
+                    .foregroundColor(selectedTab == tab ? .white : .white.opacity(0.5))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                }
+            }
+        }
+        .background(Color.black.opacity(0.3))
+    }
+
+    // MARK: - Filter Content View
+
+    private var filterContentView: some View {
+        VStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
                     // フィルターなし
@@ -248,7 +290,7 @@ struct EditView: View {
                             selectedFilter = nil
                         }
                     )
-                    
+
                     // 10種類のフィルター
                     ForEach(FilterType.allCases, id: \.self) { filter in
                         FilterButton(
@@ -263,21 +305,22 @@ struct EditView: View {
                     }
                 }
                 .padding(.horizontal)
+                .padding(.vertical, 16)
             }
-            .padding(.bottom, 8)
         }
+        .frame(height: 120)
     }
-    
-    // MARK: - Tool Selection View
-    
-    private var toolSelectionView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("編集ツール")
-                .font(.headline)
-                .foregroundColor(.primary)
-                .padding(.horizontal)
-                .padding(.top, 8)
-            
+
+    // MARK: - Adjustment Content View (編集ツール)
+
+    private var adjustmentContentView: some View {
+        VStack(spacing: 0) {
+            // ツール選択中はスライダーを表示
+            if let tool = selectedTool {
+                improvedSliderView(tool: tool)
+            }
+
+            // ツール一覧
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(viewModel.equippedTools, id: \.self) { tool in
@@ -288,33 +331,43 @@ struct EditView: View {
                             action: {
                                 if selectedTool == tool {
                                     selectedTool = nil
-                                    showToolSlider = false
                                 } else {
                                     selectedTool = tool
-                                    showToolSlider = true
+                                    // 現在の値をスライダーに反映
+                                    sliderValue = viewModel.editSettings.value(for: tool) ?? 0
                                 }
                             }
                         )
                     }
                 }
                 .padding(.horizontal)
+                .padding(.vertical, 12)
             }
-            .padding(.bottom, 8)
         }
+        .frame(minHeight: selectedTool != nil ? 180 : 100)
     }
-    
-    // MARK: - Tool Slider View
-    
-    private func toolSliderView(tool: EditTool) -> some View {
-        VStack(spacing: 12) {
+
+    // MARK: - Improved Slider View (目盛り付き)
+
+    private func improvedSliderView(tool: EditTool) -> some View {
+        VStack(spacing: 8) {
+            // ヘッダー（ツール名・現在値・リセット）
             HStack {
                 Text(tool.displayName)
                     .font(.headline)
                     .foregroundColor(.primary)
-                
+
                 Spacer()
-                
+
+                // 現在値の表示
+                Text(formatSliderValue(sliderValue))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+                    .frame(width: 50, alignment: .trailing)
+
                 Button(action: {
+                    sliderValue = 0
                     viewModel.resetToolValue(for: tool)
                 }) {
                     Text("リセット")
@@ -324,31 +377,185 @@ struct EditView: View {
             }
             .padding(.horizontal)
             .padding(.top, 8)
-            
-            HStack {
-                Image(systemName: "minus")
-                    .foregroundColor(.secondary)
-                
+
+            // 目盛り付きスライダー
+            ZStack(alignment: .center) {
+                // 目盛り
+                TickMarksView()
+
+                // スライダー
                 Slider(
                     value: Binding(
-                        get: {
-                            viewModel.editSettings.value(for: tool) ?? 0.0
-                        },
+                        get: { sliderValue },
                         set: { newValue in
-                            viewModel.setToolValue(newValue, for: tool)
+                            sliderValue = newValue
+                            // リアルタイムプレビュー
+                            viewModel.setToolValueRealtime(newValue, for: tool)
                         }
                     ),
-                    in: -1.0...1.0
+                    in: -1.0...1.0,
+                    onEditingChanged: { isEditing in
+                        if !isEditing {
+                            // スライダー操作完了時に高品質プレビュー生成
+                            viewModel.finalizeToolValue(for: tool)
+                        }
+                    }
                 )
-                .tint(.blue)
-                
-                Image(systemName: "plus")
-                    .foregroundColor(.secondary)
+                .tint(.white)
+                .accentColor(.white)
             }
             .padding(.horizontal)
             .padding(.bottom, 8)
         }
-        .background(.ultraThinMaterial)
+        .background(Color.black.opacity(0.2))
+    }
+
+    /// スライダー値のフォーマット
+    private func formatSliderValue(_ value: Float) -> String {
+        let intValue = Int(value * 100)
+        if intValue >= 0 {
+            return "+\(intValue)"
+        } else {
+            return "\(intValue)"
+        }
+    }
+
+    // MARK: - Crop Content View (切り取り)
+
+    private var cropContentView: some View {
+        VStack(spacing: 16) {
+            // 回転スライダー
+            VStack(spacing: 8) {
+                HStack {
+                    Text("回転")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    Spacer()
+
+                    Text(String(format: "%.1f°", rotationSliderValue))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                        .frame(width: 50, alignment: .trailing)
+
+                    Button(action: {
+                        rotationSliderValue = 0
+                        viewModel.resetCropSettings()
+                    }) {
+                        Text("リセット")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                }
+                .padding(.horizontal)
+
+                Slider(
+                    value: $rotationSliderValue,
+                    in: -45...45,
+                    onEditingChanged: { isEditing in
+                        if isEditing {
+                            viewModel.setRotationRealtime(rotationSliderValue)
+                        } else {
+                            viewModel.finalizeRotation()
+                        }
+                    }
+                )
+                .tint(.white)
+                .padding(.horizontal)
+                .onChange(of: rotationSliderValue) { newValue in
+                    viewModel.setRotationRealtime(newValue)
+                }
+            }
+
+            // 回転・反転ボタン
+            HStack(spacing: 20) {
+                // 左回転
+                CropActionButton(
+                    iconName: "rotate.left",
+                    label: "左90°",
+                    action: {
+                        viewModel.rotateLeft()
+                        rotationSliderValue = viewModel.rotationDegrees
+                    }
+                )
+
+                // 右回転
+                CropActionButton(
+                    iconName: "rotate.right",
+                    label: "右90°",
+                    action: {
+                        viewModel.rotateRight()
+                        rotationSliderValue = viewModel.rotationDegrees
+                    }
+                )
+
+                // 左右反転
+                CropActionButton(
+                    iconName: "arrow.left.and.right.righttriangle.left.righttriangle.right",
+                    label: "左右反転",
+                    isActive: viewModel.isFlippedHorizontal,
+                    action: {
+                        viewModel.toggleFlipHorizontal()
+                    }
+                )
+
+                // 上下反転
+                CropActionButton(
+                    iconName: "arrow.up.and.down.righttriangle.up.righttriangle.down",
+                    label: "上下反転",
+                    isActive: viewModel.isFlippedVertical,
+                    action: {
+                        viewModel.toggleFlipVertical()
+                    }
+                )
+            }
+            .padding(.horizontal)
+
+            // アスペクト比選択
+            HStack(spacing: 12) {
+                ForEach(CropAspectRatio.allCases) { ratio in
+                    AspectRatioButton(
+                        ratio: ratio,
+                        isSelected: viewModel.cropAspectRatio == ratio,
+                        action: {
+                            viewModel.setCropAspectRatio(ratio)
+                        }
+                    )
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 12)
+        }
+        .frame(minHeight: 180)
+    }
+}
+
+// MARK: - Tick Marks View (目盛り)
+
+struct TickMarksView: View {
+    /// 目盛りの数（21本: -100〜+100、10刻み）
+    private let tickCount = 21
+
+    var body: some View {
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                ForEach(0..<tickCount, id: \.self) { index in
+                    let isCenterTick = index == tickCount / 2
+
+                    Rectangle()
+                        .fill(isCenterTick ? Color.white : Color.white.opacity(0.3))
+                        .frame(width: isCenterTick ? 2 : 1, height: isCenterTick ? 16 : 8)
+
+                    if index < tickCount - 1 {
+                        Spacer()
+                    }
+                }
+            }
+            .frame(height: 20)
+            .padding(.horizontal, 8)
+        }
+        .frame(height: 20)
     }
 }
 
@@ -359,7 +566,7 @@ struct FilterButton: View {
     let displayName: String
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
             VStack(spacing: 8) {
@@ -371,7 +578,11 @@ struct FilterButton: View {
                             .font(.caption)
                             .foregroundColor(isSelected ? .white : .primary)
                     )
-                
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
+                    )
+
                 Text(displayName)
                     .font(.caption)
                     .foregroundColor(isSelected ? .blue : .primary)
@@ -387,7 +598,7 @@ struct ToolButton: View {
     let isSelected: Bool
     let hasValue: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
             VStack(spacing: 4) {
@@ -397,7 +608,7 @@ struct ToolButton: View {
                     .frame(width: 44, height: 44)
                     .background(isSelected ? Color.blue.opacity(0.1) : Color.gray.opacity(0.1))
                     .cornerRadius(8)
-                
+
                 Text(tool.displayName)
                     .font(.caption2)
                     .foregroundColor(isSelected ? .blue : .primary)
@@ -406,7 +617,7 @@ struct ToolButton: View {
             }
         }
     }
-    
+
     private func iconName(for tool: EditTool) -> String {
         switch tool {
         case .brightness: return "sun.max"
@@ -423,9 +634,56 @@ struct ToolButton: View {
     }
 }
 
+// MARK: - Crop Action Button
+
+struct CropActionButton: View {
+    let iconName: String
+    let label: String
+    var isActive: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: iconName)
+                    .font(.title2)
+                    .foregroundColor(isActive ? .blue : .white)
+                    .frame(width: 44, height: 44)
+                    .background(isActive ? Color.blue.opacity(0.2) : Color.white.opacity(0.1))
+                    .cornerRadius(8)
+
+                Text(label)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+        }
+    }
+}
+
+// MARK: - Aspect Ratio Button
+
+struct AspectRatioButton: View {
+    let ratio: CropAspectRatio
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(ratio.displayName)
+                .font(.caption)
+                .foregroundColor(isSelected ? .white : .white.opacity(0.6))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isSelected ? Color.blue : Color.white.opacity(0.1))
+                .cornerRadius(8)
+        }
+    }
+}
+
+// MARK: - Preview
+
 struct EditView_Previews: PreviewProvider {
     static var previews: some View {
         EditView(images: [], userId: nil)
     }
 }
-
