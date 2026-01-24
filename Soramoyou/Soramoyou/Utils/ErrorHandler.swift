@@ -262,15 +262,86 @@ extension Error {
     var category: ErrorCategory {
         return ErrorHandler.categorize(self)
     }
-    
+
     /// ユーザーフレンドリーなメッセージを取得
     var userFriendlyMessage: String {
         return ErrorHandler.getUserFriendlyMessage(self)
     }
-    
+
     /// リトライ可能かどうかを判定
     var isRetryable: Bool {
         return ErrorHandler.isRetryable(self)
+    }
+}
+
+// MARK: - ViewModel Error Handling Protocol
+
+/// ViewModelで共通のエラーハンドリングを提供するプロトコル
+protocol ErrorHandling: AnyObject {
+    var errorMessage: String? { get set }
+}
+
+extension ErrorHandling {
+    /// エラーを処理し、ユーザーフレンドリーなメッセージを設定する
+    /// - Parameters:
+    ///   - error: 発生したエラー
+    ///   - context: エラーコンテキスト（ログ用）
+    ///   - userId: ユーザーID（ログ用）
+    @MainActor
+    func handleError(_ error: Error, context: String, userId: String? = nil) {
+        ErrorHandler.logError(error, context: context, userId: userId)
+        errorMessage = error.userFriendlyMessage
+    }
+
+    /// エラーをクリアする
+    @MainActor
+    func clearError() {
+        errorMessage = nil
+    }
+}
+
+// MARK: - Async Error Handling
+
+extension ErrorHandling {
+    /// 非同期操作を実行し、エラーを自動的に処理する
+    /// - Parameters:
+    ///   - context: エラーコンテキスト（ログ用）
+    ///   - userId: ユーザーID（ログ用）
+    ///   - operation: 実行する非同期操作
+    /// - Returns: 操作の結果。エラー時はnil
+    @MainActor
+    func withErrorHandling<T>(
+        context: String,
+        userId: String? = nil,
+        operation: () async throws -> T
+    ) async -> T? {
+        do {
+            return try await operation()
+        } catch {
+            handleError(error, context: context, userId: userId)
+            return nil
+        }
+    }
+
+    /// 非同期操作を実行し、エラーを再スローする
+    /// - Parameters:
+    ///   - context: エラーコンテキスト（ログ用）
+    ///   - userId: ユーザーID（ログ用）
+    ///   - operation: 実行する非同期操作
+    /// - Returns: 操作の結果
+    /// - Throws: 操作からのエラー
+    @MainActor
+    func withErrorHandlingRethrow<T>(
+        context: String,
+        userId: String? = nil,
+        operation: () async throws -> T
+    ) async throws -> T {
+        do {
+            return try await operation()
+        } catch {
+            handleError(error, context: context, userId: userId)
+            throw error
+        }
     }
 }
 

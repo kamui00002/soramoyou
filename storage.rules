@@ -12,8 +12,21 @@ service firebase.storage {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // フォロー関係をチェック（Firestoreのfollowsコレクションを参照）
+    function isFollowing(followeeId) {
+      return isAuthenticated() &&
+             firestore.exists(/databases/(default)/documents/follows/$(request.auth.uid)_$(followeeId));
+    }
+
+    // 画像ファイルの検証（ホワイトリスト方式）
     function isImageFile() {
-      return request.resource.contentType.matches('image/.*');
+      let contentType = request.resource.contentType;
+      return contentType == 'image/jpeg'
+          || contentType == 'image/png'
+          || contentType == 'image/webp'
+          || contentType == 'image/gif'
+          || contentType == 'image/heic'
+          || contentType == 'image/heif';
     }
 
     function isValidSize() {
@@ -32,20 +45,26 @@ service firebase.storage {
 
     // Post images - public
     match /posts/{userId}/public/{imageId} {
-      // Anyone can read public images
-      allow read: if true;
+      // Authenticated users can read public images
+      allow read: if isAuthenticated();
 
       // Only authenticated owner can upload public images
       allow write: if isOwner(userId) && isImageFile() && isValidSize();
+
+      // Only owner can delete
+      allow delete: if isOwner(userId);
     }
 
     // Post images - followers only
     match /posts/{userId}/followers/{imageId} {
-      // Only authenticated users can read followers-only images
-      allow read: if isAuthenticated();
+      // Only followers can read followers-only images
+      allow read: if isFollowing(userId) || isOwner(userId);
 
       // Only the owner can upload followers-only images
       allow write: if isOwner(userId) && isImageFile() && isValidSize();
+
+      // Only owner can delete
+      allow delete: if isOwner(userId);
     }
 
     // Post images - private

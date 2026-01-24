@@ -1,33 +1,33 @@
 # Documentation Standards
 
-## 見出し規約
+## Heading Conventions
 
-### 見出しは名詞句で始める
-- 動詞ではなく名詞句で見出しを構成する
-- 簡潔で内容を的確に表す
+### Use Noun Phrases for Headings
+- Start headings with noun phrases, not verbs
+- Keep headings concise and descriptive
 
 ```markdown
 <!-- Good -->
-## ユーザー認証の設定
-## API エンドポイント一覧
-## エラーハンドリング
+## User Authentication Setup
+## API Endpoint Reference
+## Error Handling Strategy
 
 <!-- Bad -->
-## ユーザー認証を設定する
-## API エンドポイントを一覧する
-## エラーをハンドリングする
+## Setting Up User Authentication
+## How to List API Endpoints
+## Handling Errors
 ```
 
-## コード例規約
+## Code Example Conventions
 
-### コード例には必ず説明を添える
-- コードブロックの前後に説明文を記載する
-- 何をするコードか、なぜそう書くのかを明記する
+### Always Provide Explanation with Code Examples
+- Include explanatory text before or after code blocks
+- Explain what the code does and why it's written that way
 
 ```markdown
 <!-- Good -->
-ユーザー情報を取得するには、`fetchUser` 関数を使用します。
-引数にユーザーIDを渡すと、該当するユーザーオブジェクトを返します。
+To fetch user information, use the `fetchUser` function.
+Pass the user ID as an argument to retrieve the corresponding user object.
 
 \`\`\`typescript
 const user = await fetchUser(userId);
@@ -39,28 +39,50 @@ const user = await fetchUser(userId);
 \`\`\`
 ```
 
-## 画像規約
+## Image Conventions
 
-### 画像にはalt属性を付ける
-- すべての画像に説明的なalt属性を設定する
-- スクリーンリーダー対応とSEOのために必須
+### Always Include Alt Attributes for Images
+- Add descriptive alt attributes to all images
+- Required for screen reader accessibility and SEO
 
 ```markdown
 <!-- Good -->
-![ログイン画面のスクリーンショット](./images/login-screen.png)
-![システム構成図：フロントエンドからバックエンドへのデータフロー](./images/architecture.png)
+![Login screen screenshot](./images/login-screen.png)
+![System architecture diagram: data flow from frontend to backend](./images/architecture.png)
 
 <!-- Bad -->
 ![](./images/login-screen.png)
 ![image](./images/architecture.png)
 ```
 
-### JSX/TSXでの画像
+### Images in JSX/TSX
 ```tsx
 // Good
-<img src={loginImage} alt="ログイン画面のスクリーンショット" />
+<img src={loginImage} alt="Login screen screenshot" />
 
 // Bad
 <img src={loginImage} />
 <img src={loginImage} alt="" />
+```
+
+## Additional Guidelines
+
+### Link Text
+- Use descriptive link text, not "click here"
+```markdown
+<!-- Good -->
+See the [API documentation](./api.md) for details.
+
+<!-- Bad -->
+[Click here](./api.md) to see the API documentation.
+```
+
+### Code References
+- Use backticks for inline code references
+```markdown
+<!-- Good -->
+Call the `fetchUser()` function with a valid `userId`.
+
+<!-- Bad -->
+Call the fetchUser() function with a valid userId.
 ```

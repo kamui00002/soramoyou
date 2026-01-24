@@ -55,7 +55,7 @@ class BannerAdViewController: UIViewController {
                 }
             } catch {
                 // エラーはログに記録されるが、アプリの動作には影響しない
-                print("Failed to load banner ad: \(error.localizedDescription)")
+                LoggingService.shared.log("Failed to load banner ad: \(error.localizedDescription)", level: .warning)
             }
         }
     }

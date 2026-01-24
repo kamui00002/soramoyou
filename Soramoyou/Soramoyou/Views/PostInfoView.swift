@@ -690,8 +690,8 @@ struct MapView: View {
             let results = try await locationService.searchLandmarks(query: searchText, region: region)
             searchResults = results
         } catch {
-            // エラーハンドリング（簡易版）
-            print("ランドマーク検索エラー: \(error)")
+            // エラーハンドリング
+            LoggingService.shared.log("ランドマーク検索エラー: \(error.localizedDescription)", level: .warning)
         }
     }
 }

@@ -15,6 +15,12 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // フォロー関係をチェック（followerId_followeeId 形式のドキュメントID）
+    function isFollowing(followeeId) {
+      return isAuthenticated() &&
+             exists(/databases/$(database)/documents/follows/$(request.auth.uid)_$(followeeId));
+    }
+
     // ============================================
     // Data Validation functions
     // ============================================
@@ -34,6 +40,11 @@ service cloud.firestore {
       return visibility in ['public', 'followers', 'private'];
     }
 
+    // メールアドレスの簡易検証
+    function isValidEmail(email) {
+      return email is string && email.size() > 0 && email.matches('.*@.*\\..*');
+    }
+
     // 投稿データの検証
     function isValidPost() {
       let data = request.resource.data;
@@ -49,13 +60,16 @@ service cloud.firestore {
     // Users collection
     // ============================================
     match /users/{userId} {
-      // 認証済みユーザーのみプロフィールを読み取り可能
-      // （プライバシー保護のため）
-      allow read: if isAuthenticated();
+      // 公開プロフィール情報（displayName, photoURL, bio）は認証済みユーザーが読み取り可能
+      // プライベート情報（email）は本人のみ
+      allow read: if isOwner(userId)
+                  || (isAuthenticated() &&
+                      request.query == null); // リスト取得は制限
 
       // 新規ユーザーのみ自分のプロフィールを作成可能
       allow create: if isOwner(userId)
-                    && request.resource.data.keys().hasAll(['id', 'email', 'createdAt']);
+                    && request.resource.data.keys().hasAll(['id', 'email', 'createdAt'])
+                    && isValidEmail(request.resource.data.email);
 
       // 所有者のみ更新・削除可能
       // idとemailは変更不可
@@ -67,15 +81,37 @@ service cloud.firestore {
     }
 
     // ============================================
+    // Follows collection (フォロー関係)
+    // ドキュメントID: {followerId}_{followeeId}
+    // ============================================
+    match /follows/{followId} {
+      // フォロー関係は認証済みユーザーが確認可能
+      allow read: if isAuthenticated();
+
+      // フォロー作成: 自分がフォロワーの場合のみ
+      allow create: if isAuthenticated()
+                    && request.resource.data.followerId == request.auth.uid
+                    && followId == request.auth.uid + '_' + request.resource.data.followeeId
+                    && request.resource.data.keys().hasAll(['followerId', 'followeeId', 'createdAt']);
+
+      // フォロー解除: 自分のフォローのみ削除可能
+      allow delete: if isAuthenticated()
+                    && resource.data.followerId == request.auth.uid;
+
+      // フォロー関係の更新は不可
+      allow update: if false;
+    }
+
+    // ============================================
     // Posts collection
     // ============================================
     match /posts/{postId} {
       // 読み取り権限
-      // - public: 誰でも読み取り可能
-      // - followers: 認証済みユーザーのみ（将来的にはフォロワーチェックを追加）
+      // - public: 認証済みユーザーが読み取り可能
+      // - followers: フォロワーのみ読み取り可能
       // - private: 所有者のみ
-      allow read: if resource.data.visibility == 'public'
-                  || (resource.data.visibility == 'followers' && isAuthenticated())
+      allow read: if (resource.data.visibility == 'public' && isAuthenticated())
+                  || (resource.data.visibility == 'followers' && isFollowing(resource.data.userId))
                   || isOwner(resource.data.userId);
 
       // 作成権限: 認証済みユーザーのみ、自分のIDで作成

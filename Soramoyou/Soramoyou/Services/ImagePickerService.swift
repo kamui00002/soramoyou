@@ -57,7 +57,7 @@ struct ImagePicker: UIViewControllerRepresentable {
                             let image = try await self.loadImage(from: result.itemProvider)
                             loadedImages.append(image)
                         } catch {
-                            print("画像の読み込みに失敗しました: \(error)")
+                            LoggingService.shared.log("画像の読み込みに失敗しました: \(error.localizedDescription)", level: .warning)
                         }
                     }
                 }
