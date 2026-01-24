@@ -283,16 +283,26 @@ struct EditView: View {
     }
     
     // MARK: - Tool Slider View
-    
+
     private func toolSliderView(tool: EditTool) -> some View {
-        VStack(spacing: 12) {
+        let currentValue = viewModel.editSettings.value(for: tool) ?? 0.0
+        let displayValue = Int(currentValue * 100)
+
+        return VStack(spacing: 12) {
             HStack {
                 Text(tool.displayName)
                     .font(.headline)
                     .foregroundColor(.primary)
-                
+
                 Spacer()
-                
+
+                // 現在の値を表示
+                Text(displayValue >= 0 ? "+\(displayValue)" : "\(displayValue)")
+                    .font(.subheadline)
+                    .monospacedDigit()
+                    .foregroundColor(.secondary)
+                    .frame(width: 50, alignment: .trailing)
+
                 Button(action: {
                     viewModel.resetToolValue(for: tool)
                 }) {
@@ -303,11 +313,11 @@ struct EditView: View {
             }
             .padding(.horizontal)
             .padding(.top, 8)
-            
+
             HStack {
                 Image(systemName: "minus")
                     .foregroundColor(.secondary)
-                
+
                 Slider(
                     value: Binding(
                         get: {
@@ -317,10 +327,13 @@ struct EditView: View {
                             viewModel.setToolValue(newValue, for: tool)
                         }
                     ),
-                    in: -1.0...1.0
+                    in: -1.0...1.0,
+                    onEditingChanged: { isDragging in
+                        viewModel.onDraggingChanged(isDragging)
+                    }
                 )
                 .tint(.blue)
-                
+
                 Image(systemName: "plus")
                     .foregroundColor(.secondary)
             }

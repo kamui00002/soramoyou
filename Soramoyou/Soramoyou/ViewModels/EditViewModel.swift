@@ -19,11 +19,14 @@ class EditViewModel: ObservableObject {
     @Published var equippedToolsOrder: [String] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
-    
+    @Published var isDragging = false
+
     private let imageService: ImageServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
     private let userId: String?
     private var previewTask: Task<Void, Never>?
+    private var cachedLowResImage: UIImage?
+    private var realtimePreviewTask: Task<Void, Never>?
     
     init(
         images: [UIImage] = [],
@@ -52,30 +55,33 @@ class EditViewModel: ObservableObject {
         originalImages = images
         currentImageIndex = 0
         editSettings = EditSettings()
+        cachedLowResImage = nil
         Task {
             await generatePreview()
         }
     }
-    
+
     /// 現在の画像を取得
     var currentImage: UIImage? {
         guard currentImageIndex < originalImages.count else { return nil }
         return originalImages[currentImageIndex]
     }
-    
+
     /// 次の画像に切り替え
     func nextImage() {
         guard currentImageIndex < originalImages.count - 1 else { return }
         currentImageIndex += 1
+        cachedLowResImage = nil
         Task {
             await generatePreview()
         }
     }
-    
+
     /// 前の画像に切り替え
     func previousImage() {
         guard currentImageIndex > 0 else { return }
         currentImageIndex -= 1
+        cachedLowResImage = nil
         Task {
             await generatePreview()
         }
@@ -149,16 +155,50 @@ class EditViewModel: ObservableObject {
         }
     }
     
-    /// 編集ツールの値を設定
+    /// 編集ツールの値を設定（リアルタイムプレビュー対応）
     func setToolValue(_ value: Float, for tool: EditTool) {
         // 値の範囲を-1.0から1.0に制限
         let clampedValue = max(-1.0, min(1.0, value))
         editSettings.setValue(clampedValue, for: tool)
-        
-        // プレビューを生成（デバウンス処理）
-        debouncePreview()
+
+        // ドラッグ中は即座にプレビュー生成（低解像度）
+        if isDragging {
+            generateRealtimePreview()
+        } else {
+            // ドラッグ終了後は高品質プレビュー
+            debouncePreview()
+        }
     }
-    
+
+    /// スライダーのドラッグ状態が変更された時に呼ばれる
+    func onDraggingChanged(_ isDragging: Bool) {
+        self.isDragging = isDragging
+
+        if isDragging {
+            // ドラッグ開始時に低解像度画像をキャッシュ
+            prepareLowResImage()
+        } else {
+            // ドラッグ終了時に高品質プレビューを生成
+            realtimePreviewTask?.cancel()
+            Task {
+                await generatePreview()
+            }
+        }
+    }
+
+    /// 低解像度画像を準備
+    private func prepareLowResImage() {
+        guard let image = currentImage, cachedLowResImage == nil else { return }
+
+        Task {
+            // 低解像度版を作成（幅400px程度）
+            let targetSize = CGSize(width: 400, height: 400 * image.size.height / image.size.width)
+            if let resized = try? await imageService.resizeImage(image, maxSize: targetSize) {
+                cachedLowResImage = resized
+            }
+        }
+    }
+
     /// 編集ツールの値をリセット
     func resetToolValue(for tool: EditTool) {
         editSettings.setValue(nil, for: tool)
@@ -166,41 +206,68 @@ class EditViewModel: ObservableObject {
             await generatePreview()
         }
     }
-    
+
     /// すべての編集をリセット
     func resetAllEdits() {
         editSettings = EditSettings()
+        cachedLowResImage = nil
         Task {
             await generatePreview()
         }
     }
-    
+
     // MARK: - Preview Generation
-    
+
+    /// リアルタイムプレビューを生成（スライダー操作中）
+    private func generateRealtimePreview() {
+        // 前のリアルタイムタスクをキャンセル
+        realtimePreviewTask?.cancel()
+
+        realtimePreviewTask = Task {
+            // 即座にプレビュー生成（待機なし）
+            guard !Task.isCancelled else { return }
+
+            // 低解像度画像を使用してプレビュー生成
+            let sourceImage = cachedLowResImage ?? currentImage
+            guard let image = sourceImage else { return }
+
+            do {
+                let preview = try await imageService.generatePreview(image, edits: editSettings)
+                guard !Task.isCancelled else { return }
+                previewImage = preview
+            } catch {
+                // リアルタイムプレビュー中のエラーは無視（操作終了後に再試行される）
+            }
+        }
+    }
+
     /// プレビューを生成（デバウンス処理付き）
     private func debouncePreview() {
         // 前のタスクをキャンセル
         previewTask?.cancel()
-        
+
         // 新しいタスクを作成
         previewTask = Task {
-            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms待機
-            
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms待機（短縮）
+
             guard !Task.isCancelled else { return }
             await generatePreview()
         }
     }
-    
-    /// プレビューを生成
+
+    /// プレビューを生成（高品質）
     func generatePreview() async {
         guard let image = currentImage else {
             previewImage = nil
             return
         }
-        
-        isLoading = true
+
+        // ドラッグ中でない場合のみローディング表示
+        if !isDragging {
+            isLoading = true
+        }
         errorMessage = nil
-        
+
         do {
             let preview = try await imageService.generatePreview(image, edits: editSettings)
             previewImage = preview
@@ -210,7 +277,7 @@ class EditViewModel: ObservableObject {
             // ユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
         }
-        
+
         isLoading = false
     }
     
