@@ -16,18 +16,42 @@ protocol FirestoreServiceProtocol {
     func fetchPost(postId: String) async throws -> Post
     func deletePost(postId: String) async throws
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
-    
+
     // Drafts
     func saveDraft(_ draft: Draft) async throws -> Draft
     func fetchDrafts(userId: String) async throws -> [Draft]
     func loadDraft(draftId: String) async throws -> Draft
     func deleteDraft(draftId: String) async throws
-    
+
     // Users
     func fetchUser(userId: String) async throws -> User
     func updateUser(_ user: User) async throws -> User
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws
-    
+
+    // Likes
+    func likePost(userId: String, postId: String) async throws
+    func unlikePost(userId: String, postId: String) async throws
+    func isPostLiked(userId: String, postId: String) async throws -> Bool
+    func fetchLikesCount(postId: String) async throws -> Int
+    func fetchUserLikedPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
+
+    // Comments
+    func createComment(_ comment: Comment) async throws -> Comment
+    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Comment]
+    func updateComment(commentId: String, content: String) async throws
+    func deleteComment(commentId: String) async throws
+    func fetchCommentsCount(postId: String) async throws -> Int
+
+    // Collections
+    func createCollection(_ collection: Collection) async throws -> Collection
+    func fetchCollections(userId: String) async throws -> [Collection]
+    func updateCollection(_ collection: Collection) async throws -> Collection
+    func deleteCollection(collectionId: String) async throws
+    func addPostToCollection(userId: String, collectionId: String, postId: String) async throws
+    func removePostFromCollection(collectionId: String, postId: String) async throws
+    func fetchCollectionPosts(collectionId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
+    func isPostInCollection(collectionId: String, postId: String) async throws -> Bool
+
     // Search
     func searchByHashtag(_ hashtag: String) async throws -> [Post]
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post]
@@ -49,15 +73,31 @@ class FirestoreService: FirestoreServiceProtocol {
     private var postsCollection: CollectionReference {
         db.collection("posts")
     }
-    
+
     private var draftsCollection: CollectionReference {
         db.collection("drafts")
     }
-    
+
     private var usersCollection: CollectionReference {
         db.collection("users")
     }
-    
+
+    private var likesCollection: CollectionReference {
+        db.collection("likes")
+    }
+
+    private var commentsCollection: CollectionReference {
+        db.collection("comments")
+    }
+
+    private var collectionsCollection: CollectionReference {
+        db.collection("collections")
+    }
+
+    private var collectionItemsCollection: CollectionReference {
+        db.collection("collectionItems")
+    }
+
     init(db: Firestore = Firestore.firestore()) {
         self.db = db
     }
@@ -415,41 +455,408 @@ class FirestoreService: FirestoreServiceProtocol {
         do {
             var query: Query = postsCollection
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
-            
+
             // 条件を追加
             if let hashtag = hashtag {
                 query = query.whereField("hashtags", arrayContains: hashtag)
             }
-            
+
             if let timeOfDay = timeOfDay {
                 query = query.whereField("timeOfDay", isEqualTo: timeOfDay.rawValue)
             }
-            
+
             if let skyType = skyType {
                 query = query.whereField("skyType", isEqualTo: skyType.rawValue)
             }
-            
+
             // 色検索の場合は、まずarrayContainsで取得してからクライアント側でフィルタリング
             if let color = color {
                 query = query.whereField("skyColors", arrayContains: color)
             }
-            
+
             query = query.order(by: "createdAt", descending: true)
-            
+
             let snapshot = try await query.getDocuments()
-            
+
             var posts = try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
-            
+
             // 色検索で閾値が指定されている場合は、クライアント側でフィルタリング
             if let color = color, let threshold = colorThreshold {
                 posts = filterPostsByColorDistance(posts: posts, targetColor: color, threshold: threshold)
             }
-            
+
             return posts
         } catch {
             throw FirestoreServiceError.searchFailed(error)
+        }
+    }
+
+    // MARK: - Likes
+
+    /// 投稿にいいねする
+    func likePost(userId: String, postId: String) async throws {
+        let likeId = "\(userId)_\(postId)"
+        let like = Like(userId: userId, postId: postId)
+
+        do {
+            // トランザクションでいいね作成とカウント更新を行う
+            try await db.runTransaction { transaction, errorPointer in
+                // いいねドキュメントを作成
+                let likeRef = self.likesCollection.document(likeId)
+                transaction.setData(like.toFirestoreData(), forDocument: likeRef)
+
+                // 投稿のいいねカウントを増加
+                let postRef = self.postsCollection.document(postId)
+                transaction.updateData(["likesCount": FieldValue.increment(Int64(1))], forDocument: postRef)
+
+                return nil
+            }
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
+        }
+    }
+
+    /// 投稿のいいねを取り消す
+    func unlikePost(userId: String, postId: String) async throws {
+        let likeId = "\(userId)_\(postId)"
+
+        do {
+            // トランザクションでいいね削除とカウント更新を行う
+            try await db.runTransaction { transaction, errorPointer in
+                // いいねドキュメントを削除
+                let likeRef = self.likesCollection.document(likeId)
+                transaction.deleteDocument(likeRef)
+
+                // 投稿のいいねカウントを減少
+                let postRef = self.postsCollection.document(postId)
+                transaction.updateData(["likesCount": FieldValue.increment(Int64(-1))], forDocument: postRef)
+
+                return nil
+            }
+        } catch {
+            throw FirestoreServiceError.deleteFailed(error)
+        }
+    }
+
+    /// 投稿がいいね済みかどうかを確認
+    func isPostLiked(userId: String, postId: String) async throws -> Bool {
+        let likeId = "\(userId)_\(postId)"
+
+        do {
+            let document = try await likesCollection.document(likeId).getDocument()
+            return document.exists
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    /// 投稿のいいね数を取得
+    func fetchLikesCount(postId: String) async throws -> Int {
+        do {
+            let snapshot = try await likesCollection
+                .whereField("postId", isEqualTo: postId)
+                .count
+                .getAggregation(source: .server)
+
+            return Int(truncating: snapshot.count)
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    /// ユーザーがいいねした投稿を取得
+    func fetchUserLikedPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
+        do {
+            var query: Query = likesCollection
+                .whereField("userId", isEqualTo: userId)
+                .order(by: "createdAt", descending: true)
+                .limit(to: limit)
+
+            if let lastDocument = lastDocument {
+                query = query.start(afterDocument: lastDocument)
+            }
+
+            let likesSnapshot = try await query.getDocuments()
+
+            // いいねした投稿のIDを取得
+            let postIds = likesSnapshot.documents.compactMap { document in
+                document.data()["postId"] as? String
+            }
+
+            // 投稿を取得
+            var posts: [Post] = []
+            for postId in postIds {
+                if let post = try? await fetchPost(postId: postId) {
+                    posts.append(post)
+                }
+            }
+
+            return posts
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    // MARK: - Comments
+
+    /// コメントを作成
+    func createComment(_ comment: Comment) async throws -> Comment {
+        do {
+            // トランザクションでコメント作成とカウント更新を行う
+            try await db.runTransaction { transaction, errorPointer in
+                // コメントドキュメントを作成
+                let commentRef = self.commentsCollection.document(comment.id)
+                transaction.setData(comment.toFirestoreData(), forDocument: commentRef)
+
+                // 投稿のコメントカウントを増加
+                let postRef = self.postsCollection.document(comment.postId)
+                transaction.updateData(["commentsCount": FieldValue.increment(Int64(1))], forDocument: postRef)
+
+                return nil
+            }
+
+            return comment
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
+        }
+    }
+
+    /// 投稿のコメントを取得
+    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Comment] {
+        do {
+            var query: Query = commentsCollection
+                .whereField("postId", isEqualTo: postId)
+                .order(by: "createdAt", descending: false)
+                .limit(to: limit)
+
+            if let lastDocument = lastDocument {
+                query = query.start(afterDocument: lastDocument)
+            }
+
+            let snapshot = try await query.getDocuments()
+
+            return try snapshot.documents.compactMap { document in
+                try Comment(from: document.data())
+            }
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    /// コメントを更新
+    func updateComment(commentId: String, content: String) async throws {
+        do {
+            try await commentsCollection.document(commentId).updateData([
+                "content": content,
+                "updatedAt": Timestamp(date: Date())
+            ])
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// コメントを削除
+    func deleteComment(commentId: String) async throws {
+        do {
+            // まずコメントを取得してpostIdを確認
+            let document = try await commentsCollection.document(commentId).getDocument()
+            guard let data = document.data(),
+                  let postId = data["postId"] as? String else {
+                throw FirestoreServiceError.notFound
+            }
+
+            // トランザクションでコメント削除とカウント更新を行う
+            try await db.runTransaction { transaction, errorPointer in
+                // コメントドキュメントを削除
+                let commentRef = self.commentsCollection.document(commentId)
+                transaction.deleteDocument(commentRef)
+
+                // 投稿のコメントカウントを減少
+                let postRef = self.postsCollection.document(postId)
+                transaction.updateData(["commentsCount": FieldValue.increment(Int64(-1))], forDocument: postRef)
+
+                return nil
+            }
+        } catch let error as FirestoreServiceError {
+            throw error
+        } catch {
+            throw FirestoreServiceError.deleteFailed(error)
+        }
+    }
+
+    /// 投稿のコメント数を取得
+    func fetchCommentsCount(postId: String) async throws -> Int {
+        do {
+            let snapshot = try await commentsCollection
+                .whereField("postId", isEqualTo: postId)
+                .count
+                .getAggregation(source: .server)
+
+            return Int(truncating: snapshot.count)
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    // MARK: - Collections
+
+    /// コレクションを作成
+    func createCollection(_ collection: Collection) async throws -> Collection {
+        do {
+            let data = collection.toFirestoreData()
+            let docRef = collectionsCollection.document(collection.id)
+
+            try await docRef.setData(data)
+
+            return collection
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
+        }
+    }
+
+    /// ユーザーのコレクションを取得
+    func fetchCollections(userId: String) async throws -> [Collection] {
+        do {
+            let snapshot = try await collectionsCollection
+                .whereField("userId", isEqualTo: userId)
+                .order(by: "createdAt", descending: true)
+                .getDocuments()
+
+            return try snapshot.documents.compactMap { document in
+                try Collection(from: document.data())
+            }
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    /// コレクションを更新
+    func updateCollection(_ collection: Collection) async throws -> Collection {
+        do {
+            let data = collection.toFirestoreData()
+            let docRef = collectionsCollection.document(collection.id)
+
+            try await docRef.setData(data, merge: true)
+
+            return collection
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// コレクションを削除
+    func deleteCollection(collectionId: String) async throws {
+        do {
+            // コレクション内のアイテムも削除
+            let itemsSnapshot = try await collectionItemsCollection
+                .whereField("collectionId", isEqualTo: collectionId)
+                .getDocuments()
+
+            let batch = db.batch()
+
+            // アイテムを削除
+            for document in itemsSnapshot.documents {
+                batch.deleteDocument(document.reference)
+            }
+
+            // コレクションを削除
+            batch.deleteDocument(collectionsCollection.document(collectionId))
+
+            try await batch.commit()
+        } catch {
+            throw FirestoreServiceError.deleteFailed(error)
+        }
+    }
+
+    /// コレクションに投稿を追加
+    func addPostToCollection(userId: String, collectionId: String, postId: String) async throws {
+        let itemId = "\(collectionId)_\(postId)"
+        let item = CollectionItem(userId: userId, collectionId: collectionId, postId: postId)
+
+        do {
+            // トランザクションでアイテム追加とカウント更新を行う
+            try await db.runTransaction { transaction, errorPointer in
+                // アイテムドキュメントを作成
+                let itemRef = self.collectionItemsCollection.document(itemId)
+                transaction.setData(item.toFirestoreData(), forDocument: itemRef)
+
+                // コレクションのカウントを増加
+                let collectionRef = self.collectionsCollection.document(collectionId)
+                transaction.updateData(["postCount": FieldValue.increment(Int64(1))], forDocument: collectionRef)
+
+                return nil
+            }
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
+        }
+    }
+
+    /// コレクションから投稿を削除
+    func removePostFromCollection(collectionId: String, postId: String) async throws {
+        let itemId = "\(collectionId)_\(postId)"
+
+        do {
+            // トランザクションでアイテム削除とカウント更新を行う
+            try await db.runTransaction { transaction, errorPointer in
+                // アイテムドキュメントを削除
+                let itemRef = self.collectionItemsCollection.document(itemId)
+                transaction.deleteDocument(itemRef)
+
+                // コレクションのカウントを減少
+                let collectionRef = self.collectionsCollection.document(collectionId)
+                transaction.updateData(["postCount": FieldValue.increment(Int64(-1))], forDocument: collectionRef)
+
+                return nil
+            }
+        } catch {
+            throw FirestoreServiceError.deleteFailed(error)
+        }
+    }
+
+    /// コレクションの投稿を取得
+    func fetchCollectionPosts(collectionId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
+        do {
+            var query: Query = collectionItemsCollection
+                .whereField("collectionId", isEqualTo: collectionId)
+                .order(by: "createdAt", descending: true)
+                .limit(to: limit)
+
+            if let lastDocument = lastDocument {
+                query = query.start(afterDocument: lastDocument)
+            }
+
+            let itemsSnapshot = try await query.getDocuments()
+
+            // 投稿のIDを取得
+            let postIds = itemsSnapshot.documents.compactMap { document in
+                document.data()["postId"] as? String
+            }
+
+            // 投稿を取得
+            var posts: [Post] = []
+            for postId in postIds {
+                if let post = try? await fetchPost(postId: postId) {
+                    posts.append(post)
+                }
+            }
+
+            return posts
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    /// 投稿がコレクションに含まれているかを確認
+    func isPostInCollection(collectionId: String, postId: String) async throws -> Bool {
+        let itemId = "\(collectionId)_\(postId)"
+
+        do {
+            let document = try await collectionItemsCollection.document(itemId).getDocument()
+            return document.exists
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
         }
     }
 }

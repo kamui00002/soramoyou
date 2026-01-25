@@ -150,5 +150,103 @@ service cloud.firestore {
       allow delete: if isAuthenticated()
                     && resource.data.userId == request.auth.uid;
     }
+
+    // ============================================
+    // Likes collection (いいね)
+    // ドキュメントID: {userId}_{postId}
+    // ============================================
+    match /likes/{likeId} {
+      // 投稿の可視性に基づいてアクセス制御
+      allow read: if isAuthenticated();
+
+      // いいね作成: 認証済みユーザーのみ、自分のIDで作成
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && likeId == request.auth.uid + '_' + request.resource.data.postId
+                    && request.resource.data.keys().hasAll(['userId', 'postId', 'createdAt']);
+
+      // いいね削除: 自分のいいねのみ削除可能
+      allow delete: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid;
+
+      // いいねの更新は不可
+      allow update: if false;
+    }
+
+    // ============================================
+    // Comments collection (コメント)
+    // ============================================
+    match /comments/{commentId} {
+      // コメントは認証済みユーザーが読み取り可能
+      allow read: if isAuthenticated();
+
+      // コメント作成: 認証済みユーザーのみ、自分のIDで作成
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['userId', 'postId', 'content', 'createdAt'])
+                    && request.resource.data.content.size() >= 1
+                    && request.resource.data.content.size() <= 500;
+
+      // コメント更新: 自分のコメントのみ、内容のみ更新可能
+      allow update: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.postId == resource.data.postId
+                    && request.resource.data.content.size() >= 1
+                    && request.resource.data.content.size() <= 500;
+
+      // コメント削除: 自分のコメントまたは投稿の所有者
+      allow delete: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid;
+    }
+
+    // ============================================
+    // Collections collection (コレクション)
+    // ============================================
+    match /collections/{collectionId} {
+      // コレクションは所有者のみ読み取り可能
+      allow read: if isAuthenticated()
+                  && resource.data.userId == request.auth.uid;
+
+      // コレクション作成: 認証済みユーザーのみ、自分のIDで作成
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['userId', 'name', 'createdAt'])
+                    && request.resource.data.name.size() >= 1
+                    && request.resource.data.name.size() <= 50;
+
+      // コレクション更新: 所有者のみ
+      allow update: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.name.size() >= 1
+                    && request.resource.data.name.size() <= 50;
+
+      // コレクション削除: 所有者のみ
+      allow delete: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid;
+    }
+
+    // ============================================
+    // CollectionItems collection (コレクションアイテム)
+    // ドキュメントID: {collectionId}_{postId}
+    // ============================================
+    match /collectionItems/{itemId} {
+      // コレクションの所有者のみ読み取り可能
+      allow read: if isAuthenticated();
+
+      // アイテム追加: コレクションの所有者のみ
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && itemId == request.resource.data.collectionId + '_' + request.resource.data.postId
+                    && request.resource.data.keys().hasAll(['userId', 'collectionId', 'postId', 'createdAt']);
+
+      // アイテム削除: 所有者のみ
+      allow delete: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid;
+
+      // アイテムの更新は不可
+      allow update: if false;
+    }
   }
 }
