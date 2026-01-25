@@ -92,8 +92,19 @@ class AuthViewModel: ObservableObject {
     }
 
     /// ゲストモードで閲覧（Firebase認証なし）
-    func enterGuestMode() {
+    func enterGuestMode() async {
         errorMessage = nil
+
+        // 既存の認証セッションがある場合はサインアウト
+        if isAuthenticated {
+            do {
+                try await authService.signOut()
+            } catch {
+                ErrorHandler.logError(error, context: "AuthViewModel.enterGuestMode")
+                // サインアウトエラーは無視してゲストモードに移行
+            }
+        }
+
         currentUser = nil
         isAuthenticated = false
         isGuest = true
@@ -107,6 +118,7 @@ class AuthViewModel: ObservableObject {
             try await authService.signOut()
             currentUser = nil
             isAuthenticated = false
+            isGuest = false  // ゲストモードもリセット
 
             // ユーザーIDをLoggingServiceからクリア
             LoggingService.shared.setUserID(nil)
@@ -140,6 +152,11 @@ class AuthViewModel: ObservableObject {
         for await user in authService.observeAuthState() {
             currentUser = user
             isAuthenticated = user != nil
+
+            // 認証状態が変化したらゲストモードを解除
+            if user != nil {
+                isGuest = false
+            }
 
             // ユーザーIDをLoggingServiceに設定/クリア
             if let user = user {

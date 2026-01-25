@@ -113,7 +113,9 @@ struct WelcomeView: View {
 
                     // ゲストとして閲覧ボタン
                     Button(action: {
-                        authViewModel.enterGuestMode()
+                        Task {
+                            await authViewModel.enterGuestMode()
+                        }
                     }) {
                         Text("ゲストとして閲覧")
                             .font(.system(size: 16, weight: .medium))

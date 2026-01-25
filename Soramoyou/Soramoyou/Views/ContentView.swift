@@ -27,6 +27,9 @@ struct ContentView: View {
             } else if authViewModel.isAuthenticated {
                 // 認証済み: メインタブビューを表示
                 MainTabView()
+            } else if authViewModel.isGuest {
+                // ゲストモード: ゲスト用タブビューを表示
+                GuestTabView()
             } else {
                 // 未認証: ウェルカム画面を表示
                 WelcomeView()
