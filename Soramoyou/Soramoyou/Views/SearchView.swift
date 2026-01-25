@@ -28,24 +28,30 @@ struct SearchView: View {
                 .ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    VStack(spacing: 0) {
-                        // 検索条件セクション
-                        searchCriteriaSection
-                        
-                        Divider()
-                            .background(.white.opacity(0.3))
-                        
-                        // 検索結果セクション
+                    // 検索条件セクション
+                    searchCriteriaSection
+
+                    Divider()
+                        .background(.white.opacity(0.3))
+
+                    // 検索結果セクション（検索条件がある場合のみ表示）
+                    if viewModel.hasSearchCriteria || viewModel.isLoading || !viewModel.searchResults.isEmpty {
                         searchResultsSection
                     }
-                    
-                    // 画面下部に固定表示されるバナー広告
+
+                    // バナー広告
                     BannerAdContainer()
                 }
+                .frame(maxHeight: .infinity, alignment: .top)
             }
-            .navigationTitle("検索")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    GradientTitleView(title: "検索", fontSize: 20)
+                }
+            }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
-            .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
+            .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
                 }
@@ -61,35 +67,38 @@ struct SearchView: View {
     }
     
     // MARK: - Search Criteria Section
-    
+
     private var searchCriteriaSection: some View {
         ScrollView {
-            VStack(spacing: 24) {
+            VStack(spacing: 16) {
                 // ハッシュタグ入力
                 hashtagInputSection
-                
+
                 // 色選択
                 colorSelectionSection
-                
+
                 // 時間帯選択
                 timeOfDaySelectionSection
-                
+
                 // 空の種類選択
                 skyTypeSelectionSection
-                
+
                 // 検索ボタン
                 searchButton
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.vertical, 12)
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
     
     // MARK: - Hashtag Input Section
-    
+
     private var hashtagInputSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("ハッシュタグ")
-                .font(.headline)
+                .font(.subheadline)
+                .fontWeight(.semibold)
                 .foregroundColor(.white)
             
             HStack {
@@ -106,6 +115,7 @@ struct SearchView: View {
                     )
                     .foregroundColor(.white)
                     .onSubmit {
+                        guard viewModel.hasSearchCriteria else { return }
                         Task {
                             await viewModel.performSearch()
                         }
@@ -124,11 +134,12 @@ struct SearchView: View {
     }
     
     // MARK: - Color Selection Section
-    
+
     private var colorSelectionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("色")
-                .font(.headline)
+                .font(.subheadline)
+                .fontWeight(.semibold)
                 .foregroundColor(.white)
             
             ScrollView(.horizontal, showsIndicators: false) {
@@ -185,11 +196,12 @@ struct SearchView: View {
     }
     
     // MARK: - Time Of Day Selection Section
-    
+
     private var timeOfDaySelectionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("時間帯")
-                .font(.headline)
+                .font(.subheadline)
+                .fontWeight(.semibold)
                 .foregroundColor(.white)
             
             ScrollView(.horizontal, showsIndicators: false) {
@@ -216,11 +228,12 @@ struct SearchView: View {
     }
     
     // MARK: - Sky Type Selection Section
-    
+
     private var skyTypeSelectionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("空の種類")
-                .font(.headline)
+                .font(.subheadline)
+                .fontWeight(.semibold)
                 .foregroundColor(.white)
             
             ScrollView(.horizontal, showsIndicators: false) {
@@ -288,10 +301,14 @@ struct SearchView: View {
                         .font(.body)
                         .foregroundColor(.white.opacity(0.8))
                 }
+            } else {
+                Text("検索条件を入力してください")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
             }
         }
     }
-    
+
     // MARK: - Search Results Section
     
     private var searchResultsSection: some View {
@@ -326,16 +343,6 @@ struct SearchView: View {
                     }
                     .padding()
                 }
-            } else {
-                VStack(spacing: 16) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 60))
-                        .foregroundColor(.white.opacity(0.6))
-                    Text("検索条件を入力してください")
-                        .font(.headline)
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -364,20 +371,20 @@ struct ColorSelectionButton: View {
     let hex: String
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 8) {
+            VStack(spacing: 4) {
                 Circle()
                     .fill(hexToColor(hex))
-                    .frame(width: 50, height: 50)
+                    .frame(width: 36, height: 36)
                     .overlay(
                         Circle()
-                            .stroke(isSelected ? Color.blue : Color.gray.opacity(0.3), lineWidth: isSelected ? 3 : 1)
+                            .stroke(isSelected ? Color.blue : Color.gray.opacity(0.3), lineWidth: isSelected ? 2 : 1)
                     )
-                
+
                 Text(name)
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundColor(isSelected ? .blue : .primary)
             }
         }
@@ -404,16 +411,16 @@ struct FilterChip: View {
     let title: String
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.body)
+                .font(.caption)
                 .foregroundColor(isSelected ? .white : .primary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
                 .background(isSelected ? Color.blue : Color.gray.opacity(0.2))
-                .cornerRadius(20)
+                .cornerRadius(16)
         }
     }
 }
@@ -423,5 +430,4 @@ struct SearchView_Previews: PreviewProvider {
         SearchView()
     }
 }
-
 

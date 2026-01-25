@@ -1,3 +1,6 @@
+// ⭐️ ImageService.swift
+// 画像処理サービス
+// 高速プレビュー生成メソッドを追加
 //
 //  ImageService.swift
 //  Soramoyou
@@ -15,18 +18,21 @@ import Vision
 protocol ImageServiceProtocol {
     // Filter
     func applyFilter(_ filter: FilterType, to image: UIImage) async throws -> UIImage
-    
+
     // Edit Tools
     func applyEditTool(_ tool: EditTool, value: Float, to image: UIImage) async throws -> UIImage
     func applyEditSettings(_ settings: EditSettings, to image: UIImage) async throws -> UIImage
-    
+
     // Preview
     func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage
-    
+    /// 高速プレビュー生成（256x256の低解像度）
+    /// スライダー操作中のリアルタイム表示用
+    func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage
+
     // Compression & Resize
     func resizeImage(_ image: UIImage, maxSize: CGSize) async throws -> UIImage
     func compressImage(_ image: UIImage, quality: CGFloat) async throws -> Data
-    
+
     // Analysis
     func extractColors(_ image: UIImage, maxCount: Int) async throws -> [String]
     func calculateColorTemperature(_ image: UIImage) async throws -> Int
@@ -359,13 +365,28 @@ class ImageService: ImageServiceProtocol {
     }
     
     // MARK: - Preview
-    
+
     func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
         // まずサムネイルサイズにリサイズ
         let thumbnailSize = CGSize(width: 512, height: 512)
         let resizedImage = try await resizeImage(image, maxSize: thumbnailSize)
-        
+
         // 編集設定を適用
+        return try await applyEditSettings(edits, to: resizedImage)
+    }
+
+    /// 高速プレビュー生成（256x256の低解像度）
+    /// スライダー操作中のリアルタイム表示用
+    /// - Parameters:
+    ///   - image: 元画像
+    ///   - edits: 編集設定
+    /// - Returns: 低解像度のプレビュー画像
+    func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
+        // 非常に小さなサムネイルサイズにリサイズ（高速化のため）
+        let fastThumbnailSize = CGSize(width: 256, height: 256)
+        let resizedImage = try await resizeImage(image, maxSize: fastThumbnailSize)
+
+        // 編集設定を適用（低解像度なので高速）
         return try await applyEditSettings(edits, to: resizedImage)
     }
     

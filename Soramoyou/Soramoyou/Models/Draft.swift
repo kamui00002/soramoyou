@@ -51,9 +51,10 @@ struct Draft: Identifiable, Codable {
     // MARK: - Firestore Mapping
     
     /// Firestoreドキュメントデータに変換
+    /// 注意: firestore.rules が 'id' フィールドを期待するため、'id' をキーとして使用
     func toFirestoreData() -> [String: Any] {
         var data: [String: Any] = [
-            "draftId": id,
+            "id": id,
             "userId": userId,
             "images": images.map { $0.toFirestoreData() },
             "visibility": visibility.rawValue,
@@ -85,12 +86,14 @@ struct Draft: Identifiable, Codable {
     }
     
     /// Firestoreドキュメントデータから初期化
+    /// 注意: 'id' と 'draftId' の両方をサポート（後方互換性のため）
     init(from documentData: [String: Any]) throws {
-        guard let draftId = documentData["draftId"] as? String,
+        // 'id' フィールドを優先、なければ 'draftId' を使用（後方互換性）
+        guard let draftId = documentData["id"] as? String ?? documentData["draftId"] as? String,
               let userId = documentData["userId"] as? String else {
             throw DraftModelError.missingRequiredFields
         }
-        
+
         self.id = draftId
         self.userId = userId
         

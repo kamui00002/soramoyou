@@ -14,22 +14,25 @@ struct MainTabView: View {
     enum Tab: Int {
         case home = 0
         case post = 1
-        case search = 2
-        case profile = 3
-        
+        case gallery = 2
+        case search = 3
+        case profile = 4
+
         var title: String {
             switch self {
             case .home: return "ホーム"
             case .post: return "投稿"
+            case .gallery: return "ギャラリー"
             case .search: return "検索"
             case .profile: return "プロフィール"
             }
         }
-        
+
         var icon: String {
             switch self {
             case .home: return "house.fill"
             case .post: return "plus.circle.fill"
+            case .gallery: return "photo.on.rectangle.angled"
             case .search: return "magnifyingglass"
             case .profile: return "person.fill"
             }
@@ -49,7 +52,13 @@ struct MainTabView: View {
                     Label(Tab.post.title, systemImage: Tab.post.icon)
                 }
                 .tag(Tab.post)
-            
+
+            GalleryView()
+                .tabItem {
+                    Label(Tab.gallery.title, systemImage: Tab.gallery.icon)
+                }
+                .tag(Tab.gallery)
+
             SearchView()
                 .tabItem {
                     Label(Tab.search.title, systemImage: Tab.search.icon)

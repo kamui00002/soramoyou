@@ -34,91 +34,125 @@ class StorageService: StorageServiceProtocol {
             guard let imageData = image.jpegData(compressionQuality: 0.85) else {
                 throw StorageServiceError.compressionFailed
             }
-            
+
             // 画像サイズの検証（最大5MB）
             let maxSize: Int = 5 * 1024 * 1024 // 5MB
             if imageData.count > maxSize {
                 throw StorageServiceError.imageTooLarge
             }
-            
+
             // Storage参照を取得
             let storageRef = storage.reference().child(path)
-            
+
             // メタデータを設定
             let metadata = StorageMetadata()
             metadata.contentType = "image/jpeg"
-            
-            // アップロード
-            let uploadTask = storageRef.putData(imageData, metadata: metadata)
-            
-            // 進捗を監視
-            setupProgressObserver(for: uploadTask, path: path)
-            
-            // アップロード完了を待機
-            _ = try await uploadTask
-            
-            // ダウンロードURLを取得
-            let downloadURL = try await storageRef.downloadURL()
-            
-            // 進捗監視をクリーンアップ
-            cleanupProgressObserver(for: path)
-            
+
+            // アップロード（async/await版）
+            let uploadMetadata = try await storageRef.putDataAsync(imageData, metadata: metadata)
+
+            // アップロード完了後、メタデータが存在することを確認
+            guard uploadMetadata.path != nil else {
+                throw StorageServiceError.uploadFailed(NSError(
+                    domain: "com.soramoyou.storage",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Upload completed but metadata is invalid"]
+                ))
+            }
+
+            // ダウンロードURLを取得（リトライ機構付き）
+            let downloadURL = try await getDownloadURLWithRetry(storageRef: storageRef, maxRetries: 3)
+
             return downloadURL
         } catch let error as StorageServiceError {
-            cleanupProgressObserver(for: path)
             throw error
         } catch {
-            cleanupProgressObserver(for: path)
             throw StorageServiceError.uploadFailed(error)
         }
+    }
+
+    // MARK: - Helper: Download URL with Retry
+
+    /// ダウンロードURLを取得（リトライ機構付き）
+    /// - Parameters:
+    ///   - storageRef: Storage参照
+    ///   - maxRetries: 最大リトライ回数
+    /// - Returns: ダウンロードURL
+    private func getDownloadURLWithRetry(storageRef: StorageReference, maxRetries: Int) async throws -> URL {
+        var lastError: Error?
+
+        for attempt in 0..<maxRetries {
+            do {
+                // 少し待機してからダウンロードURLを取得
+                if attempt > 0 {
+                    try await Task.sleep(nanoseconds: UInt64(attempt * 500_000_000)) // 0.5秒 * attempt
+                }
+
+                let downloadURL = try await storageRef.downloadURL()
+                return downloadURL
+            } catch {
+                lastError = error
+                print("⚠️ ダウンロードURL取得失敗 (試行\(attempt + 1)/\(maxRetries)): \(error.localizedDescription)")
+
+                // 最後の試行でなければ続ける
+                if attempt < maxRetries - 1 {
+                    continue
+                }
+            }
+        }
+
+        // すべてのリトライが失敗した場合
+        throw lastError ?? StorageServiceError.uploadFailed(NSError(
+            domain: "com.soramoyou.storage",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "Failed to get download URL after \(maxRetries) retries"]
+        ))
     }
     
     // MARK: - Upload Thumbnail
     
     func uploadThumbnail(_ image: UIImage, path: String) async throws -> URL {
+        let thumbnailPath = "thumbnails/\(path)"
         do {
             // サムネイルサイズにリサイズ（最大512x512）
             let thumbnailSize = CGSize(width: 512, height: 512)
             let thumbnailImage = try await resizeImageForThumbnail(image, targetSize: thumbnailSize)
-            
+
             // サムネイルをJPEG形式で圧縮（品質80%）
             guard let thumbnailData = thumbnailImage.jpegData(compressionQuality: 0.80) else {
                 throw StorageServiceError.compressionFailed
             }
-            
+
             // Storage参照を取得（サムネイル用のパス）
-            let thumbnailPath = "thumbnails/\(path)"
             let storageRef = storage.reference().child(thumbnailPath)
-            
+
             // メタデータを設定
             let metadata = StorageMetadata()
             metadata.contentType = "image/jpeg"
-            
-            // アップロード
-            let uploadTask = storageRef.putData(thumbnailData, metadata: metadata)
-            
-            // 進捗を監視
-            setupProgressObserver(for: uploadTask, path: thumbnailPath)
-            
-            // アップロード完了を待機
-            _ = try await uploadTask
-            
-            // ダウンロードURLを取得
-            let downloadURL = try await storageRef.downloadURL()
-            
-            // 進捗監視をクリーンアップ
-            cleanupProgressObserver(for: thumbnailPath)
-            
+
+            // アップロード（async/await版）
+            let uploadMetadata = try await storageRef.putDataAsync(thumbnailData, metadata: metadata)
+
+            // アップロード完了後、メタデータが存在することを確認
+            guard uploadMetadata.path != nil else {
+                throw StorageServiceError.uploadFailed(NSError(
+                    domain: "com.soramoyou.storage",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Thumbnail upload completed but metadata is invalid"]
+                ))
+            }
+
+            // ダウンロードURLを取得（リトライ機構付き）
+            let downloadURL = try await getDownloadURLWithRetry(storageRef: storageRef, maxRetries: 3)
+
             return downloadURL
         } catch let error as StorageServiceError {
-            cleanupProgressObserver(for: path)
             throw error
         } catch {
-            cleanupProgressObserver(for: path)
             throw StorageServiceError.uploadFailed(error)
         }
     }
-    
+
     // MARK: - Delete Image
     
     func deleteImage(path: String) async throws {

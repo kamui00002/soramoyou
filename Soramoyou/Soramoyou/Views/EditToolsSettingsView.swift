@@ -8,8 +8,16 @@
 import SwiftUI
 
 struct EditToolsSettingsView: View {
-    @ObservedObject var viewModel: ProfileViewModel
+    @StateObject private var viewModel: ProfileViewModel
     @Environment(\.dismiss) private var dismiss
+
+    init(viewModel: ProfileViewModel? = nil) {
+        if let viewModel = viewModel {
+            _viewModel = StateObject(wrappedValue: viewModel)
+        } else {
+            _viewModel = StateObject(wrappedValue: ProfileViewModel())
+        }
+    }
     
     var body: some View {
         NavigationView {
@@ -124,7 +132,7 @@ struct EditToolsSettingsView: View {
                     .padding()
                 }
             }
-            .navigationTitle("編集装備設定")
+            .navigationTitle("おすすめ編集設定")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
@@ -147,7 +155,7 @@ struct EditToolsSettingsView: View {
                     .foregroundColor(.white)
                 }
             }
-            .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
+            .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
                 }

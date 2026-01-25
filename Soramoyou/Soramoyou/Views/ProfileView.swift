@@ -72,7 +72,12 @@ struct ProfileView: View {
                     BannerAdContainer()
                 }
             }
-            .navigationTitle("プロフィール")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    GradientTitleView(title: "プロフィール", fontSize: 20)
+                }
+            }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -87,7 +92,7 @@ struct ProfileView: View {
                             Button(action: {
                                 showingEditTools = true
                             }) {
-                                Label("編集装備設定", systemImage: "wrench.and.screwdriver")
+                                Label("おすすめ編集設定", systemImage: "slider.horizontal.3")
                             }
                             
                             Divider()
@@ -133,7 +138,7 @@ struct ProfileView: View {
                 await viewModel.loadProfile()
                 await viewModel.loadUserPosts()
             }
-            .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
+            .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
                 }

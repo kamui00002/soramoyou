@@ -13,6 +13,8 @@ struct Post: Identifiable, Codable {
     let id: String
     let userId: String
     let images: [ImageInfo]
+    let originalImages: [ImageInfo]?  // オリジナル画像（編集前）
+    let editSettings: EditSettings?    // 編集設定
     let caption: String?
     let hashtags: [String]?
     let location: Location?
@@ -31,6 +33,8 @@ struct Post: Identifiable, Codable {
         id: String,
         userId: String,
         images: [ImageInfo],
+        originalImages: [ImageInfo]? = nil,
+        editSettings: EditSettings? = nil,
         caption: String? = nil,
         hashtags: [String]? = nil,
         location: Location? = nil,
@@ -48,6 +52,8 @@ struct Post: Identifiable, Codable {
         self.id = id
         self.userId = userId
         self.images = images
+        self.originalImages = originalImages
+        self.editSettings = editSettings
         self.caption = caption
         self.hashtags = hashtags
         self.location = location
@@ -114,7 +120,17 @@ struct Post: Identifiable, Codable {
         if let colorTemperature = colorTemperature {
             data["colorTemperature"] = colorTemperature
         }
-        
+
+        // オリジナル画像（編集前）
+        if let originalImages = originalImages {
+            data["originalImages"] = originalImages.map { $0.toFirestoreData() }
+        }
+
+        // 編集設定
+        if let editSettings = editSettings {
+            data["editSettings"] = editSettings.toFirestoreData()
+        }
+
         return data
     }
     
@@ -134,7 +150,21 @@ struct Post: Identifiable, Codable {
         } else {
             throw PostModelError.invalidImages
         }
-        
+
+        // オリジナル画像の変換（オプショナル - 後方互換性）
+        if let originalImagesData = documentData["originalImages"] as? [[String: Any]] {
+            self.originalImages = originalImagesData.compactMap { ImageInfo(from: $0) }
+        } else {
+            self.originalImages = nil
+        }
+
+        // 編集設定の変換（オプショナル - 後方互換性）
+        if let editSettingsData = documentData["editSettings"] as? [String: Any] {
+            self.editSettings = EditSettings(from: editSettingsData)
+        } else {
+            self.editSettings = nil
+        }
+
         self.caption = documentData["caption"] as? String
         self.hashtags = documentData["hashtags"] as? [String]
         
