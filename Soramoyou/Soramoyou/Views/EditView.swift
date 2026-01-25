@@ -15,7 +15,9 @@ struct EditView: View {
     @State private var showToolSlider = false
     @State private var showPostInfoView = false
     @State private var finalEditedImages: [UIImage] = []
-    
+    @State private var isComparisonMode = false
+    @State private var comparisonSliderPosition: CGFloat = 0.5
+
     private let userId: String?
     private let originalImages: [UIImage]
     
@@ -108,15 +110,18 @@ struct EditView: View {
     }
     
     // MARK: - Image Preview View
-    
+
     private var imagePreviewView: some View {
         ZStack {
             // 暗い背景で画像を見やすく
             Color.black.opacity(0.3)
-            
+
             if viewModel.isLoading {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
+            } else if isComparisonMode {
+                // 比較モード表示
+                comparisonView
             } else if let previewImage = viewModel.previewImage {
                 Image(uiImage: previewImage)
                     .resizable()
@@ -131,9 +136,34 @@ struct EditView: View {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
             }
-            
+
+            // 比較モードトグルボタン
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isComparisonMode.toggle()
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: isComparisonMode ? "eye.fill" : "eye")
+                            Text(isComparisonMode ? "編集後" : "比較")
+                                .font(.caption)
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(isComparisonMode ? Color.blue : Color.white.opacity(0.2))
+                        .cornerRadius(20)
+                    }
+                    .padding()
+                }
+                Spacer()
+            }
+
             // 複数画像の場合のナビゲーション
-            if viewModel.originalImages.count > 1 {
+            if viewModel.originalImages.count > 1 && !isComparisonMode {
                 HStack {
                     Button(action: {
                         viewModel.previousImage()
@@ -146,9 +176,9 @@ struct EditView: View {
                             .clipShape(Circle())
                     }
                     .disabled(viewModel.currentImageIndex == 0)
-                    
+
                     Spacer()
-                    
+
                     Button(action: {
                         viewModel.nextImage()
                     }) {
@@ -163,9 +193,9 @@ struct EditView: View {
                 }
                 .padding()
             }
-            
+
             // 画像インデックス表示
-            if viewModel.originalImages.count > 1 {
+            if viewModel.originalImages.count > 1 && !isComparisonMode {
                 VStack {
                     Spacer()
                     Text("\(viewModel.currentImageIndex + 1) / \(viewModel.originalImages.count)")
@@ -176,6 +206,92 @@ struct EditView: View {
                         .background(.white.opacity(0.2))
                         .cornerRadius(12)
                         .padding(.bottom, 100)
+                }
+            }
+        }
+    }
+
+    // MARK: - Comparison View
+
+    private var comparisonView: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // 編集後の画像（右側）
+                if let previewImage = viewModel.previewImage {
+                    Image(uiImage: previewImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+
+                // 編集前の画像（左側、クリッピング）
+                if let currentImage = viewModel.currentImage {
+                    Image(uiImage: currentImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipShape(
+                            ComparisonClipShape(position: comparisonSliderPosition)
+                        )
+                }
+
+                // スライダーライン
+                Rectangle()
+                    .fill(Color.white)
+                    .frame(width: 3)
+                    .position(x: geometry.size.width * comparisonSliderPosition, y: geometry.size.height / 2)
+                    .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 0)
+
+                // スライダーハンドル
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 40, height: 40)
+                    .overlay(
+                        HStack(spacing: 2) {
+                            Image(systemName: "chevron.left")
+                                .font(.caption2)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                        }
+                        .foregroundColor(.gray)
+                    )
+                    .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+                    .position(x: geometry.size.width * comparisonSliderPosition, y: geometry.size.height / 2)
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                let newPosition = value.location.x / geometry.size.width
+                                comparisonSliderPosition = max(0.05, min(0.95, newPosition))
+                            }
+                    )
+
+                // ラベル表示
+                VStack {
+                    Spacer()
+                    HStack {
+                        Text("Before")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.black.opacity(0.5))
+                            .cornerRadius(4)
+                            .padding(.leading, 12)
+
+                        Spacer()
+
+                        Text("After")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.black.opacity(0.5))
+                            .cornerRadius(4)
+                            .padding(.trailing, 12)
+                    }
+                    .padding(.bottom, 12)
                 }
             }
         }
@@ -412,6 +528,18 @@ struct ToolButton: View {
         case .vignette: return "circle.dashed"
         default: return "slider.horizontal.3"
         }
+    }
+}
+
+// MARK: - Comparison Clip Shape
+
+struct ComparisonClipShape: Shape {
+    let position: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addRect(CGRect(x: 0, y: 0, width: rect.width * position, height: rect.height))
+        return path
     }
 }
 
