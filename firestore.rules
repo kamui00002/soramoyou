@@ -95,6 +95,16 @@ service cloud.firestore {
       // - followers: 所有者またはフォロワーのみ
       //   follows コレクションを使ったフォロワー検証
       // - private: 所有者のみ
+      //
+      // セキュリティノート:
+      // Firebase StorageのdownloadURL()にはアクセストークンが含まれ、
+      // URLを知っている誰でもアクセス可能です。このため、Firestore側で
+      // 厳格な権限チェックを行い、不正なアクセスを防ぎます。
+      //
+      // Phase 2では以下の対策を実装予定:
+      // - Signed URLまたはStorage参照パスのみを保存
+      // - Cloud Functionsを使った画像配信
+      // - より強固なアクセス制御
       allow read: if resource.data.visibility == 'public'
                   || (resource.data.visibility == 'followers'
                       && (isOwner(resource.data.userId) || isFollower(resource.data.userId)))

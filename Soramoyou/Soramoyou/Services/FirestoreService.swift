@@ -16,18 +16,21 @@ protocol FirestoreServiceProtocol {
     func fetchPost(postId: String) async throws -> Post
     func deletePost(postId: String) async throws
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
-    
+
+    // Access Control
+    func canAccessPost(_ post: Post, currentUserId: String?) async throws -> Bool
+
     // Drafts
     func saveDraft(_ draft: Draft) async throws -> Draft
     func fetchDrafts(userId: String) async throws -> [Draft]
     func loadDraft(draftId: String) async throws -> Draft
     func deleteDraft(draftId: String) async throws
-    
+
     // Users
     func fetchUser(userId: String) async throws -> User
     func updateUser(_ user: User) async throws -> User
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws
-    
+
     // Search
     func searchByHashtag(_ hashtag: String) async throws -> [Post]
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post]
@@ -160,14 +163,14 @@ class FirestoreService: FirestoreServiceProtocol {
                 .whereField("userId", isEqualTo: userId)
                 .order(by: "createdAt", descending: true)
                 .limit(to: limit)
-            
+
             // ページネーション
             if let lastDocument = lastDocument {
                 query = query.start(afterDocument: lastDocument)
             }
-            
+
             let snapshot = try await query.getDocuments()
-            
+
             return try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
@@ -175,7 +178,55 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-    
+
+    // MARK: - Access Control
+
+    /// 投稿へのアクセス権限をチェックする
+    ///
+    /// - Parameters:
+    ///   - post: チェック対象の投稿
+    ///   - currentUserId: 現在のユーザーID（未ログインの場合はnil）
+    /// - Returns: アクセス可能な場合はtrue
+    ///
+    /// - Important: セキュリティに関する注意事項
+    ///   このメソッドは、画像を表示する前にクライアント側で権限チェックを行うために使用します。
+    ///   Firestore Security Rulesと同様のロジックを実装していますが、
+    ///   Firebase StorageのdownloadURL()はこのチェックをバイパスして直接アクセス可能です。
+    ///
+    ///   Phase 2では、Cloud Functionsを使ったSigned URL生成により、
+    ///   より強固なアクセス制御を実装予定です。
+    func canAccessPost(_ post: Post, currentUserId: String?) async throws -> Bool {
+        // public投稿は誰でもアクセス可能
+        if post.visibility == .public {
+            return true
+        }
+
+        // 未ログインユーザーはpublic以外アクセス不可
+        guard let currentUserId = currentUserId else {
+            return false
+        }
+
+        // 投稿者本人は常にアクセス可能
+        if post.userId == currentUserId {
+            return true
+        }
+
+        // private投稿は投稿者のみアクセス可能
+        if post.visibility == .private {
+            return false
+        }
+
+        // followers投稿の場合、フォロワーかチェック
+        if post.visibility == .followers {
+            // Phase 1: followsコレクションがまだないため、現時点では投稿者のみアクセス可能
+            // Phase 2: followsコレクションを使ったフォロワーチェックを実装予定
+            // TODO: Phase 2でフォロワーチェック実装
+            return false
+        }
+
+        return false
+    }
+
     // MARK: - Drafts
     
     func saveDraft(_ draft: Draft) async throws -> Draft {

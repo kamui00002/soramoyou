@@ -27,7 +27,25 @@ class StorageService: StorageServiceProtocol {
     }
     
     // MARK: - Upload Image
-    
+
+    /// 画像をFirebase Storageにアップロードし、ダウンロードURLを返す
+    ///
+    /// - Parameters:
+    ///   - image: アップロードする画像
+    ///   - path: Storage内のパス（例: posts/{userId}/public/{imageId}.jpg）
+    /// - Returns: ダウンロードURL
+    ///
+    /// - Important: セキュリティに関する注意事項
+    ///   返されるdownloadURL()には誰でもアクセス可能なトークンが含まれています。
+    ///   private/followers投稿の場合、URLが漏洩するとFirestore権限をバイパスして
+    ///   画像にアクセスされる可能性があります。
+    ///
+    ///   Phase 2では以下の対策を実装予定:
+    ///   - Storage参照パス（path）のみをFirestoreに保存
+    ///   - Cloud Functionsを使ったSigned URL生成
+    ///   - アクセス時の動的な権限チェック
+    ///
+    ///   詳細は TECH_DEBT.md を参照してください。
     func uploadImage(_ image: UIImage, path: String) async throws -> URL {
         do {
             // 画像をJPEG形式で圧縮（品質85%）

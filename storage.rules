@@ -12,14 +12,35 @@ service firebase.storage {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // NOTE: Firebase Storage rules cannot access Firestore data.
-    // Follower access control is handled at the Firestore level.
-    // For followers-only content, the app should:
-    // 1. Check follower status via Firestore rules when fetching posts
-    // 2. Use signed URLs or Cloud Functions for image delivery in Phase 2
+    // ============================================
+    // セキュリティに関する重要な注意事項
+    // ============================================
+    //
+    // 既知の制限事項:
+    // Firebase Storage rulesはFirestoreデータにアクセスできないため、
+    // フォロワー関係のチェックができません。
+    //
+    // 現在の対応（Phase 1）:
+    // 1. Firestore側で厳格な権限チェック（投稿読み取り時）
+    // 2. クライアント側で投稿権限を確認してから画像を表示
+    // 3. downloadURL()のアクセストークンに依存（知られたら閲覧可能）
+    //
+    // 将来の対応（Phase 2）:
+    // 1. Storage参照パスのみをFirestoreに保存
+    // 2. Cloud Functionsを使ったSigned URL生成
+    // 3. より強固なアクセス制御の実装
+    //
+    // 詳細は TECH_DEBT.md を参照してください。
+    // ============================================
 
+    // ファイル種別チェック: 許可する画像フォーマット
     function isImageFile() {
-      return request.resource.contentType.matches('image/.*');
+      return request.resource.contentType in [
+        'image/jpeg',
+        'image/png',
+        'image/heic',
+        'image/webp'
+      ];
     }
 
     function isValidSize() {
@@ -42,8 +63,8 @@ service firebase.storage {
       allow read: if true;
 
       // Only authenticated owner can upload public images
-      // NOTE: テスト中は条件を緩和（本番前に戻すこと）
-      allow write: if isOwner(userId);
+      // ファイル種別とサイズの検証を追加
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
     }
 
     // Post images - followers only
@@ -86,8 +107,8 @@ service firebase.storage {
       allow read: if true;
 
       // Only authenticated owner can upload public thumbnails
-      // NOTE: テスト中は条件を緩和（本番前に戻すこと）
-      allow write: if isOwner(userId);
+      // ファイル種別とサイズの検証を追加
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
     }
 
     // Thumbnail images - followers only
@@ -115,8 +136,8 @@ service firebase.storage {
       allow read: if true;
 
       // Only authenticated owner can upload public original images
-      // NOTE: テスト中は条件を緩和（本番前に戻すこと）
-      allow write: if isOwner(userId);
+      // ファイル種別とサイズの検証を追加
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
     }
 
     // Original images (unedited) - followers only

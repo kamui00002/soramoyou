@@ -206,6 +206,25 @@ class PostViewModel: ObservableObject {
     }
     
     /// 画像をアップロード
+    ///
+    /// - Returns: アップロードされた画像のURL配列
+    ///
+    /// - Important: セキュリティに関する注意事項
+    ///   Firebase StorageのdownloadURL()を直接Firestoreに保存しています。
+    ///   このURLには誰でもアクセス可能なトークンが含まれているため、
+    ///   private/followers投稿の場合、URLが漏洩すると権限チェックを
+    ///   バイパスして画像にアクセスされる可能性があります。
+    ///
+    ///   現在の対策:
+    ///   - Firestore側で厳格な権限チェック
+    ///   - クライアント側で投稿権限を確認してから画像を表示
+    ///
+    ///   Phase 2での改善予定:
+    ///   - Storage参照パス（path）のみを保存
+    ///   - 画像表示時にCloud Functionsで動的にSigned URLを生成
+    ///   - より強固なアクセス制御
+    ///
+    ///   詳細は TECH_DEBT.md を参照してください。
     private func uploadImages() async throws -> [(url: String, thumbnail: String?)] {
         guard let userId = userId else {
             throw PostViewModelError.userNotAuthenticated

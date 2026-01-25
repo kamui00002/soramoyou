@@ -8,6 +8,23 @@
 import SwiftUI
 import Kingfisher
 
+// MARK: - セキュリティに関する注意事項
+// ⚠️ 重要: 画像URL（downloadURL）のセキュリティ制限
+//
+// 現在の実装（Phase 1）:
+// - Firebase StorageのdownloadURL()を使用して画像を表示
+// - このURLには誰でもアクセス可能なトークンが含まれている
+// - Firestore側で投稿の公開設定（visibility）をチェックしているが、
+//   URLが漏洩した場合は直接アクセスされる可能性がある
+//
+// Phase 2での改善予定:
+// - canAccessPost()メソッドを使った画像表示前の権限チェック
+// - Cloud Functionsを使ったSigned URL生成
+// - より強固なアクセス制御の実装
+//
+// 詳細は TECH_DEBT.md を参照してください。
+// MARK: -
+
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
     @State private var selectedPost: Post?

@@ -50,10 +50,13 @@
 ```
 そらもよう/
 ├── README.md              # このファイル
+├── TECH_DEBT.md           # 技術的負債とセキュリティ改善計画
 ├── SESSION_SUMMARY.md     # セッションサマリー（制限解除後の再開用）
 ├── GIT_SETUP.md           # Git設定手順
 ├── init.json              # プロジェクトメタデータ
-└── requirements.md        # 要件定義（15個の要件）
+├── requirements.md        # 要件定義（15個の要件）
+├── firestore.rules        # Firestore Securityルール
+└── storage.rules          # Firebase Storage Securityルール
 ```
 
 ## 要件定義
@@ -101,6 +104,23 @@
 
 [ライセンス情報を追加]
 
+## セキュリティに関する重要な情報
+
+### 既知の制限事項と対策
+
+#### Phase 1（現在の実装）
+- Firebase StorageのdownloadURL()を使用した画像配信
+- URLにはアクセストークンが含まれ、知っている誰でもアクセス可能
+- Firestore Security Rulesで投稿の読み取り権限を厳格に管理
+- クライアント側で投稿権限を確認してから画像を表示
+
+#### Phase 2（将来の改善）
+- Storage参照パスのみをFirestoreに保存
+- Cloud Functionsを使ったSigned URL生成
+- より強固なアクセス制御の実装
+
+詳細は `TECH_DEBT.md` を参照してください。
+
 ## 参考資料
 
 - **CLAUDE2.md**: `/Users/yoshidometoru/Documents/GitHub/cc-sdd/CLAUDE2.md`
@@ -108,5 +128,6 @@
   - 技術スタック
   - データベース設計
   - 開発ガイドライン
+- **TECH_DEBT.md**: 技術的負債とセキュリティ改善計画
 
 
