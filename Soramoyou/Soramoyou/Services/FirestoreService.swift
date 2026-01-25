@@ -566,7 +566,7 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
 
-    /// ユーザーがいいねした投稿を取得
+    /// ユーザーがいいねした投稿を取得（バッチ処理でN+1問題を回避）
     func fetchUserLikedPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
         do {
             var query: Query = likesCollection
@@ -585,18 +585,39 @@ class FirestoreService: FirestoreServiceProtocol {
                 document.data()["postId"] as? String
             }
 
-            // 投稿を取得
-            var posts: [Post] = []
-            for postId in postIds {
-                if let post = try? await fetchPost(postId: postId) {
-                    posts.append(post)
-                }
-            }
-
-            return posts
+            // バッチで投稿を取得（N+1問題を回避）
+            return try await fetchPostsByIds(postIds)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
+    }
+
+    /// 複数の投稿IDからバッチで投稿を取得（Firestoreの10件制限に対応）
+    private func fetchPostsByIds(_ postIds: [String]) async throws -> [Post] {
+        guard !postIds.isEmpty else { return [] }
+
+        var allPosts: [Post] = []
+
+        // Firestoreの `whereField in` は最大10件まで
+        let chunks = postIds.chunked(into: 10)
+
+        for chunk in chunks {
+            let snapshot = try await postsCollection
+                .whereField(FieldPath.documentID(), in: chunk)
+                .getDocuments()
+
+            let posts = try snapshot.documents.compactMap { document in
+                try Post(from: document.data())
+            }
+            allPosts.append(contentsOf: posts)
+        }
+
+        // 元の順序を維持
+        let orderedPosts = postIds.compactMap { postId in
+            allPosts.first { $0.id == postId }
+        }
+
+        return orderedPosts
     }
 
     // MARK: - Comments
@@ -815,7 +836,7 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
 
-    /// コレクションの投稿を取得
+    /// コレクションの投稿を取得（バッチ処理でN+1問題を回避）
     func fetchCollectionPosts(collectionId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
         do {
             var query: Query = collectionItemsCollection
@@ -834,15 +855,8 @@ class FirestoreService: FirestoreServiceProtocol {
                 document.data()["postId"] as? String
             }
 
-            // 投稿を取得
-            var posts: [Post] = []
-            for postId in postIds {
-                if let post = try? await fetchPost(postId: postId) {
-                    posts.append(post)
-                }
-            }
-
-            return posts
+            // バッチで投稿を取得（N+1問題を回避）
+            return try await fetchPostsByIds(postIds)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -862,6 +876,18 @@ class FirestoreService: FirestoreServiceProtocol {
 }
 
 // MARK: - FirestoreServiceError
+
+// MARK: - Array Extension
+
+extension Array {
+    /// 配列を指定されたサイズのチャンクに分割
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0 else { return [] }
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0..<Swift.min($0 + size, count)])
+        }
+    }
+}
 
 enum FirestoreServiceError: LocalizedError {
     case notFound

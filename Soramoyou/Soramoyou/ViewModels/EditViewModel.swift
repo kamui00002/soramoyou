@@ -47,7 +47,24 @@ class EditViewModel: ObservableObject {
             }
         }
     }
-    
+
+    /// メモリリーク防止のためのクリーンアップ
+    deinit {
+        previewTask?.cancel()
+        realtimePreviewTask?.cancel()
+    }
+
+    /// 手動でリソースをクリーンアップ
+    func cleanup() {
+        previewTask?.cancel()
+        realtimePreviewTask?.cancel()
+        previewTask = nil
+        realtimePreviewTask = nil
+        cachedLowResImage = nil
+        previewImage = nil
+        originalImages = []
+    }
+
     // MARK: - Image Management
     
     /// 画像を設定

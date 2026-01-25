@@ -22,7 +22,6 @@ class PostDetailViewModel: ObservableObject {
 
     private let userId: String?
     private let firestoreService: FirestoreServiceProtocol
-    private var lastCommentDocument: DocumentSnapshot?
 
     init(
         post: Post,
@@ -36,17 +35,16 @@ class PostDetailViewModel: ObservableObject {
 
     // MARK: - Load Data
 
-    /// 初期データをロード
+    /// 初期データをロード（真の並列実行）
     func loadInitialData() async {
         isLoading = true
 
-        async let likeStatus: () = loadLikeStatus()
-        async let commentsLoad: () = loadComments()
-        async let collectionsLoad: () = loadUserCollections()
-
-        await likeStatus
-        await commentsLoad
-        await collectionsLoad
+        // withTaskGroupを使用して真の並列実行を実現
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.loadLikeStatus() }
+            group.addTask { await self.loadComments() }
+            group.addTask { await self.loadUserCollections() }
+        }
 
         isLoading = false
     }

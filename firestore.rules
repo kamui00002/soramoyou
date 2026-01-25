@@ -40,9 +40,12 @@ service cloud.firestore {
       return visibility in ['public', 'followers', 'private'];
     }
 
-    // メールアドレスの簡易検証
+    // メールアドレスの検証（より厳密な正規表現）
     function isValidEmail(email) {
-      return email is string && email.size() > 0 && email.matches('.*@.*\\..*');
+      return email is string
+             && email.size() > 0
+             && email.size() <= 254
+             && email.matches('[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}');
     }
 
     // 投稿データの検証
@@ -54,6 +57,21 @@ service cloud.firestore {
              && isValidVisibility(data.visibility)
              && data.images.size() >= 1
              && data.images.size() <= 10;
+    }
+
+    // 投稿更新時のカウントフィールド検証（改ざん防止）
+    function isValidPostUpdate() {
+      let data = request.resource.data;
+      let existing = resource.data;
+      return isValidPost()
+             && data.likesCount == existing.likesCount
+             && data.commentsCount == existing.commentsCount;
+    }
+
+    // 投稿の所有者かどうかを確認
+    function isPostOwner(postId) {
+      return isAuthenticated() &&
+             get(/databases/$(database)/documents/posts/$(postId)).data.userId == request.auth.uid;
     }
 
     // ============================================
@@ -119,12 +137,13 @@ service cloud.firestore {
                     && request.resource.data.userId == request.auth.uid
                     && isValidPost();
 
-      // 更新・削除権限: 所有者のみ
-      // userIdは変更不可
+      // 更新権限: 所有者のみ
+      // userIdは変更不可、likesCount/commentsCountは改ざん不可
       allow update: if isOwner(resource.data.userId)
                     && request.resource.data.userId == resource.data.userId
-                    && isValidPost();
+                    && isValidPostUpdate();
 
+      // 削除権限: 所有者のみ
       allow delete: if isOwner(resource.data.userId);
     }
 
@@ -156,8 +175,10 @@ service cloud.firestore {
     // ドキュメントID: {userId}_{postId}
     // ============================================
     match /likes/{likeId} {
-      // 投稿の可視性に基づいてアクセス制御
-      allow read: if isAuthenticated();
+      // 読み取り権限: 自分のいいね、または投稿の所有者
+      allow read: if isAuthenticated()
+                  && (resource.data.userId == request.auth.uid
+                      || isPostOwner(resource.data.postId));
 
       // いいね作成: 認証済みユーザーのみ、自分のIDで作成
       allow create: if isAuthenticated()
@@ -195,9 +216,10 @@ service cloud.firestore {
                     && request.resource.data.content.size() >= 1
                     && request.resource.data.content.size() <= 500;
 
-      // コメント削除: 自分のコメントまたは投稿の所有者
+      // コメント削除: 自分のコメント、または投稿の所有者（モデレーション）
       allow delete: if isAuthenticated()
-                    && resource.data.userId == request.auth.uid;
+                    && (resource.data.userId == request.auth.uid
+                        || isPostOwner(resource.data.postId));
     }
 
     // ============================================
@@ -233,7 +255,8 @@ service cloud.firestore {
     // ============================================
     match /collectionItems/{itemId} {
       // コレクションの所有者のみ読み取り可能
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated()
+                  && resource.data.userId == request.auth.uid;
 
       // アイテム追加: コレクションの所有者のみ
       allow create: if isAuthenticated()
