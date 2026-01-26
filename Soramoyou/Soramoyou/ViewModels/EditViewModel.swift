@@ -27,6 +27,8 @@ class EditViewModel: ObservableObject {
     private var previewTask: Task<Void, Never>?
     private var cachedLowResImage: UIImage?
     private var realtimePreviewTask: Task<Void, Never>?
+    private var isGeneratingRealtimePreview = false
+    private var pendingRealtimeUpdate = false
     
     init(
         images: [UIImage] = [],
@@ -63,6 +65,8 @@ class EditViewModel: ObservableObject {
         cachedLowResImage = nil
         previewImage = nil
         originalImages = []
+        isGeneratingRealtimePreview = false
+        pendingRealtimeUpdate = false
     }
 
     // MARK: - Image Management
@@ -195,24 +199,36 @@ class EditViewModel: ObservableObject {
             // ドラッグ開始時に低解像度画像をキャッシュ
             prepareLowResImage()
         } else {
-            // ドラッグ終了時に高品質プレビューを生成
+            // ドラッグ終了時にリアルタイム状態をリセット
+            pendingRealtimeUpdate = false
+            isGeneratingRealtimePreview = false
             realtimePreviewTask?.cancel()
+
+            // 高品質プレビューを生成
             Task {
                 await generatePreview()
             }
         }
     }
 
-    /// 低解像度画像を準備
+    /// 低解像度画像を準備（同期的にリサイズ）
     private func prepareLowResImage() {
         guard let image = currentImage, cachedLowResImage == nil else { return }
 
-        Task {
-            // 低解像度版を作成（幅400px程度）
-            let targetSize = CGSize(width: 400, height: 400 * image.size.height / image.size.width)
-            if let resized = try? await imageService.resizeImage(image, maxSize: targetSize) {
-                cachedLowResImage = resized
+        // 同期的にリサイズ（即座にキャッシュを利用可能にする）
+        let maxWidth: CGFloat = 400
+        let scale = maxWidth / image.size.width
+        if scale < 1.0 {
+            let newSize = CGSize(
+                width: maxWidth,
+                height: image.size.height * scale
+            )
+            let renderer = UIGraphicsImageRenderer(size: newSize)
+            cachedLowResImage = renderer.image { _ in
+                image.draw(in: CGRect(origin: .zero, size: newSize))
             }
+        } else {
+            cachedLowResImage = image
         }
     }
 
@@ -235,25 +251,40 @@ class EditViewModel: ObservableObject {
 
     // MARK: - Preview Generation
 
-    /// リアルタイムプレビューを生成（スライダー操作中）
+    /// リアルタイムプレビューを生成（スロットリング方式）
+    /// 前のプレビュー生成中は新しい生成をキューイングし、
+    /// 完了後に最新の設定で再生成する
     private func generateRealtimePreview() {
-        // 前のリアルタイムタスクをキャンセル
-        realtimePreviewTask?.cancel()
+        // 既にプレビュー生成中の場合は、完了後に再生成するようフラグを立てる
+        if isGeneratingRealtimePreview {
+            pendingRealtimeUpdate = true
+            return
+        }
+
+        isGeneratingRealtimePreview = true
+        pendingRealtimeUpdate = false
 
         realtimePreviewTask = Task {
-            // 即座にプレビュー生成（待機なし）
-            guard !Task.isCancelled else { return }
-
             // 低解像度画像を使用してプレビュー生成
             let sourceImage = cachedLowResImage ?? currentImage
-            guard let image = sourceImage else { return }
+            guard let image = sourceImage else {
+                isGeneratingRealtimePreview = false
+                return
+            }
 
             do {
-                let preview = try await imageService.generatePreview(image, edits: editSettings)
-                guard !Task.isCancelled else { return }
+                let currentEdits = editSettings
+                let preview = try await imageService.generatePreview(image, edits: currentEdits)
                 previewImage = preview
             } catch {
-                // リアルタイムプレビュー中のエラーは無視（操作終了後に再試行される）
+                // リアルタイムプレビュー中のエラーは無視
+            }
+
+            isGeneratingRealtimePreview = false
+
+            // 処理中に新しい値が来ていた場合、最新の値で再生成
+            if pendingRealtimeUpdate && isDragging {
+                generateRealtimePreview()
             }
         }
     }
