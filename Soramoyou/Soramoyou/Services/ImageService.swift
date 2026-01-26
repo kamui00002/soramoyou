@@ -15,18 +15,22 @@ import Vision
 protocol ImageServiceProtocol {
     // Filter
     func applyFilter(_ filter: FilterType, to image: UIImage) async throws -> UIImage
-    
+
     // Edit Tools
     func applyEditTool(_ tool: EditTool, value: Float, to image: UIImage) async throws -> UIImage
     func applyEditSettings(_ settings: EditSettings, to image: UIImage) async throws -> UIImage
-    
+
     // Preview
     func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage
-    
+
+    // Real-time Pipeline (同期的にCIFilterグラフを構築)
+    func buildEditPipeline(for ciImage: CIImage, edits: EditSettings) -> CIImage
+    func renderToUIImage(_ ciImage: CIImage, scale: CGFloat, orientation: UIImage.Orientation) -> UIImage?
+
     // Compression & Resize
     func resizeImage(_ image: UIImage, maxSize: CGSize) async throws -> UIImage
     func compressImage(_ image: UIImage, quality: CGFloat) async throws -> Data
-    
+
     // Analysis
     func extractColors(_ image: UIImage, maxCount: Int) async throws -> [String]
     func calculateColorTemperature(_ image: UIImage) async throws -> Int
@@ -359,14 +363,92 @@ class ImageService: ImageServiceProtocol {
     }
     
     // MARK: - Preview
-    
+
     func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
         // まずサムネイルサイズにリサイズ
         let thumbnailSize = CGSize(width: 512, height: 512)
         let resizedImage = try await resizeImage(image, maxSize: thumbnailSize)
-        
+
         // 編集設定を適用
         return try await applyEditSettings(edits, to: resizedImage)
+    }
+
+    // MARK: - Real-time Pipeline
+
+    /// CIFilterパイプラインを同期的に構築（GPU処理グラフのみ、レンダリングなし）
+    /// スライダー操作中のリアルタイムプレビューで使用
+    func buildEditPipeline(for ciImage: CIImage, edits: EditSettings) -> CIImage {
+        var result = ciImage
+
+        // フィルターを適用
+        if let filter = edits.appliedFilter {
+            result = (try? processFilterSync(filter, on: result)) ?? result
+        }
+
+        // 編集ツールを順次適用
+        if let brightness = edits.brightness {
+            result = applyBrightness(brightness, to: result)
+        }
+        if let contrast = edits.contrast {
+            result = applyContrast(contrast, to: result)
+        }
+        if let saturation = edits.saturation {
+            result = applySaturation(saturation, to: result)
+        }
+        if let exposure = edits.exposure {
+            result = applyExposure(exposure, to: result)
+        }
+        if let highlight = edits.highlight {
+            result = applyHighlight(highlight, to: result)
+        }
+        if let shadow = edits.shadow {
+            result = applyShadow(shadow, to: result)
+        }
+        if let warmth = edits.warmth {
+            result = applyWarmth(warmth, to: result)
+        }
+        if let sharpness = edits.sharpness {
+            result = applySharpness(sharpness, to: result)
+        }
+        if let vignette = edits.vignette {
+            result = applyVignette(vignette, to: result)
+        }
+
+        return result
+    }
+
+    /// CIImageをUIImageにレンダリング
+    func renderToUIImage(_ ciImage: CIImage, scale: CGFloat, orientation: UIImage.Orientation) -> UIImage? {
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage, scale: scale, orientation: orientation)
+    }
+
+    /// processFilterの同期版（リアルタイム用）
+    private func processFilterSync(_ filter: FilterType, on ciImage: CIImage) -> CIImage {
+        switch filter {
+        case .natural:
+            return ciImage
+        case .clear:
+            return applyClearFilter(to: ciImage)
+        case .drama:
+            return applyDramaFilter(to: ciImage)
+        case .soft:
+            return applySoftFilter(to: ciImage)
+        case .warm:
+            return applyWarmFilter(to: ciImage)
+        case .cool:
+            return applyCoolFilter(to: ciImage)
+        case .vintage:
+            return applyVintageFilter(to: ciImage)
+        case .monochrome:
+            return applyMonochromeFilter(to: ciImage)
+        case .pastel:
+            return applyPastelFilter(to: ciImage)
+        case .vivid:
+            return applyVividFilter(to: ciImage)
+        }
     }
     
     // MARK: - Compression & Resize

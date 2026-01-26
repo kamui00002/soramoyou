@@ -7,6 +7,7 @@
 
 import Foundation
 import UIKit
+import CoreImage
 import Combine
 
 @MainActor
@@ -29,6 +30,12 @@ class EditViewModel: ObservableObject {
     private var realtimePreviewTask: Task<Void, Never>?
     private var isGeneratingRealtimePreview = false
     private var pendingRealtimeUpdate = false
+
+    // リアルタイムプレビュー用CIImageキャッシュ
+    private var cachedSourceCIImage: CIImage?
+    private var cachedSourceScale: CGFloat = 1.0
+    private var cachedSourceOrientation: UIImage.Orientation = .up
+    private let renderQueue = DispatchQueue(label: "com.soramoyou.preview.render", qos: .userInteractive)
     
     init(
         images: [UIImage] = [],
@@ -63,6 +70,7 @@ class EditViewModel: ObservableObject {
         previewTask = nil
         realtimePreviewTask = nil
         cachedLowResImage = nil
+        cachedSourceCIImage = nil
         previewImage = nil
         originalImages = []
         isGeneratingRealtimePreview = false
@@ -77,6 +85,7 @@ class EditViewModel: ObservableObject {
         currentImageIndex = 0
         editSettings = EditSettings()
         cachedLowResImage = nil
+        cachedSourceCIImage = nil
         Task {
             await generatePreview()
         }
@@ -93,6 +102,7 @@ class EditViewModel: ObservableObject {
         guard currentImageIndex < originalImages.count - 1 else { return }
         currentImageIndex += 1
         cachedLowResImage = nil
+        cachedSourceCIImage = nil
         Task {
             await generatePreview()
         }
@@ -103,6 +113,7 @@ class EditViewModel: ObservableObject {
         guard currentImageIndex > 0 else { return }
         currentImageIndex -= 1
         cachedLowResImage = nil
+        cachedSourceCIImage = nil
         Task {
             await generatePreview()
         }
@@ -196,8 +207,8 @@ class EditViewModel: ObservableObject {
         self.isDragging = isDragging
 
         if isDragging {
-            // ドラッグ開始時に低解像度画像をキャッシュ
-            prepareLowResImage()
+            // ドラッグ開始時にCIImageソースを準備
+            prepareRealtimeSource()
         } else {
             // ドラッグ終了時にリアルタイム状態をリセット
             pendingRealtimeUpdate = false
@@ -211,24 +222,34 @@ class EditViewModel: ObservableObject {
         }
     }
 
-    /// 低解像度画像を準備（同期的にリサイズ）
-    private func prepareLowResImage() {
-        guard let image = currentImage, cachedLowResImage == nil else { return }
+    /// リアルタイムプレビュー用のソース画像を準備
+    /// 低解像度UIImage → CIImage をキャッシュ
+    private func prepareRealtimeSource() {
+        guard let image = currentImage else { return }
 
-        // 同期的にリサイズ（即座にキャッシュを利用可能にする）
-        let maxWidth: CGFloat = 400
-        let scale = maxWidth / image.size.width
-        if scale < 1.0 {
-            let newSize = CGSize(
-                width: maxWidth,
-                height: image.size.height * scale
-            )
-            let renderer = UIGraphicsImageRenderer(size: newSize)
-            cachedLowResImage = renderer.image { _ in
-                image.draw(in: CGRect(origin: .zero, size: newSize))
+        // 低解像度UIImageを準備
+        if cachedLowResImage == nil {
+            let maxWidth: CGFloat = 400
+            let scale = maxWidth / image.size.width
+            if scale < 1.0 {
+                let newSize = CGSize(
+                    width: maxWidth,
+                    height: image.size.height * scale
+                )
+                let renderer = UIGraphicsImageRenderer(size: newSize)
+                cachedLowResImage = renderer.image { _ in
+                    image.draw(in: CGRect(origin: .zero, size: newSize))
+                }
+            } else {
+                cachedLowResImage = image
             }
-        } else {
-            cachedLowResImage = image
+        }
+
+        // CIImageをキャッシュ（フィルターパイプライン用）
+        if cachedSourceCIImage == nil, let sourceImage = cachedLowResImage {
+            cachedSourceCIImage = CIImage(image: sourceImage)
+            cachedSourceScale = sourceImage.scale
+            cachedSourceOrientation = sourceImage.imageOrientation
         }
     }
 
@@ -244,6 +265,7 @@ class EditViewModel: ObservableObject {
     func resetAllEdits() {
         editSettings = EditSettings()
         cachedLowResImage = nil
+        cachedSourceCIImage = nil
         Task {
             await generatePreview()
         }
@@ -251,38 +273,45 @@ class EditViewModel: ObservableObject {
 
     // MARK: - Preview Generation
 
-    /// リアルタイムプレビューを生成（スロットリング方式）
-    /// 前のプレビュー生成中は新しい生成をキューイングし、
-    /// 完了後に最新の設定で再生成する
+    /// リアルタイムプレビューを生成（CIImageパイプライン方式）
+    /// CIFilterグラフを同期的に構築し、レンダリングのみバックグラウンドで実行
+    /// 前のレンダリング中は新しいレンダリングをキューイングし、
+    /// 完了後に最新の設定で再レンダリングする
     private func generateRealtimePreview() {
-        // 既にプレビュー生成中の場合は、完了後に再生成するようフラグを立てる
+        // 既にレンダリング中の場合は、完了後に再レンダリングするようフラグを立てる
         if isGeneratingRealtimePreview {
             pendingRealtimeUpdate = true
             return
         }
 
+        guard let sourceCIImage = cachedSourceCIImage else { return }
+
         isGeneratingRealtimePreview = true
         pendingRealtimeUpdate = false
 
+        // CIFilterグラフを同期的に構築（遅延評価のため瞬時に完了）
+        let pipeline = imageService.buildEditPipeline(for: sourceCIImage, edits: editSettings)
+        let scale = cachedSourceScale
+        let orientation = cachedSourceOrientation
+        let queue = renderQueue
+        let service = imageService
+
+        // レンダリングのみバックグラウンドキューで実行
         realtimePreviewTask = Task {
-            // 低解像度画像を使用してプレビュー生成
-            let sourceImage = cachedLowResImage ?? currentImage
-            guard let image = sourceImage else {
-                isGeneratingRealtimePreview = false
-                return
+            let rendered: UIImage? = await withCheckedContinuation { continuation in
+                queue.async {
+                    let result = service.renderToUIImage(pipeline, scale: scale, orientation: orientation)
+                    continuation.resume(returning: result)
+                }
             }
 
-            do {
-                let currentEdits = editSettings
-                let preview = try await imageService.generatePreview(image, edits: currentEdits)
-                previewImage = preview
-            } catch {
-                // リアルタイムプレビュー中のエラーは無視
+            if let rendered = rendered {
+                previewImage = rendered
             }
 
             isGeneratingRealtimePreview = false
 
-            // 処理中に新しい値が来ていた場合、最新の値で再生成
+            // レンダリング中に新しい値が来ていた場合、最新の値で再レンダリング
             if pendingRealtimeUpdate && isDragging {
                 generateRealtimePreview()
             }
