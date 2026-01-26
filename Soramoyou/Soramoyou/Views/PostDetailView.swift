@@ -12,6 +12,7 @@ struct PostDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showNewCollectionAlert = false
     @State private var newCollectionName = ""
+    @State private var showErrorAlert = false
 
     init(post: Post, userId: String?) {
         _viewModel = StateObject(wrappedValue: PostDetailViewModel(post: post, userId: userId))
@@ -92,7 +93,10 @@ struct PostDetailView: View {
         } message: {
             Text("新しいコレクションの名前を入力してください")
         }
-        .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
+        .onChange(of: viewModel.errorMessage) { newValue in
+            showErrorAlert = newValue != nil
+        }
+        .alert("エラー", isPresented: $showErrorAlert) {
             Button("OK") {
                 viewModel.errorMessage = nil
             }

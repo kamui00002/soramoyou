@@ -319,12 +319,13 @@ class FirestoreService: FirestoreServiceProtocol {
     
     // MARK: - Search
     
-    func searchByHashtag(_ hashtag: String) async throws -> [Post] {
+    func searchByHashtag(_ hashtag: String, limit: Int = 50) async throws -> [Post] {
         do {
             let snapshot = try await postsCollection
                 .whereField("hashtags", arrayContains: hashtag)
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
                 .order(by: "createdAt", descending: true)
+                .limit(to: limit)
                 .getDocuments()
             
             return try snapshot.documents.compactMap { document in
@@ -335,13 +336,14 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
     
-    func searchByColor(_ color: String, threshold: Double? = nil) async throws -> [Post] {
+    func searchByColor(_ color: String, threshold: Double? = nil, limit: Int = 50) async throws -> [Post] {
         do {
             // まず、色を含む投稿を取得（完全一致）
             let snapshot = try await postsCollection
                 .whereField("skyColors", arrayContains: color)
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
                 .order(by: "createdAt", descending: true)
+                .limit(to: limit)
                 .getDocuments()
             
             var posts = try snapshot.documents.compactMap { document in
@@ -412,12 +414,13 @@ class FirestoreService: FirestoreServiceProtocol {
         return sqrt(dr * dr + dg * dg + db * db)
     }
     
-    func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] {
+    func searchByTimeOfDay(_ timeOfDay: TimeOfDay, limit: Int = 50) async throws -> [Post] {
         do {
             let snapshot = try await postsCollection
                 .whereField("timeOfDay", isEqualTo: timeOfDay.rawValue)
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
                 .order(by: "createdAt", descending: true)
+                .limit(to: limit)
                 .getDocuments()
             
             return try snapshot.documents.compactMap { document in
@@ -428,12 +431,13 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
     
-    func searchBySkyType(_ skyType: SkyType) async throws -> [Post] {
+    func searchBySkyType(_ skyType: SkyType, limit: Int = 50) async throws -> [Post] {
         do {
             let snapshot = try await postsCollection
                 .whereField("skyType", isEqualTo: skyType.rawValue)
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
                 .order(by: "createdAt", descending: true)
+                .limit(to: limit)
                 .getDocuments()
             
             return try snapshot.documents.compactMap { document in
@@ -450,7 +454,8 @@ class FirestoreService: FirestoreServiceProtocol {
         color: String? = nil,
         timeOfDay: TimeOfDay? = nil,
         skyType: SkyType? = nil,
-        colorThreshold: Double? = nil
+        colorThreshold: Double? = nil,
+        limit: Int = 50
     ) async throws -> [Post] {
         do {
             var query: Query = postsCollection
@@ -475,6 +480,7 @@ class FirestoreService: FirestoreServiceProtocol {
             }
 
             query = query.order(by: "createdAt", descending: true)
+                .limit(to: limit)
 
             let snapshot = try await query.getDocuments()
 

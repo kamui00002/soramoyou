@@ -17,6 +17,7 @@ struct EditView: View {
     @State private var finalEditedImages: [UIImage] = []
     @State private var isComparisonMode = false
     @State private var comparisonSliderPosition: CGFloat = 0.5
+    @State private var showErrorAlert = false
 
     private let userId: String?
     private let originalImages: [UIImage]
@@ -30,13 +31,13 @@ struct EditView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // 空のグラデーション背景（上部）
+                // 空のグラデーション背景（柔らかい青系）
                 LinearGradient(
                     colors: [
                         Color(red: 0.68, green: 0.85, blue: 0.90),
                         Color(red: 0.53, green: 0.81, blue: 0.98),
                         Color(red: 0.39, green: 0.58, blue: 0.93),
-                        Color.black
+                        Color(red: 0.18, green: 0.25, blue: 0.45)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -82,7 +83,10 @@ struct EditView: View {
                     .foregroundColor(.white)
                 }
             }
-            .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
+            .onChange(of: viewModel.errorMessage) { newValue in
+                showErrorAlert = newValue != nil
+            }
+            .alert("エラー", isPresented: $showErrorAlert) {
                 Button("OK") {
                     viewModel.errorMessage = nil
                 }
@@ -102,11 +106,7 @@ struct EditView: View {
                 }
             }
         }
-        .onAppear {
-            Task {
-                await viewModel.loadEquippedTools()
-            }
-        }
+        // loadEquippedToolsはEditViewModel.initで呼び出し済み
     }
     
     // MARK: - Image Preview View

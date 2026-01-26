@@ -154,10 +154,11 @@ class PostDetailViewModel: ObservableObject {
         }
     }
 
-    /// コメントを削除
+    /// コメントを削除（自分のコメント、または投稿オーナーによるモデレーション）
     func deleteComment(_ comment: Comment) async {
-        guard let userId = userId, comment.userId == userId else {
-            errorMessage = "自分のコメントのみ削除できます"
+        guard let userId = userId,
+              (comment.userId == userId || post.userId == userId) else {
+            errorMessage = "コメントを削除する権限がありません"
             return
         }
 

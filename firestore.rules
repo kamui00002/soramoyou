@@ -60,12 +60,30 @@ service cloud.firestore {
     }
 
     // 投稿更新時のカウントフィールド検証（改ざん防止）
+    // 投稿オーナーによる更新ではカウントフィールドの変更を禁止
     function isValidPostUpdate() {
       let data = request.resource.data;
       let existing = resource.data;
       return isValidPost()
              && data.likesCount == existing.likesCount
              && data.commentsCount == existing.commentsCount;
+    }
+
+    // いいね/コメントによるカウント更新の検証
+    // カウントフィールド以外の変更を禁止する
+    function isCountOnlyUpdate() {
+      let data = request.resource.data;
+      let existing = resource.data;
+      return data.userId == existing.userId
+             && data.images == existing.images
+             && data.visibility == existing.visibility
+             && data.createdAt == existing.createdAt
+             && data.get('caption', null) == existing.get('caption', null)
+             && data.get('hashtags', null) == existing.get('hashtags', null)
+             && (data.likesCount == existing.likesCount + 1
+                 || data.likesCount == existing.likesCount - 1
+                 || data.commentsCount == existing.commentsCount + 1
+                 || data.commentsCount == existing.commentsCount - 1);
     }
 
     // 投稿の所有者かどうかを確認
@@ -137,11 +155,13 @@ service cloud.firestore {
                     && request.resource.data.userId == request.auth.uid
                     && isValidPost();
 
-      // 更新権限: 所有者のみ
-      // userIdは変更不可、likesCount/commentsCountは改ざん不可
-      allow update: if isOwner(resource.data.userId)
-                    && request.resource.data.userId == resource.data.userId
-                    && isValidPostUpdate();
+      // 更新権限:
+      // 1. 所有者による編集（カウント改ざん不可）
+      // 2. 認証済みユーザーによるカウント更新（いいね/コメントのトランザクション）
+      allow update: if (isOwner(resource.data.userId)
+                        && request.resource.data.userId == resource.data.userId
+                        && isValidPostUpdate())
+                    || (isAuthenticated() && isCountOnlyUpdate());
 
       // 削除権限: 所有者のみ
       allow delete: if isOwner(resource.data.userId);
