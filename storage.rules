@@ -43,7 +43,9 @@ service firebase.storage {
 
       // Only authenticated owner can upload public images
       // NOTE: テスト中は条件を緩和（本番前に戻すこと）
-      allow write: if isOwner(userId);
+      allow write: if isOwner(userId)
+                   && isImageFile()
+                   && isValidSize();
     }
 
     // Post images - followers only
@@ -51,6 +53,8 @@ service firebase.storage {
     // Currently allows authenticated users; actual follower check is done
     // at Firestore level when fetching post metadata.
     // Phase 2: Implement signed URLs via Cloud Functions for proper access control.
+    // NOTE: Phase 2でCloud Functionsを使った署名URL方式で完全なアクセス制御を実装予定
+    // 現状はログイン済みユーザー全員が読み取り可能（一時的な制限）
     match /posts/{userId}/followers/{imageId} {
       // Authenticated users can read (follower check at Firestore level)
       allow read: if isAuthenticated();
@@ -87,11 +91,15 @@ service firebase.storage {
 
       // Only authenticated owner can upload public thumbnails
       // NOTE: テスト中は条件を緩和（本番前に戻すこと）
-      allow write: if isOwner(userId);
+      allow write: if isOwner(userId)
+                   && isImageFile()
+                   && isValidSize();
     }
 
     // Thumbnail images - followers only
     // NOTE: Same limitation as posts - follower check at Firestore level
+    // NOTE: Phase 2でCloud Functionsを使った署名URL方式で完全なアクセス制御を実装予定
+    // 現状はログイン済みユーザー全員が読み取り可能（一時的な制限）
     match /thumbnails/{userId}/followers/{imageId} {
       // Authenticated users can read (follower check at Firestore level)
       allow read: if isAuthenticated();
@@ -116,11 +124,15 @@ service firebase.storage {
 
       // Only authenticated owner can upload public original images
       // NOTE: テスト中は条件を緩和（本番前に戻すこと）
-      allow write: if isOwner(userId);
+      allow write: if isOwner(userId)
+                   && isImageFile()
+                   && isValidSize();
     }
 
     // Original images (unedited) - followers only
     // NOTE: Same limitation as posts - follower check at Firestore level
+    // NOTE: Phase 2でCloud Functionsを使った署名URL方式で完全なアクセス制御を実装予定
+    // 現状はログイン済みユーザー全員が読み取り可能（一時的な制限）
     match /originals/{userId}/followers/{imageId} {
       // Authenticated users can read (follower check at Firestore level)
       allow read: if isAuthenticated();

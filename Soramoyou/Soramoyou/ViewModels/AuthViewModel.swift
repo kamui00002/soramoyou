@@ -22,8 +22,18 @@ class AuthViewModel: ObservableObject {
     init(authService: AuthServiceProtocol = AuthService()) {
         self.authService = authService
 
-        // 初期認証状態の確認（自動ログイン）
-        checkAuthState()
+        // UIテストモードの場合は認証状態をリセット
+        if ProcessInfo.processInfo.arguments.contains("UI_TESTING") &&
+           ProcessInfo.processInfo.arguments.contains("RESET_AUTH_STATE") {
+            Task {
+                try? await authService.signOut()
+            }
+            currentUser = nil
+            isAuthenticated = false
+        } else {
+            // 初期認証状態の確認（自動ログイン）
+            checkAuthState()
+        }
 
         // 認証状態の監視（メモリリーク防止のため weak self を使用）
         authStateTask = Task { [weak self] in

@@ -213,7 +213,12 @@ class MockImageService: ImageServiceProtocol {
         generatePreviewCalled = true
         return image
     }
-    
+
+    func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
+        generatePreviewCalled = true
+        return image
+    }
+
     func resizeImage(_ image: UIImage, maxSize: CGSize) async throws -> UIImage {
         return image
     }

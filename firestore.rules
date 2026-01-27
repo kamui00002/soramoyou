@@ -107,9 +107,10 @@ service cloud.firestore {
                     && isValidPost();
 
       // 更新・削除権限: 所有者のみ
-      // userIdは変更不可
+      // userIdは変更不可、createdAtは変更不可
       allow update: if isOwner(resource.data.userId)
                     && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.createdAt == resource.data.createdAt
                     && isValidPost();
 
       allow delete: if isOwner(resource.data.userId);
