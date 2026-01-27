@@ -52,7 +52,7 @@ struct EditView: View {
                         Color(red: 0.68, green: 0.85, blue: 0.90),
                         Color(red: 0.53, green: 0.81, blue: 0.98),
                         Color(red: 0.39, green: 0.58, blue: 0.93),
-                        Color.black
+                        Color(red: 0.18, green: 0.25, blue: 0.45)
                     ],
                     startPoint: .top,
                     endPoint: .bottom

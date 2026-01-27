@@ -1,0 +1,295 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================
+    // Helper functions
+    // ============================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // フォロー関係をチェック（followerId_followeeId 形式のドキュメントID）
+    function isFollowing(followeeId) {
+      return isAuthenticated() &&
+             exists(/databases/$(database)/documents/follows/$(request.auth.uid)_$(followeeId));
+    }
+
+    // ============================================
+    // Data Validation functions
+    // ============================================
+
+    // キャプションの長さ検証（最大2000文字）
+    function isValidCaption(caption) {
+      return caption == null || caption.size() <= 2000;
+    }
+
+    // ハッシュタグの検証（最大30個）
+    function isValidHashtags(hashtags) {
+      return hashtags == null || hashtags.size() <= 30;
+    }
+
+    // 可視性の検証
+    function isValidVisibility(visibility) {
+      return visibility in ['public', 'followers', 'private'];
+    }
+
+    // メールアドレスの検証（より厳密な正規表現）
+    function isValidEmail(email) {
+      return email is string
+             && email.size() > 0
+             && email.size() <= 254
+             && email.matches('[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}');
+    }
+
+    // 投稿データの検証
+    function isValidPost() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['userId', 'images', 'visibility', 'createdAt'])
+             && isValidCaption(data.get('caption', null))
+             && isValidHashtags(data.get('hashtags', null))
+             && isValidVisibility(data.visibility)
+             && data.images.size() >= 1
+             && data.images.size() <= 10;
+    }
+
+    // 投稿更新時のカウントフィールド検証（改ざん防止）
+    // 投稿オーナーによる更新ではカウントフィールドの変更を禁止
+    function isValidPostUpdate() {
+      let data = request.resource.data;
+      let existing = resource.data;
+      return isValidPost()
+             && data.likesCount == existing.likesCount
+             && data.commentsCount == existing.commentsCount;
+    }
+
+    // いいね/コメントによるカウント更新の検証
+    // カウントフィールド以外の変更を禁止する
+    function isCountOnlyUpdate() {
+      let data = request.resource.data;
+      let existing = resource.data;
+      return data.userId == existing.userId
+             && data.images == existing.images
+             && data.visibility == existing.visibility
+             && data.createdAt == existing.createdAt
+             && data.get('caption', null) == existing.get('caption', null)
+             && data.get('hashtags', null) == existing.get('hashtags', null)
+             && (data.likesCount == existing.likesCount + 1
+                 || data.likesCount == existing.likesCount - 1
+                 || data.commentsCount == existing.commentsCount + 1
+                 || data.commentsCount == existing.commentsCount - 1);
+    }
+
+    // 投稿の所有者かどうかを確認
+    function isPostOwner(postId) {
+      return isAuthenticated() &&
+             get(/databases/$(database)/documents/posts/$(postId)).data.userId == request.auth.uid;
+    }
+
+    // ============================================
+    // Users collection
+    // ============================================
+    match /users/{userId} {
+      // 公開プロフィール情報（displayName, photoURL, bio）は認証済みユーザーが読み取り可能
+      // プライベート情報（email）は本人のみ
+      allow read: if isOwner(userId)
+                  || (isAuthenticated() &&
+                      request.query == null); // リスト取得は制限
+
+      // 新規ユーザーのみ自分のプロフィールを作成可能
+      allow create: if isOwner(userId)
+                    && request.resource.data.keys().hasAll(['id', 'email', 'createdAt'])
+                    && isValidEmail(request.resource.data.email);
+
+      // 所有者のみ更新・削除可能
+      // idとemailは変更不可
+      allow update: if isOwner(userId)
+                    && request.resource.data.id == resource.data.id
+                    && request.resource.data.email == resource.data.email;
+
+      allow delete: if isOwner(userId);
+    }
+
+    // ============================================
+    // Follows collection (フォロー関係)
+    // ドキュメントID: {followerId}_{followeeId}
+    // ============================================
+    match /follows/{followId} {
+      // フォロー関係は認証済みユーザーが確認可能
+      allow read: if isAuthenticated();
+
+      // フォロー作成: 自分がフォロワーの場合のみ
+      allow create: if isAuthenticated()
+                    && request.resource.data.followerId == request.auth.uid
+                    && followId == request.auth.uid + '_' + request.resource.data.followeeId
+                    && request.resource.data.keys().hasAll(['followerId', 'followeeId', 'createdAt']);
+
+      // フォロー解除: 自分のフォローのみ削除可能
+      allow delete: if isAuthenticated()
+                    && resource.data.followerId == request.auth.uid;
+
+      // フォロー関係の更新は不可
+      allow update: if false;
+    }
+
+    // ============================================
+    // Posts collection
+    // ============================================
+    match /posts/{postId} {
+      // 読み取り権限
+      // - public: 認証済みユーザーが読み取り可能
+      // - followers: フォロワーのみ読み取り可能
+      // - private: 所有者のみ
+      allow read: if (resource.data.visibility == 'public' && isAuthenticated())
+                  || (resource.data.visibility == 'followers' && isFollowing(resource.data.userId))
+                  || isOwner(resource.data.userId);
+
+      // 作成権限: 認証済みユーザーのみ、自分のIDで作成
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && isValidPost();
+
+      // 更新権限:
+      // 1. 所有者による編集（カウント改ざん不可）
+      // 2. 認証済みユーザーによるカウント更新（いいね/コメントのトランザクション）
+      allow update: if (isOwner(resource.data.userId)
+                        && request.resource.data.userId == resource.data.userId
+                        && isValidPostUpdate())
+                    || (isAuthenticated() && isCountOnlyUpdate());
+
+      // 削除権限: 所有者のみ
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // ============================================
+    // Drafts collection
+    // ============================================
+    match /drafts/{draftId} {
+      // 読み取り: 所有者のみ（下書きは完全にプライベート）
+      allow read: if isAuthenticated()
+                  && resource.data.userId == request.auth.uid;
+
+      // 作成: 認証済みユーザーのみ、自分のIDで作成
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['id', 'userId', 'createdAt']);
+
+      // 更新: 所有者のみ、userIdは変更不可
+      allow update: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.userId == resource.data.userId;
+
+      // 削除: 所有者のみ
+      allow delete: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid;
+    }
+
+    // ============================================
+    // Likes collection (いいね)
+    // ドキュメントID: {userId}_{postId}
+    // ============================================
+    match /likes/{likeId} {
+      // 読み取り権限: 自分のいいね、または投稿の所有者
+      allow read: if isAuthenticated()
+                  && (resource.data.userId == request.auth.uid
+                      || isPostOwner(resource.data.postId));
+
+      // いいね作成: 認証済みユーザーのみ、自分のIDで作成
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && likeId == request.auth.uid + '_' + request.resource.data.postId
+                    && request.resource.data.keys().hasAll(['userId', 'postId', 'createdAt']);
+
+      // いいね削除: 自分のいいねのみ削除可能
+      allow delete: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid;
+
+      // いいねの更新は不可
+      allow update: if false;
+    }
+
+    // ============================================
+    // Comments collection (コメント)
+    // ============================================
+    match /comments/{commentId} {
+      // コメントは認証済みユーザーが読み取り可能
+      allow read: if isAuthenticated();
+
+      // コメント作成: 認証済みユーザーのみ、自分のIDで作成
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['userId', 'postId', 'content', 'createdAt'])
+                    && request.resource.data.content.size() >= 1
+                    && request.resource.data.content.size() <= 500;
+
+      // コメント更新: 自分のコメントのみ、内容のみ更新可能
+      allow update: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.postId == resource.data.postId
+                    && request.resource.data.content.size() >= 1
+                    && request.resource.data.content.size() <= 500;
+
+      // コメント削除: 自分のコメント、または投稿の所有者（モデレーション）
+      allow delete: if isAuthenticated()
+                    && (resource.data.userId == request.auth.uid
+                        || isPostOwner(resource.data.postId));
+    }
+
+    // ============================================
+    // Collections collection (コレクション)
+    // ============================================
+    match /collections/{collectionId} {
+      // コレクションは所有者のみ読み取り可能
+      allow read: if isAuthenticated()
+                  && resource.data.userId == request.auth.uid;
+
+      // コレクション作成: 認証済みユーザーのみ、自分のIDで作成
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['userId', 'name', 'createdAt'])
+                    && request.resource.data.name.size() >= 1
+                    && request.resource.data.name.size() <= 50;
+
+      // コレクション更新: 所有者のみ
+      allow update: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.name.size() >= 1
+                    && request.resource.data.name.size() <= 50;
+
+      // コレクション削除: 所有者のみ
+      allow delete: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid;
+    }
+
+    // ============================================
+    // CollectionItems collection (コレクションアイテム)
+    // ドキュメントID: {collectionId}_{postId}
+    // ============================================
+    match /collectionItems/{itemId} {
+      // コレクションの所有者のみ読み取り可能
+      allow read: if isAuthenticated()
+                  && resource.data.userId == request.auth.uid;
+
+      // アイテム追加: コレクションの所有者のみ
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && itemId == request.resource.data.collectionId + '_' + request.resource.data.postId
+                    && request.resource.data.keys().hasAll(['userId', 'collectionId', 'postId', 'createdAt']);
+
+      // アイテム削除: 所有者のみ
+      allow delete: if isAuthenticated()
+                    && resource.data.userId == request.auth.uid;
+
+      // アイテムの更新は不可
+      allow update: if false;
+    }
+  }
+}
