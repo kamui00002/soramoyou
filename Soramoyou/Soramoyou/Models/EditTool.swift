@@ -69,6 +69,39 @@ enum EditTool: String, Codable, CaseIterable {
         case .cropAndRotate: return "トリミング・回転"
         }
     }
+
+    /// アイコン名（SF Symbols）
+    var iconName: String {
+        switch self {
+        case .exposure: return "sun.max"
+        case .brightness: return "light.max"
+        case .contrast: return "circle.lefthalf.filled"
+        case .tone: return "waveform.path"
+        case .brilliance: return "sparkles"
+        case .highlight: return "sun.and.horizon"
+        case .shadow: return "moon"
+        case .blackPoint: return "circle.bottomhalf.filled"
+        case .saturation: return "paintpalette"
+        case .naturalSaturation: return "paintpalette.fill"
+        case .warmth: return "flame"
+        case .tint: return "drop"
+        case .sharpness: return "sparkle.magnifyingglass"
+        case .vignette: return "circle.dashed"
+        case .colorTemperature: return "thermometer"
+        case .whiteBalance: return "circle.grid.cross"
+        case .texture: return "square.grid.3x3"
+        case .clarity: return "eye"
+        case .dehaze: return "wind"
+        case .grain: return "circle.grid.2x2"
+        case .fade: return "circle.lefthalf.striped.horizontal"
+        case .noiseReduction: return "waveform.path.ecg"
+        case .curves: return "chart.line.uptrend.xyaxis"
+        case .hsl: return "slider.horizontal.3"
+        case .lensCorrection: return "camera.filters"
+        case .doubleExposure: return "square.on.square"
+        case .cropAndRotate: return "crop.rotate"
+        }
+    }
 }
 
 
