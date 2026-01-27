@@ -108,11 +108,11 @@ struct EditView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showEditToolsSettings) {
+            .sheet(isPresented: $showEditToolsSettings, onDismiss: {
                 Task {
                     await viewModel.loadEquippedTools()
                 }
-            } content: {
+            }) {
                 EditToolsSettingsView()
             }
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
