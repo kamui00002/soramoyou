@@ -108,6 +108,9 @@ firebase-debug.log
 # Serena
 .serena/
 
+# Ralph Wiggum (AI loop tool)
+ralph-loop/
+
 
 
 
