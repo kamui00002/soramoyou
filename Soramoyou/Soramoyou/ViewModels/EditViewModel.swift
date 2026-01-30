@@ -12,6 +12,7 @@ import Foundation
 import UIKit
 import SwiftUI
 import Combine
+import CoreImage
 
 @MainActor
 class EditViewModel: ObservableObject {
@@ -47,6 +48,24 @@ class EditViewModel: ObservableObject {
     private let userId: String?
     private var previewTask: Task<Void, Never>?
     private var fastPreviewTask: Task<Void, Never>?
+
+    // MARK: - 低解像度CIImageキャッシュ（プレビュー高速化）
+
+    /// リサイズ済み低解像度CIImage（キャッシュ）
+    private var cachedLowResCIImage: CIImage?
+    /// キャッシュ対象の画像インデックス
+    private var cachedImageIndex: Int = -1
+    /// キャッシュ時の変換状態キー（回転・反転）
+    private var cachedTransformKey: String = ""
+
+    // MARK: - スロットリング
+
+    /// 最後の高速プレビューレンダリング時刻
+    private var lastFastPreviewTime: CFAbsoluteTime = 0
+    /// スロットリング最小間隔（約30fps）
+    private let fastPreviewMinInterval: CFAbsoluteTime = 0.033
+    /// 遅延実行用タスク
+    private var throttledPreviewTask: Task<Void, Never>?
     
     init(
         images: [UIImage] = [],
@@ -75,6 +94,7 @@ class EditViewModel: ObservableObject {
         originalImages = images
         currentImageIndex = 0
         editSettings = EditSettings()
+        invalidateLowResCache()
         Task {
             await generatePreview()
         }
@@ -90,15 +110,17 @@ class EditViewModel: ObservableObject {
     func nextImage() {
         guard currentImageIndex < originalImages.count - 1 else { return }
         currentImageIndex += 1
+        invalidateLowResCache()
         Task {
             await generatePreview()
         }
     }
-    
+
     /// 前の画像に切り替え
     func previousImage() {
         guard currentImageIndex > 0 else { return }
         currentImageIndex -= 1
+        invalidateLowResCache()
         Task {
             await generatePreview()
         }
@@ -192,18 +214,39 @@ class EditViewModel: ObservableObject {
         debouncePreview()
     }
 
-    /// 編集ツールの値をリアルタイムで設定（デバウンスなし・高速プレビュー）
+    /// 編集ツールの値をリアルタイムで設定（スロットリング付き・高速プレビュー）
     /// スライダー操作中に呼び出され、低解像度でプレビューを即座に更新
+    /// 最小間隔33ms（約30fps）でスロットリングし、間隔内の最後の値を遅延実行
     func setToolValueRealtime(_ value: Float, for tool: EditTool) {
         // 値の範囲を-1.0から1.0に制限
         let clampedValue = max(-1.0, min(1.0, value))
         editSettings.setValue(clampedValue, for: tool)
         isEditingRealtime = true
 
-        // 高速プレビューを生成
-        fastPreviewTask?.cancel()
-        fastPreviewTask = Task {
-            await generatePreviewFast()
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsed = now - lastFastPreviewTime
+
+        if elapsed >= fastPreviewMinInterval {
+            // 十分な時間が経過 → 即座にプレビュー生成
+            throttledPreviewTask?.cancel()
+            lastFastPreviewTime = now
+            fastPreviewTask?.cancel()
+            fastPreviewTask = Task {
+                await generatePreviewFast()
+            }
+        } else {
+            // 間隔内 → 遅延実行（最後の値だけ処理）
+            throttledPreviewTask?.cancel()
+            throttledPreviewTask = Task {
+                let waitNano = UInt64((fastPreviewMinInterval - elapsed) * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: waitNano)
+                guard !Task.isCancelled else { return }
+                lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
+                fastPreviewTask?.cancel()
+                fastPreviewTask = Task {
+                    await generatePreviewFast()
+                }
+            }
         }
     }
 
@@ -233,6 +276,7 @@ class EditViewModel: ObservableObject {
         isFlippedHorizontal = false
         isFlippedVertical = false
         cropAspectRatio = .free
+        invalidateLowResCache()
         Task {
             await generatePreview()
         }
@@ -240,14 +284,35 @@ class EditViewModel: ObservableObject {
 
     // MARK: - 切り取り・回転操作
 
-    /// 回転角度を設定（リアルタイム）
+    /// 回転角度を設定（リアルタイム・スロットリング付き）
     func setRotationRealtime(_ degrees: Double) {
         rotationDegrees = degrees
         isEditingRealtime = true
+        // 回転変更時はキャッシュ無効化（変換が変わるため）
+        invalidateLowResCache()
 
-        fastPreviewTask?.cancel()
-        fastPreviewTask = Task {
-            await generatePreviewFast()
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsed = now - lastFastPreviewTime
+
+        if elapsed >= fastPreviewMinInterval {
+            throttledPreviewTask?.cancel()
+            lastFastPreviewTime = now
+            fastPreviewTask?.cancel()
+            fastPreviewTask = Task {
+                await generatePreviewFast()
+            }
+        } else {
+            throttledPreviewTask?.cancel()
+            throttledPreviewTask = Task {
+                let waitNano = UInt64((fastPreviewMinInterval - elapsed) * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: waitNano)
+                guard !Task.isCancelled else { return }
+                lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
+                fastPreviewTask?.cancel()
+                fastPreviewTask = Task {
+                    await generatePreviewFast()
+                }
+            }
         }
     }
 
@@ -264,6 +329,7 @@ class EditViewModel: ObservableObject {
     /// 左右反転を切り替え
     func toggleFlipHorizontal() {
         isFlippedHorizontal.toggle()
+        invalidateLowResCache()
         Task {
             await generatePreview()
         }
@@ -272,6 +338,7 @@ class EditViewModel: ObservableObject {
     /// 上下反転を切り替え
     func toggleFlipVertical() {
         isFlippedVertical.toggle()
+        invalidateLowResCache()
         Task {
             await generatePreview()
         }
@@ -283,6 +350,7 @@ class EditViewModel: ObservableObject {
         if rotationDegrees < -180 {
             rotationDegrees += 360
         }
+        invalidateLowResCache()
         Task {
             await generatePreview()
         }
@@ -294,6 +362,7 @@ class EditViewModel: ObservableObject {
         if rotationDegrees > 180 {
             rotationDegrees -= 360
         }
+        invalidateLowResCache()
         Task {
             await generatePreview()
         }
@@ -310,6 +379,7 @@ class EditViewModel: ObservableObject {
         isFlippedHorizontal = false
         isFlippedVertical = false
         cropAspectRatio = .free
+        invalidateLowResCache()
         Task {
             await generatePreview()
         }
@@ -360,23 +430,63 @@ class EditViewModel: ObservableObject {
 
     /// 高速プレビューを生成（低解像度・256x256）
     /// スライダー操作中のリアルタイム表示用
+    /// キャッシュ済みの低解像度CIImageを使い、同期的にフィルターチェーンを適用
     func generatePreviewFast() async {
-        guard let image = currentImage else {
+        guard currentImage != nil else {
             fastPreviewImage = nil
             return
         }
 
-        do {
-            // 回転・反転を適用した画像を作成
-            var processedImage = image
-            processedImage = applyTransform(to: processedImage)
-
-            let preview = try await imageService.generatePreviewFast(processedImage, edits: editSettings)
-            fastPreviewImage = preview
-        } catch {
-            // 高速プレビューのエラーは無視（通常プレビューにフォールバック）
-            fastPreviewImage = nil
+        // キャッシュが有効かチェックし、無効なら再生成
+        let transformKey = makeTransformKey()
+        if cachedLowResCIImage == nil
+            || cachedImageIndex != currentImageIndex
+            || cachedTransformKey != transformKey {
+            rebuildLowResCache()
         }
+
+        guard let lowResCIImage = cachedLowResCIImage else {
+            fastPreviewImage = nil
+            return
+        }
+
+        // CIImageベースで同期的にプレビュー生成（Task.detached不要）
+        let preview = imageService.generatePreviewFromCIImage(lowResCIImage, edits: editSettings)
+        fastPreviewImage = preview
+    }
+
+    /// 変換状態のキーを生成（キャッシュ無効化判定用）
+    private func makeTransformKey() -> String {
+        "\(rotationDegrees)_\(isFlippedHorizontal)_\(isFlippedVertical)"
+    }
+
+    /// 低解像度CIImageキャッシュを再構築
+    private func rebuildLowResCache() {
+        guard let image = currentImage else {
+            cachedLowResCIImage = nil
+            return
+        }
+
+        // 回転・反転を適用
+        let transformed = applyTransform(to: image)
+
+        // UIImage → CIImage に変換
+        guard let ciImage = CIImage(image: transformed) else {
+            cachedLowResCIImage = nil
+            return
+        }
+
+        // CIImage上で256x256にリサイズ（UIImage変換なし）
+        let lowRes = imageService.resizeCIImage(ciImage, maxSize: CGSize(width: 256, height: 256))
+
+        cachedLowResCIImage = lowRes
+        cachedImageIndex = currentImageIndex
+        cachedTransformKey = makeTransformKey()
+    }
+
+    /// 低解像度キャッシュを無効化
+    private func invalidateLowResCache() {
+        cachedLowResCIImage = nil
     }
 
     /// 回転・反転を画像に適用

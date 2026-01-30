@@ -8,6 +8,7 @@
 import XCTest
 @testable import Soramoyou
 import UIKit
+import CoreImage
 import FirebaseFirestore
 
 @MainActor
@@ -217,6 +218,20 @@ class MockImageService: ImageServiceProtocol {
     func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
         generatePreviewCalled = true
         return image
+    }
+
+    func generatePreviewFromCIImage(_ ciImage: CIImage, edits: EditSettings) -> UIImage? {
+        generatePreviewCalled = true
+        // テスト用: CIImageから1x1のUIImageを返す
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
+    }
+
+    func resizeCIImage(_ ciImage: CIImage, maxSize: CGSize) -> CIImage {
+        return ciImage
     }
 
     func resizeImage(_ image: UIImage, maxSize: CGSize) async throws -> UIImage {

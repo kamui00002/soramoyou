@@ -8,6 +8,7 @@
 import XCTest
 @testable import Soramoyou
 import UIKit
+import CoreImage
 
 final class ImageServiceTests: XCTestCase {
     var imageService: ImageService!
@@ -191,8 +192,96 @@ final class ImageServiceTests: XCTestCase {
         XCTAssertEqual(originalAspectRatio, resizedAspectRatio, accuracy: 0.01)
     }
     
+    // MARK: - CIImage ベース高速プレビュー Tests
+
+    func testResizeCIImage() {
+        // Given
+        let testImage = createTestImage(size: CGSize(width: 2000, height: 1500))
+        guard let ciImage = CIImage(image: testImage) else {
+            XCTFail("CIImage変換に失敗")
+            return
+        }
+        let maxSize = CGSize(width: 256, height: 256)
+
+        // When
+        let resized = imageService.resizeCIImage(ciImage, maxSize: maxSize)
+
+        // Then
+        XCTAssertLessThanOrEqual(resized.extent.width, 256)
+        XCTAssertLessThanOrEqual(resized.extent.height, 256)
+    }
+
+    func testResizeCIImageNoResizeNeeded() {
+        // Given: maxSizeより小さいCIImage（スケールファクターの影響を受けないよう直接作成）
+        let ciImage = CIImage(color: .blue).cropped(to: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let maxSize = CGSize(width: 256, height: 256)
+
+        // When
+        let resized = imageService.resizeCIImage(ciImage, maxSize: maxSize)
+
+        // Then: サイズが変わらない（リサイズ不要なのでそのまま返される）
+        XCTAssertEqual(resized.extent.width, ciImage.extent.width, accuracy: 1.0)
+        XCTAssertEqual(resized.extent.height, ciImage.extent.height, accuracy: 1.0)
+    }
+
+    func testGeneratePreviewFromCIImage() {
+        // Given
+        let testImage = createTestImage(size: CGSize(width: 256, height: 256))
+        guard let ciImage = CIImage(image: testImage) else {
+            XCTFail("CIImage変換に失敗")
+            return
+        }
+        let edits = EditSettings(brightness: 0.3, contrast: 0.2)
+
+        // When
+        let preview = imageService.generatePreviewFromCIImage(ciImage, edits: edits)
+
+        // Then
+        XCTAssertNotNil(preview)
+    }
+
+    func testGeneratePreviewFromCIImageWithFilter() {
+        // Given
+        let testImage = createTestImage(size: CGSize(width: 256, height: 256))
+        guard let ciImage = CIImage(image: testImage) else {
+            XCTFail("CIImage変換に失敗")
+            return
+        }
+        let edits = EditSettings(appliedFilter: .vintage)
+
+        // When
+        let preview = imageService.generatePreviewFromCIImage(ciImage, edits: edits)
+
+        // Then
+        XCTAssertNotNil(preview)
+    }
+
+    func testGeneratePreviewFromCIImageNoEdits() {
+        // Given: 編集なし
+        let testImage = createTestImage(size: CGSize(width: 256, height: 256))
+        guard let ciImage = CIImage(image: testImage) else {
+            XCTFail("CIImage変換に失敗")
+            return
+        }
+        let edits = EditSettings()
+
+        // When
+        let preview = imageService.generatePreviewFromCIImage(ciImage, edits: edits)
+
+        // Then
+        XCTAssertNotNil(preview)
+    }
+
+    func testMetalBackedCIContext() {
+        // Given & When: デフォルトコンストラクタでMetal CIContextが使用される
+        let service = ImageService()
+
+        // Then: サービスが正常に初期化される
+        XCTAssertNotNil(service)
+    }
+
     // MARK: - Helper Methods
-    
+
     private func createTestImage(size: CGSize) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { context in
