@@ -11,7 +11,8 @@ import Kingfisher
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
     @State private var selectedPost: Post?
-    
+    @State private var animateCards = false  // フィードアニメーション用 ☀️
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -39,13 +40,13 @@ struct HomeView: View {
                             }
                         } else if viewModel.posts.isEmpty {
                             // 投稿がない場合
-                            VStack(spacing: 16) {
+                            VStack(spacing: DesignTokens.Spacing.md) {
                                 Image(systemName: "photo.on.rectangle")
                                     .font(.system(size: 60))
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
                                 Text("投稿がありません")
                                     .font(.headline)
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
                         } else {
                             // フィード表示
@@ -70,6 +71,10 @@ struct HomeView: View {
             .onAppear {
                 Task {
                     await viewModel.fetchPosts()
+                    // フィードアニメーションを開始
+                    withAnimation {
+                        animateCards = true
+                    }
                 }
             }
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
@@ -87,13 +92,21 @@ struct HomeView: View {
         }
     }
     
-    // MARK: - Feed View
-    
+    // MARK: - Feed View ☀️
+
     private var feedView: some View {
         ScrollView {
-            LazyVStack(spacing: 16) {
-                ForEach(viewModel.posts) { post in
+            LazyVStack(spacing: DesignTokens.Spacing.md) {
+                ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
                     PostCard(post: post)
+                        // スタガードアニメーション
+                        .opacity(animateCards ? 1 : 0)
+                        .offset(y: animateCards ? 0 : 20)
+                        .animation(
+                            .spring(response: 0.6, dampingFraction: 0.8)
+                            .delay(Double(index) * DesignTokens.Animation.staggerDelay),
+                            value: animateCards
+                        )
                         .onTapGesture {
                             selectedPost = post
                         }
@@ -126,46 +139,54 @@ struct HomeView: View {
     }
 }
 
-// MARK: - Post Card
+// MARK: - Post Card ☀️
 
 struct PostCard: View {
     let post: Post
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm + 4) {
             // 画像表示（サムネイル優先、遅延読み込み）
             if let firstImage = post.images.first {
                 PostImageView(imageInfo: firstImage)
+                    .clipShape(
+                        RoundedCornerShape(
+                            radius: DesignTokens.Radius.xl,
+                            corners: [.topLeft, .topRight]
+                        )
+                    )
             }
-            
+
             // 投稿情報
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                 // キャプション
                 if let caption = post.caption {
                     Text(caption)
                         .font(.body)
+                        .foregroundColor(.primary)
                         .lineLimit(3)
                 }
-                
+
                 // ハッシュタグ
                 if let hashtags = post.hashtags, !hashtags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
                             ForEach(hashtags, id: \.self) { hashtag in
                                 Text("#\(hashtag)")
                                     .font(.caption)
-                                    .foregroundColor(.blue)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(DesignTokens.Colors.skyBlue)
                             }
                         }
                     }
                 }
-                
+
                 // 位置情報
                 if let location = post.location {
-                    HStack {
-                        Image(systemName: "location")
+                    HStack(spacing: DesignTokens.Spacing.xs) {
+                        Image(systemName: "location.fill")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(DesignTokens.Colors.skyBlue.opacity(0.8))
                         if let city = location.city, let prefecture = location.prefecture {
                             Text("\(prefecture) \(city)")
                                 .font(.caption)
@@ -173,23 +194,23 @@ struct PostCard: View {
                         }
                     }
                 }
-                
+
                 // 空の種類・時間帯
-                HStack(spacing: 12) {
+                HStack(spacing: DesignTokens.Spacing.sm + 4) {
                     if let skyType = post.skyType {
-                        Label(skyType.displayName, systemImage: "cloud")
+                        Label(skyType.displayName, systemImage: "cloud.fill")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     if let timeOfDay = post.timeOfDay {
-                        Label(timeOfDay.displayName, systemImage: "clock")
+                        Label(timeOfDay.displayName, systemImage: "clock.fill")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
-                
+
                 // 統計情報
-                HStack(spacing: 16) {
+                HStack(spacing: DesignTokens.Spacing.md) {
                     Label("\(post.likesCount)", systemImage: "heart")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -198,15 +219,27 @@ struct PostCard: View {
                         .foregroundColor(.secondary)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12)
+            .padding(.horizontal, DesignTokens.Spacing.sm + 4)
+            .padding(.bottom, DesignTokens.Spacing.sm + 4)
         }
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.white.opacity(0.85))
-                .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+        .glassPostCard()
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
+    }
+}
+
+// MARK: - Rounded Corner Shape（特定の角のみ丸くする）
+
+struct RoundedCornerShape: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: corners,
+            cornerRadii: CGSize(width: radius, height: radius)
         )
-        .cornerRadius(16)
+        return Path(path.cgPath)
     }
 }
 

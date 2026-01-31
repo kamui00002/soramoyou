@@ -126,7 +126,7 @@ struct SearchView: View {
                         viewModel.hashtag = ""
                     }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(DesignTokens.Colors.textTertiary)
                     }
                 }
             }
@@ -183,7 +183,7 @@ struct SearchView: View {
                         .frame(width: 20, height: 20)
                     Text("選択中: \(selectedColor)")
                         .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                     
                     Button("クリア") {
                         viewModel.selectedColor = nil
@@ -299,12 +299,12 @@ struct SearchView: View {
                 }) {
                     Text("検索条件をクリア")
                         .font(.body)
-                        .foregroundColor(.white.opacity(0.8))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
             } else {
                 Text("検索条件を入力してください")
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(DesignTokens.Colors.textTertiary)
             }
         }
     }
@@ -325,10 +325,10 @@ struct SearchView: View {
                 VStack(spacing: 16) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 60))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(DesignTokens.Colors.textTertiary)
                     Text("検索結果がありません")
                         .font(.headline)
-                        .foregroundColor(.white.opacity(0.8))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if !viewModel.searchResults.isEmpty {

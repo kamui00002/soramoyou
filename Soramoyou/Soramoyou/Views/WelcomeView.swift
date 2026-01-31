@@ -63,7 +63,7 @@ struct WelcomeView: View {
 
                     Text("空を撮る、空を集める")
                         .font(.system(size: 18, weight: .medium))
-                        .foregroundColor(.white.opacity(0.9))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
                 }
                 .padding(.bottom, 60)
@@ -117,7 +117,7 @@ struct WelcomeView: View {
                     }) {
                         Text("ゲストとして閲覧")
                             .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.white.opacity(0.8))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                             .padding(.top, 8)
                     }
                 }

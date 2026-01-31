@@ -49,13 +49,13 @@ struct GalleryView: View {
                             VStack(spacing: 16) {
                                 Image(systemName: "photo.on.rectangle.angled")
                                     .font(.system(size: 60))
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
                                 Text("まだ投稿がありません")
                                     .font(.headline)
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
                                 Text("みんなの空の写真がここに表示されます")
                                     .font(.caption)
-                                    .foregroundColor(.white.opacity(0.6))
+                                    .foregroundColor(DesignTokens.Colors.textTertiary)
                             }
                         } else {
                             // グリッド表示
@@ -129,7 +129,7 @@ struct GalleryView: View {
             if !viewModel.hasMorePosts && !viewModel.posts.isEmpty {
                 Text("すべての投稿を表示しました")
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(DesignTokens.Colors.textTertiary)
                     .padding()
             }
         }

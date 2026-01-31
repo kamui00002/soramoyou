@@ -57,13 +57,13 @@ struct ProfileView: View {
                             profileContent(user: user)
                         } else {
                             // ユーザー情報が取得できない場合
-                            VStack(spacing: 16) {
+                            VStack(spacing: DesignTokens.Spacing.md) {
                                 Image(systemName: "person.circle")
                                     .font(.system(size: 60))
-                                    .foregroundColor(.white.opacity(0.6))
+                                    .foregroundColor(DesignTokens.Colors.textTertiary)
                                 Text("プロフィール情報を取得できませんでした")
                                     .font(.headline)
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
                         }
                     }
@@ -181,42 +181,43 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Profile Info Section
-    
+    // MARK: - Profile Info Section ☁️
+
     private func profileInfoSection(user: User) -> some View {
-        VStack(spacing: 16) {
+        VStack(spacing: DesignTokens.Spacing.md) {
             // プロフィール画像
             profileImageView(photoURL: user.photoURL)
-            
+
             // 表示名
             if let displayName = user.displayName {
                 Text(displayName)
                     .font(.title2)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                    .shadow(DesignTokens.Shadow.text)
             } else {
                 Text("ユーザー")
                     .font(.title2)
                     .fontWeight(.bold)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
-            
+
             // 自己紹介
             if let bio = user.bio {
                 Text(bio)
                     .font(.body)
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
             }
-            
+
             // 統計情報
             statsSection(user: user)
         }
     }
-    
-    // MARK: - Profile Image View
-    
+
+    // MARK: - Profile Image View ☁️
+
     private func profileImageView(photoURL: String?) -> some View {
         Group {
             if let photoURL = photoURL, let url = URL(string: photoURL) {
@@ -224,7 +225,7 @@ struct ProfileView: View {
                     .placeholder {
                         Image(systemName: "person.circle.fill")
                             .font(.system(size: 100))
-                            .foregroundColor(.white.opacity(0.6))
+                            .foregroundColor(DesignTokens.Colors.textTertiary)
                     }
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -232,85 +233,85 @@ struct ProfileView: View {
                     .clipShape(Circle())
                     .overlay(
                         Circle()
-                            .stroke(Color.white.opacity(0.4), lineWidth: 2)
+                            .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: 2)
                     )
-                    .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
+                    .shadow(DesignTokens.Shadow.medium)
             } else {
                 Image(systemName: "person.circle.fill")
                     .font(.system(size: 100))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(DesignTokens.Colors.textTertiary)
             }
         }
     }
-    
-    // MARK: - Stats Section
-    
+
+    // MARK: - Stats Section ☁️
+
     private func statsSection(user: User) -> some View {
-        HStack(spacing: 32) {
+        HStack(spacing: DesignTokens.Spacing.xl) {
             // 投稿数
-            VStack(spacing: 4) {
+            VStack(spacing: DesignTokens.Spacing.xs) {
                 Text("\(user.postsCount)")
                     .font(.title3)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
                 Text("投稿")
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
-            
+
             // フォロワー数
-            VStack(spacing: 4) {
+            VStack(spacing: DesignTokens.Spacing.xs) {
                 Text("\(user.followersCount)")
                     .font(.title3)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
                 Text("フォロワー")
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
-            
+
             // フォロー数
-            VStack(spacing: 4) {
+            VStack(spacing: DesignTokens.Spacing.xs) {
                 Text("\(user.followingCount)")
                     .font(.title3)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
                 Text("フォロー中")
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
         }
         .padding(.vertical)
-        .padding(.horizontal, 24)
+        .padding(.horizontal, DesignTokens.Spacing.lg)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.white.opacity(0.15))
+            RoundedRectangle(cornerRadius: DesignTokens.Radius.lg)
+                .fill(DesignTokens.Colors.glassSecondary)
                 .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(.white.opacity(0.3), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.lg)
+                        .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: 1)
                 )
         )
     }
-    
-    // MARK: - Posts Section
-    
+
+    // MARK: - Posts Section ☁️
+
     private var postsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
             // セクションヘッダー
             HStack {
                 Text("投稿")
                     .font(.headline)
-                    .foregroundColor(.white)
-                
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+
                 Spacer()
-                
+
                 if viewModel.isLoadingPosts {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(0.8)
                 }
             }
-            
+
             // 投稿一覧
             if viewModel.userPosts.isEmpty {
                 emptyPostsView
@@ -319,15 +320,15 @@ struct ProfileView: View {
             }
         }
     }
-    
+
     private var emptyPostsView: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: DesignTokens.Spacing.md) {
             Image(systemName: "photo.on.rectangle")
                 .font(.system(size: 60))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(DesignTokens.Colors.textTertiary)
             Text(viewModel.isOwnProfile ? "まだ投稿がありません" : "投稿がありません")
                 .font(.headline)
-                .foregroundColor(.white.opacity(0.8))
+                .foregroundColor(DesignTokens.Colors.textSecondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)

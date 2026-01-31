@@ -111,20 +111,20 @@ extension View {
     }
 }
 
-// MARK: - Glass Card Style
+// MARK: - Glass Card Style ☁️
 
 struct GlassCardStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(.white.opacity(0.2))
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                    .fill(DesignTokens.Colors.glassSecondary)
                     .background(
-                        RoundedRectangle(cornerRadius: 20)
-                            .stroke(.white.opacity(0.4), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                            .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: 1)
                     )
             )
-            .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
+            .shadow(DesignTokens.Shadow.medium)
     }
 }
 
@@ -134,7 +134,41 @@ extension View {
     }
 }
 
-// MARK: - Glass Button Style
+// MARK: - Glass Post Card Style（投稿カード用グラスモーフィズム）☀️
+
+struct GlassPostCardStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.5),
+                                        Color.white.opacity(0.2)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1
+                            )
+                    )
+            )
+            .shadow(DesignTokens.Shadow.card)
+    }
+}
+
+extension View {
+    /// 投稿カード用のグラスモーフィズムスタイルを適用
+    func glassPostCard() -> some View {
+        modifier(GlassPostCardStyle())
+    }
+}
+
+// MARK: - Glass Button Style ☁️
 
 struct GlassButtonStyle: ButtonStyle {
     let isPrimary: Bool
@@ -145,21 +179,26 @@ struct GlassButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundColor(.white)
+            .font(.system(size: DesignTokens.Typography.bodySize, weight: .semibold))
+            .foregroundColor(DesignTokens.Colors.textPrimary)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
+            .padding(.vertical, DesignTokens.Spacing.md - 2)
             .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(.white.opacity(isPrimary ? 0.25 : 0.15))
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.button)
+                    .fill(isPrimary ? DesignTokens.Colors.glassPrimary : DesignTokens.Colors.glassSecondary)
                     .background(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(.white.opacity(isPrimary ? 0.5 : 0.3), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: DesignTokens.Radius.button)
+                            .stroke(
+                                isPrimary ? DesignTokens.Colors.glassBorderPrimary : DesignTokens.Colors.glassBorderSecondary,
+                                lineWidth: 1
+                            )
                     )
             )
-            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
-            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
-            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+            .shadow(DesignTokens.Shadow.button)
+            // マイクロインタラクション強化
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .brightness(configuration.isPressed ? 0.1 : 0)
+            .animation(DesignTokens.Animation.buttonPress, value: configuration.isPressed)
     }
 }
 
