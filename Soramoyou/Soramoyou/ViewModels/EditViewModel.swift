@@ -467,8 +467,11 @@ class EditViewModel: ObservableObject {
             return
         }
 
+        // まず画像の向きを正規化（CIImageはorientationフラグを無視するため）
+        let normalizedImage = normalizeImageOrientation(image)
+
         // 回転・反転を適用
-        let transformed = applyTransform(to: image)
+        let transformed = applyTransform(to: normalizedImage)
 
         // UIImage → CIImage に変換
         guard let ciImage = CIImage(image: transformed) else {
@@ -482,6 +485,23 @@ class EditViewModel: ObservableObject {
         cachedLowResCIImage = lowRes
         cachedImageIndex = currentImageIndex
         cachedTransformKey = makeTransformKey()
+    }
+
+    /// 画像の向きを正規化（.upに統一）
+    /// CIImageはorientationフラグを無視するため、事前に物理的に回転させる必要がある
+    private func normalizeImageOrientation(_ image: UIImage) -> UIImage {
+        // 既に.upの場合は処理不要
+        guard image.imageOrientation != .up else {
+            return image
+        }
+
+        // 正規化された画像を描画
+        UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale)
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+        let normalizedImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+
+        return normalizedImage ?? image
     }
 
     /// 低解像度キャッシュを無効化
