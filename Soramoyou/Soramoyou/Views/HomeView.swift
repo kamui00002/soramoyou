@@ -16,13 +16,9 @@ struct HomeView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // 空のグラデーション背景
+                // 空のグラデーション背景 ☁️
                 LinearGradient(
-                    colors: [
-                        Color(red: 0.68, green: 0.85, blue: 0.90),
-                        Color(red: 0.53, green: 0.81, blue: 0.98),
-                        Color(red: 0.39, green: 0.58, blue: 0.93)
-                    ],
+                    colors: DesignTokens.Colors.daySkyGradient,
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -111,8 +107,11 @@ struct HomeView: View {
                             selectedPost = post
                         }
                         .onAppear {
-                            // ページネーション: 最後の投稿が表示されたら次のページを読み込む
-                            if post.id == viewModel.posts.last?.id {
+                            // ページネーション: 最後の投稿が表示されたら次のページを読み込む ☁️
+                            // 重複リクエスト防止: 読み込み中の場合はスキップ
+                            if post.id == viewModel.posts.last?.id
+                                && !viewModel.isLoadingMore
+                                && viewModel.hasMorePosts {
                                 Task {
                                     await viewModel.loadMorePosts()
                                 }
@@ -243,12 +242,12 @@ struct RoundedCornerShape: Shape {
     }
 }
 
-// MARK: - Post Image View
+// MARK: - Post Image View ☁️
 
 struct PostImageView: View {
     let imageInfo: ImageInfo
-    @State private var isLoading = true
-    
+    // 未使用の変数を削除（コードレビュー対応）
+
     var body: some View {
         // サムネイルを優先的に表示
         if let thumbnailURL = imageInfo.thumbnail, let url = URL(string: thumbnailURL) {
@@ -428,16 +427,11 @@ struct PostDetailView: View {
                     )
             }
             
-            // ユーザー情報
+            // ユーザー情報 ☁️
+            // セキュリティ: メールアドレスは表示しない
             VStack(alignment: .leading, spacing: 4) {
                 Text(user.displayName ?? "ユーザー")
                     .font(.headline)
-                
-                if let email = user.email {
-                    Text(email)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
             }
             
             Spacer()

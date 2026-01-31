@@ -58,7 +58,7 @@ class EditViewModel: ObservableObject {
     /// キャッシュ時の変換状態キー（回転・反転）
     private var cachedTransformKey: String = ""
 
-    // MARK: - スロットリング
+    // MARK: - スロットリング ☁️
 
     /// 最後の高速プレビューレンダリング時刻
     private var lastFastPreviewTime: CFAbsoluteTime = 0
@@ -66,6 +66,13 @@ class EditViewModel: ObservableObject {
     private let fastPreviewMinInterval: CFAbsoluteTime = 0.033
     /// 遅延実行用タスク
     private var throttledPreviewTask: Task<Void, Never>?
+
+    // MARK: - リクエストID管理（レースコンディション防止）☁️
+
+    /// 現在のプレビューリクエストID
+    private var currentPreviewRequestId: UUID = UUID()
+    /// 現在の高速プレビューリクエストID
+    private var currentFastPreviewRequestId: UUID = UUID()
     
     init(
         images: [UIImage] = [],
@@ -401,24 +408,44 @@ class EditViewModel: ObservableObject {
         }
     }
 
-    /// プレビューを生成
+    /// プレビューを生成 ☁️
+    /// リクエストIDを使用してレースコンディションを防止
     func generatePreview() async {
         guard let image = currentImage else {
             previewImage = nil
             return
         }
 
+        // 新しいリクエストIDを発行
+        let requestId = UUID()
+        currentPreviewRequestId = requestId
+
         isLoading = true
         errorMessage = nil
 
         do {
-            // 回転・反転を適用した画像を作成
-            var processedImage = image
-            processedImage = applyTransform(to: processedImage)
+            // 画像処理をバックグラウンドで実行
+            let processedImage = await Task.detached(priority: .userInitiated) { [weak self] in
+                guard let self = self else { return image }
+                // 回転・反転を適用した画像を作成
+                return await MainActor.run {
+                    self.applyTransform(to: image)
+                }
+            }.value
+
+            // リクエストIDが変わっていたら結果を破棄
+            guard requestId == currentPreviewRequestId else { return }
 
             let preview = try await imageService.generatePreview(processedImage, edits: editSettings)
+
+            // リクエストIDが変わっていたら結果を破棄
+            guard requestId == currentPreviewRequestId else { return }
+
             previewImage = preview
         } catch {
+            // リクエストIDが変わっていたらエラー表示も不要
+            guard requestId == currentPreviewRequestId else { return }
+
             // エラーをログに記録
             ErrorHandler.logError(error, context: "EditViewModel.generatePreview")
             // ユーザーフレンドリーなメッセージを表示
@@ -428,30 +455,42 @@ class EditViewModel: ObservableObject {
         isLoading = false
     }
 
-    /// 高速プレビューを生成（低解像度・256x256）
+    /// 高速プレビューを生成（低解像度・256x256）☁️
     /// スライダー操作中のリアルタイム表示用
     /// キャッシュ済みの低解像度CIImageを使い、同期的にフィルターチェーンを適用
+    /// リクエストIDを使用してレースコンディションを防止
     func generatePreviewFast() async {
         guard currentImage != nil else {
             fastPreviewImage = nil
             return
         }
 
-        // キャッシュが有効かチェックし、無効なら再生成
+        // 新しいリクエストIDを発行
+        let requestId = UUID()
+        currentFastPreviewRequestId = requestId
+
+        // キャッシュが有効かチェックし、無効なら再生成（バックグラウンドで実行）
         let transformKey = makeTransformKey()
         if cachedLowResCIImage == nil
             || cachedImageIndex != currentImageIndex
             || cachedTransformKey != transformKey {
-            rebuildLowResCache()
+            await rebuildLowResCacheAsync()
         }
+
+        // リクエストIDが変わっていたら結果を破棄
+        guard requestId == currentFastPreviewRequestId else { return }
 
         guard let lowResCIImage = cachedLowResCIImage else {
             fastPreviewImage = nil
             return
         }
 
-        // CIImageベースで同期的にプレビュー生成（Task.detached不要）
+        // CIImageベースでプレビュー生成
         let preview = imageService.generatePreviewFromCIImage(lowResCIImage, edits: editSettings)
+
+        // リクエストIDが変わっていたら結果を破棄
+        guard requestId == currentFastPreviewRequestId else { return }
+
         fastPreviewImage = preview
     }
 
@@ -460,7 +499,7 @@ class EditViewModel: ObservableObject {
         "\(rotationDegrees)_\(isFlippedHorizontal)_\(isFlippedVertical)"
     }
 
-    /// 低解像度CIImageキャッシュを再構築
+    /// 低解像度CIImageキャッシュを再構築（同期版：互換性のため残す）
     private func rebuildLowResCache() {
         guard let image = currentImage else {
             cachedLowResCIImage = nil
@@ -485,6 +524,45 @@ class EditViewModel: ObservableObject {
         cachedLowResCIImage = lowRes
         cachedImageIndex = currentImageIndex
         cachedTransformKey = makeTransformKey()
+    }
+
+    /// 低解像度CIImageキャッシュを再構築（非同期版：バックグラウンド処理）☁️
+    /// 重い画像処理をバックグラウンドスレッドで実行してUIブロックを防止
+    private func rebuildLowResCacheAsync() async {
+        guard let image = currentImage else {
+            cachedLowResCIImage = nil
+            return
+        }
+
+        let currentIndex = currentImageIndex
+        let transformKey = makeTransformKey()
+        let imageServiceRef = imageService
+
+        // 重い画像処理をバックグラウンドで実行
+        let result = await Task.detached(priority: .userInitiated) { [weak self] () -> CIImage? in
+            guard let self = self else { return nil }
+
+            // MainActorでUIImage関連の処理を実行
+            let processedImage: UIImage = await MainActor.run {
+                // 画像の向きを正規化
+                let normalizedImage = self.normalizeImageOrientation(image)
+                // 回転・反転を適用
+                return self.applyTransform(to: normalizedImage)
+            }
+
+            // UIImage → CIImage に変換
+            guard let ciImage = CIImage(image: processedImage) else {
+                return nil
+            }
+
+            // CIImage上で256x256にリサイズ
+            return imageServiceRef.resizeCIImage(ciImage, maxSize: CGSize(width: 256, height: 256))
+        }.value
+
+        // キャッシュを更新
+        cachedLowResCIImage = result
+        cachedImageIndex = currentIndex
+        cachedTransformKey = transformKey
     }
 
     /// 画像の向きを正規化（.upに統一）

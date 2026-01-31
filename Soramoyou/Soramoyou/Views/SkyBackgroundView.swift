@@ -22,13 +22,9 @@ struct SkyBackgroundView<Content: View>: View {
 
     var body: some View {
         ZStack {
-            // 空のグラデーション背景
+            // 空のグラデーション背景 ☁️
             LinearGradient(
-                colors: [
-                    Color(red: 0.68, green: 0.85, blue: 0.90),  // 淡い空色
-                    Color(red: 0.53, green: 0.81, blue: 0.98),  // 空色
-                    Color(red: 0.39, green: 0.58, blue: 0.93)   // 深い空色
-                ],
+                colors: DesignTokens.Colors.daySkyGradient,
                 startPoint: .top,
                 endPoint: .bottom
             )
