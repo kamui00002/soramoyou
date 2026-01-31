@@ -247,50 +247,65 @@ struct ProfileView: View {
     // MARK: - Stats Section ☁️
 
     private func statsSection(user: User) -> some View {
-        HStack(spacing: DesignTokens.Spacing.xl) {
+        HStack(spacing: 0) {
             // 投稿数
-            VStack(spacing: DesignTokens.Spacing.xs) {
-                Text("\(user.postsCount)")
-                    .font(.title3)
-                    .fontWeight(.bold)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
-                Text("投稿")
-                    .font(.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-            }
+            statItem(value: user.postsCount, label: "投稿", icon: "photo.on.rectangle")
+
+            // 区切り線
+            Rectangle()
+                .fill(DesignTokens.Colors.glassBorderSecondary)
+                .frame(width: 1, height: 40)
 
             // フォロワー数
-            VStack(spacing: DesignTokens.Spacing.xs) {
-                Text("\(user.followersCount)")
-                    .font(.title3)
-                    .fontWeight(.bold)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
-                Text("フォロワー")
-                    .font(.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-            }
+            statItem(value: user.followersCount, label: "フォロワー", icon: "person.2")
+
+            // 区切り線
+            Rectangle()
+                .fill(DesignTokens.Colors.glassBorderSecondary)
+                .frame(width: 1, height: 40)
 
             // フォロー数
-            VStack(spacing: DesignTokens.Spacing.xs) {
-                Text("\(user.followingCount)")
-                    .font(.title3)
-                    .fontWeight(.bold)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
-                Text("フォロー中")
-                    .font(.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-            }
+            statItem(value: user.followingCount, label: "フォロー中", icon: "heart")
         }
-        .padding(.vertical)
-        .padding(.horizontal, DesignTokens.Spacing.lg)
+        .padding(.vertical, DesignTokens.Spacing.md)
+        .frame(maxWidth: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: DesignTokens.Radius.lg)
-                .fill(DesignTokens.Colors.glassSecondary)
-                .background(
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.lg)
-                        .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: 1)
-                )
+            ZStack {
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                    .fill(.ultraThinMaterial)
+
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                DesignTokens.Colors.glassBorderAccentStart,
+                                DesignTokens.Colors.glassBorderAccentEnd
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            }
         )
+        .shadow(DesignTokens.Shadow.card)
+    }
+
+    private func statItem(value: Int, label: String, icon: String) -> some View {
+        VStack(spacing: DesignTokens.Spacing.xs) {
+            Text("\(value)")
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 10))
+                Text(label)
+                    .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium, design: .rounded))
+            }
+            .foregroundColor(DesignTokens.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Posts Section ☁️
@@ -369,34 +384,64 @@ struct ProfileView: View {
 
 struct PostGridItem: View {
     let post: Post
-    
+    @State private var isPressed = false
+
     var body: some View {
-        Group {
-            if let firstImage = post.images.first, let url = URL(string: firstImage.url) {
-                KFImage(url)
-                    .placeholder {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.2))
-                            .overlay(
-                                ProgressView()
-                            )
-                    }
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(height: 120)
-                    .clipped()
-                    .cornerRadius(8)
-            } else {
-                Rectangle()
-                    .fill(Color.gray.opacity(0.2))
-                    .frame(height: 120)
-                    .cornerRadius(8)
-                    .overlay(
-                        Image(systemName: "photo")
-                            .foregroundColor(.gray)
+        ZStack(alignment: .bottomTrailing) {
+            Group {
+                if let firstImage = post.images.first, let url = URL(string: firstImage.url) {
+                    KFImage(url)
+                        .placeholder {
+                            Rectangle()
+                                .fill(DesignTokens.Colors.glassTertiary)
+                                .overlay(
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                )
+                                .shimmer()
+                        }
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(height: 120)
+                        .clipped()
+                } else {
+                    Rectangle()
+                        .fill(DesignTokens.Colors.glassTertiary)
+                        .frame(height: 120)
+                        .overlay(
+                            Image(systemName: "photo")
+                                .font(.system(size: 24))
+                                .foregroundColor(DesignTokens.Colors.textTertiary)
+                        )
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.md))
+            .overlay(
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.md)
+                    .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: 0.5)
+            )
+
+            // 複数画像インジケーター
+            if post.images.count > 1 {
+                Image(systemName: "square.on.square")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(6)
+                    .background(
+                        Circle()
+                            .fill(Color.black.opacity(0.5))
                     )
+                    .padding(6)
             }
         }
+        .shadow(DesignTokens.Shadow.soft)
+        .scaleEffect(isPressed ? 0.95 : 1.0)
+        .animation(DesignTokens.Animation.quickSpring, value: isPressed)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
     }
 }
 

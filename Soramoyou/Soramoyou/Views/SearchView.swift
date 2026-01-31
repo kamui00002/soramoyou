@@ -373,34 +373,56 @@ struct ColorSelectionButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Circle()
-                    .fill(hexToColor(hex))
-                    .frame(width: 36, height: 36)
-                    .overlay(
+        Button(action: {
+            let impact = UIImpactFeedbackGenerator(style: .light)
+            impact.impactOccurred()
+            action()
+        }) {
+            VStack(spacing: 6) {
+                ZStack {
+                    // グロー効果（選択時）
+                    if isSelected {
                         Circle()
-                            .stroke(isSelected ? Color.blue : Color.gray.opacity(0.3), lineWidth: isSelected ? 2 : 1)
-                    )
+                            .fill(hexToColor(hex).opacity(0.4))
+                            .frame(width: 50, height: 50)
+                            .blur(radius: 8)
+                    }
+
+                    Circle()
+                        .fill(hexToColor(hex))
+                        .frame(width: 40, height: 40)
+                        .overlay(
+                            Circle()
+                                .stroke(
+                                    isSelected ? Color.white : Color.white.opacity(0.3),
+                                    lineWidth: isSelected ? 3 : 1
+                                )
+                        )
+                        .shadow(isSelected ? DesignTokens.Shadow.medium : DesignTokens.Shadow.soft)
+                }
+                .frame(width: 50, height: 50)
 
                 Text(name)
-                    .font(.caption2)
-                    .foregroundColor(isSelected ? .blue : .primary)
+                    .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: isSelected ? .semibold : .medium, design: .rounded))
+                    .foregroundColor(isSelected ? DesignTokens.Colors.textPrimary : DesignTokens.Colors.textSecondary)
             }
         }
+        .buttonStyle(.plain)
+        .scaleEffect(isSelected ? 1.1 : 1.0)
+        .animation(DesignTokens.Animation.bouncySpring, value: isSelected)
     }
-    
+
     private func hexToColor(_ hex: String) -> Color {
         var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
-        
+
         var rgb: UInt64 = 0
         Scanner(string: hexSanitized).scanHexInt64(&rgb)
-        
+
         let r = Double((rgb & 0xFF0000) >> 16) / 255.0
         let g = Double((rgb & 0x00FF00) >> 8) / 255.0
         let b = Double(rgb & 0x0000FF) / 255.0
-        
+
         return Color(red: r, green: g, blue: b)
     }
 }
@@ -413,15 +435,35 @@ struct FilterChip: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button(action: {
+            let impact = UIImpactFeedbackGenerator(style: .light)
+            impact.impactOccurred()
+            action()
+        }) {
             Text(title)
-                .font(.caption)
-                .foregroundColor(isSelected ? .white : .primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(isSelected ? Color.blue : Color.gray.opacity(0.2))
-                .cornerRadius(16)
+                .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                .foregroundColor(isSelected ? .white : DesignTokens.Colors.textSecondary)
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.vertical, DesignTokens.Spacing.sm)
+                .background(
+                    ZStack {
+                        Capsule()
+                            .fill(isSelected ? DesignTokens.Colors.selectionAccent : DesignTokens.Colors.glassTertiary)
+
+                        Capsule()
+                            .stroke(
+                                isSelected
+                                    ? Color.white.opacity(0.3)
+                                    : DesignTokens.Colors.glassBorderSecondary,
+                                lineWidth: 1
+                            )
+                    }
+                )
+                .shadow(isSelected ? DesignTokens.Shadow.soft : DesignTokens.Shadow.inner)
         }
+        .buttonStyle(.plain)
+        .scaleEffect(isSelected ? 1.02 : 1.0)
+        .animation(DesignTokens.Animation.quickSpring, value: isSelected)
     }
 }
 

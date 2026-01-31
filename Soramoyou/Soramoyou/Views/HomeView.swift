@@ -91,19 +91,23 @@ struct HomeView: View {
     // MARK: - Feed View ☀️
 
     private var feedView: some View {
-        ScrollView {
-            LazyVStack(spacing: DesignTokens.Spacing.md) {
+        ScrollView(showsIndicators: false) {
+            LazyVStack(spacing: DesignTokens.Spacing.lg) {
                 ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
                     PostCard(post: post)
-                        // スタガードアニメーション
+                        // スタガードアニメーション（改善）
                         .opacity(animateCards ? 1 : 0)
-                        .offset(y: animateCards ? 0 : 20)
+                        .offset(y: animateCards ? 0 : 30)
+                        .scaleEffect(animateCards ? 1 : 0.95)
                         .animation(
-                            .spring(response: 0.6, dampingFraction: 0.8)
+                            DesignTokens.Animation.smoothSpring
                             .delay(Double(index) * DesignTokens.Animation.staggerDelay),
                             value: animateCards
                         )
                         .onTapGesture {
+                            // ハプティックフィードバック
+                            let impact = UIImpactFeedbackGenerator(style: .light)
+                            impact.impactOccurred()
                             selectedPost = post
                         }
                         .onAppear {
@@ -118,22 +122,38 @@ struct HomeView: View {
                             }
                         }
                 }
-                
+
                 // 追加読み込み中のインジケーター
                 if viewModel.isLoadingMore {
-                    ProgressView()
-                        .padding()
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        Text("読み込み中...")
+                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                    .padding(.vertical, DesignTokens.Spacing.lg)
                 }
-                
+
                 // これ以上投稿がない場合
                 if !viewModel.hasMorePosts && !viewModel.posts.isEmpty {
-                    Text("すべての投稿を表示しました")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding()
+                    VStack(spacing: DesignTokens.Spacing.sm) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 24))
+                            .foregroundColor(DesignTokens.Colors.success)
+                        Text("すべての投稿を表示しました")
+                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                    .padding(.vertical, DesignTokens.Spacing.xl)
                 }
+
+                // タブバー分の余白
+                Spacer()
+                    .frame(height: 100)
             }
-            .padding()
+            .padding(.horizontal, DesignTokens.Spacing.screenMargin)
+            .padding(.top, DesignTokens.Spacing.sm)
         }
     }
 }
@@ -142,18 +162,43 @@ struct HomeView: View {
 
 struct PostCard: View {
     let post: Post
+    @State private var isPressed = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm + 4) {
+        VStack(alignment: .leading, spacing: 0) {
             // 画像表示（サムネイル優先、遅延読み込み）
-            if let firstImage = post.images.first {
-                PostImageView(imageInfo: firstImage)
-                    .clipShape(
-                        RoundedCornerShape(
-                            radius: DesignTokens.Radius.xl,
-                            corners: [.topLeft, .topRight]
+            ZStack(alignment: .bottomLeading) {
+                if let firstImage = post.images.first {
+                    PostImageView(imageInfo: firstImage)
+                        .clipShape(
+                            RoundedCornerShape(
+                                radius: DesignTokens.Radius.xl,
+                                corners: [.topLeft, .topRight]
+                            )
                         )
+                }
+
+                // 画像数インジケーター
+                if post.images.count > 1 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo.on.rectangle")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("\(post.images.count)")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.black.opacity(0.5))
+                            .background(
+                                Capsule()
+                                    .fill(.ultraThinMaterial)
+                            )
                     )
+                    .padding(DesignTokens.Spacing.sm)
+                }
             }
 
             // 投稿情報
@@ -161,8 +206,8 @@ struct PostCard: View {
                 // キャプション
                 if let caption = post.caption {
                     Text(caption)
-                        .font(.body)
-                        .foregroundColor(.primary)
+                        .font(.system(size: DesignTokens.Typography.bodySize, weight: .regular, design: .rounded))
+                        .foregroundColor(DesignTokens.Colors.textDark)
                         .lineLimit(3)
                 }
 
@@ -172,57 +217,110 @@ struct PostCard: View {
                         HStack(spacing: DesignTokens.Spacing.sm) {
                             ForEach(hashtags, id: \.self) { hashtag in
                                 Text("#\(hashtag)")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(DesignTokens.Colors.skyBlue)
+                                    .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                                    .foregroundColor(DesignTokens.Colors.selectionAccent)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        Capsule()
+                                            .fill(DesignTokens.Colors.selectionAccent.opacity(0.12))
+                                    )
                             }
                         }
                     }
                 }
 
-                // 位置情報
-                if let location = post.location {
-                    HStack(spacing: DesignTokens.Spacing.xs) {
-                        Image(systemName: "location.fill")
-                            .font(.caption)
-                            .foregroundColor(DesignTokens.Colors.skyBlue.opacity(0.8))
-                        if let city = location.city, let prefecture = location.prefecture {
-                            Text("\(prefecture) \(city)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                // メタ情報行
+                HStack(spacing: DesignTokens.Spacing.md) {
+                    // 位置情報
+                    if let location = post.location {
+                        HStack(spacing: 4) {
+                            Image(systemName: "location.fill")
+                                .font(.system(size: 11))
+                            if let city = location.city, let prefecture = location.prefecture {
+                                Text("\(prefecture) \(city)")
+                                    .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium))
+                            }
+                        }
+                        .foregroundColor(DesignTokens.Colors.skyBlue)
+                    }
+
+                    Spacer()
+
+                    // 空の種類・時間帯
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        if let skyType = post.skyType {
+                            Label(skyType.displayName, systemImage: skyType.iconName)
+                                .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium))
+                                .foregroundColor(DesignTokens.Colors.textTertiary)
+                        }
+                        if let timeOfDay = post.timeOfDay {
+                            Label(timeOfDay.displayName, systemImage: timeOfDay.iconName)
+                                .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium))
+                                .foregroundColor(DesignTokens.Colors.textTertiary)
                         }
                     }
                 }
 
-                // 空の種類・時間帯
-                HStack(spacing: DesignTokens.Spacing.sm + 4) {
-                    if let skyType = post.skyType {
-                        Label(skyType.displayName, systemImage: "cloud.fill")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                // アクション行
+                HStack(spacing: DesignTokens.Spacing.lg) {
+                    // いいねボタン
+                    HStack(spacing: 6) {
+                        Image(systemName: "heart")
+                            .font(.system(size: 16, weight: .medium))
+                        Text("\(post.likesCount)")
+                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
                     }
-                    if let timeOfDay = post.timeOfDay {
-                        Label(timeOfDay.displayName, systemImage: "clock.fill")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
+                    .foregroundColor(DesignTokens.Colors.softPink)
 
-                // 統計情報
-                HStack(spacing: DesignTokens.Spacing.md) {
-                    Label("\(post.likesCount)", systemImage: "heart")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Label("\(post.commentsCount)", systemImage: "bubble.right")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    // コメントボタン
+                    HStack(spacing: 6) {
+                        Image(systemName: "bubble.right")
+                            .font(.system(size: 16, weight: .medium))
+                        Text("\(post.commentsCount)")
+                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundColor(DesignTokens.Colors.skyBlue)
+
+                    Spacer()
+
+                    // シェアボタン
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(DesignTokens.Colors.textTertiary)
                 }
             }
-            .padding(.horizontal, DesignTokens.Spacing.sm + 4)
-            .padding(.bottom, DesignTokens.Spacing.sm + 4)
+            .padding(DesignTokens.Spacing.cardPadding)
         }
-        .glassPostCard()
+        .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                    .fill(.ultraThinMaterial)
+
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.5),
+                                Color.white.opacity(0.15)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            }
+        )
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
+        .shadow(DesignTokens.Shadow.card)
+        // タップ時のアニメーション
+        .scaleEffect(isPressed ? 0.98 : 1.0)
+        .animation(DesignTokens.Animation.quickSpring, value: isPressed)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
     }
 }
 

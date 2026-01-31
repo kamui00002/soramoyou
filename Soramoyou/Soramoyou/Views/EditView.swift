@@ -568,26 +568,61 @@ struct FilterButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? Color.blue : Color.gray.opacity(0.2))
-                    .frame(width: 60, height: 60)
-                    .overlay(
-                        Text(displayName.prefix(2))
-                            .font(.caption)
-                            .foregroundColor(isSelected ? .white : .primary)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
-                    )
+        Button(action: {
+            let impact = UIImpactFeedbackGenerator(style: .light)
+            impact.impactOccurred()
+            action()
+        }) {
+            VStack(spacing: DesignTokens.Spacing.sm) {
+                ZStack {
+                    // 選択時のグロー
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: DesignTokens.Radius.md)
+                            .fill(DesignTokens.Colors.selectionAccent.opacity(0.3))
+                            .frame(width: 68, height: 68)
+                            .blur(radius: 8)
+                    }
+
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.md)
+                        .fill(
+                            isSelected
+                                ? LinearGradient(
+                                    colors: DesignTokens.Colors.accentGradient,
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                                : LinearGradient(
+                                    colors: [DesignTokens.Colors.glassTertiary, DesignTokens.Colors.glassTertiary],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                        )
+                        .frame(width: 60, height: 60)
+                        .overlay(
+                            Text(displayName.prefix(2))
+                                .font(.system(size: DesignTokens.Typography.captionSize, weight: .bold, design: .rounded))
+                                .foregroundColor(isSelected ? .white : DesignTokens.Colors.textSecondary)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: DesignTokens.Radius.md)
+                                .stroke(
+                                    isSelected
+                                        ? Color.white.opacity(0.5)
+                                        : DesignTokens.Colors.glassBorderSecondary,
+                                    lineWidth: 1
+                                )
+                        )
+                        .shadow(isSelected ? DesignTokens.Shadow.medium : DesignTokens.Shadow.soft)
+                }
 
                 Text(displayName)
-                    .font(.caption)
-                    .foregroundColor(isSelected ? .blue : .primary)
+                    .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: isSelected ? .semibold : .medium, design: .rounded))
+                    .foregroundColor(isSelected ? DesignTokens.Colors.selectionAccent : DesignTokens.Colors.textSecondary)
             }
         }
+        .buttonStyle(.plain)
+        .scaleEffect(isSelected ? 1.05 : 1.0)
+        .animation(DesignTokens.Animation.bouncySpring, value: isSelected)
     }
 }
 
@@ -600,22 +635,70 @@ struct ToolButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: iconName(for: tool))
-                    .font(.title3)
-                    .foregroundColor(isSelected ? .blue : (hasValue ? .orange : .gray))
-                    .frame(width: 44, height: 44)
-                    .background(isSelected ? Color.blue.opacity(0.1) : Color.gray.opacity(0.1))
-                    .cornerRadius(8)
+        Button(action: {
+            let impact = UIImpactFeedbackGenerator(style: .light)
+            impact.impactOccurred()
+            action()
+        }) {
+            VStack(spacing: 6) {
+                ZStack {
+                    // 選択時のグロー
+                    if isSelected {
+                        Circle()
+                            .fill(DesignTokens.Colors.selectionAccent.opacity(0.3))
+                            .frame(width: 52, height: 52)
+                            .blur(radius: 6)
+                    }
+
+                    Circle()
+                        .fill(
+                            isSelected
+                                ? DesignTokens.Colors.selectionAccent.opacity(0.2)
+                                : (hasValue ? DesignTokens.Colors.sunsetOrange.opacity(0.15) : DesignTokens.Colors.glassTertiary)
+                        )
+                        .frame(width: 46, height: 46)
+                        .overlay(
+                            Image(systemName: iconName(for: tool))
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundColor(
+                                    isSelected
+                                        ? DesignTokens.Colors.selectionAccent
+                                        : (hasValue ? DesignTokens.Colors.sunsetOrange : DesignTokens.Colors.textSecondary)
+                                )
+                        )
+                        .overlay(
+                            Circle()
+                                .stroke(
+                                    isSelected
+                                        ? DesignTokens.Colors.selectionAccent.opacity(0.5)
+                                        : (hasValue ? DesignTokens.Colors.sunsetOrange.opacity(0.3) : DesignTokens.Colors.glassBorderSecondary),
+                                    lineWidth: 1
+                                )
+                        )
+
+                    // 値がある場合のインジケーター
+                    if hasValue && !isSelected {
+                        Circle()
+                            .fill(DesignTokens.Colors.sunsetOrange)
+                            .frame(width: 8, height: 8)
+                            .offset(x: 18, y: -18)
+                    }
+                }
 
                 Text(tool.displayName)
-                    .font(.caption2)
-                    .foregroundColor(isSelected ? .blue : .primary)
+                    .font(.system(size: DesignTokens.Typography.tabLabelSize, weight: isSelected ? .semibold : .medium, design: .rounded))
+                    .foregroundColor(
+                        isSelected
+                            ? DesignTokens.Colors.selectionAccent
+                            : DesignTokens.Colors.textSecondary
+                    )
                     .lineLimit(1)
                     .frame(width: 60)
             }
         }
+        .buttonStyle(.plain)
+        .scaleEffect(isSelected ? 1.08 : 1.0)
+        .animation(DesignTokens.Animation.bouncySpring, value: isSelected)
     }
 
     private func iconName(for tool: EditTool) -> String {
