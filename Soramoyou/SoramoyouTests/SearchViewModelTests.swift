@@ -7,7 +7,9 @@
 
 import XCTest
 @testable import Soramoyou
+import FirebaseFirestore
 
+@MainActor
 final class SearchViewModelTests: XCTestCase {
     var viewModel: SearchViewModel!
     var mockFirestoreService: MockFirestoreServiceForSearch!
@@ -167,7 +169,14 @@ final class SearchViewModelTests: XCTestCase {
 class MockFirestoreServiceForSearch: FirestoreServiceProtocol {
     var searchResults: [Post] = []
     
-    func searchPosts(hashtag: String?, color: String?, timeOfDay: TimeOfDay?, skyType: SkyType?, colorThreshold: Double?) async throws -> [Post] {
+    func searchPosts(
+        hashtag: String?,
+        color: String?,
+        timeOfDay: TimeOfDay?,
+        skyType: SkyType?,
+        colorThreshold: Double?,
+        limit: Int
+    ) async throws -> [Post] {
         return searchResults
     }
     
@@ -190,7 +199,6 @@ class MockFirestoreServiceForSearch: FirestoreServiceProtocol {
     func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] { return [] }
     func searchBySkyType(_ skyType: SkyType) async throws -> [Post] { return [] }
 }
-
 
 
 

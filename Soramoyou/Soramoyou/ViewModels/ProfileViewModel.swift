@@ -194,10 +194,9 @@ class ProfileViewModel: ObservableObject {
             
             if shouldDeleteProfileImage {
                 // 既存の画像を削除（リトライ可能）
-                if let existingPhotoURL = photoURL,
-                   let url = URL(string: existingPhotoURL) {
-                    // Storageから画像を削除
-                    let path = "users/\(userId)/profile.jpg"
+                if photoURL != nil {
+                    // Storageから画像を削除（storage.rules のパス形式: users/{userId}/profile/{imageId}）
+                    let path = "users/\(userId)/profile/profile.jpg"
                     try? await RetryableOperation.executeIfRetryable { [self] in
                         try await self.storageService.deleteImage(path: path)
                     }
@@ -205,7 +204,8 @@ class ProfileViewModel: ObservableObject {
                 photoURL = nil
             } else if let profileImage = editingProfileImage {
                 // 新しい画像をアップロード（リトライ可能）
-                let imagePath = "users/\(userId)/profile.jpg"
+                // storage.rules のパス形式: users/{userId}/profile/{imageId}
+                let imagePath = "users/\(userId)/profile/profile.jpg"
                 let uploadedURL = try await RetryableOperation.executeIfRetryable { [self] in
                     try await self.storageService.uploadImage(profileImage, path: imagePath)
                 }

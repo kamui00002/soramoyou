@@ -7,8 +7,10 @@
 
 import XCTest
 @testable import Soramoyou
-import FirebaseAuth
+import FirebaseFirestore
+// Note: FirebaseAuth.Userとの競合を避けるため、Userは Soramoyou.User を参照
 
+@MainActor
 final class ProfileViewModelTests: XCTestCase {
     var viewModel: ProfileViewModel!
     var mockFirestoreService: MockFirestoreServiceForProfile!
@@ -356,7 +358,14 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post] { return [] }
     func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] { return [] }
     func searchBySkyType(_ skyType: SkyType) async throws -> [Post] { return [] }
-    func searchPosts(hashtag: String?, color: String?, timeOfDay: TimeOfDay?, skyType: SkyType?, colorThreshold: Double?) async throws -> [Post] { return [] }
+    func searchPosts(
+        hashtag: String?,
+        color: String?,
+        timeOfDay: TimeOfDay?,
+        skyType: SkyType?,
+        colorThreshold: Double?,
+        limit: Int
+    ) async throws -> [Post] { return [] }
 }
 
 class MockStorageServiceForProfile: StorageServiceProtocol {
@@ -378,7 +387,6 @@ class MockStorageServiceForProfile: StorageServiceProtocol {
         }
     }
 }
-
 
 
 

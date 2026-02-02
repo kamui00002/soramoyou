@@ -14,6 +14,12 @@ struct LoginView: View {
     @State private var password = ""
     @State private var errorMessage = ""
     @State private var isLoading = false
+    @State private var showContent = false
+    @FocusState private var focusedField: Field?
+
+    enum Field {
+        case email, password
+    }
 
     var body: some View {
         SkyBackgroundView(showClouds: true) {
@@ -21,133 +27,198 @@ struct LoginView: View {
                 // ヘッダー
                 HStack {
                     Spacer()
-                    Button("キャンセル") {
-                        dismiss()
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                            .frame(width: 32, height: 32)
+                            .background(
+                                Circle()
+                                    .fill(DesignTokens.Colors.glassTertiary)
+                            )
                     }
-                    .foregroundColor(.white)
                     .padding()
                 }
 
                 Spacer()
 
                 // タイトル
-                VStack(spacing: 12) {
-                    Image(systemName: "person.circle.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(.white.opacity(0.9))
+                VStack(spacing: DesignTokens.Spacing.md) {
+                    ZStack {
+                        Circle()
+                            .fill(
+                                RadialGradient(
+                                    colors: [
+                                        DesignTokens.Colors.selectionAccent.opacity(0.3),
+                                        Color.clear
+                                    ],
+                                    center: .center,
+                                    startRadius: 20,
+                                    endRadius: 60
+                                )
+                            )
+                            .frame(width: 120, height: 120)
+                            .blur(radius: 15)
 
-                    Text("ログイン")
-                        .font(.system(size: 32, weight: .bold, design: .rounded))
+                        Image(systemName: "person.circle.fill")
+                            .font(.system(size: 70))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [.white, .white.opacity(0.85)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .shadow(DesignTokens.Shadow.medium)
+                    }
+
+                    Text("おかえりなさい")
+                        .font(.system(size: DesignTokens.Typography.titleSize, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
+                        .shadow(DesignTokens.Shadow.text)
                 }
-                .padding(.bottom, 40)
+                .opacity(showContent ? 1 : 0)
+                .offset(y: showContent ? 0 : 20)
+                .padding(.bottom, DesignTokens.Spacing.xl)
 
                 // フォーム
-                VStack(spacing: 16) {
+                VStack(spacing: DesignTokens.Spacing.md) {
                     // メールアドレス入力
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("メールアドレス")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white.opacity(0.8))
-
-                        TextField("example@email.com", text: $email)
-                            .textContentType(.emailAddress)
-                            .autocapitalization(.none)
-                            .keyboardType(.emailAddress)
-                            .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(.white.opacity(0.2))
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .stroke(.white.opacity(0.3), lineWidth: 1)
-                                    )
-                            )
-                            .foregroundColor(.white)
-                    }
+                    GlassInputField(
+                        placeholder: "メールアドレス",
+                        text: $email,
+                        icon: "envelope",
+                        onSubmit: { focusedField = .password }
+                    )
+                    .textContentType(.emailAddress)
+                    .autocapitalization(.none)
+                    .keyboardType(.emailAddress)
+                    .focused($focusedField, equals: .email)
 
                     // パスワード入力
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("パスワード")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white.opacity(0.8))
-
-                        SecureField("パスワード", text: $password)
-                            .textContentType(.password)
-                            .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(.white.opacity(0.2))
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .stroke(.white.opacity(0.3), lineWidth: 1)
-                                    )
-                            )
-                            .foregroundColor(.white)
-                    }
+                    GlassInputField(
+                        placeholder: "パスワード",
+                        text: $password,
+                        icon: "lock",
+                        isSecure: true,
+                        onSubmit: { attemptLogin() }
+                    )
+                    .textContentType(.password)
+                    .focused($focusedField, equals: .password)
 
                     // エラーメッセージ
-                    if !errorMessage.isEmpty {
-                        HStack {
+                    if !errorMessage.isEmpty || (authViewModel.errorMessage != nil && !authViewModel.errorMessage!.isEmpty) {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
                             Image(systemName: "exclamationmark.triangle.fill")
-                            Text(errorMessage)
+                                .foregroundColor(DesignTokens.Colors.warning)
+                            Text(errorMessage.isEmpty ? (authViewModel.errorMessage ?? "") : errorMessage)
+                                .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium))
                         }
-                        .font(.system(size: 14))
-                        .foregroundColor(.red)
-                        .padding()
+                        .foregroundColor(DesignTokens.Colors.textDark)
+                        .padding(DesignTokens.Spacing.md)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .background(
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(.white.opacity(0.9))
+                            RoundedRectangle(cornerRadius: DesignTokens.Radius.md)
+                                .fill(Color.white.opacity(0.95))
                         )
-                    }
-
-                    if let authError = authViewModel.errorMessage, !authError.isEmpty {
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                            Text(authError)
-                        }
-                        .font(.system(size: 14))
-                        .foregroundColor(.red)
-                        .padding()
-                        .background(
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(.white.opacity(0.9))
-                        )
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
                     }
 
                     // ログインボタン
-                    Button(action: {
-                        Task {
-                            isLoading = true
-                            errorMessage = ""
-                            do {
-                                try await authViewModel.signIn(email: email, password: password)
-                                dismiss()
-                            } catch {
-                                errorMessage = error.localizedDescription
-                            }
-                            isLoading = false
-                        }
-                    }) {
-                        HStack {
+                    Button(action: attemptLogin) {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
                             if isLoading {
                                 ProgressView()
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                             } else {
+                                Image(systemName: "arrow.right.circle.fill")
+                                    .font(.system(size: 18))
                                 Text("ログイン")
+                                    .font(.system(size: DesignTokens.Typography.buttonSize, weight: .semibold, design: .rounded))
                             }
                         }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, DesignTokens.Spacing.md)
+                        .background(
+                            ZStack {
+                                RoundedRectangle(cornerRadius: DesignTokens.Radius.button)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: DesignTokens.Colors.accentGradient,
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+
+                                RoundedRectangle(cornerRadius: DesignTokens.Radius.button)
+                                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                            }
+                        )
+                        .shadow(isFormValid ? DesignTokens.Shadow.glow : DesignTokens.Shadow.button)
                     }
-                    .buttonStyle(GlassButtonStyle(isPrimary: true))
-                    .disabled(isLoading || email.isEmpty || password.isEmpty)
-                    .opacity(email.isEmpty || password.isEmpty ? 0.6 : 1.0)
-                    .padding(.top, 8)
+                    .buttonStyle(ScaleButtonStyle())
+                    .disabled(isLoading || !isFormValid)
+                    .opacity(isFormValid ? 1.0 : 0.6)
+                    .padding(.top, DesignTokens.Spacing.sm)
+
+                    // パスワードを忘れた場合
+                    Button(action: {
+                        // TODO: パスワードリセット機能
+                    }) {
+                        Text("パスワードをお忘れですか？")
+                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                    .padding(.top, DesignTokens.Spacing.sm)
                 }
-                .padding(.horizontal, 32)
+                .padding(.horizontal, DesignTokens.Spacing.xl)
+                .opacity(showContent ? 1 : 0)
+                .offset(y: showContent ? 0 : 30)
 
                 Spacer()
                 Spacer()
             }
+        }
+        .onAppear {
+            withAnimation(DesignTokens.Animation.smoothSpring.delay(0.1)) {
+                showContent = true
+            }
+        }
+    }
+
+    // MARK: - Computed Properties
+
+    private var isFormValid: Bool {
+        !email.isEmpty && !password.isEmpty
+    }
+
+    // MARK: - Methods
+
+    private func attemptLogin() {
+        guard isFormValid else { return }
+        focusedField = nil
+
+        Task {
+            isLoading = true
+            errorMessage = ""
+
+            let impact = UIImpactFeedbackGenerator(style: .medium)
+            impact.impactOccurred()
+
+            do {
+                try await authViewModel.signIn(email: email, password: password)
+                let successFeedback = UINotificationFeedbackGenerator()
+                successFeedback.notificationOccurred(.success)
+                dismiss()
+            } catch {
+                let errorFeedback = UINotificationFeedbackGenerator()
+                errorFeedback.notificationOccurred(.error)
+                withAnimation(DesignTokens.Animation.quickSpring) {
+                    errorMessage = error.localizedDescription
+                }
+            }
+            isLoading = false
         }
     }
 }

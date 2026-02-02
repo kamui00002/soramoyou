@@ -19,8 +19,14 @@ struct ContentView: View {
                     .onAppear {
                         // 認証状態の確認が完了するまで待機
                         Task {
-                            // 認証状態の確認を待つ（AuthViewModelが初期化時に自動的に確認する）
-                            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5秒待機
+                            #if DEBUG
+                            // UIテストモードの場合はローディング時間を短縮
+                            let isUITesting = ProcessInfo.processInfo.arguments.contains("UI_TESTING")
+                            let waitTime: UInt64 = isUITesting ? 100_000_000 : 500_000_000 // UIテスト: 0.1秒, 通常: 0.5秒
+                            #else
+                            let waitTime: UInt64 = 500_000_000 // 通常: 0.5秒
+                            #endif
+                            try? await Task.sleep(nanoseconds: waitTime)
                             isLoading = false
                         }
                     }
@@ -32,7 +38,7 @@ struct ContentView: View {
                 WelcomeView()
             }
         }
-        .alert("エラー", isPresented: .constant(authViewModel.errorMessage != nil)) {
+        .alert("エラー", isPresented: Binding(errorMessage: $authViewModel.errorMessage)) {
             Button("OK") {
                 authViewModel.errorMessage = nil
             }

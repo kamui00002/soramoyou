@@ -89,7 +89,10 @@ struct PostInfoView: View {
                         
                         // 公開設定
                         visibilitySection
-                        
+
+                        // オリジナル画像保存オプション
+                        originalImagesSaveSection
+
                         // アクションボタン
                         actionButtons
                     }
@@ -125,7 +128,7 @@ struct PostInfoView: View {
                     }
                 )
             }
-            .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
+            .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
                 }
@@ -137,14 +140,6 @@ struct PostInfoView: View {
             .alert("投稿完了", isPresented: $viewModel.isPostSaved) {
                 Button("OK") {
                     // 投稿完了後、画面を閉じてホーム画面に戻る
-                    dismiss()
-                }
-            } message: {
-                Text("投稿が完了しました")
-            }
-            .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
-                Button("OK") {
-                    viewModel.reset()
                     dismiss()
                 }
             } message: {
@@ -433,13 +428,13 @@ struct PostInfoView: View {
     }
     
     // MARK: - Visibility Section
-    
+
     private var visibilitySection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("公開設定")
                 .font(.headline)
                 .foregroundColor(.white)
-            
+
             Picker("公開設定", selection: $viewModel.visibility) {
                 ForEach(Visibility.allCases, id: \.self) { visibility in
                     Text(visibility.displayName).tag(visibility)
@@ -452,7 +447,42 @@ struct PostInfoView: View {
             )
         }
     }
-    
+
+    // MARK: - Original Images Save Section
+
+    private var originalImagesSaveSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("保存オプション")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(isOn: $viewModel.saveOriginalImages) {
+                    HStack {
+                        Image(systemName: "photo.on.rectangle")
+                            .foregroundColor(.white.opacity(0.8))
+                        Text("オリジナル画像も保存する")
+                            .foregroundColor(.white)
+                    }
+                }
+                .toggleStyle(SwitchToggleStyle(tint: Color(red: 0.39, green: 0.58, blue: 0.93)))
+
+                Text("オンにすると、ギャラリーで編集前後の比較ができます")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.white.opacity(0.15))
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(.white.opacity(0.3), lineWidth: 1)
+                    )
+            )
+        }
+    }
+
     // MARK: - Action Buttons
     
     private var actionButtons: some View {

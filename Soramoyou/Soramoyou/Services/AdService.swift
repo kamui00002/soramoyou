@@ -10,6 +10,8 @@ import UIKit
 import GoogleMobileAds
 import Combine
 import os.log
+import AppTrackingTransparency
+import AdSupport
 
 protocol AdServiceProtocol {
     func initialize() async
@@ -20,20 +22,89 @@ protocol AdServiceProtocol {
 class AdService: NSObject, AdServiceProtocol {
     static let shared = AdService()
     static let isAdsEnabled = false
-    
+
     private var isInitialized = false
+    private var isATTRequested = false
     private let logger = Logger(subsystem: "com.soramoyou", category: "AdService")
-    
+
     // テスト用の広告ユニットID（本番環境では実際のIDに置き換える）
     static let testBannerAdUnitID = "ca-app-pub-3940256099942544/2934735716"
-    
+
     private override init() {
         super.init()
     }
-    
+
+    // MARK: - ATT (App Tracking Transparency)
+
+    /// ATT（トラッキング許可）をリクエスト
+    /// - Returns: トラッキングが許可されたかどうか
+    @MainActor
+    func requestTrackingAuthorization() async -> Bool {
+        guard !isATTRequested else {
+            // 既にリクエスト済みの場合は現在のステータスを返す
+            return ATTrackingManager.trackingAuthorizationStatus == .authorized
+        }
+
+        // iOS 14以上でATTが必要
+        guard #available(iOS 14, *) else {
+            logger.info("ATT not required for iOS < 14")
+            return true
+        }
+
+        // 現在のステータスを確認
+        let currentStatus = ATTrackingManager.trackingAuthorizationStatus
+
+        switch currentStatus {
+        case .authorized:
+            logger.info("ATT already authorized")
+            isATTRequested = true
+            return true
+        case .denied, .restricted:
+            logger.info("ATT denied or restricted")
+            isATTRequested = true
+            return false
+        case .notDetermined:
+            // リクエストダイアログを表示
+            logger.info("Requesting ATT authorization")
+            let status = await ATTrackingManager.requestTrackingAuthorization()
+            isATTRequested = true
+
+            switch status {
+            case .authorized:
+                logger.info("ATT authorized by user")
+                return true
+            case .denied:
+                logger.info("ATT denied by user")
+                return false
+            case .restricted:
+                logger.info("ATT restricted")
+                return false
+            case .notDetermined:
+                logger.warning("ATT still not determined after request")
+                return false
+            @unknown default:
+                logger.warning("ATT unknown status")
+                return false
+            }
+        @unknown default:
+            logger.warning("ATT unknown current status")
+            isATTRequested = true
+            return false
+        }
+    }
+
+    /// 現在のトラッキング許可ステータスを取得
+    var trackingAuthorizationStatus: ATTrackingManager.AuthorizationStatus {
+        if #available(iOS 14, *) {
+            return ATTrackingManager.trackingAuthorizationStatus
+        } else {
+            return .authorized
+        }
+    }
+
     // MARK: - Initialization
-    
-    /// AdMob SDKを初期化
+
+    /// AdMob SDKを初期化（ATTリクエスト後に呼び出すこと）
     func initialize() async {
         guard Self.isAdsEnabled else {
             logger.info("AdMob initialization is disabled")
@@ -42,13 +113,18 @@ class AdService: NSObject, AdServiceProtocol {
         guard !isInitialized else {
             return
         }
-        
+
+        // ATTリクエストがまだの場合は先にリクエスト
+        if !isATTRequested {
+            _ = await requestTrackingAuthorization()
+        }
+
         await MainActor.run {
             MobileAds.shared.start(completionHandler: { [weak self] status in
                 guard let self = self else { return }
-                
+
                 self.isInitialized = true
-                
+
                 if status.adapterStatusesByClassName.isEmpty {
                     self.logger.info("AdMob SDK initialized successfully")
                 } else {

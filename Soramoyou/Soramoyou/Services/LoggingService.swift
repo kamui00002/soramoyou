@@ -98,16 +98,19 @@ class LoggingService {
     /// エラーイベントを記録
     func logErrorEvent(_ error: Error, context: String? = nil, category: ErrorCategory) {
         let sanitizedContext = sanitizeContext(context)
-        
+
+        // エラー説明にPIIが含まれる可能性があるためサニタイズ
+        let sanitizedErrorDescription = sanitizeContext(error.localizedDescription) ?? "Unknown error"
+
         var parameters: [String: Any] = [
             "error_category": category.rawValue,
-            "error_description": error.localizedDescription
+            "error_description": sanitizedErrorDescription
         ]
-        
+
         if let context = sanitizedContext {
             parameters["error_context"] = context
         }
-        
+
         // Firebase Analyticsにエラーイベントを記録
         logEvent("error_occurred", parameters: parameters)
     }
@@ -119,11 +122,12 @@ class LoggingService {
             "attempt": attempt,
             "success": success
         ]
-        
+
         if let error = error {
-            parameters["error_description"] = error.localizedDescription
+            // エラー説明にPIIが含まれる可能性があるためサニタイズ
+            parameters["error_description"] = sanitizeContext(error.localizedDescription) ?? "Unknown error"
         }
-        
+
         // Firebase Analyticsにリトライイベントを記録
         logEvent("retry_operation", parameters: parameters)
     }

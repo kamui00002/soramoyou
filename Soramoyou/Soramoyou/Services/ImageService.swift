@@ -1,3 +1,6 @@
+// ⭐️ ImageService.swift
+// 画像処理サービス
+// 高速プレビュー生成メソッドを追加
 //
 //  ImageService.swift
 //  Soramoyou
@@ -11,22 +14,33 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import ImageIO
 import Vision
+import Metal
 
 protocol ImageServiceProtocol {
     // Filter
     func applyFilter(_ filter: FilterType, to image: UIImage) async throws -> UIImage
-    
+
     // Edit Tools
     func applyEditTool(_ tool: EditTool, value: Float, to image: UIImage) async throws -> UIImage
     func applyEditSettings(_ settings: EditSettings, to image: UIImage) async throws -> UIImage
-    
+
     // Preview
     func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage
-    
+    /// 高速プレビュー生成（256x256の低解像度）
+    /// スライダー操作中のリアルタイム表示用
+    func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage
+
+    /// CIImageベースの高速プレビュー生成（同期処理）
+    /// 既にリサイズ済みのCIImageを受け取り、フィルターチェーンを適用して一度だけレンダリング
+    func generatePreviewFromCIImage(_ ciImage: CIImage, edits: EditSettings) -> UIImage?
+
+    /// CIImageをリサイズ（CIFilter.lanczosScaleTransformを使用）
+    func resizeCIImage(_ ciImage: CIImage, maxSize: CGSize) -> CIImage
+
     // Compression & Resize
     func resizeImage(_ image: UIImage, maxSize: CGSize) async throws -> UIImage
     func compressImage(_ image: UIImage, quality: CGFloat) async throws -> Data
-    
+
     // Analysis
     func extractColors(_ image: UIImage, maxCount: Int) async throws -> [String]
     func calculateColorTemperature(_ image: UIImage) async throws -> Int
@@ -36,9 +50,17 @@ protocol ImageServiceProtocol {
 
 class ImageService: ImageServiceProtocol {
     private let context: CIContext
-    
-    init(context: CIContext = CIContext()) {
-        self.context = context
+
+    init(context: CIContext? = nil) {
+        if let context = context {
+            self.context = context
+        } else if let device = MTLCreateSystemDefaultDevice() {
+            // Metal GPU アクセラレーションを使用（大幅に高速化）
+            self.context = CIContext(mtlDevice: device)
+        } else {
+            // Metal が利用できない場合はCPUフォールバック
+            self.context = CIContext()
+        }
     }
     
     // MARK: - Filter
@@ -359,16 +381,146 @@ class ImageService: ImageServiceProtocol {
     }
     
     // MARK: - Preview
-    
+
     func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
         // まずサムネイルサイズにリサイズ
         let thumbnailSize = CGSize(width: 512, height: 512)
         let resizedImage = try await resizeImage(image, maxSize: thumbnailSize)
-        
+
         // 編集設定を適用
         return try await applyEditSettings(edits, to: resizedImage)
     }
-    
+
+    /// 高速プレビュー生成（256x256の低解像度）
+    /// スライダー操作中のリアルタイム表示用
+    /// - Parameters:
+    ///   - image: 元画像
+    ///   - edits: 編集設定
+    /// - Returns: 低解像度のプレビュー画像
+    func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
+        // 非常に小さなサムネイルサイズにリサイズ（高速化のため）
+        let fastThumbnailSize = CGSize(width: 256, height: 256)
+        let resizedImage = try await resizeImage(image, maxSize: fastThumbnailSize)
+
+        // 編集設定を適用（低解像度なので高速）
+        return try await applyEditSettings(edits, to: resizedImage)
+    }
+
+    // MARK: - CIImage ベースの高速プレビュー
+
+    /// CIImageベースの高速プレビュー生成（同期処理）
+    /// 既にリサイズ済みのCIImageを受け取り、フィルターチェーンを適用して一度だけレンダリング
+    /// - Parameters:
+    ///   - ciImage: リサイズ済みのCIImage
+    ///   - edits: 編集設定
+    /// - Returns: レンダリング済みのプレビュー画像（失敗時はnil）
+    func generatePreviewFromCIImage(_ ciImage: CIImage, edits: EditSettings) -> UIImage? {
+        let result = buildEditFilterChain(on: ciImage, edits: edits)
+        guard let cgImage = context.createCGImage(result, from: result.extent) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
+    }
+
+    /// CIImageをリサイズ（CIFilter.lanczosScaleTransformを使用）
+    /// UIImage変換なしで直接CIImageをリサイズ
+    /// - Parameters:
+    ///   - ciImage: 元のCIImage
+    ///   - maxSize: 最大サイズ
+    /// - Returns: リサイズ済みのCIImage
+    func resizeCIImage(_ ciImage: CIImage, maxSize: CGSize) -> CIImage {
+        let extent = ciImage.extent
+        let width = extent.width
+        let height = extent.height
+
+        // リサイズが不要な場合はそのまま返す
+        guard width > maxSize.width || height > maxSize.height else {
+            return ciImage
+        }
+
+        let scaleX = maxSize.width / width
+        let scaleY = maxSize.height / height
+        let scale = min(scaleX, scaleY)
+
+        let filter = CIFilter.lanczosScaleTransform()
+        filter.inputImage = ciImage
+        filter.scale = Float(scale)
+        filter.aspectRatio = 1.0
+        return filter.outputImage ?? ciImage
+    }
+
+    /// 編集設定のCIFilterチェーンを構築
+    /// CIFilterは遅延評価されるため、最後のcreateCGImage時にまとめて処理される
+    /// - Parameters:
+    ///   - ciImage: 入力CIImage
+    ///   - edits: 編集設定
+    /// - Returns: フィルターチェーン適用後のCIImage
+    private func buildEditFilterChain(on ciImage: CIImage, edits: EditSettings) -> CIImage {
+        var result = ciImage
+
+        // フィルターを適用
+        if let filter = edits.appliedFilter {
+            result = processFilterSync(filter, on: result)
+        }
+
+        // 編集ツールを順次適用（CIFilterチェーンとして連結）
+        if let brightness = edits.brightness {
+            result = applyBrightness(brightness, to: result)
+        }
+        if let contrast = edits.contrast {
+            result = applyContrast(contrast, to: result)
+        }
+        if let saturation = edits.saturation {
+            result = applySaturation(saturation, to: result)
+        }
+        if let exposure = edits.exposure {
+            result = applyExposure(exposure, to: result)
+        }
+        if let highlight = edits.highlight {
+            result = applyHighlight(highlight, to: result)
+        }
+        if let shadow = edits.shadow {
+            result = applyShadow(shadow, to: result)
+        }
+        if let warmth = edits.warmth {
+            result = applyWarmth(warmth, to: result)
+        }
+        if let sharpness = edits.sharpness {
+            result = applySharpness(sharpness, to: result)
+        }
+        if let vignette = edits.vignette {
+            result = applyVignette(vignette, to: result)
+        }
+
+        return result
+    }
+
+    /// フィルター適用（同期版 - processFilterのasync不要版）
+    private func processFilterSync(_ filter: FilterType, on ciImage: CIImage) -> CIImage {
+        switch filter {
+        case .natural:
+            return ciImage
+        case .clear:
+            return applyClearFilter(to: ciImage)
+        case .drama:
+            return applyDramaFilter(to: ciImage)
+        case .soft:
+            return applySoftFilter(to: ciImage)
+        case .warm:
+            return applyWarmFilter(to: ciImage)
+        case .cool:
+            return applyCoolFilter(to: ciImage)
+        case .vintage:
+            return applyVintageFilter(to: ciImage)
+        case .monochrome:
+            return applyMonochromeFilter(to: ciImage)
+        case .pastel:
+            return applyPastelFilter(to: ciImage)
+        case .vivid:
+            return applyVividFilter(to: ciImage)
+        }
+    }
+
     // MARK: - Compression & Resize
     
     func resizeImage(_ image: UIImage, maxSize: CGSize) async throws -> UIImage {

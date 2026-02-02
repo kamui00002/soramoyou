@@ -47,7 +47,12 @@ struct PostView: View {
                     BannerAdContainer()
                 }
             }
-            .navigationTitle("投稿")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    GradientTitleView(title: "投稿", fontSize: 20)
+                }
+            }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .sheet(isPresented: $viewModel.isShowingImagePicker) {
                 ImagePicker(
@@ -58,7 +63,7 @@ struct PostView: View {
                     }
                 )
             }
-            .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
+            .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
                 }

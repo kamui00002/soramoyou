@@ -12,17 +12,17 @@ struct WelcomeView: View {
     @State private var showLogin = false
     @State private var showSignUp = false
     @State private var cloudOffset: CGFloat = 0
-    @State private var cloudOpacity: Double = 0.8
+    @State private var logoScale: CGFloat = 0.8
+    @State private var logoOpacity: Double = 0
+    @State private var titleOffset: CGFloat = 30
+    @State private var buttonsOffset: CGFloat = 50
+    @State private var buttonsOpacity: Double = 0
 
     var body: some View {
         ZStack {
             // 空のグラデーション背景
             LinearGradient(
-                colors: [
-                    Color(red: 0.68, green: 0.85, blue: 0.90),  // 淡い空色
-                    Color(red: 0.53, green: 0.81, blue: 0.98),  // 空色
-                    Color(red: 0.39, green: 0.58, blue: 0.93)   // 深い空色
-                ],
+                colors: DesignTokens.Colors.daySkyGradient,
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -31,102 +31,166 @@ struct WelcomeView: View {
             // 装飾的な雲
             cloudsLayer
 
+            // 光の効果
+            lightEffects
+
             // メインコンテンツ
             VStack(spacing: 0) {
                 Spacer()
 
                 // ロゴ・タイトルエリア
-                VStack(spacing: 16) {
-                    // アプリアイコン風の雲
+                VStack(spacing: DesignTokens.Spacing.lg) {
+                    // アプリアイコン風の雲（アニメーション付き）
                     ZStack {
+                        // グロー効果
                         Circle()
-                            .fill(.white.opacity(0.3))
-                            .frame(width: 120, height: 120)
-                            .blur(radius: 10)
+                            .fill(
+                                RadialGradient(
+                                    colors: [
+                                        Color.white.opacity(0.5),
+                                        Color.white.opacity(0)
+                                    ],
+                                    center: .center,
+                                    startRadius: 40,
+                                    endRadius: 100
+                                )
+                            )
+                            .frame(width: 200, height: 200)
+                            .blur(radius: 20)
 
+                        // メインアイコン
                         Image(systemName: "cloud.sun.fill")
-                            .font(.system(size: 60))
+                            .font(.system(size: 80))
                             .foregroundStyle(
                                 .linearGradient(
-                                    colors: [.white, .white.opacity(0.8)],
+                                    colors: [.white, .white.opacity(0.9)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .shadow(color: DesignTokens.Colors.skyBlue.opacity(0.5), radius: 20, x: 0, y: 10)
+                    }
+                    .scaleEffect(logoScale)
+                    .opacity(logoOpacity)
+
+                    // タイトル
+                    VStack(spacing: DesignTokens.Spacing.sm) {
+                        Text("そらもよう")
+                            .font(.system(size: DesignTokens.Typography.heroSize, weight: .bold, design: .rounded))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [.white, .white.opacity(0.9)],
                                     startPoint: .top,
                                     endPoint: .bottom
                                 )
                             )
-                            .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
+                            .shadow(DesignTokens.Shadow.text)
+
+                        Text("空を撮る、空を集める")
+                            .font(.system(size: DesignTokens.Typography.bodySize, weight: .medium, design: .rounded))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                            .shadow(DesignTokens.Shadow.text)
                     }
-
-                    Text("そらもよう")
-                        .font(.system(size: 42, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                        .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2)
-
-                    Text("空を撮る、空を集める")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundColor(.white.opacity(0.9))
-                        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+                    .offset(y: titleOffset)
+                    .opacity(logoOpacity)
                 }
-                .padding(.bottom, 60)
+                .padding(.bottom, DesignTokens.Spacing.xxl)
 
                 Spacer()
 
-                // ボタンエリア（グラスモーフィズム）
-                VStack(spacing: 16) {
-                    // 新規登録ボタン
+                // ボタンエリア（グラスモーフィズム強化）
+                VStack(spacing: DesignTokens.Spacing.md) {
+                    // 新規登録ボタン（プライマリ）
                     Button(action: {
+                        let impact = UIImpactFeedbackGenerator(style: .medium)
+                        impact.impactOccurred()
                         showSignUp = true
                     }) {
-                        Text("新規登録")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(.white.opacity(0.25))
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 16)
-                                            .stroke(.white.opacity(0.5), lineWidth: 1)
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Image(systemName: "person.badge.plus")
+                                .font(.system(size: 18, weight: .semibold))
+                            Text("新規登録")
+                                .font(.system(size: DesignTokens.Typography.buttonSize, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, DesignTokens.Spacing.md)
+                        .background(
+                            ZStack {
+                                RoundedRectangle(cornerRadius: DesignTokens.Radius.button)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: DesignTokens.Colors.accentGradient,
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
                                     )
-                            )
-                            .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
-                    }
 
-                    // ログインボタン
+                                RoundedRectangle(cornerRadius: DesignTokens.Radius.button)
+                                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                            }
+                        )
+                        .shadow(DesignTokens.Shadow.button)
+                    }
+                    .buttonStyle(ScaleButtonStyle())
+
+                    // ログインボタン（セカンダリ）
                     Button(action: {
+                        let impact = UIImpactFeedbackGenerator(style: .light)
+                        impact.impactOccurred()
                         showLogin = true
                     }) {
                         Text("ログイン")
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(.system(size: DesignTokens.Typography.buttonSize, weight: .semibold, design: .rounded))
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
+                            .padding(.vertical, DesignTokens.Spacing.md)
                             .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(.white.opacity(0.15))
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 16)
-                                            .stroke(.white.opacity(0.3), lineWidth: 1)
-                                    )
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: DesignTokens.Radius.button)
+                                        .fill(DesignTokens.Colors.glassSecondary)
+
+                                    RoundedRectangle(cornerRadius: DesignTokens.Radius.button)
+                                        .stroke(
+                                            LinearGradient(
+                                                colors: [
+                                                    DesignTokens.Colors.glassBorderAccentStart,
+                                                    DesignTokens.Colors.glassBorderAccentEnd
+                                                ],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            ),
+                                            lineWidth: 1
+                                        )
+                                }
                             )
                     }
+                    .buttonStyle(ScaleButtonStyle())
 
                     // ゲストとして閲覧ボタン
                     Button(action: {
+                        let impact = UIImpactFeedbackGenerator(style: .light)
+                        impact.impactOccurred()
                         authViewModel.enterGuestMode()
                     }) {
-                        Text("ゲストとして閲覧")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.white.opacity(0.8))
-                            .padding(.top, 8)
+                        HStack(spacing: 6) {
+                            Image(systemName: "eye")
+                                .font(.system(size: 14))
+                            Text("ゲストとして閲覧")
+                                .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                        }
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                        .padding(.top, DesignTokens.Spacing.sm)
                     }
                 }
-                .padding(.horizontal, 32)
-                .padding(.bottom, 50)
+                .padding(.horizontal, DesignTokens.Spacing.xl)
+                .padding(.bottom, DesignTokens.Spacing.xxl)
+                .offset(y: buttonsOffset)
+                .opacity(buttonsOpacity)
             }
         }
         .onAppear {
-            startCloudAnimation()
+            startAnimations()
         }
         .sheet(isPresented: $showLogin) {
             LoginView()
@@ -136,53 +200,100 @@ struct WelcomeView: View {
         }
     }
 
-    // MARK: - 雲のレイヤー
+    // MARK: - Light Effects ☀️
+
+    private var lightEffects: some View {
+        GeometryReader { geometry in
+            // 上部の光
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.white.opacity(0.2),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 200
+                    )
+                )
+                .frame(width: 400, height: 400)
+                .offset(x: geometry.size.width * 0.3, y: -100)
+                .blur(radius: 30)
+        }
+        .ignoresSafeArea()
+    }
+
+    // MARK: - 雲のレイヤー ☀️
 
     private var cloudsLayer: some View {
         GeometryReader { geometry in
             ZStack {
                 // 上部の雲
-                cloudShape
-                    .fill(.white.opacity(0.6))
-                    .frame(width: 200, height: 80)
-                    .offset(x: cloudOffset - 50, y: geometry.size.height * 0.1)
+                CloudShape()
+                    .fill(.white.opacity(0.5))
+                    .frame(width: 220, height: 90)
+                    .offset(x: cloudOffset - 60, y: geometry.size.height * 0.08)
+                    .blur(radius: 1)
 
-                cloudShape
-                    .fill(.white.opacity(0.4))
-                    .frame(width: 150, height: 60)
-                    .offset(x: geometry.size.width - cloudOffset - 100, y: geometry.size.height * 0.15)
+                CloudShape()
+                    .fill(.white.opacity(0.35))
+                    .frame(width: 160, height: 65)
+                    .offset(x: geometry.size.width - cloudOffset - 100, y: geometry.size.height * 0.14)
+                    .blur(radius: 1)
 
                 // 中央の雲
-                cloudShape
-                    .fill(.white.opacity(0.5))
-                    .frame(width: 180, height: 70)
-                    .offset(x: cloudOffset + 20, y: geometry.size.height * 0.35)
+                CloudShape()
+                    .fill(.white.opacity(0.4))
+                    .frame(width: 190, height: 75)
+                    .offset(x: cloudOffset + 30, y: geometry.size.height * 0.32)
+                    .blur(radius: 1)
 
                 // 下部の雲
-                cloudShape
-                    .fill(.white.opacity(0.3))
-                    .frame(width: 220, height: 90)
-                    .offset(x: geometry.size.width - cloudOffset - 150, y: geometry.size.height * 0.6)
+                CloudShape()
+                    .fill(.white.opacity(0.25))
+                    .frame(width: 240, height: 95)
+                    .offset(x: geometry.size.width - cloudOffset - 160, y: geometry.size.height * 0.58)
+                    .blur(radius: 2)
             }
         }
         .ignoresSafeArea()
     }
 
-    // MARK: - 雲の形状
+    // MARK: - アニメーション ☀️
 
-    private var cloudShape: some Shape {
-        CloudShape()
-    }
-
-    // MARK: - アニメーション
-
-    private func startCloudAnimation() {
+    private func startAnimations() {
+        // 雲のアニメーション
         withAnimation(
-            Animation.easeInOut(duration: 8)
+            Animation.easeInOut(duration: DesignTokens.Animation.cloudDuration)
                 .repeatForever(autoreverses: true)
         ) {
-            cloudOffset = 30
+            cloudOffset = 35
         }
+
+        // ロゴの登場アニメーション
+        withAnimation(DesignTokens.Animation.smoothSpring.delay(0.2)) {
+            logoScale = 1.0
+            logoOpacity = 1.0
+            titleOffset = 0
+        }
+
+        // ボタンの登場アニメーション
+        withAnimation(DesignTokens.Animation.smoothSpring.delay(0.5)) {
+            buttonsOffset = 0
+            buttonsOpacity = 1.0
+        }
+    }
+}
+
+// MARK: - Scale Button Style ☀️
+
+struct ScaleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .opacity(configuration.isPressed ? 0.9 : 1.0)
+            .animation(DesignTokens.Animation.buttonPress, value: configuration.isPressed)
     }
 }
 

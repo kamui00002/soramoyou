@@ -22,6 +22,7 @@ class SearchViewModel: ObservableObject {
     @Published var colorThreshold: Double = 0.3 // 色検索の閾値（デフォルト0.3）
     
     private let firestoreService: FirestoreServiceProtocol
+    private var activeSearchToken: UUID?
     
     init(firestoreService: FirestoreServiceProtocol = FirestoreService()) {
         self.firestoreService = firestoreService
@@ -31,13 +32,29 @@ class SearchViewModel: ObservableObject {
     
     /// 検索を実行
     func performSearch() async {
+        let token = UUID()
+        activeSearchToken = token
+        
+        let trimmedHashtag = hashtag.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasHashtag = !trimmedHashtag.isEmpty
+        let hasCriteria = hasHashtag || selectedColor != nil || selectedTimeOfDay != nil || selectedSkyType != nil
+        
+        if !hasCriteria {
+            if activeSearchToken == token {
+                isLoading = false
+                errorMessage = nil
+                searchResults = []
+            }
+            return
+        }
+        
         isLoading = true
         errorMessage = nil
         searchResults = []
         
         do {
             // 検索条件を整理
-            let hashtagQuery = hashtag.isEmpty ? nil : hashtag.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hashtagQuery = hasHashtag ? trimmedHashtag : nil
             let colorQuery = selectedColor
             
             // 複合検索を実行（リトライ可能）
@@ -47,24 +64,30 @@ class SearchViewModel: ObservableObject {
                     color: colorQuery,
                     timeOfDay: self.selectedTimeOfDay,
                     skyType: self.selectedSkyType,
-                    colorThreshold: colorQuery != nil ? self.colorThreshold : nil
+                    colorThreshold: colorQuery != nil ? self.colorThreshold : nil,
+                    limit: 50
                 )
             }
-            
-            searchResults = results
+            if activeSearchToken == token {
+                searchResults = results
+            }
         } catch {
             // エラーをログに記録
             ErrorHandler.logError(error, context: "SearchViewModel.performSearch")
             // ユーザーフレンドリーなメッセージを表示
-            errorMessage = error.userFriendlyMessage
+            if activeSearchToken == token {
+                errorMessage = error.userFriendlyMessage
+            }
         }
         
-        isLoading = false
+        if activeSearchToken == token {
+            isLoading = false
+        }
     }
     
     /// ハッシュタグ検索
     func searchByHashtag(_ hashtag: String) async {
-        self.hashtag = hashtag
+        self.hashtag = hashtag.trimmingCharacters(in: .whitespacesAndNewlines)
         selectedColor = nil
         selectedTimeOfDay = nil
         selectedSkyType = nil
@@ -115,6 +138,9 @@ class SearchViewModel: ObservableObject {
     
     /// 検索条件があるかどうか
     var hasSearchCriteria: Bool {
-        !hashtag.isEmpty || selectedColor != nil || selectedTimeOfDay != nil || selectedSkyType != nil
+        !hashtag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || selectedColor != nil
+            || selectedTimeOfDay != nil
+            || selectedSkyType != nil
     }
 }

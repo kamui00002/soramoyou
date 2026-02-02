@@ -12,6 +12,12 @@ service firebase.storage {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // NOTE: Firebase Storage rules cannot access Firestore data.
+    // Follower access control is handled at the Firestore level.
+    // For followers-only content, the app should:
+    // 1. Check follower status via Firestore rules when fetching posts
+    // 2. Use signed URLs or Cloud Functions for image delivery in Phase 2
+
     function isImageFile() {
       return request.resource.contentType.matches('image/.*');
     }
@@ -36,12 +42,21 @@ service firebase.storage {
       allow read: if true;
 
       // Only authenticated owner can upload public images
-      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+      // NOTE: テスト中は条件を緩和（本番前に戻すこと）
+      allow write: if isOwner(userId)
+                   && isImageFile()
+                   && isValidSize();
     }
 
     // Post images - followers only
+    // NOTE: Storage cannot verify Firestore followers collection.
+    // Currently allows authenticated users; actual follower check is done
+    // at Firestore level when fetching post metadata.
+    // Phase 2: Implement signed URLs via Cloud Functions for proper access control.
+    // NOTE: Phase 2でCloud Functionsを使った署名URL方式で完全なアクセス制御を実装予定
+    // 現状はログイン済みユーザー全員が読み取り可能（一時的な制限）
     match /posts/{userId}/followers/{imageId} {
-      // Only authenticated users can read followers-only images
+      // Authenticated users can read (follower check at Firestore level)
       allow read: if isAuthenticated();
 
       // Only the owner can upload followers-only images
@@ -59,8 +74,80 @@ service firebase.storage {
 
     // Draft images
     match /drafts/{userId}/{imageId} {
-      // Only the owner can read/write draft images
-      allow read, write: if isOwner(userId) && isImageFile() && isValidSize();
+      // Only the owner can read draft images
+      allow read: if isOwner(userId);
+
+      // Only the owner can write draft images (with file type and size validation)
+      allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
+
+      // Only the owner can delete draft images (no file validation needed for delete)
+      allow delete: if isOwner(userId);
+    }
+
+    // Thumbnail images - public
+    match /thumbnails/{userId}/public/{imageId} {
+      // Anyone can read public thumbnails
+      allow read: if true;
+
+      // Only authenticated owner can upload public thumbnails
+      // NOTE: テスト中は条件を緩和（本番前に戻すこと）
+      allow write: if isOwner(userId)
+                   && isImageFile()
+                   && isValidSize();
+    }
+
+    // Thumbnail images - followers only
+    // NOTE: Same limitation as posts - follower check at Firestore level
+    // NOTE: Phase 2でCloud Functionsを使った署名URL方式で完全なアクセス制御を実装予定
+    // 現状はログイン済みユーザー全員が読み取り可能（一時的な制限）
+    match /thumbnails/{userId}/followers/{imageId} {
+      // Authenticated users can read (follower check at Firestore level)
+      allow read: if isAuthenticated();
+
+      // Only the owner can upload followers-only thumbnails
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Thumbnail images - private
+    match /thumbnails/{userId}/private/{imageId} {
+      // Only the owner can read private thumbnails
+      allow read: if isOwner(userId);
+
+      // Only the owner can upload private thumbnails
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Original images (unedited) - public
+    match /originals/{userId}/public/{imageId} {
+      // Anyone can read public original images
+      allow read: if true;
+
+      // Only authenticated owner can upload public original images
+      // NOTE: テスト中は条件を緩和（本番前に戻すこと）
+      allow write: if isOwner(userId)
+                   && isImageFile()
+                   && isValidSize();
+    }
+
+    // Original images (unedited) - followers only
+    // NOTE: Same limitation as posts - follower check at Firestore level
+    // NOTE: Phase 2でCloud Functionsを使った署名URL方式で完全なアクセス制御を実装予定
+    // 現状はログイン済みユーザー全員が読み取り可能（一時的な制限）
+    match /originals/{userId}/followers/{imageId} {
+      // Authenticated users can read (follower check at Firestore level)
+      allow read: if isAuthenticated();
+
+      // Only the owner can upload followers-only original images
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
+
+    // Original images (unedited) - private
+    match /originals/{userId}/private/{imageId} {
+      // Only the owner can read private original images
+      allow read: if isOwner(userId);
+
+      // Only the owner can upload private original images
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
     }
   }
 }

@@ -69,13 +69,14 @@ struct User: Identifiable, Codable {
     // MARK: - Firestore Mapping
     
     /// Firestoreドキュメントデータに変換
+    /// 注意: firestore.rules が 'id' フィールドを期待するため、'id' をキーとして使用
     func toFirestoreData() -> [String: Any] {
         var data: [String: Any] = [
-            "userId": id,
+            "id": id,
             "createdAt": Timestamp(date: createdAt),
             "updatedAt": Timestamp(date: updatedAt)
         ]
-        
+
         if let email = email {
             data["email"] = email
         }
@@ -108,11 +109,13 @@ struct User: Identifiable, Codable {
     }
     
     /// Firestoreドキュメントデータから初期化
+    /// 注意: 'id' と 'userId' の両方をサポート（後方互換性のため）
     init(from documentData: [String: Any]) throws {
-        guard let userId = documentData["userId"] as? String else {
+        // 'id' フィールドを優先、なければ 'userId' を使用（後方互換性）
+        guard let userId = documentData["id"] as? String ?? documentData["userId"] as? String else {
             throw UserModelError.missingUserId
         }
-        
+
         self.id = userId
         self.email = documentData["email"] as? String
         self.displayName = documentData["displayName"] as? String

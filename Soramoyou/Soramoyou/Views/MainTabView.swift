@@ -10,92 +10,209 @@ import UIKit
 
 struct MainTabView: View {
     @State private var selectedTab: Tab = .home
-    
-    enum Tab: Int {
+    @Namespace private var tabAnimation
+
+    enum Tab: Int, CaseIterable {
         case home = 0
-        case post = 1
-        case search = 2
-        case profile = 3
-        
+        case gallery = 1
+        case post = 2
+        case search = 3
+        case profile = 4
+
         var title: String {
             switch self {
             case .home: return "ホーム"
             case .post: return "投稿"
+            case .gallery: return "ギャラリー"
             case .search: return "検索"
             case .profile: return "プロフィール"
             }
         }
-        
+
         var icon: String {
             switch self {
+            case .home: return "house"
+            case .post: return "plus"
+            case .gallery: return "photo.on.rectangle.angled"
+            case .search: return "magnifyingglass"
+            case .profile: return "person"
+            }
+        }
+
+        var selectedIcon: String {
+            switch self {
             case .home: return "house.fill"
-            case .post: return "plus.circle.fill"
+            case .post: return "plus"
+            case .gallery: return "photo.on.rectangle.angled.fill"
             case .search: return "magnifyingglass"
             case .profile: return "person.fill"
             }
         }
     }
-    
+
     var body: some View {
-        TabView(selection: $selectedTab) {
-            HomeView()
-                .tabItem {
-                    Label(Tab.home.title, systemImage: Tab.home.icon)
+        ZStack(alignment: .bottom) {
+            // メインコンテンツ
+            Group {
+                switch selectedTab {
+                case .home:
+                    HomeView()
+                case .gallery:
+                    GalleryView()
+                case .post:
+                    PostView()
+                case .search:
+                    SearchView()
+                case .profile:
+                    ProfileView()
                 }
-                .tag(Tab.home)
-            
-            PostView()
-                .tabItem {
-                    Label(Tab.post.title, systemImage: Tab.post.icon)
-                }
-                .tag(Tab.post)
-            
-            SearchView()
-                .tabItem {
-                    Label(Tab.search.title, systemImage: Tab.search.icon)
-                }
-                .tag(Tab.search)
-            
-            ProfileView()
-                .tabItem {
-                    Label(Tab.profile.title, systemImage: Tab.profile.icon)
-                }
-                .tag(Tab.profile)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // カスタムフローティングタブバー
+            floatingTabBar
         }
-        .onAppear {
-            // タブバーの外観をカスタマイズ
-            setupTabBarAppearance()
-        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
-    
-    // MARK: - Tab Bar Appearance
-    
-    private func setupTabBarAppearance() {
-        // iOS 15以降でタブバーの外観をカスタマイズ
-        if #available(iOS 15.0, *) {
-            let appearance = UITabBarAppearance()
-            appearance.configureWithOpaqueBackground()
-            
-            // 選択されていないタブの色
-            appearance.stackedLayoutAppearance.normal.iconColor = UIColor.secondaryLabel
-            appearance.stackedLayoutAppearance.normal.titleTextAttributes = [
-                .foregroundColor: UIColor.secondaryLabel
-            ]
-            
-            // 選択されているタブの色
-            appearance.stackedLayoutAppearance.selected.iconColor = UIColor.systemBlue
-            appearance.stackedLayoutAppearance.selected.titleTextAttributes = [
-                .foregroundColor: UIColor.systemBlue
-            ]
-            
-            // 背景色
-            appearance.backgroundColor = UIColor.systemBackground
-            
-            UITabBar.appearance().standardAppearance = appearance
-            if #available(iOS 15.0, *) {
-                UITabBar.appearance().scrollEdgeAppearance = appearance
+
+    // MARK: - Floating Tab Bar ☀️
+
+    private var floatingTabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(Tab.allCases, id: \.rawValue) { tab in
+                if tab == .post {
+                    // 中央の投稿ボタン（特別デザイン）
+                    postButton
+                } else {
+                    // 通常のタブボタン
+                    tabButton(for: tab)
+                }
             }
         }
+        .padding(.horizontal, DesignTokens.Spacing.sm)
+        .padding(.vertical, DesignTokens.Spacing.sm)
+        .background(
+            ZStack {
+                // ブラー背景
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xxl)
+                    .fill(.ultraThinMaterial)
+
+                // グラデーションボーダー
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xxl)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.4),
+                                Color.white.opacity(0.1)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            }
+        )
+        .shadow(DesignTokens.Shadow.floating)
+        .padding(.horizontal, DesignTokens.Spacing.lg)
+        .padding(.bottom, DesignTokens.Spacing.sm)
+    }
+
+    // MARK: - Tab Button
+
+    private func tabButton(for tab: Tab) -> some View {
+        Button(action: {
+            withAnimation(DesignTokens.Animation.smoothSpring) {
+                selectedTab = tab
+            }
+            // ハプティックフィードバック
+            let impact = UIImpactFeedbackGenerator(style: .light)
+            impact.impactOccurred()
+        }) {
+            VStack(spacing: 4) {
+                ZStack {
+                    // 選択時の背景
+                    if selectedTab == tab {
+                        Circle()
+                            .fill(DesignTokens.Colors.selectionAccent.opacity(0.15))
+                            .frame(width: 44, height: 44)
+                            .matchedGeometryEffect(id: "tabBackground", in: tabAnimation)
+                    }
+
+                    Image(systemName: selectedTab == tab ? tab.selectedIcon : tab.icon)
+                        .font(.system(size: 20, weight: selectedTab == tab ? .semibold : .regular))
+                        .foregroundColor(
+                            selectedTab == tab
+                                ? DesignTokens.Colors.selectionAccent
+                                : DesignTokens.Colors.textTertiary
+                        )
+                        .frame(width: 44, height: 44)
+                }
+
+                Text(tab.title)
+                    .font(.system(size: DesignTokens.Typography.tabLabelSize, weight: .medium, design: .rounded))
+                    .foregroundColor(
+                        selectedTab == tab
+                            ? DesignTokens.Colors.selectionAccent
+                            : DesignTokens.Colors.textTertiary
+                    )
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Post Button (Center)
+
+    private var postButton: some View {
+        Button(action: {
+            withAnimation(DesignTokens.Animation.bouncySpring) {
+                selectedTab = .post
+            }
+            // ハプティックフィードバック
+            let impact = UIImpactFeedbackGenerator(style: .medium)
+            impact.impactOccurred()
+        }) {
+            ZStack {
+                // グロー効果
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                DesignTokens.Colors.accentGradient[0].opacity(0.4),
+                                Color.clear
+                            ],
+                            center: .center,
+                            startRadius: 15,
+                            endRadius: 35
+                        )
+                    )
+                    .frame(width: 70, height: 70)
+                    .blur(radius: 10)
+
+                // メインボタン
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: DesignTokens.Colors.accentGradient,
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 52, height: 52)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                    )
+                    .shadow(DesignTokens.Shadow.button)
+
+                Image(systemName: "plus")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundColor(.white)
+            }
+            .scaleEffect(selectedTab == .post ? 1.1 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .offset(y: -10)
     }
 }
 

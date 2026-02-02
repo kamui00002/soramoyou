@@ -11,17 +11,14 @@ import Kingfisher
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
     @State private var selectedPost: Post?
-    
+    @State private var animateCards = false  // フィードアニメーション用 ☀️
+
     var body: some View {
         NavigationView {
             ZStack {
-                // 空のグラデーション背景
+                // 空のグラデーション背景 ☁️
                 LinearGradient(
-                    colors: [
-                        Color(red: 0.68, green: 0.85, blue: 0.90),
-                        Color(red: 0.53, green: 0.81, blue: 0.98),
-                        Color(red: 0.39, green: 0.58, blue: 0.93)
-                    ],
+                    colors: DesignTokens.Colors.daySkyGradient,
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -39,13 +36,13 @@ struct HomeView: View {
                             }
                         } else if viewModel.posts.isEmpty {
                             // 投稿がない場合
-                            VStack(spacing: 16) {
+                            VStack(spacing: DesignTokens.Spacing.md) {
                                 Image(systemName: "photo.on.rectangle")
                                     .font(.system(size: 60))
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
                                 Text("投稿がありません")
                                     .font(.headline)
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
                         } else {
                             // フィード表示
@@ -57,7 +54,12 @@ struct HomeView: View {
                     BannerAdContainer()
                 }
             }
-            .navigationTitle("そらもよう")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    AppTitleView()
+                }
+            }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .refreshable {
                 await viewModel.refresh()
@@ -65,9 +67,13 @@ struct HomeView: View {
             .onAppear {
                 Task {
                     await viewModel.fetchPosts()
+                    // フィードアニメーションを開始
+                    withAnimation {
+                        animateCards = true
+                    }
                 }
             }
-            .alert("エラー", isPresented: .constant(viewModel.errorMessage != nil)) {
+            .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
                 }
@@ -82,135 +88,264 @@ struct HomeView: View {
         }
     }
     
-    // MARK: - Feed View
-    
+    // MARK: - Feed View ☀️
+
     private var feedView: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                ForEach(viewModel.posts) { post in
+        ScrollView(showsIndicators: false) {
+            LazyVStack(spacing: DesignTokens.Spacing.lg) {
+                ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
                     PostCard(post: post)
+                        // スタガードアニメーション（改善）
+                        .opacity(animateCards ? 1 : 0)
+                        .offset(y: animateCards ? 0 : 30)
+                        .scaleEffect(animateCards ? 1 : 0.95)
+                        .animation(
+                            DesignTokens.Animation.smoothSpring
+                            .delay(Double(index) * DesignTokens.Animation.staggerDelay),
+                            value: animateCards
+                        )
                         .onTapGesture {
+                            // ハプティックフィードバック
+                            let impact = UIImpactFeedbackGenerator(style: .light)
+                            impact.impactOccurred()
                             selectedPost = post
                         }
                         .onAppear {
-                            // ページネーション: 最後の投稿が表示されたら次のページを読み込む
-                            if post.id == viewModel.posts.last?.id {
+                            // ページネーション: 最後の投稿が表示されたら次のページを読み込む ☁️
+                            // 重複リクエスト防止: 読み込み中の場合はスキップ
+                            if post.id == viewModel.posts.last?.id
+                                && !viewModel.isLoadingMore
+                                && viewModel.hasMorePosts {
                                 Task {
                                     await viewModel.loadMorePosts()
                                 }
                             }
                         }
                 }
-                
+
                 // 追加読み込み中のインジケーター
                 if viewModel.isLoadingMore {
-                    ProgressView()
-                        .padding()
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        Text("読み込み中...")
+                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                    .padding(.vertical, DesignTokens.Spacing.lg)
                 }
-                
+
                 // これ以上投稿がない場合
                 if !viewModel.hasMorePosts && !viewModel.posts.isEmpty {
-                    Text("すべての投稿を表示しました")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding()
+                    VStack(spacing: DesignTokens.Spacing.sm) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 24))
+                            .foregroundColor(DesignTokens.Colors.success)
+                        Text("すべての投稿を表示しました")
+                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                    .padding(.vertical, DesignTokens.Spacing.xl)
                 }
+
+                // タブバー分の余白
+                Spacer()
+                    .frame(height: 100)
             }
-            .padding()
+            .padding(.horizontal, DesignTokens.Spacing.screenMargin)
+            .padding(.top, DesignTokens.Spacing.sm)
         }
     }
 }
 
-// MARK: - Post Card
+// MARK: - Post Card ☀️
 
 struct PostCard: View {
     let post: Post
-    
+    @State private var isPressed = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             // 画像表示（サムネイル優先、遅延読み込み）
-            if let firstImage = post.images.first {
-                PostImageView(imageInfo: firstImage)
+            ZStack(alignment: .bottomLeading) {
+                if let firstImage = post.images.first {
+                    PostImageView(imageInfo: firstImage)
+                        .clipShape(
+                            RoundedCornerShape(
+                                radius: DesignTokens.Radius.xl,
+                                corners: [.topLeft, .topRight]
+                            )
+                        )
+                }
+
+                // 画像数インジケーター
+                if post.images.count > 1 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo.on.rectangle")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("\(post.images.count)")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.black.opacity(0.5))
+                            .background(
+                                Capsule()
+                                    .fill(.ultraThinMaterial)
+                            )
+                    )
+                    .padding(DesignTokens.Spacing.sm)
+                }
             }
-            
+
             // 投稿情報
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                 // キャプション
                 if let caption = post.caption {
                     Text(caption)
-                        .font(.body)
+                        .font(.system(size: DesignTokens.Typography.bodySize, weight: .regular, design: .rounded))
+                        .foregroundColor(DesignTokens.Colors.textDark)
                         .lineLimit(3)
                 }
-                
+
                 // ハッシュタグ
                 if let hashtags = post.hashtags, !hashtags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
                             ForEach(hashtags, id: \.self) { hashtag in
                                 Text("#\(hashtag)")
-                                    .font(.caption)
-                                    .foregroundColor(.blue)
+                                    .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                                    .foregroundColor(DesignTokens.Colors.selectionAccent)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        Capsule()
+                                            .fill(DesignTokens.Colors.selectionAccent.opacity(0.12))
+                                    )
                             }
                         }
                     }
                 }
-                
-                // 位置情報
-                if let location = post.location {
-                    HStack {
-                        Image(systemName: "location")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        if let city = location.city, let prefecture = location.prefecture {
-                            Text("\(prefecture) \(city)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+
+                // メタ情報行
+                HStack(spacing: DesignTokens.Spacing.md) {
+                    // 位置情報
+                    if let location = post.location {
+                        HStack(spacing: 4) {
+                            Image(systemName: "location.fill")
+                                .font(.system(size: 11))
+                            if let city = location.city, let prefecture = location.prefecture {
+                                Text("\(prefecture) \(city)")
+                                    .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium))
+                            }
+                        }
+                        .foregroundColor(DesignTokens.Colors.skyBlue)
+                    }
+
+                    Spacer()
+
+                    // 空の種類・時間帯
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        if let skyType = post.skyType {
+                            Label(skyType.displayName, systemImage: skyType.iconName)
+                                .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium))
+                                .foregroundColor(DesignTokens.Colors.textTertiary)
+                        }
+                        if let timeOfDay = post.timeOfDay {
+                            Label(timeOfDay.displayName, systemImage: timeOfDay.iconName)
+                                .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium))
+                                .foregroundColor(DesignTokens.Colors.textTertiary)
                         }
                     }
                 }
-                
-                // 空の種類・時間帯
-                HStack(spacing: 12) {
-                    if let skyType = post.skyType {
-                        Label(skyType.displayName, systemImage: "cloud")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+
+                // アクション行
+                HStack(spacing: DesignTokens.Spacing.lg) {
+                    // いいねボタン
+                    HStack(spacing: 6) {
+                        Image(systemName: "heart")
+                            .font(.system(size: 16, weight: .medium))
+                        Text("\(post.likesCount)")
+                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
                     }
-                    if let timeOfDay = post.timeOfDay {
-                        Label(timeOfDay.displayName, systemImage: "clock")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    .foregroundColor(DesignTokens.Colors.softPink)
+
+                    // コメントボタン
+                    HStack(spacing: 6) {
+                        Image(systemName: "bubble.right")
+                            .font(.system(size: 16, weight: .medium))
+                        Text("\(post.commentsCount)")
+                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
                     }
-                }
-                
-                // 統計情報
-                HStack(spacing: 16) {
-                    Label("\(post.likesCount)", systemImage: "heart")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Label("\(post.commentsCount)", systemImage: "bubble.right")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    .foregroundColor(DesignTokens.Colors.skyBlue)
+
+                    Spacer()
+
+                    // シェアボタン
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(DesignTokens.Colors.textTertiary)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12)
+            .padding(DesignTokens.Spacing.cardPadding)
         }
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.white.opacity(0.85))
-                .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+            ZStack {
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                    .fill(.ultraThinMaterial)
+
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.5),
+                                Color.white.opacity(0.15)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            }
         )
-        .cornerRadius(16)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
+        .shadow(DesignTokens.Shadow.card)
+        // タップ時のアニメーション
+        .scaleEffect(isPressed ? 0.98 : 1.0)
+        .animation(DesignTokens.Animation.quickSpring, value: isPressed)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
     }
 }
 
-// MARK: - Post Image View
+// MARK: - Rounded Corner Shape（特定の角のみ丸くする）
+
+struct RoundedCornerShape: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: corners,
+            cornerRadii: CGSize(width: radius, height: radius)
+        )
+        return Path(path.cgPath)
+    }
+}
+
+// MARK: - Post Image View ☁️
 
 struct PostImageView: View {
     let imageInfo: ImageInfo
-    @State private var isLoading = true
-    
+    // 未使用の変数を削除（コードレビュー対応）
+
     var body: some View {
         // サムネイルを優先的に表示
         if let thumbnailURL = imageInfo.thumbnail, let url = URL(string: thumbnailURL) {
@@ -390,16 +525,11 @@ struct PostDetailView: View {
                     )
             }
             
-            // ユーザー情報
+            // ユーザー情報 ☁️
+            // セキュリティ: メールアドレスは表示しない
             VStack(alignment: .leading, spacing: 4) {
                 Text(user.displayName ?? "ユーザー")
                     .font(.headline)
-                
-                if let email = user.email {
-                    Text(email)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
             }
             
             Spacer()
@@ -462,6 +592,43 @@ struct PostDetailImageView: View {
                         .foregroundColor(.gray)
                 )
         }
+    }
+}
+
+// MARK: - App Title View
+
+struct AppTitleView: View {
+    var body: some View {
+        VStack(spacing: 2) {
+            GradientTitleView(title: "そらもよう", fontSize: 28)
+            Text("空を撮る、空を集める")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+// MARK: - Gradient Title View (共通コンポーネント)
+
+struct GradientTitleView: View {
+    let title: String
+    var fontSize: CGFloat = 20
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: fontSize, weight: .bold, design: .rounded))
+            .foregroundStyle(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.4, green: 0.6, blue: 0.9),   // 明るい空色
+                        Color(red: 0.3, green: 0.5, blue: 0.85),  // 中間の青
+                        Color(red: 0.5, green: 0.3, blue: 0.8)    // 夕暮れのパープル
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .shadow(color: Color(red: 0.4, green: 0.6, blue: 0.9).opacity(0.3), radius: 4, x: 0, y: 2)
     }
 }
 

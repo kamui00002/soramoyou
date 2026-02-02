@@ -102,6 +102,15 @@ firebase-debug.log
 .env
 .env.local
 
+# macOS
+.DS_Store
+
+# Serena
+.serena/
+
+# Ralph Wiggum (AI loop tool)
+ralph-loop/
+
 
 
 

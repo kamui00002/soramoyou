@@ -13,7 +13,7 @@ enum TimeOfDay: String, Codable, CaseIterable {
     case afternoon = "afternoon"
     case evening = "evening"
     case night = "night"
-    
+
     /// 表示名
     var displayName: String {
         switch self {
@@ -23,11 +23,21 @@ enum TimeOfDay: String, Codable, CaseIterable {
         case .night: return "夜"
         }
     }
-    
+
+    /// SF Symbolsアイコン名 ☀️
+    var iconName: String {
+        switch self {
+        case .morning: return "sunrise"
+        case .afternoon: return "sun.max"
+        case .evening: return "sunset"
+        case .night: return "moon.stars"
+        }
+    }
+
     /// 時刻から時間帯を判定
     static func from(date: Date) -> TimeOfDay {
         let hour = Calendar.current.component(.hour, from: date)
-        
+
         switch hour {
         case 5..<12:
             return .morning

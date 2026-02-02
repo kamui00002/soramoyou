@@ -8,7 +8,10 @@
 import XCTest
 @testable import Soramoyou
 import UIKit
+import CoreImage
+import FirebaseFirestore
 
+@MainActor
 final class EditViewModelTests: XCTestCase {
     var viewModel: EditViewModel!
     var mockImageService: MockImageService!
@@ -211,7 +214,26 @@ class MockImageService: ImageServiceProtocol {
         generatePreviewCalled = true
         return image
     }
-    
+
+    func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
+        generatePreviewCalled = true
+        return image
+    }
+
+    func generatePreviewFromCIImage(_ ciImage: CIImage, edits: EditSettings) -> UIImage? {
+        generatePreviewCalled = true
+        // テスト用: CIImageから1x1のUIImageを返す
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
+    }
+
+    func resizeCIImage(_ ciImage: CIImage, maxSize: CGSize) -> CIImage {
+        return ciImage
+    }
+
     func resizeImage(_ image: UIImage, maxSize: CGSize) async throws -> UIImage {
         return image
     }
@@ -219,16 +241,33 @@ class MockImageService: ImageServiceProtocol {
     func compressImage(_ image: UIImage, quality: CGFloat) async throws -> Data {
         return Data()
     }
+
+    func extractColors(_ image: UIImage, maxCount: Int) async throws -> [String] {
+        return ["#87CEEB", "#F0F8FF", "#FFFFFF"]
+    }
+
+    func calculateColorTemperature(_ image: UIImage) async throws -> Int {
+        return 6500
+    }
+
+    func detectSkyType(_ image: UIImage) async throws -> SkyType {
+        return .clear
+    }
+
+    func extractEXIFData(_ image: UIImage) async throws -> EXIFData {
+        return EXIFData()
+    }
 }
 
 class MockFirestoreService: FirestoreServiceProtocol {
     func fetchUser(userId: String) async throws -> User {
         return User(id: userId, email: "test@example.com")
     }
-    
+
     // その他のメソッドは空実装
     func createPost(_ post: Post) async throws -> Post { return post }
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
+    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) { return ([], nil) }
     func fetchPost(postId: String) async throws -> Post { throw FirestoreServiceError.notFound }
     func deletePost(postId: String) async throws {}
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
@@ -242,9 +281,15 @@ class MockFirestoreService: FirestoreServiceProtocol {
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post] { return [] }
     func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] { return [] }
     func searchBySkyType(_ skyType: SkyType) async throws -> [Post] { return [] }
-    func searchPosts(hashtag: String?, color: String?, timeOfDay: TimeOfDay?, skyType: SkyType?, colorThreshold: Double?) async throws -> [Post] { return [] }
+    func searchPosts(
+        hashtag: String?,
+        color: String?,
+        timeOfDay: TimeOfDay?,
+        skyType: SkyType?,
+        colorThreshold: Double?,
+        limit: Int
+    ) async throws -> [Post] { return [] }
 }
-
 
 
 

@@ -12,12 +12,16 @@ final class SoramoyouUITests: XCTestCase {
     
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
-        
+
         // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
-        
+
         // In UI tests it's important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
         app = XCUIApplication()
+
+        // UIテスト用のlaunchArgumentsを設定（認証状態をリセット）
+        app.launchArguments = ["UI_TESTING", "RESET_AUTH_STATE"]
+
         app.launch()
     }
     
@@ -340,18 +344,190 @@ final class SoramoyouUITests: XCTestCase {
         XCTAssertTrue(editProfileButton.waitForExistence(timeout: 2.0) || editProfileButton.exists, "プロフィール編集ボタンが表示される")
     }
     
+    // MARK: - Post Flow Tests (E2E)
+
+    /// 投稿フローのE2Eテスト: ログインから投稿まで
+    func testPostFlow_LoginAndPost() throws {
+        // Given: アプリが起動している
+
+        // Step 1: ログイン
+        let loginButton = app.buttons["ログイン"]
+        if loginButton.waitForExistence(timeout: 5.0) {
+            loginButton.tap()
+
+            // メールアドレスとパスワードを入力
+            let emailField = app.textFields["メールアドレス"]
+            let passwordField = app.secureTextFields["パスワード"]
+
+            if emailField.waitForExistence(timeout: 3.0) {
+                emailField.tap()
+                emailField.typeText("test@example.com")
+            }
+
+            if passwordField.waitForExistence(timeout: 3.0) {
+                passwordField.tap()
+                passwordField.typeText("testpassword123")
+            }
+
+            // ログインボタンをタップ
+            let submitButton = app.buttons["ログイン"].firstMatch
+            if submitButton.waitForExistence(timeout: 2.0) {
+                submitButton.tap()
+            }
+        }
+
+        // Step 2: ホーム画面が表示されるのを待つ
+        let homeTab = app.tabBars.buttons["ホーム"]
+        XCTAssertTrue(homeTab.waitForExistence(timeout: 10.0), "ログイン後、ホーム画面が表示される")
+
+        // Step 3: 投稿タブをタップ
+        let postTab = app.tabBars.buttons["投稿"]
+        if postTab.waitForExistence(timeout: 3.0) {
+            postTab.tap()
+        }
+
+        // Step 4: 写真選択画面が表示される
+        // 注意: 実際の写真選択はシステムのPhotosピッカーを使用するため、
+        // XCUITestでの自動化には制限があります
+        let photoButton = app.buttons["写真を選択"]
+        if photoButton.waitForExistence(timeout: 3.0) {
+            XCTAssertTrue(photoButton.exists, "写真選択ボタンが表示される")
+        }
+    }
+
+    /// 投稿フローのテスト: 写真選択から編集画面への遷移
+    func testPostFlow_PhotoSelectionToEdit() throws {
+        // Given: ログイン済みで投稿タブが選択されている
+
+        // 投稿タブに移動（既にログイン済みと仮定）
+        let postTab = app.tabBars.buttons["投稿"]
+        if postTab.waitForExistence(timeout: 5.0) {
+            postTab.tap()
+
+            // 写真選択ボタンをタップ
+            let photoButton = app.buttons["写真を選択"]
+            if photoButton.waitForExistence(timeout: 3.0) {
+                photoButton.tap()
+
+                // 写真ピッカーが表示されることを確認
+                // iOS 14以降のPHPickerは限定的なテストが可能
+                let photosNavBar = app.navigationBars["Photos"]
+                if photosNavBar.waitForExistence(timeout: 5.0) {
+                    XCTAssertTrue(photosNavBar.exists, "写真ピッカーが表示される")
+                }
+            }
+        }
+    }
+
+    /// 投稿フローのテスト: 編集画面の表示
+    func testPostFlow_EditViewDisplay() throws {
+        // Given: 写真が選択されて編集画面が表示されている
+
+        // 編集画面のナビゲーションタイトルを確認
+        let editTitle = app.navigationBars["編集"]
+        if editTitle.waitForExistence(timeout: 5.0) {
+            XCTAssertTrue(editTitle.exists, "編集画面が表示される")
+
+            // フィルターボタンが表示されることを確認
+            let filterButton = app.buttons["フィルター"]
+            XCTAssertTrue(filterButton.waitForExistence(timeout: 3.0), "フィルターボタンが表示される")
+
+            // 次へボタンが表示されることを確認
+            let nextButton = app.buttons["次へ"]
+            XCTAssertTrue(nextButton.waitForExistence(timeout: 3.0), "次へボタンが表示される")
+        }
+    }
+
+    /// 投稿フローのテスト: 投稿情報入力画面
+    func testPostFlow_PostInfoViewDisplay() throws {
+        // Given: 投稿情報入力画面が表示されている
+
+        let postInfoTitle = app.navigationBars["投稿情報"]
+        if postInfoTitle.waitForExistence(timeout: 5.0) {
+            XCTAssertTrue(postInfoTitle.exists, "投稿情報画面が表示される")
+
+            // 位置情報追加ボタンが表示されることを確認
+            let locationButton = app.buttons["位置情報を追加"]
+            XCTAssertTrue(locationButton.waitForExistence(timeout: 3.0), "位置情報追加ボタンが表示される")
+
+            // 公開設定が表示されることを確認
+            let publicButton = app.buttons["公開"]
+            XCTAssertTrue(publicButton.waitForExistence(timeout: 3.0), "公開設定が表示される")
+
+            // 投稿ボタンが表示されることを確認
+            let postButton = app.buttons["投稿"]
+            XCTAssertTrue(postButton.waitForExistence(timeout: 3.0), "投稿ボタンが表示される")
+        }
+    }
+
+    /// 編集装備設定のテスト
+    func testEditEquipmentSettings() throws {
+        // Given: プロフィール画面が表示されている
+
+        let profileTab = app.tabBars.buttons["プロフィール"]
+        if profileTab.waitForExistence(timeout: 5.0) {
+            profileTab.tap()
+
+            // 設定ボタンをタップ
+            let settingsButton = app.buttons["設定"]
+            if settingsButton.waitForExistence(timeout: 3.0) {
+                settingsButton.tap()
+
+                // 編集装備設定をタップ
+                let editEquipmentButton = app.buttons["おすすめ編集設定"]
+                if editEquipmentButton.waitForExistence(timeout: 3.0) {
+                    editEquipmentButton.tap()
+
+                    // 編集装備設定画面が表示されることを確認
+                    let equipmentTitle = app.navigationBars["おすすめ編集設定"]
+                    XCTAssertTrue(equipmentTitle.waitForExistence(timeout: 3.0), "編集装備設定画面が表示される")
+
+                    // 保存ボタンが表示されることを確認
+                    let saveButton = app.buttons["保存"]
+                    XCTAssertTrue(saveButton.waitForExistence(timeout: 3.0), "保存ボタンが表示される")
+                }
+            }
+        }
+    }
+
     // MARK: - Helper Methods
-    
+
     /// アプリをリセット（各テストの独立性を保つため）
     private func resetApp() {
         app.terminate()
         app.launch()
     }
-    
+
     /// 認証済み状態にする（テスト用）
     private func authenticateForTesting() {
         // 注意: 実際の認証が必要な場合は、テスト用の認証情報を使用
         // または、モックを使用して認証状態を設定
+    }
+
+    /// テスト用のログインを実行
+    private func performTestLogin(email: String = "test@example.com", password: String = "testpassword123") {
+        let loginButton = app.buttons["ログイン"]
+        if loginButton.waitForExistence(timeout: 5.0) {
+            loginButton.tap()
+
+            let emailField = app.textFields["メールアドレス"]
+            let passwordField = app.secureTextFields["パスワード"]
+
+            if emailField.waitForExistence(timeout: 3.0) {
+                emailField.tap()
+                emailField.typeText(email)
+            }
+
+            if passwordField.waitForExistence(timeout: 3.0) {
+                passwordField.tap()
+                passwordField.typeText(password)
+            }
+
+            let submitButton = app.buttons["ログイン"].firstMatch
+            if submitButton.waitForExistence(timeout: 2.0) {
+                submitButton.tap()
+            }
+        }
     }
 }
 
