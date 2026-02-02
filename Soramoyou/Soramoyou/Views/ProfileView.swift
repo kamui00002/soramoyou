@@ -15,6 +15,7 @@ struct ProfileView: View {
     @State private var selectedPost: Post?
     @State private var showingEditProfile = false
     @State private var showingEditTools = false
+    @State private var showingSettings = false
     @State private var displayMode: DisplayMode = .grid
     
     enum DisplayMode {
@@ -94,9 +95,15 @@ struct ProfileView: View {
                             }) {
                                 Label("おすすめ編集設定", systemImage: "slider.horizontal.3")
                             }
-                            
+
+                            Button(action: {
+                                showingSettings = true
+                            }) {
+                                Label("設定", systemImage: "gearshape")
+                            }
+
                             Divider()
-                            
+
                             Button(action: {
                                 // 表示モード切り替え
                                 displayMode = displayMode == .grid ? .list : .grid
@@ -156,6 +163,9 @@ struct ProfileView: View {
                 if viewModel.isOwnProfile {
                     EditToolsSettingsView(viewModel: viewModel)
                 }
+            }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
             }
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
