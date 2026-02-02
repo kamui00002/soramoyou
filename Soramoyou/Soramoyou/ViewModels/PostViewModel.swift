@@ -27,7 +27,13 @@ class PostViewModel: ObservableObject {
     // 自動抽出された情報
     @Published var extractedInfo: ExtractedImageInfo?
 
+    // AI空タイプ判定結果 ☁️
+    @Published var skyTypeClassificationResult: SkyTypeClassificationResult?
+    @Published var isClassifyingSkyType = false
+    @Published var userSelectedSkyType: SkyType?  // ユーザーが手動選択した場合
+
     private let imageService: ImageServiceProtocol
+    private let skyTypeClassifier: SkyTypeClassifierProtocol
     private let storageService: StorageServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
     private let userId: String?
@@ -40,12 +46,14 @@ class PostViewModel: ObservableObject {
         userId: String? = nil,
         imageService: ImageServiceProtocol = ImageService(),
         storageService: StorageServiceProtocol = StorageService(),
-        firestoreService: FirestoreServiceProtocol = FirestoreService()
+        firestoreService: FirestoreServiceProtocol = FirestoreService(),
+        skyTypeClassifier: SkyTypeClassifierProtocol = SkyTypeClassifier()
     ) {
         self.userId = userId
         self.imageService = imageService
         self.storageService = storageService
         self.firestoreService = firestoreService
+        self.skyTypeClassifier = skyTypeClassifier
     }
     
     // MARK: - Image Management
@@ -98,16 +106,16 @@ class PostViewModel: ObservableObject {
     }
     
     // MARK: - Image Info Extraction
-    
+
     /// 画像情報を抽出
     private func extractImageInfo() {
         guard let firstImage = selectedImages.first else { return }
-        
+
         Task {
             do {
                 // EXIF情報の抽出
                 let exifData = try await imageService.extractEXIFData(firstImage)
-                
+
                 // 時間帯の判定
                 let timeOfDay: TimeOfDay?
                 if let capturedAt = exifData.capturedAt {
@@ -115,28 +123,67 @@ class PostViewModel: ObservableObject {
                 } else {
                     timeOfDay = nil
                 }
-                
+
                 // 色の抽出
                 let colors = try await imageService.extractColors(firstImage, maxCount: 5)
-                
+
                 // 色温度の計算
                 let colorTemperature = try await imageService.calculateColorTemperature(firstImage)
-                
-                // 空の種類の判定
-                let skyType = try await imageService.detectSkyType(firstImage)
-                
+
+                // AI空タイプ判定（新しい分類器を使用）☁️
+                isClassifyingSkyType = true
+                let classificationResult = try await skyTypeClassifier.classify(firstImage, timeOfDay: timeOfDay)
+                skyTypeClassificationResult = classificationResult
+                isClassifyingSkyType = false
+
                 extractedInfo = ExtractedImageInfo(
                     capturedAt: exifData.capturedAt,
                     timeOfDay: timeOfDay,
                     skyColors: colors,
                     colorTemperature: colorTemperature,
-                    skyType: skyType
+                    skyType: classificationResult.skyType
                 )
             } catch {
+                isClassifyingSkyType = false
                 // エラーは無視（自動抽出はオプション）
                 print("画像情報の抽出に失敗しました: \(error)")
             }
         }
+    }
+
+    // MARK: - Sky Type Management ☁️
+
+    /// ユーザーがAI判定結果を採用
+    func acceptAISkyType() {
+        guard let result = skyTypeClassificationResult else { return }
+        userSelectedSkyType = nil  // AI判定を使用
+        updateExtractedInfoSkyType(result.skyType)
+    }
+
+    /// ユーザーが手動で空タイプを選択
+    func selectSkyType(_ skyType: SkyType) {
+        userSelectedSkyType = skyType
+        updateExtractedInfoSkyType(skyType)
+    }
+
+    /// extractedInfoのskyTypeを更新
+    private func updateExtractedInfoSkyType(_ skyType: SkyType) {
+        guard let info = extractedInfo else { return }
+        extractedInfo = ExtractedImageInfo(
+            capturedAt: info.capturedAt,
+            timeOfDay: info.timeOfDay,
+            skyColors: info.skyColors,
+            colorTemperature: info.colorTemperature,
+            skyType: skyType
+        )
+    }
+
+    /// 現在有効な空タイプを取得
+    var effectiveSkyType: SkyType? {
+        if let userSelected = userSelectedSkyType {
+            return userSelected
+        }
+        return skyTypeClassificationResult?.skyType ?? extractedInfo?.skyType
     }
     
     // MARK: - Post Save
@@ -332,7 +379,7 @@ class PostViewModel: ObservableObject {
             }
         }
 
-        // 投稿データを作成
+        // 投稿データを作成（effectiveSkyTypeを使用 ☁️）
         let post = Post(
             id: UUID().uuidString,
             userId: userId,
@@ -345,7 +392,7 @@ class PostViewModel: ObservableObject {
             skyColors: extractedInfo?.skyColors,
             capturedAt: extractedInfo?.capturedAt,
             timeOfDay: extractedInfo?.timeOfDay,
-            skyType: extractedInfo?.skyType,
+            skyType: effectiveSkyType,  // ユーザー選択 or AI判定
             colorTemperature: extractedInfo?.colorTemperature,
             visibility: visibility
         )
@@ -437,6 +484,9 @@ class PostViewModel: ObservableObject {
         visibility = .public
         saveOriginalImages = false
         extractedInfo = nil
+        skyTypeClassificationResult = nil  // ☁️
+        isClassifyingSkyType = false  // ☁️
+        userSelectedSkyType = nil  // ☁️
         isPostSaved = false
         errorMessage = nil
         uploadedImageURLs = []

@@ -84,6 +84,9 @@ struct PostInfoView: View {
                         // 位置情報
                         locationSection
                         
+                        // AI空タイプ判定セクション ☁️
+                        skyTypeSection
+
                         // 自動抽出された情報
                         extractedInfoSection
                         
@@ -335,8 +338,242 @@ struct PostInfoView: View {
         }
     }
     
+    // MARK: - Helper Methods ☁️
+
+    /// 16進数カラーコードをColorに変換
+    private func hexToColor(_ hex: String) -> Color {
+        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
+
+        var rgb: UInt64 = 0
+        Scanner(string: hexSanitized).scanHexInt64(&rgb)
+
+        let r = Double((rgb & 0xFF0000) >> 16) / 255.0
+        let g = Double((rgb & 0x00FF00) >> 8) / 255.0
+        let b = Double(rgb & 0x0000FF) / 255.0
+
+        return Color(red: r, green: g, blue: b)
+    }
+
+    // MARK: - Sky Type Section ☁️
+
+    private var skyTypeSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("空のタイプ")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            VStack(alignment: .leading, spacing: 16) {
+                // AI判定結果
+                if viewModel.isClassifyingSkyType {
+                    // 判定中
+                    HStack(spacing: 12) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        Text("🤖 AIが空を分析中...")
+                            .font(.subheadline)
+                            .foregroundColor(.white)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.white.opacity(0.1))
+                    )
+                } else if let result = viewModel.skyTypeClassificationResult {
+                    // AI判定結果を表示
+                    aiSuggestionView(result: result)
+                }
+
+                // 手動選択オプション
+                manualSkyTypeSelector
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.white.opacity(0.15))
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(.white.opacity(0.3), lineWidth: 1)
+                    )
+            )
+        }
+    }
+
+    /// AI判定結果表示ビュー
+    private func aiSuggestionView(result: SkyTypeClassificationResult) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // ヘッダー
+            HStack {
+                Image(systemName: "cpu")
+                    .foregroundColor(.cyan)
+                Text("AI自動判定")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+
+                Spacer()
+
+                // 信頼度バッジ
+                Text("\(result.confidencePercentage)%")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule()
+                            .fill(confidenceColor(result.confidence))
+                    )
+            }
+
+            // 判定結果
+            HStack(spacing: 12) {
+                Image(systemName: result.skyType.iconName)
+                    .font(.system(size: 28))
+                    .foregroundColor(.white)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        Circle()
+                            .fill(.white.opacity(0.2))
+                    )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(result.skyType.displayName)
+                        .font(.title3)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+
+                    Text(result.details)
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.8))
+                }
+
+                Spacer()
+            }
+
+            // 主要色表示
+            if !result.dominantColors.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("検出された主要色")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+
+                    HStack(spacing: 8) {
+                        ForEach(result.dominantColors.prefix(4), id: \.hex) { color in
+                            VStack(spacing: 2) {
+                                Circle()
+                                    .fill(hexToColor(color.hex))
+                                    .frame(width: 24, height: 24)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                                    )
+                                Text("\(Int(color.percentage * 100))%")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.white.opacity(0.7))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // アクションボタン
+            if viewModel.userSelectedSkyType == nil {
+                Button(action: {
+                    viewModel.acceptAISkyType()
+                }) {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                        Text("この判定を採用")
+                    }
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color(red: 0.39, green: 0.58, blue: 0.93))
+                    )
+                }
+            } else {
+                HStack {
+                    Image(systemName: "hand.tap")
+                        .foregroundColor(.white.opacity(0.7))
+                    Text("手動選択中")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                }
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.2, green: 0.3, blue: 0.5).opacity(0.6),
+                            Color(red: 0.3, green: 0.4, blue: 0.6).opacity(0.4)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(
+                            LinearGradient(
+                                colors: [.white.opacity(0.3), .white.opacity(0.1)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
+        )
+    }
+
+    /// 手動選択オプション
+    private var manualSkyTypeSelector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("または手動で選択:")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.7))
+
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ], spacing: 10) {
+                ForEach(SkyType.allCases, id: \.self) { skyType in
+                    SkyTypeButton(
+                        skyType: skyType,
+                        isSelected: viewModel.effectiveSkyType == skyType,
+                        isUserSelected: viewModel.userSelectedSkyType == skyType,
+                        action: {
+                            viewModel.selectSkyType(skyType)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    /// 信頼度に応じた色を返す
+    private func confidenceColor(_ confidence: Double) -> Color {
+        switch confidence {
+        case 0.8...:
+            return Color(red: 0.2, green: 0.7, blue: 0.4) // 緑
+        case 0.6..<0.8:
+            return Color(red: 0.9, green: 0.7, blue: 0.2) // 黄色
+        default:
+            return Color(red: 0.8, green: 0.4, blue: 0.3) // オレンジ
+        }
+    }
+
     // MARK: - Extracted Info Section
-    
+
     private var extractedInfoSection: some View {
         Group {
             if let info = viewModel.extractedInfo {
@@ -766,6 +1003,56 @@ struct ColorCircle: View {
         let b = Double(rgb & 0x0000FF) / 255.0
         
         return Color(red: r, green: g, blue: b)
+    }
+}
+
+// MARK: - Sky Type Button ☁️
+
+struct SkyTypeButton: View {
+    let skyType: SkyType
+    let isSelected: Bool
+    let isUserSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: {
+            let impact = UIImpactFeedbackGenerator(style: .light)
+            impact.impactOccurred()
+            action()
+        }) {
+            VStack(spacing: 6) {
+                Image(systemName: skyType.iconName)
+                    .font(.system(size: 20))
+                    .foregroundColor(isSelected ? .white : .white.opacity(0.7))
+
+                Text(skyType.displayName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(isSelected ? .white : .white.opacity(0.7))
+
+                // ユーザー選択インジケーター
+                if isUserSelected {
+                    Image(systemName: "hand.tap.fill")
+                        .font(.system(size: 8))
+                        .foregroundColor(.cyan)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isSelected ? Color(red: 0.39, green: 0.58, blue: 0.93) : .white.opacity(0.1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(
+                                isSelected ? Color.white.opacity(0.4) : Color.white.opacity(0.2),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isSelected ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
     }
 }
 
