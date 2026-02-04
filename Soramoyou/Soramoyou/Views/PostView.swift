@@ -10,7 +10,8 @@ import SwiftUI
 struct PostView: View {
     @StateObject private var viewModel: PhotoSelectionViewModel
     @EnvironmentObject var authViewModel: AuthViewModel
-    
+    @State private var showEditView = false
+
     init() {
         // 認証状態に応じて最大選択数を設定
         // 実際の認証状態は環境オブジェクトから取得するため、初期値は10に設定
@@ -71,6 +72,15 @@ struct PostView: View {
                 if let errorMessage = viewModel.errorMessage {
                     Text(errorMessage)
                 }
+            }
+            .fullScreenCover(isPresented: $showEditView, onDismiss: {
+                // 編集画面から戻ったら選択をクリア
+                viewModel.clearSelection()
+            }) {
+                EditView(
+                    images: viewModel.selectedImages,
+                    userId: authViewModel.currentUser?.id
+                )
             }
         }
         .onAppear {
@@ -170,10 +180,9 @@ struct PostView: View {
                 
                 // アクションボタン
                 VStack(spacing: 12) {
-                    NavigationLink(destination: EditView(
-                        images: viewModel.selectedImages,
-                        userId: authViewModel.currentUser?.id
-                    ).navigationBarBackButtonHidden(false)) {
+                    Button(action: {
+                        showEditView = true
+                    }) {
                         HStack {
                             Image(systemName: "checkmark.circle.fill")
                             Text("次へ")
