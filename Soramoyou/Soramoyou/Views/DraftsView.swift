@@ -30,16 +30,11 @@ struct DraftsView: View {
                 .ignoresSafeArea()
 
                 if viewModel.isLoading && viewModel.drafts.isEmpty {
-                    // 初回読み込み中
-                    VStack {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        Text("読み込み中...")
-                            .foregroundColor(.white)
-                    }
+                    // 初回読み込み中 ☁️
+                    LoadingStateView(type: .initial)
                 } else if viewModel.drafts.isEmpty {
-                    // 下書きがない場合
-                    emptyDraftsView
+                    // 下書きがない場合 ☁️
+                    EmptyStateView(type: .drafts)
                 } else {
                     // 下書き一覧
                     draftsList
@@ -93,23 +88,7 @@ struct DraftsView: View {
         }
     }
     
-    // MARK: - Empty Drafts View
-    
-    private var emptyDraftsView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "doc.text")
-                .font(.system(size: 60))
-                .foregroundColor(.white.opacity(0.6))
-            Text("下書きがありません")
-                .font(.headline)
-                .foregroundColor(.white.opacity(0.8))
-            Text("投稿画面で下書きを保存できます")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.7))
-        }
-    }
-    
-    // MARK: - Drafts List
+    // MARK: - Drafts List ☁️
     
     private var draftsList: some View {
         ScrollView {

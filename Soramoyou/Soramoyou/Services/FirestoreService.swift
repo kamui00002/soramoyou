@@ -7,6 +7,7 @@
 
 import Foundation
 import FirebaseFirestore
+import FirebaseAuth
 
 protocol FirestoreServiceProtocol {
     // Posts
@@ -266,13 +267,35 @@ class FirestoreService: FirestoreServiceProtocol {
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws {
         do {
             let docRef = usersCollection.document(userId)
-            
             let toolsStrings = tools.map { $0.rawValue }
-            
-            try await docRef.updateData([
-                "customEditTools": toolsStrings,
-                "customEditToolsOrder": order
-            ])
+
+            // まずドキュメントの存在を確認
+            let document = try await docRef.getDocument()
+
+            if document.exists {
+                // ドキュメントが存在する場合はupdateData()で更新
+                try await docRef.updateData([
+                    "customEditTools": toolsStrings,
+                    "customEditToolsOrder": order
+                ])
+            } else {
+                // ドキュメントが存在しない場合は、必要なフィールドを含めて作成
+                // Firebase Authから現在のユーザー情報を取得
+                guard let currentUser = FirebaseAuth.Auth.auth().currentUser else {
+                    throw FirestoreServiceError.updateFailed(NSError(domain: "FirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "ユーザーがログインしていません"]))
+                }
+
+                let newUserData: [String: Any] = [
+                    "id": userId,
+                    "email": currentUser.email ?? "",
+                    "createdAt": Timestamp(date: Date()),
+                    "customEditTools": toolsStrings,
+                    "customEditToolsOrder": order
+                ]
+                try await docRef.setData(newUserData)
+            }
+        } catch let error as FirestoreServiceError {
+            throw error
         } catch {
             throw FirestoreServiceError.updateFailed(error)
         }

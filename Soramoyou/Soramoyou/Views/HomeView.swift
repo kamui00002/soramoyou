@@ -27,22 +27,22 @@ struct HomeView: View {
                 VStack(spacing: 0) {
                     ZStack {
                         if viewModel.isLoading && viewModel.posts.isEmpty {
-                            // 初回読み込み中
-                            VStack {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                Text("読み込み中...")
-                                    .foregroundColor(.white)
-                            }
+                            // 初回読み込み中 ☁️
+                            LoadingStateView(type: .initial)
+                        } else if let error = viewModel.lastError, viewModel.posts.isEmpty {
+                            // エラー発生時（投稿が空の場合）☁️
+                            ErrorStateView(
+                                error: error,
+                                retryAction: {
+                                    await viewModel.refresh()
+                                },
+                                secondaryAction: nil,
+                                secondaryActionTitle: nil
+                            )
                         } else if viewModel.posts.isEmpty {
-                            // 投稿がない場合
-                            VStack(spacing: DesignTokens.Spacing.md) {
-                                Image(systemName: "photo.on.rectangle")
-                                    .font(.system(size: 60))
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                                Text("投稿がありません")
-                                    .font(.headline)
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                            // 投稿がない場合 ☁️
+                            EmptyStateView(type: .posts) {
+                                // 投稿タブに切り替える（TabViewの切り替えはMainTabViewで管理）
                             }
                         } else {
                             // フィード表示

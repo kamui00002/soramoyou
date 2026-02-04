@@ -473,14 +473,14 @@ final class SoramoyouUITests: XCTestCase {
             if settingsButton.waitForExistence(timeout: 3.0) {
                 settingsButton.tap()
 
-                // 編集装備設定をタップ
-                let editEquipmentButton = app.buttons["おすすめ編集設定"]
+                // 編集ツールの並び替え設定をタップ
+                let editEquipmentButton = app.buttons["編集ツールの並び替え"]
                 if editEquipmentButton.waitForExistence(timeout: 3.0) {
                     editEquipmentButton.tap()
 
-                    // 編集装備設定画面が表示されることを確認
-                    let equipmentTitle = app.navigationBars["おすすめ編集設定"]
-                    XCTAssertTrue(equipmentTitle.waitForExistence(timeout: 3.0), "編集装備設定画面が表示される")
+                    // 編集ツールの並び替え画面が表示されることを確認
+                    let equipmentTitle = app.navigationBars["編集ツールの並び替え"]
+                    XCTAssertTrue(equipmentTitle.waitForExistence(timeout: 3.0), "編集ツールの並び替え画面が表示される")
 
                     // 保存ボタンが表示されることを確認
                     let saveButton = app.buttons["保存"]

@@ -15,6 +15,7 @@ struct ProfileView: View {
     @State private var selectedPost: Post?
     @State private var showingEditProfile = false
     @State private var showingEditTools = false
+    @State private var showingSettings = false
     @State private var displayMode: DisplayMode = .grid
     
     enum DisplayMode {
@@ -45,13 +46,8 @@ struct ProfileView: View {
                 VStack(spacing: 0) {
                     ZStack {
                         if viewModel.isLoading && viewModel.user == nil {
-                            // 初回読み込み中
-                            VStack {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                Text("読み込み中...")
-                                    .foregroundColor(.white)
-                            }
+                            // 初回読み込み中 ☁️
+                            LoadingStateView(type: .initial)
                         } else if let user = viewModel.user {
                             // プロフィール表示
                             profileContent(user: user)
@@ -92,11 +88,17 @@ struct ProfileView: View {
                             Button(action: {
                                 showingEditTools = true
                             }) {
-                                Label("おすすめ編集設定", systemImage: "slider.horizontal.3")
+                                Label("編集ツールの並び替え", systemImage: "arrow.up.arrow.down")
                             }
-                            
+
+                            Button(action: {
+                                showingSettings = true
+                            }) {
+                                Label("設定", systemImage: "gearshape")
+                            }
+
                             Divider()
-                            
+
                             Button(action: {
                                 // 表示モード切り替え
                                 displayMode = displayMode == .grid ? .list : .grid
@@ -156,6 +158,9 @@ struct ProfileView: View {
                 if viewModel.isOwnProfile {
                     EditToolsSettingsView(viewModel: viewModel)
                 }
+            }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
             }
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
@@ -336,17 +341,18 @@ struct ProfileView: View {
         }
     }
 
+    /// 投稿がない場合のEmpty State ☁️
     private var emptyPostsView: some View {
-        VStack(spacing: DesignTokens.Spacing.md) {
-            Image(systemName: "photo.on.rectangle")
-                .font(.system(size: 60))
-                .foregroundColor(DesignTokens.Colors.textTertiary)
-            Text(viewModel.isOwnProfile ? "まだ投稿がありません" : "投稿がありません")
-                .font(.headline)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-        }
+        EmptyStateView(
+            type: viewModel.isOwnProfile ? .userPosts : .custom(
+                icon: "photo.on.rectangle",
+                title: "投稿がありません",
+                description: "このユーザーはまだ投稿していません",
+                actionTitle: nil
+            )
+        )
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        .padding(.vertical, 20)
     }
     
     private var postsContentView: some View {

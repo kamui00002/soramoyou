@@ -25,9 +25,9 @@ class ProfileViewModel: ObservableObject {
     @Published var editingProfileImage: UIImage?
     @Published var shouldDeleteProfileImage: Bool = false // プロフィール画像を削除するかどうか
     
-    // 編集装備システムの管理
+    // 編集装備システムの管理（全27ツールの並び替え）
     @Published var availableTools: [EditTool] = EditTool.allCases
-    @Published var selectedTools: [EditTool] = []
+    @Published var selectedTools: [EditTool] = EditTool.allCases  // 全ツールを常に選択状態
     @Published var toolsOrder: [String] = []
     
     private let userId: String?
@@ -44,10 +44,6 @@ class ProfileViewModel: ObservableObject {
         return userId == currentUserId
     }
     
-    // 編集装備の制約（5-8個）
-    let minEditTools = 5
-    let maxEditTools = 8
-    
     init(
         userId: String? = nil,
         firestoreService: FirestoreServiceProtocol = FirestoreService(),
@@ -62,6 +58,10 @@ class ProfileViewModel: ObservableObject {
         
         self.firestoreService = firestoreService
         self.storageService = storageService
+        
+        // デフォルトで全ツールを選択状態にする
+        self.selectedTools = EditTool.allCases
+        self.toolsOrder = EditTool.allCases.map { $0.rawValue }
     }
     
     // MARK: - Load Profile
@@ -69,24 +69,24 @@ class ProfileViewModel: ObservableObject {
     /// プロフィール情報を読み込む
     func loadProfile() async {
         guard let userId = userId else {
-            errorMessage = "ユーザーIDが取得できません"
+            // 未ログイン時はエラーを表示しない
             return
         }
-        
+
         isLoading = true
         errorMessage = nil
-        
+
         do {
             // リトライ可能な操作として実行
             let fetchedUser = try await RetryableOperation.executeIfRetryable { [self] in
                 try await self.firestoreService.fetchUser(userId: userId)
             }
             user = fetchedUser
-            
+
             // 編集用の値を設定
             editingDisplayName = fetchedUser.displayName ?? ""
             editingBio = fetchedUser.bio ?? ""
-            
+
             // 編集装備を読み込む（自分のプロフィールの場合のみ）
             if isOwnProfile {
                 await loadEditTools()
@@ -94,48 +94,104 @@ class ProfileViewModel: ObservableObject {
         } catch {
             // エラーをログに記録
             ErrorHandler.logError(error, context: "ProfileViewModel.loadProfile", userId: userId)
-            // ユーザーフレンドリーなメッセージを表示
+
+            // notFoundエラーや権限エラーの場合はユーザーにエラーを表示しない
+            // （新規ユーザーやドキュメント未作成の正常なケース）
+            if let firestoreError = error as? FirestoreServiceError {
+                switch firestoreError {
+                case .notFound:
+                    // ドキュメントが存在しない場合はデフォルト状態で表示
+                    setDefaultEditTools()
+                    return
+                case .fetchFailed(let underlyingError):
+                    // 権限エラーの場合もエラーを表示しない
+                    if underlyingError.localizedDescription.contains("Missing or insufficient permissions") {
+                        setDefaultEditTools()
+                        return
+                    }
+                default:
+                    break
+                }
+            }
+
+            // その他のエラーの場合のみユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
         }
-        
+
         isLoading = false
     }
     
-    /// 編集装備を読み込む
+    /// 編集装備を読み込む（内部用）
+    /// 全27ツールの順序のみを管理
     private func loadEditTools() async {
-        guard let userId = userId,
+        guard userId != nil,
               let user = user else {
             return
         }
-        
-        // customEditToolsとcustomEditToolsOrderから編集装備を復元
-        if let customTools = user.customEditTools,
-           let toolsOrder = user.customEditToolsOrder {
+
+        // customEditToolsOrderから順序を復元
+        if let toolsOrderFromUser = user.customEditToolsOrder,
+           !toolsOrderFromUser.isEmpty {
             // 順序に従ってEditToolを取得
-            var tools: [EditTool] = []
-            for toolId in toolsOrder {
+            var orderedTools: [EditTool] = []
+            for toolId in toolsOrderFromUser {
                 if let tool = EditTool(rawValue: toolId) {
-                    tools.append(tool)
+                    orderedTools.append(tool)
                 }
             }
-            
+
             // 順序に含まれていないツールも追加（後ろに追加）
             for tool in EditTool.allCases {
-                if !tools.contains(tool) && customTools.contains(tool.rawValue) {
-                    tools.append(tool)
+                if !orderedTools.contains(tool) {
+                    orderedTools.append(tool)
                 }
             }
-            
-            equippedTools = tools
-            selectedTools = tools
-            self.toolsOrder = toolsOrder
+
+            equippedTools = orderedTools
+            selectedTools = orderedTools
+            self.toolsOrder = orderedTools.map { $0.rawValue }
         } else {
-            // デフォルトの編集装備（最初の5個）
-            let defaultTools = Array(EditTool.allCases.prefix(minEditTools))
-            equippedTools = defaultTools
-            selectedTools = defaultTools
-            self.toolsOrder = defaultTools.map { $0.rawValue }
+            // デフォルトは全ツールをそのままの順序で
+            setDefaultEditTools()
         }
+    }
+
+    /// 編集装備設定のみを読み込む（EditToolsSettingsView用）
+    /// エラーが発生してもアラートを表示せず、デフォルトのツールを使用する
+    func loadEditToolsSettings() async {
+        guard let userId = userId else {
+            // 未ログイン時はデフォルトのツールを使用
+            setDefaultEditTools()
+            return
+        }
+
+        isLoading = true
+
+        do {
+            // ユーザードキュメントの取得を試みる
+            let fetchedUser = try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.fetchUser(userId: userId)
+            }
+            user = fetchedUser
+
+            // 編集装備を読み込む
+            await loadEditTools()
+        } catch {
+            // エラーが発生した場合はデフォルトのツールを使用
+            // エラーメッセージは表示しない（EditToolsSettingsViewでは不要）
+            ErrorHandler.logError(error, context: "ProfileViewModel.loadEditToolsSettings", userId: userId)
+            setDefaultEditTools()
+        }
+
+        isLoading = false
+    }
+
+    /// デフォルトの編集装備を設定（全27ツール）
+    private func setDefaultEditTools() {
+        let allTools = EditTool.allCases
+        equippedTools = allTools
+        selectedTools = allTools
+        toolsOrder = allTools.map { $0.rawValue }
     }
     
     // MARK: - Load Posts
@@ -145,10 +201,10 @@ class ProfileViewModel: ObservableObject {
         guard let userId = userId else {
             return
         }
-        
+
         isLoadingPosts = true
-        errorMessage = nil
-        
+        // エラーメッセージはリセットしない（loadProfileで設定されている可能性があるため）
+
         do {
             // リトライ可能な操作として実行
             let posts = try await RetryableOperation.executeIfRetryable { [self] in
@@ -158,7 +214,7 @@ class ProfileViewModel: ObservableObject {
                     lastDocument: nil
                 )
             }
-            
+
             // 他ユーザーのプロフィールの場合は公開投稿のみフィルタリング
             if !isOwnProfile {
                 userPosts = posts.filter { $0.visibility == .public }
@@ -168,10 +224,27 @@ class ProfileViewModel: ObservableObject {
         } catch {
             // エラーをログに記録
             ErrorHandler.logError(error, context: "ProfileViewModel.loadUserPosts", userId: userId)
-            // ユーザーフレンドリーなメッセージを表示
+
+            // 権限エラーの場合はエラーを表示しない（新規ユーザーやドキュメント未作成の正常なケース）
+            if let firestoreError = error as? FirestoreServiceError {
+                switch firestoreError {
+                case .notFound:
+                    // 投稿がない場合は正常
+                    return
+                case .fetchFailed(let underlyingError):
+                    // 権限エラーの場合もエラーを表示しない
+                    if underlyingError.localizedDescription.contains("Missing or insufficient permissions") {
+                        return
+                    }
+                default:
+                    break
+                }
+            }
+
+            // その他のエラーの場合のみユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
         }
-        
+
         isLoadingPosts = false
     }
     
@@ -239,16 +312,10 @@ class ProfileViewModel: ObservableObject {
     
     // MARK: - Edit Tools Management
     
-    /// 編集装備を更新
+    /// 編集装備の順序を更新（Firestoreに保存）
     func updateEditTools() async {
         guard let userId = userId else {
             errorMessage = "ユーザーIDが取得できません"
-            return
-        }
-        
-        // バリデーション: 5-8個の制約
-        guard selectedTools.count >= minEditTools && selectedTools.count <= maxEditTools else {
-            errorMessage = "編集装備は\(minEditTools)個から\(maxEditTools)個まで選択できます"
             return
         }
         
@@ -256,7 +323,7 @@ class ProfileViewModel: ObservableObject {
         errorMessage = nil
         
         do {
-            // 選択されたツールのIDと順序を取得
+            // 選択されたツールの順序を取得
             let toolsOrder = selectedTools.map { $0.rawValue }
             
             // リトライ可能な操作として実行
@@ -284,38 +351,21 @@ class ProfileViewModel: ObservableObject {
         isLoading = false
     }
     
-    /// 編集装備を追加
-    func addEditTool(_ tool: EditTool) {
-        guard !selectedTools.contains(tool),
-              selectedTools.count < maxEditTools else {
-            return
-        }
-        selectedTools.append(tool)
-    }
-    
-    /// 編集装備を削除
-    func removeEditTool(_ tool: EditTool) {
-        guard selectedTools.count > minEditTools else {
-            return
-        }
-        selectedTools.removeAll { $0 == tool }
-    }
-    
-    /// 編集装備の順序を変更
+    /// 編集装備の順序を変更（ドラッグ&ドロップ）
     func moveEditTool(from source: IndexSet, to destination: Int) {
         selectedTools.move(fromOffsets: source, toOffset: destination)
     }
     
-    /// 編集装備の選択をリセット
+    /// 編集装備の選択をリセット（現在保存されている順序に戻す）
     func resetEditTools() {
         selectedTools = equippedTools
     }
     
     // MARK: - Validation
     
-    /// 編集装備の選択が有効かどうか
+    /// 編集装備の選択が有効かどうか（常にtrue - 全ツール表示のため）
     var isValidEditToolsSelection: Bool {
-        selectedTools.count >= minEditTools && selectedTools.count <= maxEditTools
+        true
     }
     
     /// プロフィール編集が有効かどうか

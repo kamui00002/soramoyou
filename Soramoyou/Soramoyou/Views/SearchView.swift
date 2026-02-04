@@ -311,24 +311,18 @@ struct SearchView: View {
 
     // MARK: - Search Results Section
     
+    // MARK: - Search Results Section ☁️
+
     private var searchResultsSection: some View {
         Group {
             if viewModel.isLoading && viewModel.searchResults.isEmpty {
-                VStack {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    Text("検索中...")
-                        .foregroundColor(.white)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // 検索中 ☁️
+                LoadingStateView(type: .custom(message: "検索中..."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.searchResults.isEmpty && viewModel.hasSearchCriteria {
-                VStack(spacing: 16) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 60))
-                        .foregroundColor(DesignTokens.Colors.textTertiary)
-                    Text("検索結果がありません")
-                        .font(.headline)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                // 検索結果がない場合 ☁️
+                EmptyStateView(type: .searchResults) {
+                    viewModel.clearSearch()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if !viewModel.searchResults.isEmpty {

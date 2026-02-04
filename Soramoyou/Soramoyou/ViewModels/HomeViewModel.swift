@@ -15,6 +15,7 @@ class HomeViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var isLoadingMore = false
     @Published var errorMessage: String?
+    @Published var lastError: Error?  // エラーオブジェクトを保持（ErrorStateView用）☁️
     @Published var hasMorePosts = true
     
     private let firestoreService: FirestoreServiceProtocol
@@ -27,14 +28,15 @@ class HomeViewModel: ObservableObject {
     
     // MARK: - Fetch Posts
     
-    /// 投稿を取得（初回読み込み）
+    /// 投稿を取得（初回読み込み）☁️
     func fetchPosts() async {
         isLoading = true
         errorMessage = nil
+        lastError = nil  // エラーをクリア
         posts = []
         lastDocument = nil
         hasMorePosts = true
-        
+
         do {
             // リトライ可能な操作として実行
             let result = try await RetryableOperation.executeIfRetryable(
@@ -44,7 +46,8 @@ class HomeViewModel: ObservableObject {
             }
             posts = result.posts
             lastDocument = result.lastDocument
-            
+            lastError = nil  // 成功時にエラーをクリア
+
             // 最後のドキュメントを保存（ページネーション用）
             if result.posts.count < pageSize {
                 hasMorePosts = false
@@ -54,8 +57,9 @@ class HomeViewModel: ObservableObject {
             ErrorHandler.logError(error, context: "HomeViewModel.fetchPosts")
             // ユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
+            lastError = error  // エラーオブジェクトを保持
         }
-        
+
         isLoading = false
     }
     

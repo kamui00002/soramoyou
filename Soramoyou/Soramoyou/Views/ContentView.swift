@@ -10,10 +10,14 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var authViewModel: AuthViewModel
     @State private var isLoading = true
-    
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+
     var body: some View {
         Group {
-            if isLoading {
+            if !hasCompletedOnboarding {
+                // 初回起動: オンボーディング画面を表示
+                OnboardingView(hasCompletedOnboarding: $hasCompletedOnboarding)
+            } else if isLoading {
                 // 初期読み込み中
                 ProgressView("読み込み中...")
                     .onAppear {
