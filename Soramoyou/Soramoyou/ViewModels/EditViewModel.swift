@@ -153,58 +153,53 @@ class EditViewModel: ObservableObject {
     
     // MARK: - Edit Tool Management
     
-    /// 装備ツールを読み込む
+    /// 装備ツールを読み込む（全27ツールを順序に従って表示）
     func loadEquippedTools() async {
         guard let userId = userId else {
-            // 未ログイン時は基本ツールのみ
-            equippedTools = [.brightness, .contrast, .saturation, .exposure, .highlight, .shadow, .warmth, .sharpness, .vignette]
+            // 未ログイン時は全ツールをデフォルト順序で表示
+            equippedTools = EditTool.allCases
             equippedToolsOrder = equippedTools.map { $0.rawValue }
             return
         }
-        
+
         do {
             // リトライ可能な操作として実行
             let user = try await RetryableOperation.executeIfRetryable { [self] in
                 try await self.firestoreService.fetchUser(userId: userId)
             }
-            
-            // 装備ツールを取得
-            if let customTools = user.customEditTools,
-               !customTools.isEmpty {
-                equippedTools = customTools.compactMap { EditTool(rawValue: $0) }
-            } else {
-                // デフォルトツール
-                equippedTools = [.brightness, .contrast, .saturation, .exposure, .highlight, .shadow, .warmth, .sharpness, .vignette]
-            }
-            
-            // ツールの順序を取得
+
+            // 全27ツールを使用（順序のみカスタマイズ）
+            var allTools = EditTool.allCases
+
+            // ツールの順序を取得して並び替え
             if let order = user.customEditToolsOrder,
                !order.isEmpty {
                 equippedToolsOrder = order
                 // 順序に従ってツールを並び替え
-                equippedTools.sort { tool1, tool2 in
+                allTools.sort { tool1, tool2 in
                     let index1 = order.firstIndex(of: tool1.rawValue) ?? Int.max
                     let index2 = order.firstIndex(of: tool2.rawValue) ?? Int.max
                     return index1 < index2
                 }
             } else {
-                equippedToolsOrder = equippedTools.map { $0.rawValue }
+                equippedToolsOrder = allTools.map { $0.rawValue }
             }
+
+            equippedTools = allTools
         } catch {
-            // notFoundエラーの場合はユーザードキュメントが未作成なので、デフォルトツールを使用
+            // notFoundエラーの場合はユーザードキュメントが未作成なので、全ツールをデフォルト順序で表示
             // エラーメッセージは表示しない（正常なケースとして扱う）
             if let firestoreError = error as? FirestoreServiceError,
                case .notFound = firestoreError {
-                // ユーザードキュメントが存在しない場合はデフォルトツールを使用
-                equippedTools = [.brightness, .contrast, .saturation, .exposure, .highlight, .shadow, .warmth, .sharpness, .vignette]
+                equippedTools = EditTool.allCases
                 equippedToolsOrder = equippedTools.map { $0.rawValue }
                 return
             }
 
             // その他のエラーの場合はログに記録
             ErrorHandler.logError(error, context: "EditViewModel.loadEquippedTools", userId: userId)
-            // エラー時はデフォルトツールを使用
-            equippedTools = [.brightness, .contrast, .saturation, .exposure, .highlight, .shadow, .warmth, .sharpness, .vignette]
+            // エラー時は全ツールをデフォルト順序で表示
+            equippedTools = EditTool.allCases
             equippedToolsOrder = equippedTools.map { $0.rawValue }
             // ユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage

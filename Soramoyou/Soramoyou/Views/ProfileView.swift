@@ -88,7 +88,7 @@ struct ProfileView: View {
                             Button(action: {
                                 showingEditTools = true
                             }) {
-                                Label("おすすめ編集設定", systemImage: "slider.horizontal.3")
+                                Label("編集ツールの並び替え", systemImage: "arrow.up.arrow.down")
                             }
 
                             Button(action: {
