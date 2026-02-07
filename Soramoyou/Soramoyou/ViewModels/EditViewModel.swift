@@ -38,7 +38,7 @@ class EditViewModel: ObservableObject {
 
     // MARK: - リアルタイムプレビュー用プロパティ
 
-    /// 高速プレビュー用（低解像度）
+    /// 高速プレビュー用（中解像度）
     @Published var fastPreviewImage: UIImage?
     /// リアルタイム編集中フラグ
     @Published var isEditingRealtime: Bool = false
@@ -217,7 +217,8 @@ class EditViewModel: ObservableObject {
     }
 
     /// 編集ツールの値をリアルタイムで設定（スロットリング付き・高速プレビュー）
-    /// スライダー操作中に呼び出され、低解像度でプレビューを即座に更新
+    /// スライダー操作中に呼び出され、中解像度でプレビューを即座に更新
+    /// キャッシュ有効時は同期処理でTask overhead を排除し、即座にレンダリング
     /// 最小間隔33ms（約30fps）でスロットリングし、間隔内の最後の値を遅延実行
     func setToolValueRealtime(_ value: Float, for tool: EditTool) {
         // 値の範囲を-1.0から1.0に制限
@@ -232,10 +233,7 @@ class EditViewModel: ObservableObject {
             // 十分な時間が経過 → 即座にプレビュー生成
             throttledPreviewTask?.cancel()
             lastFastPreviewTime = now
-            fastPreviewTask?.cancel()
-            fastPreviewTask = Task {
-                await generatePreviewFast()
-            }
+            renderFastPreviewOrAsync()
         } else {
             // 間隔内 → 遅延実行（最後の値だけ処理）
             throttledPreviewTask?.cancel()
@@ -244,10 +242,24 @@ class EditViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: waitNano)
                 guard !Task.isCancelled else { return }
                 lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
-                fastPreviewTask?.cancel()
-                fastPreviewTask = Task {
-                    await generatePreviewFast()
-                }
+                renderFastPreviewOrAsync()
+            }
+        }
+    }
+
+    /// キャッシュが有効なら同期レンダリング、無効なら非同期でキャッシュ再構築後レンダリング
+    private func renderFastPreviewOrAsync() {
+        let transformKey = makeTransformKey()
+        if let lowResCIImage = cachedLowResCIImage,
+           cachedImageIndex == currentImageIndex,
+           cachedTransformKey == transformKey {
+            // キャッシュ有効 → 同期レンダリング（Task overhead なし）
+            fastPreviewImage = imageService.generatePreviewFromCIImage(lowResCIImage, edits: editSettings)
+        } else {
+            // キャッシュ無効 → 非同期でキャッシュ再構築してからレンダリング
+            fastPreviewTask?.cancel()
+            fastPreviewTask = Task {
+                await generatePreviewFast()
             }
         }
     }
@@ -255,9 +267,14 @@ class EditViewModel: ObservableObject {
     /// スライダー操作完了時に呼び出し、高品質プレビューを生成
     func finalizeToolValue(for tool: EditTool) {
         isEditingRealtime = false
+
+        // 高速プレビューを通常プレビューに昇格（同解像度なので品質ジャンプなし）
+        if let fastPreview = fastPreviewImage {
+            previewImage = fastPreview
+        }
         fastPreviewImage = nil
 
-        // 高品質プレビューを生成
+        // バックグラウンドでフル解像度プレビューを再生成
         Task {
             await generatePreview()
         }
@@ -321,6 +338,11 @@ class EditViewModel: ObservableObject {
     /// 回転操作完了
     func finalizeRotation() {
         isEditingRealtime = false
+
+        // 高速プレビューを通常プレビューに昇格
+        if let fastPreview = fastPreviewImage {
+            previewImage = fastPreview
+        }
         fastPreviewImage = nil
 
         Task {
@@ -450,9 +472,9 @@ class EditViewModel: ObservableObject {
         isLoading = false
     }
 
-    /// 高速プレビューを生成（低解像度・256x256）☁️
+    /// 高速プレビューを生成（中解像度・750x750）☁️
     /// スライダー操作中のリアルタイム表示用
-    /// キャッシュ済みの低解像度CIImageを使い、同期的にフィルターチェーンを適用
+    /// キャッシュ済みの中解像度CIImageを使い、同期的にフィルターチェーンを適用
     /// リクエストIDを使用してレースコンディションを防止
     func generatePreviewFast() async {
         guard currentImage != nil else {
@@ -494,7 +516,7 @@ class EditViewModel: ObservableObject {
         "\(rotationDegrees)_\(isFlippedHorizontal)_\(isFlippedVertical)"
     }
 
-    /// 低解像度CIImageキャッシュを再構築（同期版：互換性のため残す）
+    /// 中解像度CIImageキャッシュを再構築（同期版：互換性のため残す）
     private func rebuildLowResCache() {
         guard let image = currentImage else {
             cachedLowResCIImage = nil
@@ -513,15 +535,15 @@ class EditViewModel: ObservableObject {
             return
         }
 
-        // CIImage上で256x256にリサイズ（UIImage変換なし）
-        let lowRes = imageService.resizeCIImage(ciImage, maxSize: CGSize(width: 256, height: 256))
+        // CIImage上で750x750にリサイズ（UIImage変換なし）
+        let lowRes = imageService.resizeCIImage(ciImage, maxSize: CGSize(width: 750, height: 750))
 
         cachedLowResCIImage = lowRes
         cachedImageIndex = currentImageIndex
         cachedTransformKey = makeTransformKey()
     }
 
-    /// 低解像度CIImageキャッシュを再構築（非同期版：バックグラウンド処理）☁️
+    /// 中解像度CIImageキャッシュを再構築（非同期版：バックグラウンド処理）☁️
     /// 重い画像処理をバックグラウンドスレッドで実行してUIブロックを防止
     private func rebuildLowResCacheAsync() async {
         guard let image = currentImage else {
@@ -550,8 +572,8 @@ class EditViewModel: ObservableObject {
                 return nil
             }
 
-            // CIImage上で256x256にリサイズ
-            return imageServiceRef.resizeCIImage(ciImage, maxSize: CGSize(width: 256, height: 256))
+            // CIImage上で750x750にリサイズ
+            return imageServiceRef.resizeCIImage(ciImage, maxSize: CGSize(width: 750, height: 750))
         }.value
 
         // キャッシュを更新
@@ -577,7 +599,7 @@ class EditViewModel: ObservableObject {
         return normalizedImage ?? image
     }
 
-    /// 低解像度キャッシュを無効化
+    /// 中解像度キャッシュを無効化
     private func invalidateLowResCache() {
         cachedLowResCIImage = nil
     }

@@ -173,8 +173,8 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertTrue(mockFirestoreService.updateEditToolsCalled)
     }
     
-    func testUpdateEditToolsValidation() async {
-        // Given
+    func testUpdateEditToolsAllToolsOrder() async {
+        // Given - 全ツール表示モードではバリデーションエラーなし
         let testUser = createTestUser()
         mockFirestoreService.user = testUser
         viewModel = ProfileViewModel(
@@ -183,92 +183,68 @@ final class ProfileViewModelTests: XCTestCase {
             storageService: mockStorageService
         )
         await viewModel.loadProfile()
-        
-        // 4個のツールを選択（最小値未満）
-        viewModel.selectedTools = Array(EditTool.allCases.prefix(4))
-        
-        // When
+
+        // When - 全ツールの順序を保存
+        viewModel.selectedTools = EditTool.allCases
         await viewModel.updateEditTools()
-        
-        // Then
-        XCTAssertNotNil(viewModel.errorMessage)
-        XCTAssertTrue(viewModel.errorMessage?.contains("5個から8個まで") ?? false)
+
+        // Then - エラーなし
+        XCTAssertNil(viewModel.errorMessage)
     }
     
-    func testAddEditTool() {
+    func testMoveEditTool() {
         // Given
         viewModel = ProfileViewModel(
             userId: "test-user-id",
             firestoreService: mockFirestoreService,
             storageService: mockStorageService
         )
-        viewModel.selectedTools = Array(EditTool.allCases.prefix(5))
-        
-        // When
-        viewModel.addEditTool(.saturation)
-        
-        // Then
-        XCTAssertEqual(viewModel.selectedTools.count, 6)
-        XCTAssertTrue(viewModel.selectedTools.contains(.saturation))
+        viewModel.selectedTools = EditTool.allCases
+        let firstTool = viewModel.selectedTools[0]
+
+        // When - 先頭のツールを2番目に移動
+        viewModel.moveEditTool(from: IndexSet(integer: 0), to: 2)
+
+        // Then - 先頭のツールが移動している
+        XCTAssertEqual(viewModel.selectedTools[1], firstTool)
     }
-    
-    func testRemoveEditTool() {
+
+    func testSelectedToolsContainsAll27Tools() {
         // Given
         viewModel = ProfileViewModel(
             userId: "test-user-id",
             firestoreService: mockFirestoreService,
             storageService: mockStorageService
         )
-        viewModel.selectedTools = Array(EditTool.allCases.prefix(6))
-        
-        // When
-        viewModel.removeEditTool(.exposure)
-        
-        // Then
-        XCTAssertEqual(viewModel.selectedTools.count, 5)
-        XCTAssertFalse(viewModel.selectedTools.contains(.exposure))
+
+        // Then - 全27ツールが常に選択状態
+        XCTAssertEqual(viewModel.selectedTools.count, EditTool.allCases.count)
     }
-    
-    func testRemoveEditToolMinimumConstraint() {
+
+    func testIsValidEditToolsSelectionAlwaysTrue() {
         // Given
         viewModel = ProfileViewModel(
             userId: "test-user-id",
             firestoreService: mockFirestoreService,
             storageService: mockStorageService
         )
-        viewModel.selectedTools = Array(EditTool.allCases.prefix(5)) // 最小値
-        
-        // When
-        viewModel.removeEditTool(.exposure)
-        
-        // Then
-        // 最小値なので削除されない
-        XCTAssertEqual(viewModel.selectedTools.count, 5)
-    }
-    
-    func testIsValidEditToolsSelection() {
-        // Given
-        viewModel = ProfileViewModel(
-            userId: "test-user-id",
-            firestoreService: mockFirestoreService,
-            storageService: mockStorageService
-        )
-        
-        // When & Then - 5個（有効）
-        viewModel.selectedTools = Array(EditTool.allCases.prefix(5))
+
+        // Then - 全ツール表示のため常にtrue
         XCTAssertTrue(viewModel.isValidEditToolsSelection)
-        
-        // When & Then - 8個（有効）
-        viewModel.selectedTools = Array(EditTool.allCases.prefix(8))
+    }
+
+    func testIsValidEditToolsSelection_legacy() {
+        // Given
+        viewModel = ProfileViewModel(
+            userId: "test-user-id",
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+
+        // When & Then - 全ツール表示のため常に有効
         XCTAssertTrue(viewModel.isValidEditToolsSelection)
-        
-        // When & Then - 4個（無効）
-        viewModel.selectedTools = Array(EditTool.allCases.prefix(4))
-        XCTAssertFalse(viewModel.isValidEditToolsSelection)
-        
-        // When & Then - 9個（無効）
         viewModel.selectedTools = Array(EditTool.allCases.prefix(9))
-        XCTAssertFalse(viewModel.isValidEditToolsSelection)
+        XCTAssertTrue(viewModel.isValidEditToolsSelection)
     }
     
     // MARK: - Helper Methods
