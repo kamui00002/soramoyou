@@ -797,11 +797,24 @@ class ImageService: ImageServiceProtocol {
                     }
                 }
 
-                let renderer = UIGraphicsImageRenderer(size: newSize)
-                let resizedImage = renderer.image { _ in
-                    image.draw(in: CGRect(origin: .zero, size: newSize))
+                // CIContextベースのリサイズ（バックグラウンドスレッドセーフ）
+                guard let cgImage = image.cgImage else {
+                    continuation.resume(returning: image)
+                    return
+                }
+                let ciImage = CIImage(cgImage: cgImage)
+                let scaleX = newSize.width / ciImage.extent.width
+                let scaleY = newSize.height / ciImage.extent.height
+                let scale = min(scaleX, scaleY)
+
+                let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                let context = CIContext(options: [.useSoftwareRenderer: false])
+                guard let outputCGImage = context.createCGImage(scaled, from: scaled.extent) else {
+                    continuation.resume(returning: image)
+                    return
                 }
 
+                let resizedImage = UIImage(cgImage: outputCGImage, scale: image.scale, orientation: image.imageOrientation)
                 continuation.resume(returning: resizedImage)
             }
         }
@@ -968,10 +981,24 @@ class ImageService: ImageServiceProtocol {
                     let g = Double(pixelData[1]) / 255.0
                     let b = Double(pixelData[2]) / 255.0
 
-                    let n = (r - 0.3320) / (0.1858 - b)
+                    // ゼロ除算防止: 除数 (0.1858 - b) が0近傍の場合はデフォルト値（昼光 5500K）を返す
+                    let divisor = 0.1858 - b
+                    let epsilon = 1e-10
+                    guard abs(divisor) > epsilon else {
+                        continuation.resume(returning: 5500)
+                        return
+                    }
+
+                    let n = (r - 0.3320) / divisor
                     let nSquared = n * n
                     let nCubed = nSquared * n
                     let colorTemperature = (449.0 * nCubed) + (3525.0 * nSquared) + (6823.3 * n) + 5520.33
+
+                    // NaN/Infinity チェック: 異常値の場合はデフォルト値（昼光 5500K）を返す
+                    guard colorTemperature.isFinite else {
+                        continuation.resume(returning: 5500)
+                        return
+                    }
 
                     let clampedTemperature = max(2000, min(10000, Int(colorTemperature)))
                     continuation.resume(returning: clampedTemperature)

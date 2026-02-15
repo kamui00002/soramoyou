@@ -8,7 +8,6 @@
 import Foundation
 import Combine
 import UIKit
-import FirebaseAuth
 
 @MainActor
 class ProfileViewModel: ObservableObject {
@@ -18,50 +17,75 @@ class ProfileViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var isLoadingPosts = false
     @Published var errorMessage: String?
-    
+
     // 編集用の一時的な値
     @Published var editingDisplayName: String = ""
     @Published var editingBio: String = ""
     @Published var editingProfileImage: UIImage?
     @Published var shouldDeleteProfileImage: Bool = false // プロフィール画像を削除するかどうか
-    
+
     // 編集装備システムの管理（全27ツールの並び替え）
     @Published var availableTools: [EditTool] = EditTool.allCases
     @Published var selectedTools: [EditTool] = EditTool.allCases  // 全ツールを常に選択状態
     @Published var toolsOrder: [String] = []
-    
-    private let userId: String?
+
+    /// Auth復元後にuserIdを再取得できるようvarに変更
+    private var userId: String?
+    /// 外部から指定されたuserIdかどうか（自分のプロフィール判定用）
+    private let isExternalUserId: Bool
     private let firestoreService: FirestoreServiceProtocol
     private let storageService: StorageServiceProtocol
+    /// 認証サービス（Firebase直参照を排除し、テスタビリティを向上）
+    private let authService: AuthServiceProtocol
     private var cancellables = Set<AnyCancellable>()
-    
+
     // 自分のプロフィールかどうか
     var isOwnProfile: Bool {
         guard let userId = userId,
-              let currentUserId = Auth.auth().currentUser?.uid else {
+              let currentUserId = authService.currentUser()?.id else {
             return false
         }
         return userId == currentUserId
     }
-    
+
     init(
         userId: String? = nil,
         firestoreService: FirestoreServiceProtocol = FirestoreService(),
-        storageService: StorageServiceProtocol = StorageService()
+        storageService: StorageServiceProtocol = StorageService(),
+        authService: AuthServiceProtocol = AuthService()
     ) {
+        self.authService = authService
+        self.isExternalUserId = (userId != nil)
+
         // userIdが指定されていない場合は現在のユーザーIDを使用
         if let userId = userId {
             self.userId = userId
         } else {
-            self.userId = Auth.auth().currentUser?.uid
+            self.userId = authService.currentUser()?.id
         }
-        
+
         self.firestoreService = firestoreService
         self.storageService = storageService
-        
+
         // デフォルトで全ツールを選択状態にする
         self.selectedTools = EditTool.allCases
         self.toolsOrder = EditTool.allCases.map { $0.rawValue }
+    }
+    
+    /// Auth状態が復元された後にuserIdを再取得してプロフィールをリロード
+    /// Firebase Auth復元前にProfileViewが初期化された場合の対策
+    func refreshUserIdIfNeeded() async {
+        // 外部指定のuserIdがある場合はスキップ
+        guard !isExternalUserId else { return }
+        
+        // userIdがnilの場合、Auth復元後に再取得を試みる
+        if userId == nil {
+            if let currentUserId = authService.currentUser()?.id {
+                userId = currentUserId
+                await loadProfile()
+                await loadUserPosts()
+            }
+        }
     }
     
     // MARK: - Load Profile
@@ -75,6 +99,8 @@ class ProfileViewModel: ObservableObject {
 
         isLoading = true
         errorMessage = nil
+        // すべてのパス（early return含む）で確実にローディング状態を解除する
+        defer { isLoading = false }
 
         do {
             // リトライ可能な操作として実行
@@ -105,7 +131,9 @@ class ProfileViewModel: ObservableObject {
                     return
                 case .fetchFailed(let underlyingError):
                     // 権限エラーの場合もエラーを表示しない
-                    if underlyingError.localizedDescription.contains("Missing or insufficient permissions") {
+                    if let nsError = underlyingError as NSError?,
+                       nsError.domain == "FIRFirestoreErrorDomain",
+                       nsError.code == 7 { // PERMISSION_DENIED
                         setDefaultEditTools()
                         return
                     }
@@ -117,8 +145,6 @@ class ProfileViewModel: ObservableObject {
             // その他のエラーの場合のみユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
         }
-
-        isLoading = false
     }
     
     /// 編集装備を読み込む（内部用）
@@ -166,6 +192,8 @@ class ProfileViewModel: ObservableObject {
         }
 
         isLoading = true
+        // すべてのパスで確実にローディング状態を解除する
+        defer { isLoading = false }
 
         do {
             // ユーザードキュメントの取得を試みる
@@ -182,8 +210,6 @@ class ProfileViewModel: ObservableObject {
             ErrorHandler.logError(error, context: "ProfileViewModel.loadEditToolsSettings", userId: userId)
             setDefaultEditTools()
         }
-
-        isLoading = false
     }
 
     /// デフォルトの編集装備を設定（全27ツール）
@@ -204,6 +230,8 @@ class ProfileViewModel: ObservableObject {
 
         isLoadingPosts = true
         // エラーメッセージはリセットしない（loadProfileで設定されている可能性があるため）
+        // すべてのパス（early return含む）で確実にローディング状態を解除する
+        defer { isLoadingPosts = false }
 
         do {
             // リトライ可能な操作として実行
@@ -233,7 +261,9 @@ class ProfileViewModel: ObservableObject {
                     return
                 case .fetchFailed(let underlyingError):
                     // 権限エラーの場合もエラーを表示しない
-                    if underlyingError.localizedDescription.contains("Missing or insufficient permissions") {
+                    if let nsError = underlyingError as NSError?,
+                       nsError.domain == "FIRFirestoreErrorDomain",
+                       nsError.code == 7 { // PERMISSION_DENIED
                         return
                     }
                 default:
@@ -244,8 +274,6 @@ class ProfileViewModel: ObservableObject {
             // その他のエラーの場合のみユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
         }
-
-        isLoadingPosts = false
     }
     
     // MARK: - Update Profile
@@ -257,10 +285,12 @@ class ProfileViewModel: ObservableObject {
             errorMessage = "ユーザー情報が取得できません"
             return
         }
-        
+
         isLoading = true
         errorMessage = nil
-        
+        // すべてのパスで確実にローディング状態を解除する
+        defer { isLoading = false }
+
         do {
             // プロフィール画像の処理
             var photoURL = updatedUser.photoURL
@@ -306,10 +336,8 @@ class ProfileViewModel: ObservableObject {
             // ユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
         }
-        
-        isLoading = false
     }
-    
+
     // MARK: - Edit Tools Management
     
     /// 編集装備の順序を更新（Firestoreに保存）
@@ -318,10 +346,12 @@ class ProfileViewModel: ObservableObject {
             errorMessage = "ユーザーIDが取得できません"
             return
         }
-        
+
         isLoading = true
         errorMessage = nil
-        
+        // すべてのパスで確実にローディング状態を解除する
+        defer { isLoading = false }
+
         do {
             // 選択されたツールの順序を取得
             let toolsOrder = selectedTools.map { $0.rawValue }
@@ -347,10 +377,8 @@ class ProfileViewModel: ObservableObject {
             // ユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
         }
-        
-        isLoading = false
     }
-    
+
     /// 編集装備の順序を変更（ドラッグ&ドロップ）
     func moveEditTool(from source: IndexSet, to destination: Int) {
         selectedTools.move(fromOffsets: source, toOffset: destination)

@@ -152,10 +152,18 @@ class SkyTypeClassifier: SkyTypeClassifierProtocol {
             newSize = CGSize(width: min(size.height, maxSize.height) * aspectRatio, height: min(size.height, maxSize.height))
         }
 
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        return renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: newSize))
-        }
+        // CIContextベースのリサイズ（バックグラウンドスレッドセーフ）
+        guard let cgImage = image.cgImage else { return image }
+        let ciImage = CIImage(cgImage: cgImage)
+        let scaleX = newSize.width / ciImage.extent.width
+        let scaleY = newSize.height / ciImage.extent.height
+        let scale = min(scaleX, scaleY)
+
+        let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let context = CIContext(options: [.useSoftwareRenderer: false])
+        guard let outputCGImage = context.createCGImage(scaled, from: scaled.extent) else { return image }
+
+        return UIImage(cgImage: outputCGImage, scale: image.scale, orientation: image.imageOrientation)
     }
 
     /// 画像上部（空部分）を抽出

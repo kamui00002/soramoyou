@@ -14,9 +14,13 @@ import StoreKit
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var authViewModel: AuthViewModel
+    @StateObject private var viewModel = SettingsViewModel()
     @State private var showingPrivacyPolicy = false
     @State private var showingTermsOfService = false
     @State private var showingLogoutConfirmation = false
+    @State private var showingDeleteAccountConfirmation = false
+    @State private var reauthEmail = ""
+    @State private var reauthPassword = ""
 
     /// アプリのバージョン情報を取得
     private var appVersion: String {
@@ -90,6 +94,92 @@ struct SettingsView: View {
             } message: {
                 Text("本当にログアウトしますか？")
             }
+            // アカウント削除の確認アラート
+            .alert("アカウントを削除", isPresented: $showingDeleteAccountConfirmation) {
+                Button("キャンセル", role: .cancel) { }
+                Button("削除する", role: .destructive) {
+                    Task {
+                        await performAccountDeletion()
+                    }
+                }
+            } message: {
+                Text("アカウントを削除すると、すべての投稿・下書き・プロフィール情報が完全に削除されます。この操作は取り消せません。")
+            }
+            // 再認証が必要な場合のアラート
+            .alert("パスワードを入力", isPresented: $viewModel.showingReauthentication) {
+                TextField("メールアドレス", text: $reauthEmail)
+                    .textContentType(.emailAddress)
+                    .autocapitalization(.none)
+                SecureField("パスワード", text: $reauthPassword)
+                    .textContentType(.password)
+                Button("キャンセル", role: .cancel) {
+                    reauthEmail = ""
+                    reauthPassword = ""
+                }
+                Button("確認して削除") {
+                    Task {
+                        await performReauthAndDelete()
+                    }
+                }
+            } message: {
+                Text("セキュリティのため、アカウント削除にはパスワードの再入力が必要です。")
+            }
+            // アカウント削除エラー
+            .alert("エラー", isPresented: Binding(
+                get: { viewModel.deleteAccountError != nil },
+                set: { if !$0 { viewModel.deleteAccountError = nil } }
+            )) {
+                Button("OK") { viewModel.deleteAccountError = nil }
+            } message: {
+                if let error = viewModel.deleteAccountError {
+                    Text(error)
+                }
+            }
+            // 削除中のオーバーレイ
+            .overlay {
+                if viewModel.isDeletingAccount {
+                    ZStack {
+                        Color.black.opacity(0.4)
+                            .ignoresSafeArea()
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .tint(.white)
+                            Text("アカウントを削除中...")
+                                .font(.system(size: 16, weight: .medium, design: .rounded))
+                                .foregroundColor(.white)
+                        }
+                        .padding(32)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(.ultraThinMaterial)
+                        )
+                    }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+    
+    // MARK: - Account Deletion
+
+    /// アカウント削除を実行（ViewModelに委譲）
+    private func performAccountDeletion() async {
+        let success = await viewModel.performAccountDeletion()
+        if success {
+            dismiss()
+        } else if viewModel.showingReauthentication {
+            reauthEmail = ""
+            reauthPassword = ""
+        }
+    }
+
+    /// 再認証後にアカウント削除を実行（ViewModelに委譲）
+    private func performReauthAndDelete() async {
+        let success = await viewModel.performReauthAndDelete(email: reauthEmail, password: reauthPassword)
+        reauthEmail = ""
+        reauthPassword = ""
+        if success {
+            dismiss()
         }
     }
 
@@ -203,6 +293,19 @@ struct SettingsView: View {
                     showChevron: false
                 ) {
                     showingLogoutConfirmation = true
+                }
+                
+                Divider()
+                    .padding(.leading, 44)
+                
+                // アカウント削除
+                SettingsRow(
+                    title: "アカウントを削除",
+                    icon: "trash.fill",
+                    iconColor: .red,
+                    showChevron: false
+                ) {
+                    showingDeleteAccountConfirmation = true
                 }
             }
         }
@@ -371,6 +474,7 @@ struct PrivacyPolicyView: View {
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
         }
+        .navigationViewStyle(.stack)
     }
 
     /// プライバシーポリシーの本文
@@ -378,7 +482,7 @@ struct PrivacyPolicyView: View {
         """
         プライバシーポリシー
 
-        最終更新日: 2025年2月2日
+        最終更新日: 2026年2月10日
 
         「そらもよう」（以下、「本アプリ」）は、ユーザーのプライバシーを尊重し、個人情報の保護に努めています。本プライバシーポリシーは、本アプリが収集する情報とその利用方法について説明します。
 
@@ -406,6 +510,10 @@ struct PrivacyPolicyView: View {
         - アプリの使用状況
         - デバイス情報
 
+        6. 広告関連データ
+        - 広告識別子（IDFA）※ユーザーの許可がある場合のみ
+        - 広告の表示・クリック情報
+
         ■ 情報の利用目的
 
         収集した情報は以下の目的で利用します：
@@ -414,36 +522,52 @@ struct PrivacyPolicyView: View {
         - アプリの機能改善
         - ユーザーサポートの提供
         - 広告の表示（Google AdMob）
+        - アプリのクラッシュ分析と品質向上（Firebase Crashlytics）
 
-        ■ 第三者へのデータ提供
+        ■ 第三者サービスへのデータ提供
 
         本アプリは以下のサービスを利用しています：
 
-        1. Firebase（Google）
-        - 認証、データベース、ストレージに使用
+        1. Firebase（Google LLC）
+        - 認証、データベース、ストレージ、クラッシュレポートに使用
         - プライバシーポリシー: https://firebase.google.com/support/privacy
 
-        2. Google AdMob
+        2. Google AdMob（Google LLC）
         - 広告配信に使用
         - プライバシーポリシー: https://policies.google.com/privacy
+
+        上記以外の第三者に対して、ユーザーの個人情報を提供することはありません。
 
         ■ データの保護
 
         ユーザーのデータは、Firebase のセキュリティ機能により保護されています。
-        - データの暗号化
-        - アクセス制御
-        - セキュリティルールの適用
+        - 通信の暗号化（SSL/TLS）
+        - データベースのアクセス制御
+        - Firestoreセキュリティルールの適用
+
+        ■ データの保存期間
+
+        - アカウント情報・投稿データ：アカウント削除まで保存
+        - 利用状況データ：収集から最大26ヶ月間保存
+        - クラッシュレポート：収集から90日間保存
 
         ■ ユーザーの権利
 
         ユーザーは以下の権利を有します：
         - アカウント情報の閲覧・編集
-        - 投稿の削除
-        - アカウントの削除（お問い合わせください）
+        - 投稿の編集・削除
+        - 位置情報の使用許可の取り消し（端末の設定から変更可能）
+        - 広告トラッキングの拒否（端末の設定から変更可能）
+        - アカウントの削除（設定画面またはお問い合わせより申請）
+
+        ■ 児童のプライバシー
+
+        本アプリは、13歳未満のお子様を対象としていません。
 
         ■ お問い合わせ
 
-        プライバシーに関するお問い合わせは、アプリ内の「設定」→「お問い合わせ」よりご連絡ください。
+        プライバシーに関するお問い合わせは、以下のメールアドレスまでご連絡ください。
+        メール: dome090111220916@gmail.com
 
         ■ ポリシーの変更
 
@@ -494,6 +618,7 @@ struct TermsOfServiceView: View {
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
         }
+        .navigationViewStyle(.stack)
     }
 
     /// 利用規約の本文
@@ -501,7 +626,7 @@ struct TermsOfServiceView: View {
         """
         利用規約
 
-        最終更新日: 2025年2月2日
+        最終更新日: 2026年2月10日
 
         本利用規約（以下、「本規約」）は、「そらもよう」（以下、「本アプリ」）の利用条件を定めるものです。ユーザーの皆様には、本規約に同意いただいた上で、本アプリをご利用いただきます。
 

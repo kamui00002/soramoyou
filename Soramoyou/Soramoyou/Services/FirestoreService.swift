@@ -7,7 +7,6 @@
 
 import Foundation
 import FirebaseFirestore
-import FirebaseAuth
 
 protocol FirestoreServiceProtocol {
     // Posts
@@ -15,7 +14,7 @@ protocol FirestoreServiceProtocol {
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
     func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?)
     func fetchPost(postId: String) async throws -> Post
-    func deletePost(postId: String) async throws
+    func deletePost(postId: String, userId: String) async throws
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
     
     // Drafts
@@ -28,6 +27,15 @@ protocol FirestoreServiceProtocol {
     func fetchUser(userId: String) async throws -> User
     func updateUser(_ user: User) async throws -> User
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws
+    
+    // Account
+    func deleteUserData(userId: String) async throws
+    
+    // Report / Block
+    func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws
+    func blockUser(userId: String, blockedUserId: String) async throws
+    func unblockUser(userId: String, blockedUserId: String) async throws
+    func fetchBlockedUserIds(userId: String) async throws -> [String]
     
     // Search
     func searchByHashtag(_ hashtag: String) async throws -> [Post]
@@ -46,22 +54,25 @@ protocol FirestoreServiceProtocol {
 
 class FirestoreService: FirestoreServiceProtocol {
     private let db: Firestore
-    
+    /// 認証サービス（Firebase直参照を排除し、テスタビリティを向上）
+    private let authService: AuthServiceProtocol
+
     // コレクション参照
     private var postsCollection: CollectionReference {
         db.collection("posts")
     }
-    
+
     private var draftsCollection: CollectionReference {
         db.collection("drafts")
     }
-    
+
     private var usersCollection: CollectionReference {
         db.collection("users")
     }
-    
-    init(db: Firestore = Firestore.firestore()) {
+
+    init(db: Firestore = Firestore.firestore(), authService: AuthServiceProtocol = AuthService()) {
         self.db = db
+        self.authService = authService
     }
     
     // MARK: - Posts
@@ -147,9 +158,23 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
     
-    func deletePost(postId: String) async throws {
+    func deletePost(postId: String, userId: String) async throws {
         do {
+            // 投稿の所有者を確認
+            let document = try await postsCollection.document(postId).getDocument()
+            guard let data = document.data(),
+                  let postUserId = data["userId"] as? String else {
+                throw FirestoreServiceError.notFound
+            }
+            
+            // 認可チェック: 自分の投稿のみ削除可能
+            guard postUserId == userId else {
+                throw FirestoreServiceError.unauthorized
+            }
+            
             try await postsCollection.document(postId).delete()
+        } catch let error as FirestoreServiceError {
+            throw error
         } catch {
             throw FirestoreServiceError.deleteFailed(error)
         }
@@ -280,18 +305,24 @@ class FirestoreService: FirestoreServiceProtocol {
                 ])
             } else {
                 // ドキュメントが存在しない場合は、必要なフィールドを含めて作成
-                // Firebase Authから現在のユーザー情報を取得
-                guard let currentUser = FirebaseAuth.Auth.auth().currentUser else {
+                // AuthServiceProtocol経由で現在のユーザー情報を取得
+                guard let currentUser = authService.currentUser() else {
                     throw FirestoreServiceError.updateFailed(NSError(domain: "FirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "ユーザーがログインしていません"]))
                 }
 
-                let newUserData: [String: Any] = [
+                // 匿名ユーザー（Anonymous Auth）はemailがnilのため、
+                // emailフィールドはnilでない場合のみ含める
+                var newUserData: [String: Any] = [
                     "id": userId,
-                    "email": currentUser.email ?? "",
                     "createdAt": Timestamp(date: Date()),
                     "customEditTools": toolsStrings,
                     "customEditToolsOrder": order
                 ]
+
+                if let email = currentUser.email {
+                    newUserData["email"] = email
+                }
+
                 try await docRef.setData(newUserData)
             }
         } catch let error as FirestoreServiceError {
@@ -327,75 +358,24 @@ class FirestoreService: FirestoreServiceProtocol {
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
-            
+
             var posts = try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
-            
-            // 閾値が指定されている場合は、クライアント側でRGB距離を計算してフィルタリング
+
+            // 閾値が指定されている場合は、ColorMatchingでRGB距離フィルタリングを適用
             if let threshold = threshold {
-                posts = filterPostsByColorDistance(posts: posts, targetColor: color, threshold: threshold)
+                posts = ColorMatching.filterPostsByColorDistance(
+                    posts: posts, targetColor: color, threshold: threshold
+                )
             }
-            
+
             return posts
         } catch {
             throw FirestoreServiceError.searchFailed(error)
         }
     }
-    
-    /// RGB距離を計算して投稿をフィルタリング
-    private func filterPostsByColorDistance(posts: [Post], targetColor: String, threshold: Double) -> [Post] {
-        guard let targetRGB = hexToRGB(targetColor) else {
-            return posts
-        }
-        
-        return posts.filter { post in
-            guard let skyColors = post.skyColors else {
-                return false
-            }
-            
-            // 投稿の色のいずれかが閾値以内の距離にあるかチェック
-            return skyColors.contains { color in
-                guard let colorRGB = hexToRGB(color) else {
-                    return false
-                }
-                
-                let distance = calculateRGBDistance(targetRGB, colorRGB)
-                return distance <= threshold
-            }
-        }
-    }
-    
-    /// 16進数カラーコードをRGBに変換
-    private func hexToRGB(_ hex: String) -> (r: Double, g: Double, b: Double)? {
-        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
-        
-        guard hexSanitized.count == 6 else {
-            return nil
-        }
-        
-        var rgb: UInt64 = 0
-        guard Scanner(string: hexSanitized).scanHexInt64(&rgb) else {
-            return nil
-        }
-        
-        let r = Double((rgb & 0xFF0000) >> 16) / 255.0
-        let g = Double((rgb & 0x00FF00) >> 8) / 255.0
-        let b = Double(rgb & 0x0000FF) / 255.0
-        
-        return (r: r, g: g, b: b)
-    }
-    
-    /// RGB距離を計算（ユークリッド距離）
-    private func calculateRGBDistance(_ color1: (r: Double, g: Double, b: Double), _ color2: (r: Double, g: Double, b: Double)) -> Double {
-        let dr = color1.r - color2.r
-        let dg = color1.g - color2.g
-        let db = color1.b - color2.b
-        
-        return sqrt(dr * dr + dg * dg + db * db)
-    }
-    
+
     func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] {
         do {
             let snapshot = try await postsCollection
@@ -403,7 +383,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
-            
+
             return try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
@@ -411,7 +391,7 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.searchFailed(error)
         }
     }
-    
+
     func searchBySkyType(_ skyType: SkyType) async throws -> [Post] {
         do {
             let snapshot = try await postsCollection
@@ -419,7 +399,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
-            
+
             return try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
@@ -427,8 +407,10 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.searchFailed(error)
         }
     }
-    
+
     /// 複合検索（複数条件の組み合わせ）
+    /// PostQueryBuilderでクエリ構築、ColorMatchingでクライアントサイドフィルタを実行し、
+    /// FirestoreServiceはデータ取得のみに集中する
     func searchPosts(
         hashtag: String? = nil,
         color: String? = nil,
@@ -438,44 +420,130 @@ class FirestoreService: FirestoreServiceProtocol {
         limit: Int = 50
     ) async throws -> [Post] {
         do {
-            var query: Query = postsCollection
-                .whereField("visibility", isEqualTo: Visibility.public.rawValue)
-            
-            // 条件を追加
-            if let hashtag = hashtag {
-                query = query.whereField("hashtags", arrayContains: hashtag)
-            }
-            
-            if let timeOfDay = timeOfDay {
-                query = query.whereField("timeOfDay", isEqualTo: timeOfDay.rawValue)
-            }
-            
-            if let skyType = skyType {
-                query = query.whereField("skyType", isEqualTo: skyType.rawValue)
-            }
-            
-            // 色検索の場合は、まずarrayContainsで取得してからクライアント側でフィルタリング
-            if let color = color {
-                query = query.whereField("skyColors", arrayContains: color)
-            }
-            
-            query = query.order(by: "createdAt", descending: true)
-                .limit(to: limit)
-            
-            let snapshot = try await query.getDocuments()
-            
-            var posts = try snapshot.documents.compactMap { document in
+            // PostQueryBuilderでFirestoreクエリを構築
+            let queryResult = PostQueryBuilder.buildSearchQuery(
+                collection: postsCollection,
+                hashtag: hashtag,
+                color: color,
+                timeOfDay: timeOfDay,
+                skyType: skyType,
+                limit: limit
+            )
+
+            // Firestoreからデータを取得
+            let snapshot = try await queryResult.query.getDocuments()
+
+            let posts = try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
-            
-            // 色検索で閾値が指定されている場合は、クライアント側でフィルタリング
-            if let color = color, let threshold = colorThreshold {
-                posts = filterPostsByColorDistance(posts: posts, targetColor: color, threshold: threshold)
-            }
-            
-            return posts
+
+            // PostQueryBuilderでクライアントサイドフィルタリングを適用
+            return PostQueryBuilder.applyClientSideFilters(
+                posts: posts,
+                queryResult: queryResult,
+                color: color,
+                colorThreshold: colorThreshold
+            )
         } catch {
             throw FirestoreServiceError.searchFailed(error)
+        }
+    }
+    
+    // MARK: - Account Deletion
+    
+    /// ユーザーの全データを削除（投稿、下書き、ユーザードキュメント）
+    func deleteUserData(userId: String) async throws {
+        do {
+            // 1. ユーザーの投稿を全てバッチ削除
+            let postsSnapshot = try await postsCollection
+                .whereField("userId", isEqualTo: userId)
+                .getDocuments()
+
+            try await batchDelete(documents: postsSnapshot.documents)
+
+            // 2. ユーザーの下書きを全てバッチ削除
+            let draftsSnapshot = try await draftsCollection
+                .whereField("userId", isEqualTo: userId)
+                .getDocuments()
+
+            try await batchDelete(documents: draftsSnapshot.documents)
+
+            // 3. ユーザードキュメントを削除
+            try await usersCollection.document(userId).delete()
+        } catch {
+            throw FirestoreServiceError.deleteFailed(error)
+        }
+    }
+
+    /// ドキュメントをバッチ削除（最大500件/バッチ）
+    private func batchDelete(documents: [QueryDocumentSnapshot]) async throws {
+        // Firestoreのバッチは最大500オペレーション
+        let batchSize = 500
+        var index = 0
+
+        while index < documents.count {
+            let batch = db.batch()
+            let end = min(index + batchSize, documents.count)
+
+            for i in index..<end {
+                batch.deleteDocument(documents[i].reference)
+            }
+
+            try await batch.commit()
+            index = end
+        }
+    }
+    
+    // MARK: - Report
+    
+    /// 投稿を通報する
+    func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {
+        do {
+            let reportData: [String: Any] = [
+                "postId": postId,
+                "reporterId": reporterId,
+                "reportedUserId": reportedUserId,
+                "reason": reason,
+                "createdAt": FieldValue.serverTimestamp()
+            ]
+            try await db.collection("reports").addDocument(data: reportData)
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
+        }
+    }
+    
+    // MARK: - Block
+    
+    /// ユーザーをブロックする
+    func blockUser(userId: String, blockedUserId: String) async throws {
+        do {
+            try await usersCollection.document(userId).updateData([
+                "blockedUserIds": FieldValue.arrayUnion([blockedUserId])
+            ])
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+    
+    /// ユーザーのブロックを解除する
+    func unblockUser(userId: String, blockedUserId: String) async throws {
+        do {
+            try await usersCollection.document(userId).updateData([
+                "blockedUserIds": FieldValue.arrayRemove([blockedUserId])
+            ])
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+    
+    /// ブロックしているユーザーIDのリストを取得
+    func fetchBlockedUserIds(userId: String) async throws -> [String] {
+        do {
+            let document = try await usersCollection.document(userId).getDocument()
+            guard let data = document.data() else { return [] }
+            return data["blockedUserIds"] as? [String] ?? []
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
         }
     }
 }
@@ -489,6 +557,7 @@ enum FirestoreServiceError: LocalizedError {
     case updateFailed(Error)
     case deleteFailed(Error)
     case searchFailed(Error)
+    case unauthorized
     
     var errorDescription: String? {
         switch self {
@@ -504,6 +573,8 @@ enum FirestoreServiceError: LocalizedError {
             return "データの削除に失敗しました: \(error.localizedDescription)"
         case .searchFailed(let error):
             return "検索に失敗しました: \(error.localizedDescription)"
+        case .unauthorized:
+            return "この操作を行う権限がありません"
         }
     }
 }

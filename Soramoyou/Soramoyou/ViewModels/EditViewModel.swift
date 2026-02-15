@@ -85,15 +85,23 @@ class EditViewModel: ObservableObject {
         self.imageService = imageService
         self.firestoreService = firestoreService
         
-        // 初期プレビューを生成
+        // 初期プレビューを生成（メモリリーク防止のため weak self を使用）
         if !images.isEmpty {
-            Task {
-                await loadEquippedTools()
-                await generatePreview()
+            Task { [weak self] in
+                guard let self = self else { return }
+                await self.loadEquippedTools()
+                await self.generatePreview()
             }
         }
     }
-    
+
+    deinit {
+        // 全Taskをキャンセルしてリソースを解放
+        previewTask?.cancel()
+        fastPreviewTask?.cancel()
+        throttledPreviewTask?.cancel()
+    }
+
     // MARK: - Image Management
     
     /// 画像を設定
@@ -102,8 +110,8 @@ class EditViewModel: ObservableObject {
         currentImageIndex = 0
         editSettings = EditSettings()
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
     
@@ -118,8 +126,8 @@ class EditViewModel: ObservableObject {
         guard currentImageIndex < originalImages.count - 1 else { return }
         currentImageIndex += 1
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -128,8 +136,8 @@ class EditViewModel: ObservableObject {
         guard currentImageIndex > 0 else { return }
         currentImageIndex -= 1
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
     
@@ -138,16 +146,16 @@ class EditViewModel: ObservableObject {
     /// フィルターを適用
     func applyFilter(_ filter: FilterType) {
         editSettings.appliedFilter = filter
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
-    
+
     /// フィルターを解除
     func removeFilter() {
         editSettings.appliedFilter = nil
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
     
@@ -237,12 +245,13 @@ class EditViewModel: ObservableObject {
         } else {
             // 間隔内 → 遅延実行（最後の値だけ処理）
             throttledPreviewTask?.cancel()
-            throttledPreviewTask = Task {
+            throttledPreviewTask = Task { [weak self] in
                 let waitNano = UInt64((fastPreviewMinInterval - elapsed) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: waitNano)
                 guard !Task.isCancelled else { return }
-                lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
-                renderFastPreviewOrAsync()
+                guard let self = self else { return }
+                self.lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
+                self.renderFastPreviewOrAsync()
             }
         }
     }
@@ -258,8 +267,8 @@ class EditViewModel: ObservableObject {
         } else {
             // キャッシュ無効 → 非同期でキャッシュ再構築してからレンダリング
             fastPreviewTask?.cancel()
-            fastPreviewTask = Task {
-                await generatePreviewFast()
+            fastPreviewTask = Task { [weak self] in
+                await self?.generatePreviewFast()
             }
         }
     }
@@ -275,16 +284,16 @@ class EditViewModel: ObservableObject {
         fastPreviewImage = nil
 
         // バックグラウンドでフル解像度プレビューを再生成
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
     /// 編集ツールの値をリセット
     func resetToolValue(for tool: EditTool) {
         editSettings.setValue(nil, for: tool)
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -296,8 +305,8 @@ class EditViewModel: ObservableObject {
         isFlippedVertical = false
         cropAspectRatio = .free
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -317,19 +326,20 @@ class EditViewModel: ObservableObject {
             throttledPreviewTask?.cancel()
             lastFastPreviewTime = now
             fastPreviewTask?.cancel()
-            fastPreviewTask = Task {
-                await generatePreviewFast()
+            fastPreviewTask = Task { [weak self] in
+                await self?.generatePreviewFast()
             }
         } else {
             throttledPreviewTask?.cancel()
-            throttledPreviewTask = Task {
+            throttledPreviewTask = Task { [weak self] in
                 let waitNano = UInt64((fastPreviewMinInterval - elapsed) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: waitNano)
                 guard !Task.isCancelled else { return }
-                lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
-                fastPreviewTask?.cancel()
-                fastPreviewTask = Task {
-                    await generatePreviewFast()
+                guard let self = self else { return }
+                self.lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
+                self.fastPreviewTask?.cancel()
+                self.fastPreviewTask = Task { [weak self] in
+                    await self?.generatePreviewFast()
                 }
             }
         }
@@ -345,8 +355,8 @@ class EditViewModel: ObservableObject {
         }
         fastPreviewImage = nil
 
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -354,8 +364,8 @@ class EditViewModel: ObservableObject {
     func toggleFlipHorizontal() {
         isFlippedHorizontal.toggle()
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -363,8 +373,8 @@ class EditViewModel: ObservableObject {
     func toggleFlipVertical() {
         isFlippedVertical.toggle()
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -375,8 +385,8 @@ class EditViewModel: ObservableObject {
             rotationDegrees += 360
         }
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -387,8 +397,8 @@ class EditViewModel: ObservableObject {
             rotationDegrees -= 360
         }
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -404,8 +414,8 @@ class EditViewModel: ObservableObject {
         isFlippedVertical = false
         cropAspectRatio = .free
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
     
@@ -416,12 +426,12 @@ class EditViewModel: ObservableObject {
         // 前のタスクをキャンセル
         previewTask?.cancel()
 
-        // 新しいタスクを作成
-        previewTask = Task {
+        // 新しいタスクを作成（メモリリーク防止のため weak self を使用）
+        previewTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 200_000_000) // 200ms待機
 
             guard !Task.isCancelled else { return }
-            await generatePreview()
+            await self?.generatePreview()
         }
     }
 
@@ -590,13 +600,14 @@ class EditViewModel: ObservableObject {
             return image
         }
 
-        // 正規化された画像を描画
-        UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale)
-        image.draw(in: CGRect(origin: .zero, size: image.size))
-        let normalizedImage = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-
-        return normalizedImage ?? image
+        // UIGraphicsImageRendererで正規化（スレッドセーフかつモダンなAPI）
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+        }
     }
 
     /// 中解像度キャッシュを無効化
@@ -612,39 +623,40 @@ class EditViewModel: ObservableObject {
         }
 
         let size = image.size
-        UIGraphicsBeginImageContextWithOptions(size, false, image.scale)
-        guard let context = UIGraphicsGetCurrentContext() else { return image }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
 
-        // コンテキストの中心に移動
-        context.translateBy(x: size.width / 2, y: size.height / 2)
+        return renderer.image { rendererContext in
+            let context = rendererContext.cgContext
 
-        // 反転を適用
-        var scaleX: CGFloat = 1.0
-        var scaleY: CGFloat = 1.0
-        if isFlippedHorizontal {
-            scaleX = -1.0
+            // コンテキストの中心に移動
+            context.translateBy(x: size.width / 2, y: size.height / 2)
+
+            // 反転を適用
+            var scaleX: CGFloat = 1.0
+            var scaleY: CGFloat = 1.0
+            if isFlippedHorizontal {
+                scaleX = -1.0
+            }
+            if isFlippedVertical {
+                scaleY = -1.0
+            }
+            context.scaleBy(x: scaleX, y: scaleY)
+
+            // 回転を適用
+            let radians = rotationDegrees * .pi / 180.0
+            context.rotate(by: CGFloat(radians))
+
+            // 画像を描画
+            image.draw(in: CGRect(
+                x: -size.width / 2,
+                y: -size.height / 2,
+                width: size.width,
+                height: size.height
+            ))
         }
-        if isFlippedVertical {
-            scaleY = -1.0
-        }
-        context.scaleBy(x: scaleX, y: scaleY)
-
-        // 回転を適用
-        let radians = rotationDegrees * .pi / 180.0
-        context.rotate(by: CGFloat(radians))
-
-        // 画像を描画
-        image.draw(in: CGRect(
-            x: -size.width / 2,
-            y: -size.height / 2,
-            width: size.width,
-            height: size.height
-        ))
-
-        let transformedImage = UIGraphicsGetImageFromCurrentImageContext() ?? image
-        UIGraphicsEndImageContext()
-
-        return transformedImage
     }
     
     // MARK: - Final Image Generation
