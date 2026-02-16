@@ -46,18 +46,9 @@ struct EditView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // 空のグラデーション背景
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.68, green: 0.85, blue: 0.90),
-                        Color(red: 0.53, green: 0.81, blue: 0.98),
-                        Color(red: 0.39, green: 0.58, blue: 0.93),
-                        Color(red: 0.18, green: 0.25, blue: 0.45)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+                // Apple Photos風の黒背景
+                Color.black
+                    .ignoresSafeArea()
 
                 VStack(spacing: 0) {
                     // 画像プレビュー
@@ -69,7 +60,8 @@ struct EditView: View {
             }
             .navigationTitle("編集")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+            .toolbarBackground(Color.black, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("キャンセル") {
@@ -99,7 +91,7 @@ struct EditView: View {
                                         showPostInfoView = true
                                     }
                                 } catch {
-                                    // エラーは viewModel.errorMessage に設定
+                                    viewModel.errorMessage = error.userFriendlyMessage
                                 }
                             }
                         }
@@ -133,8 +125,11 @@ struct EditView: View {
                         userId: userId
                     )
                 }
+                .navigationViewStyle(.stack)
             }
         }
+        .navigationViewStyle(.stack)
+        .preferredColorScheme(.dark)
         .onAppear {
             Task {
                 await viewModel.loadEquippedTools()
@@ -146,8 +141,8 @@ struct EditView: View {
 
     private var imagePreviewView: some View {
         ZStack {
-            // 暗い背景で画像を見やすく
-            Color.black.opacity(0.3)
+            // Apple Photos風の黒背景
+            Color.black
 
             if viewModel.isLoading && !viewModel.isEditingRealtime {
                 ProgressView()
@@ -227,10 +222,7 @@ struct EditView: View {
             // タブバー
             editTabBar
         }
-        .background(
-            .ultraThinMaterial,
-            in: RoundedRectangle(cornerRadius: 0)
-        )
+        .background(Color.black)
     }
 
     // MARK: - Tab Content View
@@ -271,7 +263,7 @@ struct EditView: View {
                 }
             }
         }
-        .background(Color.black.opacity(0.3))
+        .background(Color.black)
     }
 
     // MARK: - Filter Content View
@@ -355,14 +347,14 @@ struct EditView: View {
             HStack {
                 Text(tool.displayName)
                     .font(.headline)
-                    .foregroundColor(.primary)
+                    .foregroundColor(.white)
 
                 Spacer()
 
                 // 現在値の表示
                 Text(formatSliderValue(sliderValue))
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.6))
                     .monospacedDigit()
                     .frame(width: 50, alignment: .trailing)
 
@@ -407,7 +399,7 @@ struct EditView: View {
             .padding(.horizontal)
             .padding(.bottom, 8)
         }
-        .background(Color.black.opacity(0.2))
+        .background(Color.black)
     }
 
     /// スライダー値のフォーマット
@@ -429,13 +421,13 @@ struct EditView: View {
                 HStack {
                     Text("回転")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(.white)
 
                     Spacer()
 
                     Text(String(format: "%.1f°", rotationSliderValue))
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.white.opacity(0.6))
                         .monospacedDigit()
                         .frame(width: 50, alignment: .trailing)
 
@@ -592,7 +584,7 @@ struct FilterButton: View {
                                     endPoint: .bottomTrailing
                                 )
                                 : LinearGradient(
-                                    colors: [DesignTokens.Colors.glassTertiary, DesignTokens.Colors.glassTertiary],
+                                    colors: [Color.white.opacity(0.1), Color.white.opacity(0.1)],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
                                 )
@@ -601,14 +593,14 @@ struct FilterButton: View {
                         .overlay(
                             Text(displayName.prefix(2))
                                 .font(.system(size: DesignTokens.Typography.captionSize, weight: .bold, design: .rounded))
-                                .foregroundColor(isSelected ? .white : DesignTokens.Colors.textSecondary)
+                                .foregroundColor(isSelected ? .white : .white.opacity(0.6))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: DesignTokens.Radius.md)
                                 .stroke(
                                     isSelected
                                         ? Color.white.opacity(0.5)
-                                        : DesignTokens.Colors.glassBorderSecondary,
+                                        : Color.white.opacity(0.15),
                                     lineWidth: 1
                                 )
                         )
@@ -617,7 +609,7 @@ struct FilterButton: View {
 
                 Text(displayName)
                     .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: isSelected ? .semibold : .medium, design: .rounded))
-                    .foregroundColor(isSelected ? DesignTokens.Colors.selectionAccent : DesignTokens.Colors.textSecondary)
+                    .foregroundColor(isSelected ? .white : .white.opacity(0.6))
             }
         }
         .buttonStyle(.plain)
@@ -654,7 +646,7 @@ struct ToolButton: View {
                         .fill(
                             isSelected
                                 ? DesignTokens.Colors.selectionAccent.opacity(0.2)
-                                : (hasValue ? DesignTokens.Colors.sunsetOrange.opacity(0.15) : DesignTokens.Colors.glassTertiary)
+                                : (hasValue ? DesignTokens.Colors.sunsetOrange.opacity(0.15) : Color.white.opacity(0.1))
                         )
                         .frame(width: 46, height: 46)
                         .overlay(
@@ -663,7 +655,7 @@ struct ToolButton: View {
                                 .foregroundColor(
                                     isSelected
                                         ? DesignTokens.Colors.selectionAccent
-                                        : (hasValue ? DesignTokens.Colors.sunsetOrange : DesignTokens.Colors.textSecondary)
+                                        : (hasValue ? DesignTokens.Colors.sunsetOrange : .white.opacity(0.6))
                                 )
                         )
                         .overlay(
@@ -671,7 +663,7 @@ struct ToolButton: View {
                                 .stroke(
                                     isSelected
                                         ? DesignTokens.Colors.selectionAccent.opacity(0.5)
-                                        : (hasValue ? DesignTokens.Colors.sunsetOrange.opacity(0.3) : DesignTokens.Colors.glassBorderSecondary),
+                                        : (hasValue ? DesignTokens.Colors.sunsetOrange.opacity(0.3) : Color.white.opacity(0.15)),
                                     lineWidth: 1
                                 )
                         )
@@ -690,7 +682,7 @@ struct ToolButton: View {
                     .foregroundColor(
                         isSelected
                             ? DesignTokens.Colors.selectionAccent
-                            : DesignTokens.Colors.textSecondary
+                            : .white.opacity(0.6)
                     )
                     .lineLimit(1)
                     .frame(width: 60)

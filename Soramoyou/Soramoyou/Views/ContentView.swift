@@ -10,6 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var authViewModel: AuthViewModel
     @State private var isLoading = true
+    @State private var hasRequestedATT = false
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
     var body: some View {
@@ -32,11 +33,21 @@ struct ContentView: View {
                             #endif
                             try? await Task.sleep(nanoseconds: waitTime)
                             isLoading = false
+                            
+                            // ビュー表示後にATT/AdMob初期化を実行
+                            // ATTダイアログはビューが表示された後でないと表示されない
+                            if !hasRequestedATT && AdService.isAdsEnabled {
+                                hasRequestedATT = true
+                                await AdService.shared.initialize()
+                            }
                         }
                     }
             } else if authViewModel.isAuthenticated {
                 // 認証済み: メインタブビューを表示
                 MainTabView()
+            } else if authViewModel.isGuest {
+                // ゲストモード: 閲覧専用タブビューを表示（投稿・プロフィール機能は制限）
+                GuestTabView()
             } else {
                 // 未認証: ウェルカム画面を表示
                 WelcomeView()

@@ -23,10 +23,15 @@ protocol FirestoreServiceProtocol {
     func loadDraft(draftId: String) async throws -> Draft
     func deleteDraft(draftId: String) async throws
     
-    // Users
+    // Users (機密情報含む - 所有者のみ)
     func fetchUser(userId: String) async throws -> User
     func updateUser(_ user: User) async throws -> User
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws
+
+    // Public Profiles (公開情報のみ - 認証済みユーザー)
+    func fetchPublicProfile(userId: String) async throws -> PublicProfile
+    func updatePublicProfile(_ profile: PublicProfile) async throws
+    func createPublicProfile(from user: User) async throws
     
     // Account
     func deleteUserData(userId: String) async throws
@@ -68,6 +73,10 @@ class FirestoreService: FirestoreServiceProtocol {
 
     private var usersCollection: CollectionReference {
         db.collection("users")
+    }
+
+    private var publicProfilesCollection: CollectionReference {
+        db.collection("publicProfiles")
     }
 
     init(db: Firestore = Firestore.firestore(), authService: AuthServiceProtocol = AuthService()) {
@@ -544,6 +553,45 @@ class FirestoreService: FirestoreServiceProtocol {
             return data["blockedUserIds"] as? [String] ?? []
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    // MARK: - Public Profiles
+
+    /// 公開プロフィールを取得（機密情報を含まない）
+    func fetchPublicProfile(userId: String) async throws -> PublicProfile {
+        do {
+            let document = try await publicProfilesCollection.document(userId).getDocument()
+
+            guard let data = document.data() else {
+                throw FirestoreServiceError.notFound
+            }
+
+            return try PublicProfile(from: data)
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    /// 公開プロフィールを更新
+    func updatePublicProfile(_ profile: PublicProfile) async throws {
+        do {
+            let docRef = publicProfilesCollection.document(profile.id)
+            try await docRef.setData(profile.toFirestoreData(), merge: true)
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// Userモデルから公開プロフィールを作成
+    /// ユーザー作成時に自動的に呼び出される
+    func createPublicProfile(from user: User) async throws {
+        do {
+            let publicProfile = PublicProfile(from: user)
+            let docRef = publicProfilesCollection.document(publicProfile.id)
+            try await docRef.setData(publicProfile.toFirestoreData())
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
         }
     }
 }

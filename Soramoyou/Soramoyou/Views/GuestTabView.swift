@@ -140,6 +140,7 @@ struct GuestPromptView: View {
             }
             .navigationBarHidden(true)
         }
+        .navigationViewStyle(.stack)
         .sheet(isPresented: $showLogin) {
             LoginView()
         }

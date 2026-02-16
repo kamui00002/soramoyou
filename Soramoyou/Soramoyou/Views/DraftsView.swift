@@ -86,6 +86,7 @@ struct DraftsView: View {
                 DraftDetailView(draft: draft)
             }
         }
+        .navigationViewStyle(.stack)
     }
     
     // MARK: - Drafts List ☁️
@@ -291,6 +292,7 @@ struct DraftDetailView: View {
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
     
     private var draftInfoSection: some View {

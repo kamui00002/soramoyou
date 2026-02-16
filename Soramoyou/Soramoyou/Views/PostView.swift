@@ -83,6 +83,7 @@ struct PostView: View {
                 )
             }
         }
+        .navigationViewStyle(.stack)
         .onAppear {
             updateMaxSelectionCount()
         }

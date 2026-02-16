@@ -20,12 +20,8 @@ struct SoramoyouApp: App {
         // Crashlyticsの設定
         setupCrashlytics()
         
-        // AdMob SDKを初期化（非同期で実行、アプリの起動をブロックしない）
-        if AdService.isAdsEnabled {
-            Task {
-                await AdService.shared.initialize()
-            }
-        }
+        // 注意: AdMob/ATT初期化はContentViewのonAppearで実行
+        // init()ではビューが表示されていないため、ATTダイアログが表示されない
     }
     
     /// Crashlyticsの設定

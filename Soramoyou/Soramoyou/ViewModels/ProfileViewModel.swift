@@ -38,6 +38,8 @@ class ProfileViewModel: ObservableObject {
     /// 認証サービス（Firebase直参照を排除し、テスタビリティを向上）
     private let authService: AuthServiceProtocol
     private var cancellables = Set<AnyCancellable>()
+    /// 投稿作成通知の購読を保持
+    private var postCreatedObserver: NSObjectProtocol?
 
     // 自分のプロフィールかどうか
     var isOwnProfile: Bool {
@@ -70,6 +72,30 @@ class ProfileViewModel: ObservableObject {
         // デフォルトで全ツールを選択状態にする
         self.selectedTools = EditTool.allCases
         self.toolsOrder = EditTool.allCases.map { $0.rawValue }
+
+        // 投稿作成通知を購読（自分のプロフィールの場合のみ投稿一覧を自動更新）☁️
+        setupPostCreatedObserver()
+    }
+
+    deinit {
+        if let observer = postCreatedObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    /// 投稿作成通知を監視して投稿一覧を自動更新 ☁️
+    private func setupPostCreatedObserver() {
+        postCreatedObserver = NotificationCenter.default.addObserver(
+            forName: .postCreated,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            Task { @MainActor in
+                await self.loadProfile()
+                await self.loadUserPosts()
+            }
+        }
     }
     
     /// Auth状態が復元された後にuserIdを再取得してプロフィールをリロード
@@ -103,19 +129,43 @@ class ProfileViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            // リトライ可能な操作として実行
-            let fetchedUser = try await RetryableOperation.executeIfRetryable { [self] in
-                try await self.firestoreService.fetchUser(userId: userId)
-            }
-            user = fetchedUser
-
-            // 編集用の値を設定
-            editingDisplayName = fetchedUser.displayName ?? ""
-            editingBio = fetchedUser.bio ?? ""
-
-            // 編集装備を読み込む（自分のプロフィールの場合のみ）
+            // 自分のプロフィールの場合は完全な情報を取得（email, blockedUserIds含む）
+            // 他人のプロフィールの場合は公開情報のみ取得
             if isOwnProfile {
+                // リトライ可能な操作として実行
+                let fetchedUser = try await RetryableOperation.executeIfRetryable { [self] in
+                    try await self.firestoreService.fetchUser(userId: userId)
+                }
+                user = fetchedUser
+
+                // 編集用の値を設定
+                editingDisplayName = fetchedUser.displayName ?? ""
+                editingBio = fetchedUser.bio ?? ""
+
+                // 編集装備を読み込む
                 await loadEditTools()
+            } else {
+                // 他人のプロフィールは公開情報のみ取得
+                let publicProfile = try await RetryableOperation.executeIfRetryable { [self] in
+                    try await self.firestoreService.fetchPublicProfile(userId: userId)
+                }
+
+                // PublicProfileからUserモデルに変換（機密情報はnil）
+                user = User(
+                    id: publicProfile.id,
+                    email: nil,  // 公開情報には含まれない
+                    displayName: publicProfile.displayName,
+                    photoURL: publicProfile.photoURL,
+                    bio: publicProfile.bio,
+                    customEditTools: publicProfile.customEditTools,
+                    customEditToolsOrder: publicProfile.customEditToolsOrder,
+                    followersCount: publicProfile.followersCount,
+                    followingCount: publicProfile.followingCount,
+                    postsCount: publicProfile.postsCount,
+                    blockedUserIds: nil,  // 公開情報には含まれない
+                    createdAt: publicProfile.createdAt,
+                    updatedAt: publicProfile.updatedAt
+                )
             }
         } catch {
             // エラーをログに記録
@@ -222,11 +272,15 @@ class ProfileViewModel: ObservableObject {
     
     // MARK: - Load Posts
     
-    /// ユーザーの投稿一覧を読み込む
+    /// ユーザーの投稿一覧を読み込む ☁️
     func loadUserPosts() async {
         guard let userId = userId else {
+            print("⚠️ [ProfileVM] loadUserPosts: userId is nil, skipping")
             return
         }
+
+        let currentAuthId = authService.currentUser()?.id
+        print("📋 [ProfileVM] loadUserPosts: userId=\(userId), authId=\(currentAuthId ?? "nil"), isOwnProfile=\(isOwnProfile)")
 
         isLoadingPosts = true
         // エラーメッセージはリセットしない（loadProfileで設定されている可能性があるため）
@@ -243,28 +297,36 @@ class ProfileViewModel: ObservableObject {
                 )
             }
 
+            print("✅ [ProfileVM] loadUserPosts: fetched \(posts.count) posts")
+
             // 他ユーザーのプロフィールの場合は公開投稿のみフィルタリング
             if !isOwnProfile {
                 userPosts = posts.filter { $0.visibility == .public }
+                print("📋 [ProfileVM] loadUserPosts: filtered to \(userPosts.count) public posts (not own profile)")
             } else {
                 userPosts = posts
             }
         } catch {
-            // エラーをログに記録
+            // エラーをログに記録（デバッグ用に詳細を出力）
+            print("❌ [ProfileVM] loadUserPosts error: \(error)")
             ErrorHandler.logError(error, context: "ProfileViewModel.loadUserPosts", userId: userId)
 
-            // 権限エラーの場合はエラーを表示しない（新規ユーザーやドキュメント未作成の正常なケース）
             if let firestoreError = error as? FirestoreServiceError {
                 switch firestoreError {
                 case .notFound:
                     // 投稿がない場合は正常
+                    print("📋 [ProfileVM] loadUserPosts: notFound (no posts yet)")
                     return
                 case .fetchFailed(let underlyingError):
-                    // 権限エラーの場合もエラーを表示しない
                     if let nsError = underlyingError as NSError?,
-                       nsError.domain == "FIRFirestoreErrorDomain",
-                       nsError.code == 7 { // PERMISSION_DENIED
-                        return
+                       nsError.domain == "FIRFirestoreErrorDomain" {
+                        print("❌ [ProfileVM] loadUserPosts: Firestore error code=\(nsError.code), desc=\(nsError.localizedDescription)")
+                        // 権限エラー（code 7）やインデックス未作成（code 9）はログのみ
+                        if nsError.code == 7 || nsError.code == 9 {
+                            // PERMISSION_DENIED(7)やFAILED_PRECONDITION(9)はUIにも通知
+                            errorMessage = "投稿の読み込みに失敗しました。しばらくしてから再試行してください。"
+                            return
+                        }
                     }
                 default:
                     break
@@ -326,7 +388,13 @@ class ProfileViewModel: ObservableObject {
                 try await self.firestoreService.updateUser(updatedUser)
             }
             user = savedUser
-            
+
+            // 公開プロフィールも更新（他のユーザーから閲覧可能な情報）
+            let publicProfile = PublicProfile(from: savedUser)
+            try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.updatePublicProfile(publicProfile)
+            }
+
             // 編集用の値をリセット
             editingProfileImage = nil
             shouldDeleteProfileImage = false
@@ -401,7 +469,14 @@ class ProfileViewModel: ObservableObject {
         // 表示名と自己紹介の長さチェック（任意）
         let displayNameValid = editingDisplayName.count <= 50
         let bioValid = editingBio.count <= 200
-        
+
         return displayNameValid && bioValid
     }
+}
+
+// MARK: - 投稿作成通知 ☁️
+
+extension Notification.Name {
+    /// 新しい投稿が作成された時に送信される通知
+    static let postCreated = Notification.Name("com.soramoyou.postCreated")
 }

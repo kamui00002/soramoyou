@@ -17,8 +17,9 @@ service cloud.firestore {
 
     // フォロー関係をチェック（followerId_followeeId 形式のドキュメントID）
     function isFollowing(followeeId) {
+      let followId = request.auth.uid + '_' + followeeId;
       return isAuthenticated() &&
-             exists(/databases/$(database)/documents/follows/$(request.auth.uid)_$(followeeId));
+             exists(/databases/$(database)/documents/follows/$(followId));
     }
 
     // ============================================
@@ -102,13 +103,11 @@ service cloud.firestore {
     }
 
     // ============================================
-    // Users collection
+    // Users collection (機密情報のみ - 所有者のみアクセス可能)
     // ============================================
     match /users/{userId} {
-      // プロフィール情報は認証済みユーザーのみ読み取り可能
-      // email, blockedUserIds等の個人情報はアプリ側で表示制御する
-      allow get: if isAuthenticated();
-      allow list: if isAuthenticated() && request.query.limit <= 20;
+      // 機密情報（email, blockedUserIds等）は所有者のみ読み取り可能
+      allow read: if isOwner(userId);
 
       // 新規ユーザーのみ自分のプロフィールを作成可能
       // 匿名ユーザーはemailを持たないため、emailフィールドは必須としない
@@ -116,11 +115,29 @@ service cloud.firestore {
                     && request.resource.data.keys().hasAll(['id', 'createdAt'])
                     && isValidEmail(request.resource.data.get('email', null));
 
-      // 所有者のみ更新・削除可能
+      // 所有者のみ更新可能
       // idは変更不可。emailは存在する場合のみ変更不可（匿名ユーザーはemailなし）
       allow update: if isOwner(userId)
                     && request.resource.data.id == resource.data.id
                     && request.resource.data.get('email', null) == resource.data.get('email', null);
+
+      allow delete: if isOwner(userId);
+    }
+
+    // ============================================
+    // Public Profiles collection (公開プロフィール情報)
+    // ============================================
+    match /publicProfiles/{userId} {
+      // 公開プロフィール情報は認証済みユーザーが読み取り可能
+      allow get: if isAuthenticated();
+      allow list: if isAuthenticated() && request.query.limit <= 20;
+
+      // 所有者のみ作成・更新・削除可能
+      allow create: if isOwner(userId)
+                    && request.resource.data.keys().hasAll(['id', 'createdAt']);
+
+      allow update: if isOwner(userId)
+                    && request.resource.data.id == resource.data.id;
 
       allow delete: if isOwner(userId);
     }

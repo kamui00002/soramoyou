@@ -115,5 +115,6 @@ struct EditToolsSettingsView: View {
                 await viewModel.loadEditToolsSettings()
             }
         }
+        .navigationViewStyle(.stack)
     }
 }

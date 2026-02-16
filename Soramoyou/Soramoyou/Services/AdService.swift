@@ -4,6 +4,8 @@
 //
 //  Created on 2025-12-06.
 //
+//  AdMob広告サービス
+//  クラッシュ防止対策を施した安全な広告管理
 
 import Foundation
 import UIKit
@@ -21,14 +23,23 @@ protocol AdServiceProtocol {
 
 class AdService: NSObject, AdServiceProtocol {
     static let shared = AdService()
-    static let isAdsEnabled = false
+    static let isAdsEnabled = true
 
-    private var isInitialized = false
+    /// SDK初期化が完了したかどうか（スレッドセーフ）
+    @MainActor
+    private(set) var isInitialized = false
     private var isATTRequested = false
+    /// 初期化中の重複防止フラグ
+    private var isInitializing = false
     private let logger = Logger(subsystem: "com.soramoyou", category: "AdService")
 
-    // テスト用の広告ユニットID（本番環境では実際のIDに置き換える）
-    static let testBannerAdUnitID = "ca-app-pub-3940256099942544/2934735716"
+    // 本番用バナー広告ユニットID
+    static let bannerAdUnitID = "ca-app-pub-5237930968754753/3919828319"
+
+    /// 広告読み込みのリトライ回数上限
+    static let maxRetryCount = 3
+    /// リトライ間隔（秒）
+    static let retryInterval: UInt64 = 2_000_000_000 // 2秒
 
     private override init() {
         super.init()
@@ -41,17 +52,14 @@ class AdService: NSObject, AdServiceProtocol {
     @MainActor
     func requestTrackingAuthorization() async -> Bool {
         guard !isATTRequested else {
-            // 既にリクエスト済みの場合は現在のステータスを返す
             return ATTrackingManager.trackingAuthorizationStatus == .authorized
         }
 
-        // iOS 14以上でATTが必要
         guard #available(iOS 14, *) else {
             logger.info("ATT not required for iOS < 14")
             return true
         }
 
-        // 現在のステータスを確認
         let currentStatus = ATTrackingManager.trackingAuthorizationStatus
 
         switch currentStatus {
@@ -64,7 +72,6 @@ class AdService: NSObject, AdServiceProtocol {
             isATTRequested = true
             return false
         case .notDetermined:
-            // リクエストダイアログを表示
             logger.info("Requesting ATT authorization")
             let status = await ATTrackingManager.requestTrackingAuthorization()
             isATTRequested = true
@@ -104,66 +111,81 @@ class AdService: NSObject, AdServiceProtocol {
 
     // MARK: - Initialization
 
-    /// AdMob SDKを初期化（ATTリクエスト後に呼び出すこと）
+    /// AdMob SDKを安全に初期化（ATTリクエスト後に呼び出すこと）
+    /// 重複呼び出し・初期化中の再呼び出しを防止
+    @MainActor
     func initialize() async {
         guard Self.isAdsEnabled else {
             logger.info("AdMob initialization is disabled")
             return
         }
-        guard !isInitialized else {
+        guard !isInitialized, !isInitializing else {
             return
         }
+
+        isInitializing = true
 
         // ATTリクエストがまだの場合は先にリクエスト
         if !isATTRequested {
             _ = await requestTrackingAuthorization()
         }
 
-        await MainActor.run {
-            MobileAds.shared.start(completionHandler: { [weak self] status in
-                guard let self = self else { return }
-
-                self.isInitialized = true
-
-                if status.adapterStatusesByClassName.isEmpty {
-                    self.logger.info("AdMob SDK initialized successfully")
-                } else {
-                    self.logger.warning("AdMob SDK initialized with warnings: \(status.adapterStatusesByClassName.keys.joined(separator: ", "))")
+        // Continuation を使って初期化完了を確実に待つ
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            MobileAds.shared.start { [weak self] status in
+                guard let self = self else {
+                    continuation.resume()
+                    return
                 }
-            })
+
+                Task { @MainActor in
+                    self.isInitialized = true
+                    self.isInitializing = false
+
+                    if status.adapterStatusesByClassName.isEmpty {
+                        self.logger.info("AdMob SDK initialized successfully")
+                    } else {
+                        self.logger.info("AdMob SDK initialized: \(status.adapterStatusesByClassName.keys.joined(separator: ", "))")
+                    }
+                    continuation.resume()
+                }
+            }
         }
     }
-    
+
     // MARK: - Load Banner Ad
-    
-    /// バナー広告を読み込む
+
+    /// バナー広告を安全に読み込む
+    /// SDK未初期化の場合は初期化を待ってから読み込む
+    @MainActor
     func loadBannerAd(adUnitID: String) async throws -> BannerView {
         guard Self.isAdsEnabled else {
             throw AdServiceError.adsDisabled
         }
-        // 初期化されていない場合は初期化を試みる
+
+        // 初期化されていない場合は初期化を待つ
         if !isInitialized {
             await initialize()
-            // 初期化の完了を待つ（簡易的な実装）
-            try await Task.sleep(nanoseconds: 500_000_000) // 0.5秒待機
         }
-        
-        return await MainActor.run {
-            let bannerView = BannerView(adSize: getBannerAdSize())
-            bannerView.adUnitID = adUnitID
-            bannerView.delegate = self
-            
-            // 広告を読み込む
-            let request = Request()
-            bannerView.load(request)
-            
-            return bannerView
+
+        // 初期化に失敗した場合はエラーを返す（クラッシュさせない）
+        guard isInitialized else {
+            logger.error("AdMob SDK initialization failed, skipping ad load")
+            throw AdServiceError.initializationFailed
         }
+
+        let bannerView = BannerView(adSize: getBannerAdSize())
+        bannerView.adUnitID = adUnitID
+        bannerView.delegate = self
+
+        let request = Request()
+        bannerView.load(request)
+
+        return bannerView
     }
-    
+
     /// バナー広告のサイズを取得
     func getBannerAdSize() -> AdSize {
-        // 標準バナーサイズ（SDK互換性優先）
         return AdSizeBanner
     }
 }
@@ -171,45 +193,43 @@ class AdService: NSObject, AdServiceProtocol {
 // MARK: - BannerViewDelegate
 
 extension AdService: BannerViewDelegate {
-    /// 広告が正常に読み込まれたとき
     func bannerViewDidReceiveAd(_ bannerView: BannerView) {
         logger.info("Banner ad loaded successfully: \(bannerView.adUnitID ?? "unknown")")
     }
-    
-    /// 広告の読み込みに失敗したとき
+
     func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
-        // エラーをログに記録するが、アプリの動作には影響を与えない
         logger.error("Banner ad failed to load: \(error.localizedDescription)")
     }
-    
-    /// 広告が表示されたとき
+
     func bannerViewDidRecordImpression(_ bannerView: BannerView) {
-        logger.info("Banner ad impression recorded: \(bannerView.adUnitID ?? "unknown")")
+        logger.info("Banner ad impression recorded")
     }
-    
-    /// 広告がクリックされたとき
+
     func bannerViewWillPresentScreen(_ bannerView: BannerView) {
-        logger.info("Banner ad clicked: \(bannerView.adUnitID ?? "unknown")")
+        logger.info("Banner ad clicked")
     }
-    
-    /// 広告画面が閉じられたとき
+
     func bannerViewWillDismissScreen(_ bannerView: BannerView) {
-        logger.info("Banner ad screen will dismiss: \(bannerView.adUnitID ?? "unknown")")
+        logger.info("Banner ad screen will dismiss")
     }
-    
-    /// 広告画面が閉じられたとき
+
     func bannerViewDidDismissScreen(_ bannerView: BannerView) {
-        logger.info("Banner ad screen dismissed: \(bannerView.adUnitID ?? "unknown")")
+        logger.info("Banner ad screen dismissed")
     }
 }
 
+// MARK: - Error Types
+
 enum AdServiceError: LocalizedError {
     case adsDisabled
+    case initializationFailed
 
     var errorDescription: String? {
         switch self {
         case .adsDisabled:
             return "広告が無効化されています"
+        case .initializationFailed:
+            return "広告サービスの初期化に失敗しました"
         }
     }
 }

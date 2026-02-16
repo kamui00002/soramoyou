@@ -93,6 +93,7 @@ iOSInjectionProject/
 GoogleService-Info.plist
 firebase-debug.log
 .firebaserc
+serviceAccountKey.json
 
 # API Keys
 *.plist
@@ -110,6 +111,11 @@ firebase-debug.log
 
 # Ralph Wiggum (AI loop tool)
 ralph-loop/
+
+# Node modules (screenshot generator)
+node_modules/
+screenshots/generator/node_modules/
+package-lock.json
 
 
 

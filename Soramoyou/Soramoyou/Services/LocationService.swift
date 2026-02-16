@@ -36,6 +36,12 @@ class LocationService: NSObject, LocationServiceProtocol, CLLocationManagerDeleg
         case .authorizedWhenInUse, .authorizedAlways:
             return true
         case .notDetermined:
+            // 既存のcontinuationがある場合はfalseで解放
+            if let existing = permissionContinuation {
+                existing.resume(returning: false)
+                permissionContinuation = nil
+            }
+            
             return await withCheckedContinuation { continuation in
                 permissionContinuation = continuation
                 locationManager.requestWhenInUseAuthorization()
@@ -51,6 +57,12 @@ class LocationService: NSObject, LocationServiceProtocol, CLLocationManagerDeleg
         let hasPermission = await requestLocationPermission()
         guard hasPermission else {
             throw LocationServiceError.permissionDenied
+        }
+        
+        // 既存のcontinuationがある場合はエラーで解放
+        if let existing = locationContinuation {
+            existing.resume(throwing: LocationServiceError.locationNotFound)
+            locationContinuation = nil
         }
         
         return try await withCheckedThrowingContinuation { continuation in

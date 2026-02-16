@@ -64,6 +64,7 @@ struct SearchView: View {
                 PostDetailView(post: post)
             }
         }
+        .navigationViewStyle(.stack)
     }
     
     // MARK: - Search Criteria Section

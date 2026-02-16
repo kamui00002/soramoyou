@@ -166,6 +166,7 @@ struct PostInfoView: View {
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
     
     // MARK: - Photo Preview Section
@@ -948,6 +949,7 @@ struct MapView: View {
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
     
     private func searchLandmarks() async {

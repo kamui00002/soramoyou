@@ -237,7 +237,10 @@ class PostViewModel: ObservableObject {
             ) { [self] in
                 try await self.firestoreService.createPost(post)
             }
-            
+
+            // 4. 投稿作成を通知（プロフィール画面の自動更新用）☁️
+            NotificationCenter.default.post(name: .postCreated, object: nil)
+
             isPostSaved = true
             uploadProgress = 1.0
         } catch {

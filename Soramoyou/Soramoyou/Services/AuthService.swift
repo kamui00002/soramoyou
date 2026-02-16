@@ -13,6 +13,8 @@ protocol AuthServiceProtocol {
     func signUp(email: String, password: String) async throws -> User
     func signInAnonymously() async throws -> User
     func signOut() async throws
+    func deleteAccount() async throws
+    func reauthenticate(email: String, password: String) async throws
     func currentUser() -> User?
     func observeAuthState() -> AsyncStream<User?>
 }
@@ -70,6 +72,38 @@ class AuthService: AuthServiceProtocol {
     func signOut() async throws {
         do {
             try Auth.auth().signOut()
+        } catch {
+            throw mapFirebaseError(error)
+        }
+    }
+    
+    /// アカウントを完全に削除（Firebase Auth）
+    func deleteAccount() async throws {
+        guard let user = Auth.auth().currentUser else {
+            throw AuthError.userNotFound
+        }
+        
+        do {
+            try await user.delete()
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == AuthErrorDomain,
+               AuthErrorCode(rawValue: nsError.code) == .requiresRecentLogin {
+                throw AuthError.requiresRecentLogin
+            }
+            throw mapFirebaseError(error)
+        }
+    }
+    
+    /// 再認証（アカウント削除前に必要な場合がある）
+    func reauthenticate(email: String, password: String) async throws {
+        guard let user = Auth.auth().currentUser else {
+            throw AuthError.userNotFound
+        }
+        
+        let credential = EmailAuthProvider.credential(withEmail: email, password: password)
+        do {
+            try await user.reauthenticate(with: credential)
         } catch {
             throw mapFirebaseError(error)
         }
@@ -149,6 +183,7 @@ enum AuthError: LocalizedError, Equatable {
     case userNotFound
     case networkError
     case tooManyRequests
+    case requiresRecentLogin
     case unknown(String)
 
     static func == (lhs: AuthError, rhs: AuthError) -> Bool {
@@ -160,7 +195,8 @@ enum AuthError: LocalizedError, Equatable {
              (.wrongPassword, .wrongPassword),
              (.userNotFound, .userNotFound),
              (.networkError, .networkError),
-             (.tooManyRequests, .tooManyRequests):
+             (.tooManyRequests, .tooManyRequests),
+             (.requiresRecentLogin, .requiresRecentLogin):
             return true
         case (.unknown(let lhsMessage), .unknown(let rhsMessage)):
             return lhsMessage == rhsMessage
@@ -187,6 +223,8 @@ enum AuthError: LocalizedError, Equatable {
             return "ネットワークエラーが発生しました。接続を確認してください"
         case .tooManyRequests:
             return "リクエストが多すぎます。しばらく待ってから再試行してください"
+        case .requiresRecentLogin:
+            return "セキュリティのため、再ログインが必要です。パスワードを入力してください"
         case .unknown(let message):
             return message
         }
