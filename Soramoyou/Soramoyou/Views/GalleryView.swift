@@ -1,9 +1,10 @@
 //
-//  GalleryView.swift
+//  GalleryView.swift ☁️⭐️
 //  Soramoyou
 //
 //  Created on 2025-01-19.
 //
+//  AsyncContentViewを使用してエラー/ロード状態を統一的に表示する
 
 import SwiftUI
 import Kingfisher
@@ -11,13 +12,19 @@ import Kingfisher
 struct GalleryView: View {
     @StateObject private var viewModel = GalleryViewModel()
     @State private var selectedPost: Post?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    // 3列のグリッドレイアウト
-    private let columns = [
-        GridItem(.flexible(), spacing: 2),
-        GridItem(.flexible(), spacing: 2),
-        GridItem(.flexible(), spacing: 2)
-    ]
+    /// iPad対応: 画面サイズに応じて列数を動的に変更
+    private var columns: [GridItem] {
+        let count = horizontalSizeClass == .regular ? 5 : 3
+        return Array(repeating: GridItem(.flexible(), spacing: 2), count: count)
+    }
+
+    /// ViewModelの状態をLoadableStateとして取得
+    /// PaginatedPostsViewModelの共通プロパティを活用
+    private var galleryState: LoadableState<[Post]> {
+        viewModel.loadableState
+    }
 
     var body: some View {
         NavigationView {
@@ -35,33 +42,25 @@ struct GalleryView: View {
                 .ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    ZStack {
-                        if viewModel.isLoading && viewModel.posts.isEmpty {
-                            // 初回読み込み中
-                            VStack {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                Text("読み込み中...")
-                                    .foregroundColor(.white)
-                            }
-                        } else if viewModel.posts.isEmpty {
-                            // 投稿がない場合
-                            VStack(spacing: 16) {
-                                Image(systemName: "photo.on.rectangle.angled")
-                                    .font(.system(size: 60))
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                                Text("まだ投稿がありません")
-                                    .font(.headline)
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                                Text("みんなの空の写真がここに表示されます")
-                                    .font(.caption)
-                                    .foregroundColor(DesignTokens.Colors.textTertiary)
-                            }
-                        } else {
-                            // グリッド表示
+                    // AsyncContentViewで状態に応じた表示を統一 ⭐️
+                    AsyncContentView(
+                        state: galleryState,
+                        loadingType: .initial,
+                        emptyCheck: { $0.isEmpty },
+                        emptyStateType: .custom(
+                            icon: "photo.on.rectangle.angled",
+                            title: "まだ投稿がありません",
+                            description: "みんなの空の写真がここに表示されます",
+                            actionTitle: nil
+                        ),
+                        onRetry: {
+                            await viewModel.refresh()
+                        },
+                        content: { _ in
+                            // グリッド表示（viewModel.postsを直接使用してページネーション対応）
                             galleryGrid
                         }
-                    }
+                    )
 
                     // 画面下部に固定表示されるバナー広告
                     BannerAdContainer()
@@ -95,6 +94,7 @@ struct GalleryView: View {
                 GalleryDetailView(post: post)
             }
         }
+        .navigationViewStyle(.stack)
     }
 
     // MARK: - Gallery Grid
@@ -103,11 +103,13 @@ struct GalleryView: View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 2) {
                 ForEach(viewModel.posts) { post in
-                    GalleryGridItem(post: post)
-                        .onTapGesture {
-                            selectedPost = post
-                        }
-                        .onAppear {
+                    Button {
+                        selectedPost = post
+                    } label: {
+                        GalleryGridItem(post: post)
+                    }
+                    .buttonStyle(CardButtonStyle())
+                    .onAppear {
                             // ページネーション: 最後の投稿が表示されたら次のページを読み込む
                             if post.id == viewModel.posts.last?.id {
                                 Task {

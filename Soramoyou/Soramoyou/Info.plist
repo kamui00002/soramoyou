@@ -20,6 +20,8 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
@@ -57,7 +59,7 @@
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>投稿に位置情報を追加するために、位置情報へのアクセスが必要です。</string>
 	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-3940256099942544~1458002511</string>
+	<string>ca-app-pub-5237930968754753~7016872745</string>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>このアプリでは、より関連性の高い広告を表示するために、トラッキングの許可をお願いしています。許可しない場合でも、アプリの機能は制限されません。</string>
 	<key>SKAdNetworkItems</key>

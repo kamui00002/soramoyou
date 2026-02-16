@@ -17,6 +17,7 @@ struct ProfileView: View {
     @State private var showingEditTools = false
     @State private var showingSettings = false
     @State private var displayMode: DisplayMode = .grid
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     enum DisplayMode {
         case grid
@@ -132,6 +133,8 @@ struct ProfileView: View {
             }
             .onAppear {
                 Task {
+                    // Auth状態が復元されていない場合にuserIdを再取得
+                    await viewModel.refreshUserIdIfNeeded()
                     await viewModel.loadProfile()
                     await viewModel.loadUserPosts()
                 }
@@ -166,6 +169,7 @@ struct ProfileView: View {
                 PostDetailView(post: post)
             }
         }
+        .navigationViewStyle(.stack)
     }
     
     // MARK: - Profile Content
@@ -359,26 +363,26 @@ struct ProfileView: View {
         Group {
             if displayMode == .grid {
                 // グリッド表示
-                LazyVGrid(columns: [
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8)
-                ], spacing: 8) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: horizontalSizeClass == .regular ? 5 : 3), spacing: 8) {
                     ForEach(viewModel.userPosts) { post in
-                        PostGridItem(post: post)
-                            .onTapGesture {
-                                selectedPost = post
-                            }
+                        Button {
+                            selectedPost = post
+                        } label: {
+                            PostGridItem(post: post)
+                        }
+                        .buttonStyle(CardButtonStyle())
                     }
                 }
             } else {
                 // リスト表示
                 LazyVStack(spacing: 16) {
                     ForEach(viewModel.userPosts) { post in
-                        PostCard(post: post)
-                            .onTapGesture {
-                                selectedPost = post
-                            }
+                        Button {
+                            selectedPost = post
+                        } label: {
+                            PostCard(post: post)
+                        }
+                        .buttonStyle(CardButtonStyle())
                     }
                 }
             }
@@ -390,7 +394,6 @@ struct ProfileView: View {
 
 struct PostGridItem: View {
     let post: Post
-    @State private var isPressed = false
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -441,13 +444,8 @@ struct PostGridItem: View {
             }
         }
         .shadow(DesignTokens.Shadow.soft)
-        .scaleEffect(isPressed ? 0.95 : 1.0)
-        .animation(DesignTokens.Animation.quickSpring, value: isPressed)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
+        // タップアニメーションはButtonStyle側で制御（DragGestureはScrollViewとの競合を回避）
+        .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.md))
     }
 }
 

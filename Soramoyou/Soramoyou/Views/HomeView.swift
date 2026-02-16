@@ -97,23 +97,25 @@ struct HomeView: View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: DesignTokens.Spacing.lg) {
                 ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
-                    PostCard(post: post)
-                        // スタガードアニメーション（改善）
-                        .opacity(animateCards ? 1 : 0)
-                        .offset(y: animateCards ? 0 : 30)
-                        .scaleEffect(animateCards ? 1 : 0.95)
-                        .animation(
-                            DesignTokens.Animation.smoothSpring
-                            .delay(Double(index) * DesignTokens.Animation.staggerDelay),
-                            value: animateCards
-                        )
-                        .onTapGesture {
-                            // ハプティックフィードバック
-                            let impact = UIImpactFeedbackGenerator(style: .light)
-                            impact.impactOccurred()
-                            selectedPost = post
-                        }
-                        .onAppear {
+                    Button {
+                        // ハプティックフィードバック
+                        let impact = UIImpactFeedbackGenerator(style: .light)
+                        impact.impactOccurred()
+                        selectedPost = post
+                    } label: {
+                        PostCard(post: post)
+                    }
+                    .buttonStyle(CardButtonStyle())
+                    // スタガードアニメーション（改善）
+                    .opacity(animateCards ? 1 : 0)
+                    .offset(y: animateCards ? 0 : 30)
+                    .scaleEffect(animateCards ? 1 : 0.95)
+                    .animation(
+                        DesignTokens.Animation.smoothSpring
+                        .delay(Double(index) * DesignTokens.Animation.staggerDelay),
+                        value: animateCards
+                    )
+                    .onAppear {
                             // ページネーション: 最後の投稿が表示されたら次のページを読み込む ☁️
                             // 重複リクエスト防止: 読み込み中の場合はスキップ
                             if post.id == viewModel.posts.last?.id
@@ -165,7 +167,6 @@ struct HomeView: View {
 
 struct PostCard: View {
     let post: Post
-    @State private var isPressed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -316,14 +317,8 @@ struct PostCard: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
         .shadow(DesignTokens.Shadow.card)
-        // タップ時のアニメーション（DragGestureはScrollViewと競合するためLongPressGestureで代替）
-        .scaleEffect(isPressed ? 0.98 : 1.0)
-        .animation(DesignTokens.Animation.quickSpring, value: isPressed)
-        .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.01)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
+        // タップ時のアニメーションはButtonStyle側で制御（ScrollViewとの競合を回避）
+        .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
     }
 }
 
@@ -385,6 +380,18 @@ struct PostImageView: View {
                         .foregroundColor(.gray)
                 )
         }
+    }
+}
+
+// MARK: - Card Button Style ☀️
+// ScrollView内で安全に動作するタップアニメーション
+// DragGesture/LongPressGestureの代わりにButtonStyleを使用し、スクロール競合を回避
+
+struct CardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
 
