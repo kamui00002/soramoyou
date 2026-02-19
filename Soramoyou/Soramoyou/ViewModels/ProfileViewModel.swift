@@ -336,6 +336,25 @@ class ProfileViewModel: ObservableObject {
             } else {
                 userPosts = posts
             }
+
+            // postsCount を実際の取得数で補正（Firestoreデータの不整合を修正）
+            // User は struct（値型）のため user?.postsCount = x は @Published に反映されない。
+            // いったん取り出して代入し直すことで ObservableObject の変更通知を確実に発行する。
+            let actualCount = isOwnProfile ? posts.count : userPosts.count
+            if user?.postsCount != actualCount {
+                print("📋 [ProfileVM] loadUserPosts: postsCount mismatch (\(user?.postsCount ?? -1) → \(actualCount)), correcting")
+                if var updatedUser = user {
+                    updatedUser.postsCount = actualCount
+                    user = updatedUser  // @Published への再代入でUI更新を発火
+                }
+                // 自分のプロフィールの場合はFirestoreにも書き戻す（バックグラウンドで実行）
+                if isOwnProfile {
+                    let correctionUserId = userId
+                    Task { [weak self] in
+                        try? await self?.firestoreService.syncPostsCount(userId: correctionUserId, count: actualCount)
+                    }
+                }
+            }
         } catch {
             // エラーをログに記録（デバッグ用に詳細を出力）
             print("❌ [ProfileVM] loadUserPosts error: \(error)")

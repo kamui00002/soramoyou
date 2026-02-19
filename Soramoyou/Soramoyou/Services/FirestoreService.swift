@@ -27,6 +27,7 @@ protocol FirestoreServiceProtocol {
     func fetchUser(userId: String) async throws -> User
     func updateUser(_ user: User) async throws -> User
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws
+    func syncPostsCount(userId: String, count: Int) async throws
 
     // Public Profiles (公開情報のみ - 認証済みユーザー)
     func fetchPublicProfile(userId: String) async throws -> PublicProfile
@@ -90,11 +91,19 @@ class FirestoreService: FirestoreServiceProtocol {
         do {
             let data = post.toFirestoreData()
             let docRef = postsCollection.document(post.id)
-            
+
             try await docRef.setData(data)
-            
+
+            // users と publicProfiles の postsCount をインクリメント
+            let countIncrement: [String: Any] = ["postsCount": FieldValue.increment(Int64(1))]
+            try await usersCollection.document(post.userId).updateData(countIncrement)
+            // publicProfiles が存在しない場合はエラーを無視（マイグレーション未実施ユーザー対応）
+            try? await publicProfilesCollection.document(post.userId).updateData(countIncrement)
+
             // 作成された投稿を返す（IDは既に設定されている）
             return post
+        } catch let error as FirestoreServiceError {
+            throw error
         } catch {
             throw FirestoreServiceError.createFailed(error)
         }
@@ -175,13 +184,18 @@ class FirestoreService: FirestoreServiceProtocol {
                   let postUserId = data["userId"] as? String else {
                 throw FirestoreServiceError.notFound
             }
-            
+
             // 認可チェック: 自分の投稿のみ削除可能
             guard postUserId == userId else {
                 throw FirestoreServiceError.unauthorized
             }
-            
+
             try await postsCollection.document(postId).delete()
+
+            // users と publicProfiles の postsCount をデクリメント（0未満にはならない）
+            let countDecrement: [String: Any] = ["postsCount": FieldValue.increment(Int64(-1))]
+            try await usersCollection.document(userId).updateData(countDecrement)
+            try? await publicProfilesCollection.document(userId).updateData(countDecrement)
         } catch let error as FirestoreServiceError {
             throw error
         } catch {
@@ -341,8 +355,19 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
     
+    /// 投稿数カウンターをFirestoreと同期する（既存データの不整合を修正）
+    func syncPostsCount(userId: String, count: Int) async throws {
+        do {
+            let countData: [String: Any] = ["postsCount": count]
+            try await usersCollection.document(userId).updateData(countData)
+            try? await publicProfilesCollection.document(userId).updateData(countData)
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
     // MARK: - Search
-    
+
     func searchByHashtag(_ hashtag: String) async throws -> [Post] {
         do {
             let snapshot = try await postsCollection
