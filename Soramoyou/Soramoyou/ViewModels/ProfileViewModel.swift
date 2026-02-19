@@ -100,18 +100,22 @@ class ProfileViewModel: ObservableObject {
     
     /// Auth状態が復元された後にuserIdを再取得してプロフィールをリロード
     /// Firebase Auth復元前にProfileViewが初期化された場合の対策
-    func refreshUserIdIfNeeded() async {
-        // 外部指定のuserIdがある場合はスキップ
-        guard !isExternalUserId else { return }
-        
+    /// - Returns: true = このメソッド内でロード済み（呼び出し元は再ロード不要）
+    ///            false = ロード未実施（呼び出し元でロードが必要）
+    func refreshUserIdIfNeeded() async -> Bool {
+        // 外部指定のuserIdがある場合はスキップ（呼び出し元でロードが必要）
+        guard !isExternalUserId else { return false }
+
         // userIdがnilの場合、Auth復元後に再取得を試みる
         if userId == nil {
             if let currentUserId = authService.currentUser()?.id {
                 userId = currentUserId
                 await loadProfile()
                 await loadUserPosts()
+                return true  // このメソッド内でロード済み
             }
         }
+        return false  // ロード未実施（呼び出し元でロードが必要）
     }
     
     // MARK: - Load Profile
@@ -146,26 +150,52 @@ class ProfileViewModel: ObservableObject {
                 await loadEditTools()
             } else {
                 // 他人のプロフィールは公開情報のみ取得
-                let publicProfile = try await RetryableOperation.executeIfRetryable { [self] in
-                    try await self.firestoreService.fetchPublicProfile(userId: userId)
-                }
+                // publicProfiles が存在しない場合（マイグレーション未実施ユーザー）は
+                // users コレクションからフォールバック取得する
+                do {
+                    let publicProfile = try await RetryableOperation.executeIfRetryable { [self] in
+                        try await self.firestoreService.fetchPublicProfile(userId: userId)
+                    }
 
-                // PublicProfileからUserモデルに変換（機密情報はnil）
-                user = User(
-                    id: publicProfile.id,
-                    email: nil,  // 公開情報には含まれない
-                    displayName: publicProfile.displayName,
-                    photoURL: publicProfile.photoURL,
-                    bio: publicProfile.bio,
-                    customEditTools: publicProfile.customEditTools,
-                    customEditToolsOrder: publicProfile.customEditToolsOrder,
-                    followersCount: publicProfile.followersCount,
-                    followingCount: publicProfile.followingCount,
-                    postsCount: publicProfile.postsCount,
-                    blockedUserIds: nil,  // 公開情報には含まれない
-                    createdAt: publicProfile.createdAt,
-                    updatedAt: publicProfile.updatedAt
-                )
+                    // PublicProfileからUserモデルに変換（機密情報はnil）
+                    user = User(
+                        id: publicProfile.id,
+                        email: nil,  // 公開情報には含まれない
+                        displayName: publicProfile.displayName,
+                        photoURL: publicProfile.photoURL,
+                        bio: publicProfile.bio,
+                        customEditTools: publicProfile.customEditTools,
+                        customEditToolsOrder: publicProfile.customEditToolsOrder,
+                        followersCount: publicProfile.followersCount,
+                        followingCount: publicProfile.followingCount,
+                        postsCount: publicProfile.postsCount,
+                        blockedUserIds: nil,  // 公開情報には含まれない
+                        createdAt: publicProfile.createdAt,
+                        updatedAt: publicProfile.updatedAt
+                    )
+                } catch FirestoreServiceError.notFound {
+                    // publicProfiles ドキュメント未作成の場合: users コレクションからフォールバック
+                    // （マイグレーション未実施の既存ユーザー対応）
+                    let fallbackUser = try await RetryableOperation.executeIfRetryable { [self] in
+                        try await self.firestoreService.fetchUser(userId: userId)
+                    }
+                    // 機密情報（email, blockedUserIds）をマスクして表示
+                    user = User(
+                        id: fallbackUser.id,
+                        email: nil,
+                        displayName: fallbackUser.displayName,
+                        photoURL: fallbackUser.photoURL,
+                        bio: fallbackUser.bio,
+                        customEditTools: fallbackUser.customEditTools,
+                        customEditToolsOrder: fallbackUser.customEditToolsOrder,
+                        followersCount: fallbackUser.followersCount,
+                        followingCount: fallbackUser.followingCount,
+                        postsCount: fallbackUser.postsCount,
+                        blockedUserIds: nil,
+                        createdAt: fallbackUser.createdAt,
+                        updatedAt: fallbackUser.updatedAt
+                    )
+                }
             }
         } catch {
             // エラーをログに記録

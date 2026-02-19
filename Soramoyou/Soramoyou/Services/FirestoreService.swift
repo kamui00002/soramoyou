@@ -563,12 +563,17 @@ class FirestoreService: FirestoreServiceProtocol {
         do {
             let document = try await publicProfilesCollection.document(userId).getDocument()
 
-            guard let data = document.data() else {
+            // ドキュメントが存在しない、またはデータがない場合は notFound を直接 throw
+            guard document.exists, let data = document.data() else {
                 throw FirestoreServiceError.notFound
             }
 
             return try PublicProfile(from: data)
+        } catch let error as FirestoreServiceError {
+            // FirestoreServiceError（notFound 等）はそのまま re-throw（fetchFailed でラップしない）
+            throw error
         } catch {
+            // Firestore SDK 等の外部エラーのみ fetchFailed にラップ
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
