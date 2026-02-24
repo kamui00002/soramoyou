@@ -27,7 +27,13 @@ class PostViewModel: ObservableObject {
     // 自動抽出された情報
     @Published var extractedInfo: ExtractedImageInfo?
 
+    // AI空タイプ判定結果 ☁️
+    @Published var skyTypeClassificationResult: SkyTypeClassificationResult?
+    @Published var isClassifyingSkyType = false
+    @Published var userSelectedSkyType: SkyType?  // ユーザーが手動選択した場合
+
     private let imageService: ImageServiceProtocol
+    private let skyTypeClassifier: SkyTypeClassifierProtocol
     private let storageService: StorageServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
     private let userId: String?
@@ -40,12 +46,14 @@ class PostViewModel: ObservableObject {
         userId: String? = nil,
         imageService: ImageServiceProtocol = ImageService(),
         storageService: StorageServiceProtocol = StorageService(),
-        firestoreService: FirestoreServiceProtocol = FirestoreService()
+        firestoreService: FirestoreServiceProtocol = FirestoreService(),
+        skyTypeClassifier: SkyTypeClassifierProtocol = SkyTypeClassifier()
     ) {
         self.userId = userId
         self.imageService = imageService
         self.storageService = storageService
         self.firestoreService = firestoreService
+        self.skyTypeClassifier = skyTypeClassifier
     }
     
     // MARK: - Image Management
@@ -98,16 +106,17 @@ class PostViewModel: ObservableObject {
     }
     
     // MARK: - Image Info Extraction
-    
+
     /// 画像情報を抽出
     private func extractImageInfo() {
         guard let firstImage = selectedImages.first else { return }
-        
-        Task {
+
+        Task { [weak self] in
+            guard let self = self else { return }
             do {
                 // EXIF情報の抽出
-                let exifData = try await imageService.extractEXIFData(firstImage)
-                
+                let exifData = try await self.imageService.extractEXIFData(firstImage)
+
                 // 時間帯の判定
                 let timeOfDay: TimeOfDay?
                 if let capturedAt = exifData.capturedAt {
@@ -115,28 +124,67 @@ class PostViewModel: ObservableObject {
                 } else {
                     timeOfDay = nil
                 }
-                
+
                 // 色の抽出
-                let colors = try await imageService.extractColors(firstImage, maxCount: 5)
-                
+                let colors = try await self.imageService.extractColors(firstImage, maxCount: 5)
+
                 // 色温度の計算
-                let colorTemperature = try await imageService.calculateColorTemperature(firstImage)
-                
-                // 空の種類の判定
-                let skyType = try await imageService.detectSkyType(firstImage)
-                
-                extractedInfo = ExtractedImageInfo(
+                let colorTemperature = try await self.imageService.calculateColorTemperature(firstImage)
+
+                // AI空タイプ判定（新しい分類器を使用）☁️
+                self.isClassifyingSkyType = true
+                let classificationResult = try await self.skyTypeClassifier.classify(firstImage, timeOfDay: timeOfDay)
+                self.skyTypeClassificationResult = classificationResult
+                self.isClassifyingSkyType = false
+
+                self.extractedInfo = ExtractedImageInfo(
                     capturedAt: exifData.capturedAt,
                     timeOfDay: timeOfDay,
                     skyColors: colors,
                     colorTemperature: colorTemperature,
-                    skyType: skyType
+                    skyType: classificationResult.skyType
                 )
             } catch {
-                // エラーは無視（自動抽出はオプション）
-                print("画像情報の抽出に失敗しました: \(error)")
+                self.isClassifyingSkyType = false
+                // エラーをログに記録（自動抽出はオプションだが、ログ基盤には記録する）
+                ErrorHandler.logError(error, context: "PostViewModel.extractImageInfo")
             }
         }
+    }
+
+    // MARK: - Sky Type Management ☁️
+
+    /// ユーザーがAI判定結果を採用
+    func acceptAISkyType() {
+        guard let result = skyTypeClassificationResult else { return }
+        userSelectedSkyType = nil  // AI判定を使用
+        updateExtractedInfoSkyType(result.skyType)
+    }
+
+    /// ユーザーが手動で空タイプを選択
+    func selectSkyType(_ skyType: SkyType) {
+        userSelectedSkyType = skyType
+        updateExtractedInfoSkyType(skyType)
+    }
+
+    /// extractedInfoのskyTypeを更新
+    private func updateExtractedInfoSkyType(_ skyType: SkyType) {
+        guard let info = extractedInfo else { return }
+        extractedInfo = ExtractedImageInfo(
+            capturedAt: info.capturedAt,
+            timeOfDay: info.timeOfDay,
+            skyColors: info.skyColors,
+            colorTemperature: info.colorTemperature,
+            skyType: skyType
+        )
+    }
+
+    /// 現在有効な空タイプを取得
+    var effectiveSkyType: SkyType? {
+        if let userSelected = userSelectedSkyType {
+            return userSelected
+        }
+        return skyTypeClassificationResult?.skyType ?? extractedInfo?.skyType
     }
     
     // MARK: - Post Save
@@ -171,7 +219,7 @@ class PostViewModel: ObservableObject {
             }
 
             // 2. オリジナル画像をアップロード（ユーザーが選択した場合のみ）
-            var originalImageURLs: [(url: String, thumbnail: String?)]? = nil
+            var originalImageURLs: [(url: String, thumbnail: String?, width: Int, height: Int)]? = nil
             if saveOriginalImages && !selectedImages.isEmpty {
                 originalImageURLs = try await RetryableOperation.executeIfRetryable(
                     operationName: "PostViewModel.uploadOriginalImages"
@@ -189,7 +237,10 @@ class PostViewModel: ObservableObject {
             ) { [self] in
                 try await self.firestoreService.createPost(post)
             }
-            
+
+            // 4. 投稿作成を通知（プロフィール画面の自動更新用）☁️
+            NotificationCenter.default.post(name: .postCreated, object: nil)
+
             isPostSaved = true
             uploadProgress = 1.0
         } catch {
@@ -206,13 +257,16 @@ class PostViewModel: ObservableObject {
     }
     
     /// 画像をアップロード
-    private func uploadImages() async throws -> [(url: String, thumbnail: String?)] {
+    private func uploadImages() async throws -> [(url: String, thumbnail: String?, width: Int, height: Int)] {
         guard let userId = userId else {
             throw PostViewModelError.userNotAuthenticated
         }
 
-        var imageURLs: [(url: String, thumbnail: String?)] = []
-        let totalImages = Double(editedImages.count)
+        // 配列のスナップショットを取得（async待機中の変更を防ぐ）
+        let imagesToUpload = editedImages
+
+        var imageURLs: [(url: String, thumbnail: String?, width: Int, height: Int)] = []
+        let totalImages = Double(imagesToUpload.count)
 
         // visibility に基づいてサブパスを決定（storage.rules に合わせる）
         let visibilityPath: String
@@ -225,7 +279,7 @@ class PostViewModel: ObservableObject {
             visibilityPath = "private"
         }
 
-        for (index, image) in editedImages.enumerated() {
+        for (index, image) in imagesToUpload.enumerated() {
             // 画像を圧縮・リサイズ
             let resizedImage = try await imageService.resizeImage(
                 image,
@@ -246,7 +300,13 @@ class PostViewModel: ObservableObject {
             let thumbnailURL = try await storageService.uploadThumbnail(resizedImage, path: thumbnailBasePath)
             uploadedThumbnailURLs.append("thumbnails/\(thumbnailBasePath)")
 
-            imageURLs.append((url: imageURL.absoluteString, thumbnail: thumbnailURL.absoluteString))
+            // サイズ情報もスナップショット時点で収集
+            imageURLs.append((
+                url: imageURL.absoluteString,
+                thumbnail: thumbnailURL.absoluteString,
+                width: Int(image.size.width),
+                height: Int(image.size.height)
+            ))
 
             // 進捗を更新（オリジナル画像保存時は70%まで、保存しない場合は90%まで）
             let progressMax = saveOriginalImages ? 0.7 : 0.9
@@ -257,13 +317,16 @@ class PostViewModel: ObservableObject {
     }
 
     /// オリジナル画像をアップロード
-    private func uploadOriginalImages() async throws -> [(url: String, thumbnail: String?)] {
+    private func uploadOriginalImages() async throws -> [(url: String, thumbnail: String?, width: Int, height: Int)] {
         guard let userId = userId else {
             throw PostViewModelError.userNotAuthenticated
         }
 
-        var originalURLs: [(url: String, thumbnail: String?)] = []
-        let totalImages = Double(selectedImages.count)
+        // 配列のスナップショットを取得（async待機中の変更を防ぐ）
+        let imagesToUpload = selectedImages
+
+        var originalURLs: [(url: String, thumbnail: String?, width: Int, height: Int)] = []
+        let totalImages = Double(imagesToUpload.count)
 
         // visibility に基づいてサブパスを決定
         let visibilityPath: String
@@ -276,7 +339,7 @@ class PostViewModel: ObservableObject {
             visibilityPath = "private"
         }
 
-        for (index, image) in selectedImages.enumerated() {
+        for (index, image) in imagesToUpload.enumerated() {
             // オリジナル画像を圧縮・リサイズ
             let resizedImage = try await imageService.resizeImage(
                 image,
@@ -289,7 +352,13 @@ class PostViewModel: ObservableObject {
             let imageURL = try await storageService.uploadImage(resizedImage, path: imagePath)
             uploadedOriginalImageURLs.append(imagePath)
 
-            originalURLs.append((url: imageURL.absoluteString, thumbnail: nil))
+            // サイズ情報もスナップショット時点で収集
+            originalURLs.append((
+                url: imageURL.absoluteString,
+                thumbnail: nil,
+                width: Int(image.size.width),
+                height: Int(image.size.height)
+            ))
 
             // 進捗を更新（70% 〜 90%）
             uploadProgress = 0.7 + (Double(index + 1) / totalImages * 0.2)
@@ -300,20 +369,20 @@ class PostViewModel: ObservableObject {
 
     /// 投稿データを作成
     private func createPost(
-        imageURLs: [(url: String, thumbnail: String?)],
-        originalImageURLs: [(url: String, thumbnail: String?)]? = nil
+        imageURLs: [(url: String, thumbnail: String?, width: Int, height: Int)],
+        originalImageURLs: [(url: String, thumbnail: String?, width: Int, height: Int)]? = nil
     ) throws -> Post {
         guard let userId = userId else {
             throw PostViewModelError.userNotAuthenticated
         }
 
-        // ImageInfo配列を作成（編集済み画像）
+        // ImageInfo配列を作成（アップロード時に収集したサイズ情報を使用）
         let imageInfos = imageURLs.enumerated().map { index, urls in
             ImageInfo(
                 url: urls.url,
                 thumbnail: urls.thumbnail,
-                width: Int(editedImages[index].size.width),
-                height: Int(editedImages[index].size.height),
+                width: urls.width,
+                height: urls.height,
                 order: index
             )
         }
@@ -325,14 +394,14 @@ class PostViewModel: ObservableObject {
                 ImageInfo(
                     url: urls.url,
                     thumbnail: urls.thumbnail,
-                    width: Int(selectedImages[index].size.width),
-                    height: Int(selectedImages[index].size.height),
+                    width: urls.width,
+                    height: urls.height,
                     order: index
                 )
             }
         }
 
-        // 投稿データを作成
+        // 投稿データを作成（effectiveSkyTypeを使用 ☁️）
         let post = Post(
             id: UUID().uuidString,
             userId: userId,
@@ -345,7 +414,7 @@ class PostViewModel: ObservableObject {
             skyColors: extractedInfo?.skyColors,
             capturedAt: extractedInfo?.capturedAt,
             timeOfDay: extractedInfo?.timeOfDay,
-            skyType: extractedInfo?.skyType,
+            skyType: effectiveSkyType,  // ユーザー選択 or AI判定
             colorTemperature: extractedInfo?.colorTemperature,
             visibility: visibility
         )
@@ -437,6 +506,9 @@ class PostViewModel: ObservableObject {
         visibility = .public
         saveOriginalImages = false
         extractedInfo = nil
+        skyTypeClassificationResult = nil  // ☁️
+        isClassifyingSkyType = false  // ☁️
+        userSelectedSkyType = nil  // ☁️
         isPostSaved = false
         errorMessage = nil
         uploadedImageURLs = []

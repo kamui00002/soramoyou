@@ -111,6 +111,9 @@ enum DesignTokens {
         /// 成功状態
         static let success = Color(red: 0.40, green: 0.80, blue: 0.55)
 
+        /// エラー色 ☁️
+        static let error = Color(red: 0.90, green: 0.35, blue: 0.35)
+
         /// 警告状態
         static let warning = Color(red: 0.95, green: 0.75, blue: 0.35)
 

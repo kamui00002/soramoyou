@@ -168,6 +168,13 @@ class StorageService: StorageServiceProtocol {
     
     func uploadProgress(path: String) -> AsyncStream<Double> {
         return AsyncStream { continuation in
+            // ストリームが終了（キャンセル含む）したときにクリーンアップ
+            continuation.onTermination = { [weak self] _ in
+                guard let self = self else { return }
+                self.progressStreamsQueue.async {
+                    self.progressStreams.removeValue(forKey: path)
+                }
+            }
             progressStreamsQueue.async {
                 self.progressStreams[path] = continuation
             }
@@ -251,11 +258,24 @@ class StorageService: StorageServiceProtocol {
                     }
                 }
                 
-                let renderer = UIGraphicsImageRenderer(size: newSize)
-                let resizedImage = renderer.image { _ in
-                    image.draw(in: CGRect(origin: .zero, size: newSize))
+                // CIContextベースのリサイズ（バックグラウンドスレッドセーフ）
+                guard let cgImage = image.cgImage else {
+                    continuation.resume(returning: image)
+                    return
                 }
-                
+                let ciImage = CIImage(cgImage: cgImage)
+                let scaleX = newSize.width / ciImage.extent.width
+                let scaleY = newSize.height / ciImage.extent.height
+                let scale = min(scaleX, scaleY)
+
+                let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                let context = CIContext(options: [.useSoftwareRenderer: false])
+                guard let outputCGImage = context.createCGImage(scaled, from: scaled.extent) else {
+                    continuation.resume(returning: image)
+                    return
+                }
+
+                let resizedImage = UIImage(cgImage: outputCGImage, scale: image.scale, orientation: image.imageOrientation)
                 continuation.resume(returning: resizedImage)
             }
         }

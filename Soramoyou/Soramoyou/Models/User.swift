@@ -20,6 +20,7 @@ struct User: Identifiable, Codable {
     var followersCount: Int
     var followingCount: Int
     var postsCount: Int
+    var blockedUserIds: [String]?
     let createdAt: Date
     var updatedAt: Date
     
@@ -34,6 +35,7 @@ struct User: Identifiable, Codable {
         followersCount: Int = 0,
         followingCount: Int = 0,
         postsCount: Int = 0,
+        blockedUserIds: [String]? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -47,6 +49,7 @@ struct User: Identifiable, Codable {
         self.followersCount = followersCount
         self.followingCount = followingCount
         self.postsCount = postsCount
+        self.blockedUserIds = blockedUserIds
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -62,6 +65,7 @@ struct User: Identifiable, Codable {
         self.followersCount = 0
         self.followingCount = 0
         self.postsCount = 0
+        self.blockedUserIds = nil
         self.createdAt = Date()
         self.updatedAt = Date()
     }
@@ -105,6 +109,10 @@ struct User: Identifiable, Codable {
         data["followingCount"] = followingCount
         data["postsCount"] = postsCount
         
+        if let blockedUserIds = blockedUserIds {
+            data["blockedUserIds"] = blockedUserIds
+        }
+        
         return data
     }
     
@@ -126,6 +134,7 @@ struct User: Identifiable, Codable {
         self.followersCount = documentData["followersCount"] as? Int ?? 0
         self.followingCount = documentData["followingCount"] as? Int ?? 0
         self.postsCount = documentData["postsCount"] as? Int ?? 0
+        self.blockedUserIds = documentData["blockedUserIds"] as? [String]
         
         // TimestampからDateに変換
         if let createdAtTimestamp = documentData["createdAt"] as? Timestamp {

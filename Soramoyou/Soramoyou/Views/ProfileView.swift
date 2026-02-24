@@ -15,7 +15,9 @@ struct ProfileView: View {
     @State private var selectedPost: Post?
     @State private var showingEditProfile = false
     @State private var showingEditTools = false
+    @State private var showingSettings = false
     @State private var displayMode: DisplayMode = .grid
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     enum DisplayMode {
         case grid
@@ -45,25 +47,27 @@ struct ProfileView: View {
                 VStack(spacing: 0) {
                     ZStack {
                         if viewModel.isLoading && viewModel.user == nil {
-                            // 初回読み込み中
-                            VStack {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                Text("読み込み中...")
-                                    .foregroundColor(.white)
-                            }
+                            // 初回読み込み中 ☁️
+                            LoadingStateView(type: .initial)
                         } else if let user = viewModel.user {
                             // プロフィール表示
                             profileContent(user: user)
                         } else {
-                            // ユーザー情報が取得できない場合
+                            // ユーザー情報が取得できない場合 - リトライを促す
                             VStack(spacing: DesignTokens.Spacing.md) {
                                 Image(systemName: "person.circle")
                                     .font(.system(size: 60))
                                     .foregroundColor(DesignTokens.Colors.textTertiary)
-                                Text("プロフィール情報を取得できませんでした")
+                                Text("プロフィールを読み込み中...")
                                     .font(.headline)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
+                                Button("再読み込み") {
+                                    Task {
+                                        await viewModel.loadProfile()
+                                        await viewModel.loadUserPosts()
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
                             }
                         }
                     }
@@ -92,11 +96,17 @@ struct ProfileView: View {
                             Button(action: {
                                 showingEditTools = true
                             }) {
-                                Label("おすすめ編集設定", systemImage: "slider.horizontal.3")
+                                Label("編集ツールの並び替え", systemImage: "arrow.up.arrow.down")
                             }
-                            
+
+                            Button(action: {
+                                showingSettings = true
+                            }) {
+                                Label("設定", systemImage: "gearshape")
+                            }
+
                             Divider()
-                            
+
                             Button(action: {
                                 // 表示モード切り替え
                                 displayMode = displayMode == .grid ? .list : .grid
@@ -128,8 +138,12 @@ struct ProfileView: View {
                     }
                 }
             }
-            .onAppear {
-                Task {
+            .task {
+                // .taskを使用してビューのライフサイクルに紐づけた非同期処理 ☁️
+                // Auth状態が復元されていない場合にuserIdを再取得
+                // refreshUserIdIfNeeded が true を返した場合は内部でロード済みのため二重実行しない
+                let alreadyLoaded = await viewModel.refreshUserIdIfNeeded()
+                if !alreadyLoaded {
                     await viewModel.loadProfile()
                     await viewModel.loadUserPosts()
                 }
@@ -157,10 +171,14 @@ struct ProfileView: View {
                     EditToolsSettingsView(viewModel: viewModel)
                 }
             }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
+            }
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
             }
         }
+        .navigationViewStyle(.stack)
     }
     
     // MARK: - Profile Content
@@ -336,43 +354,44 @@ struct ProfileView: View {
         }
     }
 
+    /// 投稿がない場合のEmpty State ☁️
     private var emptyPostsView: some View {
-        VStack(spacing: DesignTokens.Spacing.md) {
-            Image(systemName: "photo.on.rectangle")
-                .font(.system(size: 60))
-                .foregroundColor(DesignTokens.Colors.textTertiary)
-            Text(viewModel.isOwnProfile ? "まだ投稿がありません" : "投稿がありません")
-                .font(.headline)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-        }
+        EmptyStateView(
+            type: viewModel.isOwnProfile ? .userPosts : .custom(
+                icon: "photo.on.rectangle",
+                title: "投稿がありません",
+                description: "このユーザーはまだ投稿していません",
+                actionTitle: nil
+            )
+        )
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        .padding(.vertical, 20)
     }
     
     private var postsContentView: some View {
         Group {
             if displayMode == .grid {
                 // グリッド表示
-                LazyVGrid(columns: [
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8)
-                ], spacing: 8) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: horizontalSizeClass == .regular ? 5 : 3), spacing: 8) {
                     ForEach(viewModel.userPosts) { post in
-                        PostGridItem(post: post)
-                            .onTapGesture {
-                                selectedPost = post
-                            }
+                        Button {
+                            selectedPost = post
+                        } label: {
+                            PostGridItem(post: post)
+                        }
+                        .buttonStyle(CardButtonStyle())
                     }
                 }
             } else {
                 // リスト表示
                 LazyVStack(spacing: 16) {
                     ForEach(viewModel.userPosts) { post in
-                        PostCard(post: post)
-                            .onTapGesture {
-                                selectedPost = post
-                            }
+                        Button {
+                            selectedPost = post
+                        } label: {
+                            PostCard(post: post)
+                        }
+                        .buttonStyle(CardButtonStyle())
                     }
                 }
             }
@@ -384,7 +403,6 @@ struct ProfileView: View {
 
 struct PostGridItem: View {
     let post: Post
-    @State private var isPressed = false
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -435,13 +453,8 @@ struct PostGridItem: View {
             }
         }
         .shadow(DesignTokens.Shadow.soft)
-        .scaleEffect(isPressed ? 0.95 : 1.0)
-        .animation(DesignTokens.Animation.quickSpring, value: isPressed)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
+        // タップアニメーションはButtonStyle側で制御（DragGestureはScrollViewとの競合を回避）
+        .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.md))
     }
 }
 

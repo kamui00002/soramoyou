@@ -158,6 +158,72 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.currentImageIndex, 0)
     }
     
+    /// 新規追加ツール（トーン）の値設定テスト
+    func testSetToolValueTone() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        viewModel.setToolValue(0.7, for: .tone)
+        XCTAssertEqual(viewModel.editSettings.tone, 0.7)
+    }
+
+    /// 新規追加ツール（ブリリアンス）の値設定テスト
+    func testSetToolValueBrilliance() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        viewModel.setToolValue(-0.3, for: .brilliance)
+        XCTAssertEqual(viewModel.editSettings.brilliance, -0.3)
+    }
+
+    /// 新規追加ツール（自然な彩度）の値設定テスト
+    func testSetToolValueNaturalSaturation() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        viewModel.setToolValue(0.6, for: .naturalSaturation)
+        XCTAssertEqual(viewModel.editSettings.naturalSaturation, 0.6)
+    }
+
+    /// 全27ツールの値設定・リセットテスト
+    func testSetAndResetAllTools() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        let toolsToTest = EditTool.allCases.filter { $0 != .cropAndRotate }
+
+        for tool in toolsToTest {
+            viewModel.setToolValue(0.42, for: tool)
+            XCTAssertEqual(viewModel.editSettings.value(for: tool), 0.42,
+                           "\(tool.displayName)の値設定に失敗")
+        }
+
+        for tool in toolsToTest {
+            viewModel.resetToolValue(for: tool)
+            XCTAssertNil(viewModel.editSettings.value(for: tool),
+                         "\(tool.displayName)のリセットに失敗")
+        }
+    }
+
+    /// リアルタイム編集フラグのテスト
+    func testRealtimeEditingFlag() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        // リアルタイム値設定でフラグがtrueになる
+        viewModel.setToolValueRealtime(0.5, for: .clarity)
+        XCTAssertTrue(viewModel.isEditingRealtime)
+
+        // finalizeでフラグがfalseに戻る
+        viewModel.finalizeToolValue(for: .clarity)
+        XCTAssertFalse(viewModel.isEditingRealtime)
+    }
+
     func testLoadEquippedToolsWithoutUser() async {
         // Given
         viewModel = EditViewModel(
@@ -269,7 +335,7 @@ class MockFirestoreService: FirestoreServiceProtocol {
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
     func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) { return ([], nil) }
     func fetchPost(postId: String) async throws -> Post { throw FirestoreServiceError.notFound }
-    func deletePost(postId: String) async throws {}
+    func deletePost(postId: String, userId: String) async throws {}
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
     func saveDraft(_ draft: Draft) async throws -> Draft { return draft }
     func fetchDrafts(userId: String) async throws -> [Draft] { return [] }

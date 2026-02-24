@@ -17,10 +17,13 @@ class AuthViewModel: ObservableObject {
     @Published var isGuest = false
 
     private let authService: AuthServiceProtocol
+    private let firestoreService: FirestoreServiceProtocol
     private var authStateTask: Task<Void, Never>?
-    
-    init(authService: AuthServiceProtocol = AuthService()) {
+
+    init(authService: AuthServiceProtocol = AuthService(),
+         firestoreService: FirestoreServiceProtocol = FirestoreService()) {
         self.authService = authService
+        self.firestoreService = firestoreService
 
         #if DEBUG
         // UIテストモードの場合は認証状態をリセット
@@ -88,7 +91,15 @@ class AuthViewModel: ObservableObject {
         errorMessage = nil
 
         do {
+            // 1. Firebase Authでユーザーを作成
             let user = try await authService.signUp(email: email, password: password)
+
+            // 2. Firestoreにユーザー情報を保存
+            let _ = try await firestoreService.updateUser(user)
+
+            // 3. 公開プロフィールを作成（機密情報を含まない）
+            try await firestoreService.createPublicProfile(from: user)
+
             currentUser = user
             isAuthenticated = true
 
@@ -107,7 +118,15 @@ class AuthViewModel: ObservableObject {
         errorMessage = nil
 
         do {
+            // 1. Firebase Authで匿名ユーザーを作成
             let user = try await authService.signInAnonymously()
+
+            // 2. Firestoreにユーザー情報を保存（emailはnil）
+            let _ = try await firestoreService.updateUser(user)
+
+            // 3. 公開プロフィールを作成
+            try await firestoreService.createPublicProfile(from: user)
+
             currentUser = user
             isAuthenticated = true
 

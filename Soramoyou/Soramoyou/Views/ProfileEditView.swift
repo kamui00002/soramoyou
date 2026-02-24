@@ -140,6 +140,7 @@ struct ProfileEditView: View {
                 // 編集用の値を初期化（既にProfileViewModelで設定済み）
             }
         }
+        .navigationViewStyle(.stack)
     }
     
     // MARK: - Profile Image Section

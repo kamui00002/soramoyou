@@ -12,6 +12,7 @@ struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
     @State private var selectedPost: Post?
     @State private var animateCards = false  // フィードアニメーション用 ☀️
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         NavigationView {
@@ -27,28 +28,29 @@ struct HomeView: View {
                 VStack(spacing: 0) {
                     ZStack {
                         if viewModel.isLoading && viewModel.posts.isEmpty {
-                            // 初回読み込み中
-                            VStack {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                Text("読み込み中...")
-                                    .foregroundColor(.white)
-                            }
+                            // 初回読み込み中 ☁️
+                            LoadingStateView(type: .initial)
+                        } else if let error = viewModel.lastError, viewModel.posts.isEmpty {
+                            // エラー発生時（投稿が空の場合）☁️
+                            ErrorStateView(
+                                error: error,
+                                retryAction: {
+                                    await viewModel.refresh()
+                                },
+                                secondaryAction: nil,
+                                secondaryActionTitle: nil
+                            )
                         } else if viewModel.posts.isEmpty {
-                            // 投稿がない場合
-                            VStack(spacing: DesignTokens.Spacing.md) {
-                                Image(systemName: "photo.on.rectangle")
-                                    .font(.system(size: 60))
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                                Text("投稿がありません")
-                                    .font(.headline)
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                            // 投稿がない場合 ☁️
+                            EmptyStateView(type: .posts) {
+                                // 投稿タブに切り替える（TabViewの切り替えはMainTabViewで管理）
                             }
                         } else {
                             // フィード表示
                             feedView
                         }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     // 画面下部に固定表示されるバナー広告
                     BannerAdContainer()
@@ -86,6 +88,7 @@ struct HomeView: View {
                 PostDetailView(post: post)
             }
         }
+        .navigationViewStyle(.stack)
     }
     
     // MARK: - Feed View ☀️
@@ -94,23 +97,25 @@ struct HomeView: View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: DesignTokens.Spacing.lg) {
                 ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
-                    PostCard(post: post)
-                        // スタガードアニメーション（改善）
-                        .opacity(animateCards ? 1 : 0)
-                        .offset(y: animateCards ? 0 : 30)
-                        .scaleEffect(animateCards ? 1 : 0.95)
-                        .animation(
-                            DesignTokens.Animation.smoothSpring
-                            .delay(Double(index) * DesignTokens.Animation.staggerDelay),
-                            value: animateCards
-                        )
-                        .onTapGesture {
-                            // ハプティックフィードバック
-                            let impact = UIImpactFeedbackGenerator(style: .light)
-                            impact.impactOccurred()
-                            selectedPost = post
-                        }
-                        .onAppear {
+                    Button {
+                        // ハプティックフィードバック
+                        let impact = UIImpactFeedbackGenerator(style: .light)
+                        impact.impactOccurred()
+                        selectedPost = post
+                    } label: {
+                        PostCard(post: post)
+                    }
+                    .buttonStyle(CardButtonStyle())
+                    // スタガードアニメーション（改善）
+                    .opacity(animateCards ? 1 : 0)
+                    .offset(y: animateCards ? 0 : 30)
+                    .scaleEffect(animateCards ? 1 : 0.95)
+                    .animation(
+                        DesignTokens.Animation.smoothSpring
+                        .delay(Double(index) * DesignTokens.Animation.staggerDelay),
+                        value: animateCards
+                    )
+                    .onAppear {
                             // ページネーション: 最後の投稿が表示されたら次のページを読み込む ☁️
                             // 重複リクエスト防止: 読み込み中の場合はスキップ
                             if post.id == viewModel.posts.last?.id
@@ -162,7 +167,6 @@ struct HomeView: View {
 
 struct PostCard: View {
     let post: Post
-    @State private var isPressed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -313,14 +317,8 @@ struct PostCard: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
         .shadow(DesignTokens.Shadow.card)
-        // タップ時のアニメーション
-        .scaleEffect(isPressed ? 0.98 : 1.0)
-        .animation(DesignTokens.Animation.quickSpring, value: isPressed)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
+        // タップ時のアニメーションはButtonStyle側で制御（ScrollViewとの競合を回避）
+        .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
     }
 }
 
@@ -344,7 +342,12 @@ struct RoundedCornerShape: Shape {
 
 struct PostImageView: View {
     let imageInfo: ImageInfo
-    // 未使用の変数を削除（コードレビュー対応）
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    
+    /// iPad対応: 画面サイズに応じて画像高さを調整
+    private var imageHeight: CGFloat {
+        horizontalSizeClass == .regular ? 450 : 300
+    }
 
     var body: some View {
         // サムネイルを優先的に表示
@@ -355,7 +358,7 @@ struct PostImageView: View {
                 }
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(height: 300)
+                .frame(height: imageHeight)
                 .clipped()
         } else if let imageURL = URL(string: imageInfo.url) {
             // サムネイルがない場合はフルサイズ画像を表示
@@ -365,18 +368,30 @@ struct PostImageView: View {
                 }
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(height: 300)
+                .frame(height: imageHeight)
                 .clipped()
         } else {
             // URLが無効な場合
             Rectangle()
                 .fill(Color.gray.opacity(0.3))
-                .frame(height: 300)
+                .frame(height: imageHeight)
                 .overlay(
                     Image(systemName: "photo")
                         .foregroundColor(.gray)
                 )
         }
+    }
+}
+
+// MARK: - Card Button Style ☀️
+// ScrollView内で安全に動作するタップアニメーション
+// DragGesture/LongPressGestureの代わりにButtonStyleを使用し、スクロール競合を回避
+
+struct CardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
 
@@ -386,6 +401,10 @@ struct PostDetailView: View {
     let post: Post
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel = PostDetailViewModel()
+    @State private var showingReportSheet = false
+    @State private var showingBlockConfirmation = false
+    @State private var showingReportConfirmation = false
+    @State private var selectedReportReason: ReportReason?
     
     var body: some View {
         NavigationView {
@@ -482,9 +501,26 @@ struct PostDetailView: View {
             .navigationTitle("投稿詳細")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") {
                         dismiss()
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        Button(role: .destructive) {
+                            showingReportSheet = true
+                        } label: {
+                            Label("この投稿を通報", systemImage: "flag")
+                        }
+                        
+                        Button(role: .destructive) {
+                            showingBlockConfirmation = true
+                        } label: {
+                            Label("このユーザーをブロック", systemImage: "hand.raised")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
             }
@@ -493,6 +529,52 @@ struct PostDetailView: View {
                     await viewModel.loadAuthor(userId: post.userId)
                 }
             }
+            // 通報理由選択シート
+            .confirmationDialog("通報理由を選択", isPresented: $showingReportSheet) {
+                ForEach(ReportReason.allCases, id: \.self) { reason in
+                    Button(reason.displayName) {
+                        selectedReportReason = reason
+                        Task {
+                            await submitReport(reason: reason)
+                        }
+                    }
+                }
+                Button("キャンセル", role: .cancel) { }
+            }
+            // ブロック確認アラート
+            .alert("ユーザーをブロック", isPresented: $showingBlockConfirmation) {
+                Button("キャンセル", role: .cancel) { }
+                Button("ブロック", role: .destructive) {
+                    Task {
+                        await blockPostAuthor()
+                    }
+                }
+            } message: {
+                Text("このユーザーをブロックすると、このユーザーの投稿がフィードに表示されなくなります。")
+            }
+            // 通報完了アラート
+            .alert("通報しました", isPresented: $showingReportConfirmation) {
+                Button("OK") { }
+            } message: {
+                Text("ご報告ありがとうございます。内容を確認いたします。")
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+    
+    /// 通報を送信（ViewModelに委譲）
+    private func submitReport(reason: ReportReason) async {
+        await viewModel.submitReport(post: post, reason: reason)
+        if viewModel.reportError == nil {
+            showingReportConfirmation = true
+        }
+    }
+
+    /// 投稿者をブロック（ViewModelに委譲）
+    private func blockPostAuthor() async {
+        await viewModel.blockPostAuthor(post: post)
+        if viewModel.reportError == nil {
+            dismiss()
         }
     }
     
@@ -540,38 +622,11 @@ struct PostDetailView: View {
     }
 }
 
-// MARK: - Post Detail ViewModel
-
-@MainActor
-class PostDetailViewModel: ObservableObject {
-    @Published var author: User?
-    @Published var isLoadingAuthor = false
-    @Published var errorMessage: String?
-    
-    private let firestoreService: FirestoreServiceProtocol
-    
-    init(firestoreService: FirestoreServiceProtocol = FirestoreService()) {
-        self.firestoreService = firestoreService
-    }
-    
-    func loadAuthor(userId: String) async {
-        isLoadingAuthor = true
-        errorMessage = nil
-        
-        do {
-            author = try await firestoreService.fetchUser(userId: userId)
-        } catch {
-            errorMessage = "投稿者情報の取得に失敗しました: \(error.localizedDescription)"
-        }
-        
-        isLoadingAuthor = false
-    }
-}
-
 // MARK: - Post Detail Image View
 
 struct PostDetailImageView: View {
     let imageInfo: ImageInfo
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     var body: some View {
         // フルサイズ画像を表示
@@ -586,7 +641,7 @@ struct PostDetailImageView: View {
         } else {
             Rectangle()
                 .fill(Color.gray.opacity(0.3))
-                .frame(height: 300)
+                .frame(height: horizontalSizeClass == .regular ? 450 : 300)
                 .overlay(
                     Image(systemName: "photo")
                         .foregroundColor(.gray)

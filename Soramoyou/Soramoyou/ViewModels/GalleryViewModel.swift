@@ -4,104 +4,58 @@
 //
 //  Created on 2025-01-19.
 //
+//  ギャラリー画面用ViewModel ⭐️
+//  PaginatedPostsViewModelを継承し、グリッド表示に最適化された設定を提供
 
 import Foundation
 import FirebaseFirestore
 import Combine
 
+/// ギャラリー画面のViewModel
+///
+/// PaginatedPostsViewModelを継承し、グリッド表示に特化した設定を提供する。
+/// ページサイズをホームより多め（30件）に設定してグリッド表示に最適化。
 @MainActor
-class GalleryViewModel: ObservableObject {
-    @Published var posts: [Post] = []
-    @Published var isLoading = false
-    @Published var isLoadingMore = false
-    @Published var errorMessage: String?
-    @Published var hasMorePosts = true
+class GalleryViewModel: PaginatedPostsViewModel {
+    // MARK: - PaginatedPostsViewModel Overrides
 
-    private let firestoreService: FirestoreServiceProtocol
-    private var lastDocument: DocumentSnapshot?
-    private let pageSize = 30  // グリッド表示用に多めに取得
+    /// ViewModel名（エラーログ用）
+    override var viewModelName: String { "GalleryViewModel" }
 
-    init(firestoreService: FirestoreServiceProtocol = FirestoreService()) {
-        self.firestoreService = firestoreService
+    /// グリッド表示用に多めに取得（30件/ページ）
+    override var pageSize: Int { 30 }
+    
+    /// ブロックしているユーザーIDのリスト
+    private var blockedUserIds: [String] = []
+    
+    /// 投稿を取得（ブロックユーザーのフィルタリング付き）
+    override func fetchPosts() async {
+        await loadBlockedUsers()
+        await super.fetchPosts()
+        filterBlockedUsers()
     }
-
-    // MARK: - Fetch Public Posts
-
-    /// 公開投稿を取得（初回読み込み）
-    func fetchPosts() async {
-        isLoading = true
-        errorMessage = nil
-        posts = []
-        lastDocument = nil
-        hasMorePosts = true
-
+    
+    /// 次のページの投稿を取得（ブロックユーザーのフィルタリング付き）
+    override func loadMorePosts() async {
+        await super.loadMorePosts()
+        filterBlockedUsers()
+    }
+    
+    /// ブロックユーザーリストを読み込む
+    private func loadBlockedUsers() async {
+        let authService = AuthService()
+        guard let currentUserId = authService.currentUser()?.id else { return }
+        
         do {
-            // リトライ可能な操作として実行
-            let result = try await RetryableOperation.executeIfRetryable(
-                operationName: "GalleryViewModel.fetchPosts"
-            ) { [self] in
-                try await self.firestoreService.fetchPostsWithSnapshot(limit: self.pageSize, lastDocument: nil)
-            }
-            posts = result.posts
-            lastDocument = result.lastDocument
-
-            // 最後のドキュメントを保存（ページネーション用）
-            if result.posts.count < pageSize {
-                hasMorePosts = false
-            }
+            blockedUserIds = try await firestoreService.fetchBlockedUserIds(userId: currentUserId)
         } catch {
-            // エラーをログに記録
-            ErrorHandler.logError(error, context: "GalleryViewModel.fetchPosts")
-            // ユーザーフレンドリーなメッセージを表示
-            errorMessage = error.userFriendlyMessage
+            blockedUserIds = []
         }
-
-        isLoading = false
     }
-
-    /// 次のページの投稿を取得（ページネーション）
-    func loadMorePosts() async {
-        guard !isLoadingMore && hasMorePosts else { return }
-
-        isLoadingMore = true
-        errorMessage = nil
-
-        do {
-            // リトライ可能な操作として実行
-            let result = try await RetryableOperation.executeIfRetryable(
-                operationName: "GalleryViewModel.loadMorePosts"
-            ) { [self] in
-                try await self.firestoreService.fetchPostsWithSnapshot(limit: self.pageSize, lastDocument: self.lastDocument)
-            }
-
-            if result.posts.isEmpty {
-                hasMorePosts = false
-            } else {
-                posts.append(contentsOf: result.posts)
-                lastDocument = result.lastDocument
-
-                // 取得した投稿数がページサイズより少ない場合は、これ以上取得できない
-                if result.posts.count < pageSize {
-                    hasMorePosts = false
-                }
-            }
-        } catch {
-            // エラーをログに記録
-            ErrorHandler.logError(error, context: "GalleryViewModel.loadMorePosts")
-            // ユーザーフレンドリーなメッセージを表示
-            errorMessage = error.userFriendlyMessage
-        }
-
-        isLoadingMore = false
-    }
-
-    /// 投稿をリフレッシュ
-    func refresh() async {
-        await fetchPosts()
-    }
-
-    /// 特定の投稿を取得
-    func fetchPost(postId: String) async throws -> Post {
-        return try await firestoreService.fetchPost(postId: postId)
+    
+    /// ブロックユーザーの投稿をフィルタリング
+    private func filterBlockedUsers() {
+        guard !blockedUserIds.isEmpty else { return }
+        posts = posts.filter { !blockedUserIds.contains($0.userId) }
     }
 }

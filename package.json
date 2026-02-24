@@ -1,0 +1,16 @@
+{
+  "name": "soramoyou-migration",
+  "version": "1.0.0",
+  "description": "Data migration scripts for Soramoyou app",
+  "private": true,
+  "scripts": {
+    "migrate": "node migrate-public-profiles.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

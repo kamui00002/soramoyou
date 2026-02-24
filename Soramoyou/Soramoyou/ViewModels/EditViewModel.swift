@@ -38,7 +38,7 @@ class EditViewModel: ObservableObject {
 
     // MARK: - リアルタイムプレビュー用プロパティ
 
-    /// 高速プレビュー用（低解像度）
+    /// 高速プレビュー用（中解像度）
     @Published var fastPreviewImage: UIImage?
     /// リアルタイム編集中フラグ
     @Published var isEditingRealtime: Bool = false
@@ -85,15 +85,23 @@ class EditViewModel: ObservableObject {
         self.imageService = imageService
         self.firestoreService = firestoreService
         
-        // 初期プレビューを生成
+        // 初期プレビューを生成（メモリリーク防止のため weak self を使用）
         if !images.isEmpty {
-            Task {
-                await loadEquippedTools()
-                await generatePreview()
+            Task { [weak self] in
+                guard let self = self else { return }
+                await self.loadEquippedTools()
+                await self.generatePreview()
             }
         }
     }
-    
+
+    deinit {
+        // 全Taskをキャンセルしてリソースを解放
+        previewTask?.cancel()
+        fastPreviewTask?.cancel()
+        throttledPreviewTask?.cancel()
+    }
+
     // MARK: - Image Management
     
     /// 画像を設定
@@ -102,8 +110,8 @@ class EditViewModel: ObservableObject {
         currentImageIndex = 0
         editSettings = EditSettings()
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
     
@@ -118,8 +126,8 @@ class EditViewModel: ObservableObject {
         guard currentImageIndex < originalImages.count - 1 else { return }
         currentImageIndex += 1
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -128,8 +136,8 @@ class EditViewModel: ObservableObject {
         guard currentImageIndex > 0 else { return }
         currentImageIndex -= 1
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
     
@@ -138,73 +146,68 @@ class EditViewModel: ObservableObject {
     /// フィルターを適用
     func applyFilter(_ filter: FilterType) {
         editSettings.appliedFilter = filter
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
-    
+
     /// フィルターを解除
     func removeFilter() {
         editSettings.appliedFilter = nil
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
     
     // MARK: - Edit Tool Management
     
-    /// 装備ツールを読み込む
+    /// 装備ツールを読み込む（全27ツールを順序に従って表示）
     func loadEquippedTools() async {
         guard let userId = userId else {
-            // 未ログイン時は基本ツールのみ
-            equippedTools = [.brightness, .contrast, .saturation, .exposure, .highlight, .shadow, .warmth, .sharpness, .vignette]
+            // 未ログイン時は全ツールをデフォルト順序で表示
+            equippedTools = EditTool.allCases
             equippedToolsOrder = equippedTools.map { $0.rawValue }
             return
         }
-        
+
         do {
             // リトライ可能な操作として実行
             let user = try await RetryableOperation.executeIfRetryable { [self] in
                 try await self.firestoreService.fetchUser(userId: userId)
             }
-            
-            // 装備ツールを取得
-            if let customTools = user.customEditTools,
-               !customTools.isEmpty {
-                equippedTools = customTools.compactMap { EditTool(rawValue: $0) }
-            } else {
-                // デフォルトツール
-                equippedTools = [.brightness, .contrast, .saturation, .exposure, .highlight, .shadow, .warmth, .sharpness, .vignette]
-            }
-            
-            // ツールの順序を取得
+
+            // 全27ツールを使用（順序のみカスタマイズ）
+            var allTools = EditTool.allCases
+
+            // ツールの順序を取得して並び替え
             if let order = user.customEditToolsOrder,
                !order.isEmpty {
                 equippedToolsOrder = order
                 // 順序に従ってツールを並び替え
-                equippedTools.sort { tool1, tool2 in
+                allTools.sort { tool1, tool2 in
                     let index1 = order.firstIndex(of: tool1.rawValue) ?? Int.max
                     let index2 = order.firstIndex(of: tool2.rawValue) ?? Int.max
                     return index1 < index2
                 }
             } else {
-                equippedToolsOrder = equippedTools.map { $0.rawValue }
+                equippedToolsOrder = allTools.map { $0.rawValue }
             }
+
+            equippedTools = allTools
         } catch {
-            // notFoundエラーの場合はユーザードキュメントが未作成なので、デフォルトツールを使用
+            // notFoundエラーの場合はユーザードキュメントが未作成なので、全ツールをデフォルト順序で表示
             // エラーメッセージは表示しない（正常なケースとして扱う）
             if let firestoreError = error as? FirestoreServiceError,
                case .notFound = firestoreError {
-                // ユーザードキュメントが存在しない場合はデフォルトツールを使用
-                equippedTools = [.brightness, .contrast, .saturation, .exposure, .highlight, .shadow, .warmth, .sharpness, .vignette]
+                equippedTools = EditTool.allCases
                 equippedToolsOrder = equippedTools.map { $0.rawValue }
                 return
             }
 
             // その他のエラーの場合はログに記録
             ErrorHandler.logError(error, context: "EditViewModel.loadEquippedTools", userId: userId)
-            // エラー時はデフォルトツールを使用
-            equippedTools = [.brightness, .contrast, .saturation, .exposure, .highlight, .shadow, .warmth, .sharpness, .vignette]
+            // エラー時は全ツールをデフォルト順序で表示
+            equippedTools = EditTool.allCases
             equippedToolsOrder = equippedTools.map { $0.rawValue }
             // ユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
@@ -222,7 +225,8 @@ class EditViewModel: ObservableObject {
     }
 
     /// 編集ツールの値をリアルタイムで設定（スロットリング付き・高速プレビュー）
-    /// スライダー操作中に呼び出され、低解像度でプレビューを即座に更新
+    /// スライダー操作中に呼び出され、中解像度でプレビューを即座に更新
+    /// キャッシュ有効時は同期処理でTask overhead を排除し、即座にレンダリング
     /// 最小間隔33ms（約30fps）でスロットリングし、間隔内の最後の値を遅延実行
     func setToolValueRealtime(_ value: Float, for tool: EditTool) {
         // 値の範囲を-1.0から1.0に制限
@@ -237,22 +241,34 @@ class EditViewModel: ObservableObject {
             // 十分な時間が経過 → 即座にプレビュー生成
             throttledPreviewTask?.cancel()
             lastFastPreviewTime = now
-            fastPreviewTask?.cancel()
-            fastPreviewTask = Task {
-                await generatePreviewFast()
-            }
+            renderFastPreviewOrAsync()
         } else {
             // 間隔内 → 遅延実行（最後の値だけ処理）
             throttledPreviewTask?.cancel()
-            throttledPreviewTask = Task {
+            throttledPreviewTask = Task { [weak self] in
                 let waitNano = UInt64((fastPreviewMinInterval - elapsed) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: waitNano)
                 guard !Task.isCancelled else { return }
-                lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
-                fastPreviewTask?.cancel()
-                fastPreviewTask = Task {
-                    await generatePreviewFast()
-                }
+                guard let self = self else { return }
+                self.lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
+                self.renderFastPreviewOrAsync()
+            }
+        }
+    }
+
+    /// キャッシュが有効なら同期レンダリング、無効なら非同期でキャッシュ再構築後レンダリング
+    private func renderFastPreviewOrAsync() {
+        let transformKey = makeTransformKey()
+        if let lowResCIImage = cachedLowResCIImage,
+           cachedImageIndex == currentImageIndex,
+           cachedTransformKey == transformKey {
+            // キャッシュ有効 → 同期レンダリング（Task overhead なし）
+            fastPreviewImage = imageService.generatePreviewFromCIImage(lowResCIImage, edits: editSettings)
+        } else {
+            // キャッシュ無効 → 非同期でキャッシュ再構築してからレンダリング
+            fastPreviewTask?.cancel()
+            fastPreviewTask = Task { [weak self] in
+                await self?.generatePreviewFast()
             }
         }
     }
@@ -260,19 +276,24 @@ class EditViewModel: ObservableObject {
     /// スライダー操作完了時に呼び出し、高品質プレビューを生成
     func finalizeToolValue(for tool: EditTool) {
         isEditingRealtime = false
+
+        // 高速プレビューを通常プレビューに昇格（同解像度なので品質ジャンプなし）
+        if let fastPreview = fastPreviewImage {
+            previewImage = fastPreview
+        }
         fastPreviewImage = nil
 
-        // 高品質プレビューを生成
-        Task {
-            await generatePreview()
+        // バックグラウンドでフル解像度プレビューを再生成
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
     /// 編集ツールの値をリセット
     func resetToolValue(for tool: EditTool) {
         editSettings.setValue(nil, for: tool)
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -284,8 +305,8 @@ class EditViewModel: ObservableObject {
         isFlippedVertical = false
         cropAspectRatio = .free
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -305,19 +326,20 @@ class EditViewModel: ObservableObject {
             throttledPreviewTask?.cancel()
             lastFastPreviewTime = now
             fastPreviewTask?.cancel()
-            fastPreviewTask = Task {
-                await generatePreviewFast()
+            fastPreviewTask = Task { [weak self] in
+                await self?.generatePreviewFast()
             }
         } else {
             throttledPreviewTask?.cancel()
-            throttledPreviewTask = Task {
+            throttledPreviewTask = Task { [weak self] in
                 let waitNano = UInt64((fastPreviewMinInterval - elapsed) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: waitNano)
                 guard !Task.isCancelled else { return }
-                lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
-                fastPreviewTask?.cancel()
-                fastPreviewTask = Task {
-                    await generatePreviewFast()
+                guard let self = self else { return }
+                self.lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
+                self.fastPreviewTask?.cancel()
+                self.fastPreviewTask = Task { [weak self] in
+                    await self?.generatePreviewFast()
                 }
             }
         }
@@ -326,10 +348,15 @@ class EditViewModel: ObservableObject {
     /// 回転操作完了
     func finalizeRotation() {
         isEditingRealtime = false
+
+        // 高速プレビューを通常プレビューに昇格
+        if let fastPreview = fastPreviewImage {
+            previewImage = fastPreview
+        }
         fastPreviewImage = nil
 
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -337,8 +364,8 @@ class EditViewModel: ObservableObject {
     func toggleFlipHorizontal() {
         isFlippedHorizontal.toggle()
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -346,8 +373,8 @@ class EditViewModel: ObservableObject {
     func toggleFlipVertical() {
         isFlippedVertical.toggle()
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -358,8 +385,8 @@ class EditViewModel: ObservableObject {
             rotationDegrees += 360
         }
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -370,8 +397,8 @@ class EditViewModel: ObservableObject {
             rotationDegrees -= 360
         }
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
 
@@ -387,8 +414,8 @@ class EditViewModel: ObservableObject {
         isFlippedVertical = false
         cropAspectRatio = .free
         invalidateLowResCache()
-        Task {
-            await generatePreview()
+        Task { [weak self] in
+            await self?.generatePreview()
         }
     }
     
@@ -399,12 +426,12 @@ class EditViewModel: ObservableObject {
         // 前のタスクをキャンセル
         previewTask?.cancel()
 
-        // 新しいタスクを作成
-        previewTask = Task {
+        // 新しいタスクを作成（メモリリーク防止のため weak self を使用）
+        previewTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 200_000_000) // 200ms待機
 
             guard !Task.isCancelled else { return }
-            await generatePreview()
+            await self?.generatePreview()
         }
     }
 
@@ -455,9 +482,9 @@ class EditViewModel: ObservableObject {
         isLoading = false
     }
 
-    /// 高速プレビューを生成（低解像度・256x256）☁️
+    /// 高速プレビューを生成（中解像度・750x750）☁️
     /// スライダー操作中のリアルタイム表示用
-    /// キャッシュ済みの低解像度CIImageを使い、同期的にフィルターチェーンを適用
+    /// キャッシュ済みの中解像度CIImageを使い、同期的にフィルターチェーンを適用
     /// リクエストIDを使用してレースコンディションを防止
     func generatePreviewFast() async {
         guard currentImage != nil else {
@@ -499,7 +526,7 @@ class EditViewModel: ObservableObject {
         "\(rotationDegrees)_\(isFlippedHorizontal)_\(isFlippedVertical)"
     }
 
-    /// 低解像度CIImageキャッシュを再構築（同期版：互換性のため残す）
+    /// 中解像度CIImageキャッシュを再構築（同期版：互換性のため残す）
     private func rebuildLowResCache() {
         guard let image = currentImage else {
             cachedLowResCIImage = nil
@@ -518,15 +545,15 @@ class EditViewModel: ObservableObject {
             return
         }
 
-        // CIImage上で256x256にリサイズ（UIImage変換なし）
-        let lowRes = imageService.resizeCIImage(ciImage, maxSize: CGSize(width: 256, height: 256))
+        // CIImage上で750x750にリサイズ（UIImage変換なし）
+        let lowRes = imageService.resizeCIImage(ciImage, maxSize: CGSize(width: 750, height: 750))
 
         cachedLowResCIImage = lowRes
         cachedImageIndex = currentImageIndex
         cachedTransformKey = makeTransformKey()
     }
 
-    /// 低解像度CIImageキャッシュを再構築（非同期版：バックグラウンド処理）☁️
+    /// 中解像度CIImageキャッシュを再構築（非同期版：バックグラウンド処理）☁️
     /// 重い画像処理をバックグラウンドスレッドで実行してUIブロックを防止
     private func rebuildLowResCacheAsync() async {
         guard let image = currentImage else {
@@ -555,8 +582,8 @@ class EditViewModel: ObservableObject {
                 return nil
             }
 
-            // CIImage上で256x256にリサイズ
-            return imageServiceRef.resizeCIImage(ciImage, maxSize: CGSize(width: 256, height: 256))
+            // CIImage上で750x750にリサイズ
+            return imageServiceRef.resizeCIImage(ciImage, maxSize: CGSize(width: 750, height: 750))
         }.value
 
         // キャッシュを更新
@@ -573,16 +600,17 @@ class EditViewModel: ObservableObject {
             return image
         }
 
-        // 正規化された画像を描画
-        UIGraphicsBeginImageContextWithOptions(image.size, false, image.scale)
-        image.draw(in: CGRect(origin: .zero, size: image.size))
-        let normalizedImage = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-
-        return normalizedImage ?? image
+        // UIGraphicsImageRendererで正規化（スレッドセーフかつモダンなAPI）
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+        }
     }
 
-    /// 低解像度キャッシュを無効化
+    /// 中解像度キャッシュを無効化
     private func invalidateLowResCache() {
         cachedLowResCIImage = nil
     }
@@ -595,39 +623,40 @@ class EditViewModel: ObservableObject {
         }
 
         let size = image.size
-        UIGraphicsBeginImageContextWithOptions(size, false, image.scale)
-        guard let context = UIGraphicsGetCurrentContext() else { return image }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
 
-        // コンテキストの中心に移動
-        context.translateBy(x: size.width / 2, y: size.height / 2)
+        return renderer.image { rendererContext in
+            let context = rendererContext.cgContext
 
-        // 反転を適用
-        var scaleX: CGFloat = 1.0
-        var scaleY: CGFloat = 1.0
-        if isFlippedHorizontal {
-            scaleX = -1.0
+            // コンテキストの中心に移動
+            context.translateBy(x: size.width / 2, y: size.height / 2)
+
+            // 反転を適用
+            var scaleX: CGFloat = 1.0
+            var scaleY: CGFloat = 1.0
+            if isFlippedHorizontal {
+                scaleX = -1.0
+            }
+            if isFlippedVertical {
+                scaleY = -1.0
+            }
+            context.scaleBy(x: scaleX, y: scaleY)
+
+            // 回転を適用
+            let radians = rotationDegrees * .pi / 180.0
+            context.rotate(by: CGFloat(radians))
+
+            // 画像を描画
+            image.draw(in: CGRect(
+                x: -size.width / 2,
+                y: -size.height / 2,
+                width: size.width,
+                height: size.height
+            ))
         }
-        if isFlippedVertical {
-            scaleY = -1.0
-        }
-        context.scaleBy(x: scaleX, y: scaleY)
-
-        // 回転を適用
-        let radians = rotationDegrees * .pi / 180.0
-        context.rotate(by: CGFloat(radians))
-
-        // 画像を描画
-        image.draw(in: CGRect(
-            x: -size.width / 2,
-            y: -size.height / 2,
-            width: size.width,
-            height: size.height
-        ))
-
-        let transformedImage = UIGraphicsGetImageFromCurrentImageContext() ?? image
-        UIGraphicsEndImageContext()
-
-        return transformedImage
     }
     
     // MARK: - Final Image Generation

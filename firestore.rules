@@ -17,8 +17,9 @@ service cloud.firestore {
 
     // フォロー関係をチェック（followerId_followeeId 形式のドキュメントID）
     function isFollowing(followeeId) {
+      let followId = request.auth.uid + '_' + followeeId;
       return isAuthenticated() &&
-             exists(/databases/$(database)/documents/follows/$(request.auth.uid)_$(followeeId));
+             exists(/databases/$(database)/documents/follows/$(followId));
     }
 
     // ============================================
@@ -41,11 +42,13 @@ service cloud.firestore {
     }
 
     // メールアドレスの検証（より厳密な正規表現）
+    // 匿名ユーザー（Anonymous Auth）はemailを持たないため、nullも許可する
     function isValidEmail(email) {
-      return email is string
-             && email.size() > 0
-             && email.size() <= 254
-             && email.matches('[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}');
+      return email == null
+             || (email is string
+                 && email.size() > 0
+                 && email.size() <= 254
+                 && email.matches('[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}'));
     }
 
     // 投稿データの検証
@@ -72,10 +75,12 @@ service cloud.firestore {
     // いいね/コメントによるカウント更新の検証
     // カウントフィールド以外の変更を禁止する
     // 各カウントは独立して検証され、いずれも変更なし or ±1 のみ許可
+    // フィールド数が同一であることを検証（余分なフィールド追加を防ぐ）
     function isCountOnlyUpdate() {
       let data = request.resource.data;
       let existing = resource.data;
-      return data.userId == existing.userId
+      return data.keys().size() == existing.keys().size()
+             && data.userId == existing.userId
              && data.images == existing.images
              && data.visibility == existing.visibility
              && data.createdAt == existing.createdAt
@@ -98,25 +103,41 @@ service cloud.firestore {
     }
 
     // ============================================
-    // Users collection
+    // Users collection (機密情報のみ - 所有者のみアクセス可能)
     // ============================================
     match /users/{userId} {
-      // 公開プロフィール情報（displayName, photoURL, bio）は認証済みユーザーが読み取り可能
-      // プライベート情報（email）は本人のみ
-      allow read: if isOwner(userId)
-                  || (isAuthenticated() &&
-                      request.query == null); // リスト取得は制限
+      // 機密情報（email, blockedUserIds等）は所有者のみ読み取り可能
+      allow read: if isOwner(userId);
 
       // 新規ユーザーのみ自分のプロフィールを作成可能
+      // 匿名ユーザーはemailを持たないため、emailフィールドは必須としない
       allow create: if isOwner(userId)
-                    && request.resource.data.keys().hasAll(['id', 'email', 'createdAt'])
-                    && isValidEmail(request.resource.data.email);
+                    && request.resource.data.keys().hasAll(['id', 'createdAt'])
+                    && isValidEmail(request.resource.data.get('email', null));
 
-      // 所有者のみ更新・削除可能
-      // idとemailは変更不可
+      // 所有者のみ更新可能
+      // idは変更不可。emailは存在する場合のみ変更不可（匿名ユーザーはemailなし）
       allow update: if isOwner(userId)
                     && request.resource.data.id == resource.data.id
-                    && request.resource.data.email == resource.data.email;
+                    && request.resource.data.get('email', null) == resource.data.get('email', null);
+
+      allow delete: if isOwner(userId);
+    }
+
+    // ============================================
+    // Public Profiles collection (公開プロフィール情報)
+    // ============================================
+    match /publicProfiles/{userId} {
+      // 公開プロフィール情報は認証済みユーザーが読み取り可能
+      allow get: if isAuthenticated();
+      allow list: if isAuthenticated() && request.query.limit <= 20;
+
+      // 所有者のみ作成・更新・削除可能
+      allow create: if isOwner(userId)
+                    && request.resource.data.keys().hasAll(['id', 'createdAt']);
+
+      allow update: if isOwner(userId)
+                    && request.resource.data.id == resource.data.id;
 
       allow delete: if isOwner(userId);
     }
@@ -148,10 +169,10 @@ service cloud.firestore {
     // ============================================
     match /posts/{postId} {
       // 読み取り権限
-      // - public: 認証済みユーザーが読み取り可能
-      // - followers: フォロワーのみ読み取り可能
-      // - private: 所有者のみ
-      allow read: if (resource.data.visibility == 'public' && isAuthenticated())
+      // - public: 誰でも読み取り可能（ゲスト・未認証ユーザー含む）
+      // - followers: フォロワーのみ読み取り可能（認証必須）
+      // - private: 所有者のみ（認証必須）
+      allow read: if resource.data.visibility == 'public'
                   || (resource.data.visibility == 'followers' && isFollowing(resource.data.userId))
                   || isOwner(resource.data.userId);
 
@@ -224,9 +245,12 @@ service cloud.firestore {
     // ============================================
     match /comments/{commentId} {
       // コメントは認証済みユーザーが読み取り可能
+      // TODO: Phase 2でコメント機能実装時に、投稿の可視性と連動させる
+      // （非公開投稿のコメントはオーナーのみ、フォロワー限定はフォロワーのみ読み取り可能にする）
       allow read: if isAuthenticated();
 
       // コメント作成: 認証済みユーザーのみ、自分のIDで作成
+      // TODO: Phase 2で投稿の可視性に基づくアクセス制御を追加
       allow create: if isAuthenticated()
                     && request.resource.data.userId == request.auth.uid
                     && request.resource.data.keys().hasAll(['userId', 'postId', 'content', 'createdAt'])
@@ -245,6 +269,22 @@ service cloud.firestore {
       allow delete: if isAuthenticated()
                     && (resource.data.userId == request.auth.uid
                         || isPostOwner(resource.data.postId));
+    }
+
+    // ============================================
+    // Reports collection (通報)
+    // ============================================
+    match /reports/{reportId} {
+      // 通報は管理者のみ読み取り可能（Cloud Functions経由）
+      allow read: if false;
+
+      // 通報作成: 認証済みユーザーのみ、自分のIDで作成
+      allow create: if isAuthenticated()
+                    && request.resource.data.reporterId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['postId', 'reporterId', 'reportedUserId', 'reason', 'createdAt']);
+
+      // 通報の更新・削除は不可
+      allow update, delete: if false;
     }
 
     // ============================================

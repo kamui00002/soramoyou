@@ -43,7 +43,7 @@ final class FirestoreServiceTests: XCTestCase {
         XCTAssertEqual(createdPost.userId, post.userId)
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: post.id)
+        try? await firestoreService.deletePost(postId: post.id, userId: post.userId)
     }
     
     func testFetchPost() async throws {
@@ -60,7 +60,7 @@ final class FirestoreServiceTests: XCTestCase {
         XCTAssertEqual(fetchedPost.userId, post.userId)
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: post.id)
+        try? await firestoreService.deletePost(postId: post.id, userId: post.userId)
     }
     
     func testFetchPosts() async throws {
@@ -77,8 +77,8 @@ final class FirestoreServiceTests: XCTestCase {
         XCTAssertFalse(posts.isEmpty)
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: post1.id)
-        try? await firestoreService.deletePost(postId: post2.id)
+        try? await firestoreService.deletePost(postId: post1.id, userId: post1.userId)
+        try? await firestoreService.deletePost(postId: post2.id, userId: post2.userId)
     }
     
     func testFetchPostsWithPagination() async throws {
@@ -100,8 +100,8 @@ final class FirestoreServiceTests: XCTestCase {
         }
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: post1.id)
-        try? await firestoreService.deletePost(postId: post2.id)
+        try? await firestoreService.deletePost(postId: post1.id, userId: post1.userId)
+        try? await firestoreService.deletePost(postId: post2.id, userId: post2.userId)
     }
     
     func testDeletePost() async throws {
@@ -110,7 +110,7 @@ final class FirestoreServiceTests: XCTestCase {
         _ = try await firestoreService.createPost(post)
         
         // When
-        try await firestoreService.deletePost(postId: post.id)
+        try await firestoreService.deletePost(postId: post.id, userId: post.userId)
         
         // Then
         // 削除された投稿を取得しようとするとエラーになることを確認
@@ -138,8 +138,8 @@ final class FirestoreServiceTests: XCTestCase {
         XCTAssertFalse(posts.isEmpty)
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: publicPost.id)
-        try? await firestoreService.deletePost(postId: privatePost.id)
+        try? await firestoreService.deletePost(postId: publicPost.id, userId: publicPost.userId)
+        try? await firestoreService.deletePost(postId: privatePost.id, userId: privatePost.userId)
     }
     
     // MARK: - Draft Tests
@@ -266,7 +266,7 @@ final class FirestoreServiceTests: XCTestCase {
         XCTAssertFalse(results.isEmpty)
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: post.id)
+        try? await firestoreService.deletePost(postId: post.id, userId: post.userId)
     }
     
     func testSearchByColor() async throws {
@@ -281,7 +281,7 @@ final class FirestoreServiceTests: XCTestCase {
         XCTAssertFalse(results.isEmpty)
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: post.id)
+        try? await firestoreService.deletePost(postId: post.id, userId: post.userId)
     }
     
     func testSearchByTimeOfDay() async throws {
@@ -296,7 +296,7 @@ final class FirestoreServiceTests: XCTestCase {
         XCTAssertFalse(results.isEmpty)
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: post.id)
+        try? await firestoreService.deletePost(postId: post.id, userId: post.userId)
     }
     
     func testSearchBySkyType() async throws {
@@ -311,7 +311,7 @@ final class FirestoreServiceTests: XCTestCase {
         XCTAssertFalse(results.isEmpty)
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: post.id)
+        try? await firestoreService.deletePost(postId: post.id, userId: post.userId)
     }
     
     func testSearchPostsComposite() async throws {
@@ -334,7 +334,7 @@ final class FirestoreServiceTests: XCTestCase {
         XCTAssertFalse(results.isEmpty)
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: post.id)
+        try? await firestoreService.deletePost(postId: post.id, userId: post.userId)
     }
     
     func testFetchUserPosts() async throws {
@@ -352,8 +352,8 @@ final class FirestoreServiceTests: XCTestCase {
         XCTAssertFalse(posts.isEmpty)
         
         // Cleanup
-        try? await firestoreService.deletePost(postId: post1.id)
-        try? await firestoreService.deletePost(postId: post2.id)
+        try? await firestoreService.deletePost(postId: post1.id, userId: post1.userId)
+        try? await firestoreService.deletePost(postId: post2.id, userId: post2.userId)
     }
     
     // MARK: - Helper Methods
@@ -415,6 +415,82 @@ final class FirestoreServiceTests: XCTestCase {
             email: email,
             displayName: "Test User"
         )
+    }
+
+    /// 匿名ユーザー（emailなし）のテスト用ヘルパー
+    private func createAnonymousTestUser(
+        id: String = "test-anonymous-user-id"
+    ) -> User {
+        return User(
+            id: id,
+            email: nil,
+            displayName: nil
+        )
+    }
+}
+
+// MARK: - 匿名ユーザー対応テスト
+
+extension FirestoreServiceTests {
+
+    /// 匿名ユーザーのtoFirestoreDataでemailフィールドが含まれないことを確認
+    func testAnonymousUserToFirestoreDataExcludesEmail() {
+        // Given: emailがnilの匿名ユーザー
+        let user = createAnonymousTestUser()
+
+        // When: Firestoreデータに変換
+        let data = user.toFirestoreData()
+
+        // Then: emailフィールドが含まれないことを確認
+        XCTAssertNil(data["email"], "匿名ユーザーのFirestoreデータにemailフィールドが含まれてはいけない")
+        XCTAssertEqual(data["id"] as? String, user.id)
+        XCTAssertNotNil(data["createdAt"], "createdAtは必須フィールド")
+    }
+
+    /// emailありのユーザーのtoFirestoreDataでemailフィールドが含まれることを確認
+    func testAuthenticatedUserToFirestoreDataIncludesEmail() {
+        // Given: emailありのユーザー
+        let user = createTestUser(email: "user@example.com")
+
+        // When: Firestoreデータに変換
+        let data = user.toFirestoreData()
+
+        // Then: emailフィールドが含まれることを確認
+        XCTAssertEqual(data["email"] as? String, "user@example.com")
+    }
+
+    /// 匿名ユーザーのプロフィール更新が成功することを確認
+    func testUpdateAnonymousUser() async throws {
+        // Given: emailがnilの匿名ユーザー
+        let user = createAnonymousTestUser()
+
+        // When: プロフィールを更新
+        let updatedUser = try await firestoreService.updateUser(user)
+
+        // Then: エラーなく更新されることを確認
+        XCTAssertNotNil(updatedUser)
+        XCTAssertEqual(updatedUser.id, user.id)
+        XCTAssertNil(updatedUser.email, "匿名ユーザーのemailはnilのまま")
+    }
+
+    /// Firestoreドキュメントからemailなしのユーザーを復元できることを確認
+    func testInitUserFromFirestoreDataWithoutEmail() throws {
+        // Given: emailフィールドがないFirestoreデータ（匿名ユーザー）
+        let data: [String: Any] = [
+            "id": "anonymous-user-123",
+            "createdAt": Date(),
+            "updatedAt": Date(),
+            "followersCount": 0,
+            "followingCount": 0,
+            "postsCount": 0
+        ]
+
+        // When: Firestoreデータからユーザーを初期化
+        let user = try User(from: data)
+
+        // Then: emailがnilとして正しく復元されることを確認
+        XCTAssertEqual(user.id, "anonymous-user-123")
+        XCTAssertNil(user.email, "emailフィールドがない場合はnilであるべき")
     }
 }
 

@@ -166,7 +166,7 @@ class MockFirestoreServiceForHome: FirestoreServiceProtocol {
     
     // その他のメソッドは空実装
     func createPost(_ post: Post) async throws -> Post { return post }
-    func deletePost(postId: String) async throws {}
+    func deletePost(postId: String, userId: String) async throws {}
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
     func saveDraft(_ draft: Draft) async throws -> Draft { return draft }
     func fetchDrafts(userId: String) async throws -> [Draft] { return [] }

@@ -1,9 +1,10 @@
 //
-//  GalleryDetailView.swift
+//  GalleryDetailView.swift ☁️⭐️
 //  Soramoyou
 //
 //  Created on 2025-01-19.
 //
+//  エラー/ロード状態の統一対応・セキュリティ改善
 
 import SwiftUI
 import Kingfisher
@@ -11,8 +12,12 @@ import Kingfisher
 struct GalleryDetailView: View {
     let post: Post
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var viewModel = GalleryDetailViewModel()
+    /// 投稿者情報の取得にはPostDetailViewModelを使用（GalleryDetailViewModelとの二重定義を解消）
+    @StateObject private var viewModel = PostDetailViewModel()
     @State private var showingOriginalImage = false
+    @State private var showingReportSheet = false
+    @State private var showingBlockConfirmation = false
+    @State private var showingReportConfirmation = false
 
     // オリジナル画像が利用可能かどうか
     private var hasOriginalImages: Bool {
@@ -23,17 +28,13 @@ struct GalleryDetailView: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    // 投稿者情報
+                    // 投稿者情報 ☁️
+                    // InlineLoadingViewを使用して統一されたローディング表示
                     if let user = viewModel.author {
                         authorSection(user: user)
                     } else if viewModel.isLoadingAuthor {
-                        HStack {
-                            ProgressView()
-                            Text("投稿者情報を読み込み中...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .padding()
+                        InlineLoadingView(message: "投稿者情報を読み込み中...")
+                            .padding()
                     }
 
                     // 画像表示（編集前後切り替え対応）
@@ -64,9 +65,26 @@ struct GalleryDetailView: View {
             .navigationTitle("投稿詳細")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") {
                         dismiss()
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        Button(role: .destructive) {
+                            showingReportSheet = true
+                        } label: {
+                            Label("この投稿を通報", systemImage: "flag")
+                        }
+                        
+                        Button(role: .destructive) {
+                            showingBlockConfirmation = true
+                        } label: {
+                            Label("このユーザーをブロック", systemImage: "hand.raised")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
             }
@@ -75,7 +93,42 @@ struct GalleryDetailView: View {
                     await viewModel.loadAuthor(userId: post.userId)
                 }
             }
+            // 通報理由選択シート
+            .confirmationDialog("通報理由を選択", isPresented: $showingReportSheet) {
+                ForEach(ReportReason.allCases, id: \.self) { reason in
+                    Button(reason.displayName) {
+                        Task {
+                            await viewModel.submitReport(post: post, reason: reason)
+                            if viewModel.reportError == nil {
+                                showingReportConfirmation = true
+                            }
+                        }
+                    }
+                }
+                Button("キャンセル", role: .cancel) { }
+            }
+            // ブロック確認アラート
+            .alert("ユーザーをブロック", isPresented: $showingBlockConfirmation) {
+                Button("キャンセル", role: .cancel) { }
+                Button("ブロック", role: .destructive) {
+                    Task {
+                        await viewModel.blockPostAuthor(post: post)
+                        if viewModel.reportError == nil {
+                            dismiss()
+                        }
+                    }
+                }
+            } message: {
+                Text("このユーザーをブロックすると、このユーザーの投稿がフィードに表示されなくなります。")
+            }
+            // 通報完了アラート
+            .alert("通報しました", isPresented: $showingReportConfirmation) {
+                Button("OK") { }
+            } message: {
+                Text("ご報告ありがとうございます。内容を確認いたします。")
+            }
         }
+        .navigationViewStyle(.stack)
     }
 
     // MARK: - Image Section
@@ -334,16 +387,11 @@ struct GalleryDetailView: View {
                     )
             }
 
-            // ユーザー情報
+            // ユーザー情報 ☁️
+            // セキュリティ: メールアドレスは表示しない（HomeViewのauthorSectionと統一）
             VStack(alignment: .leading, spacing: 4) {
                 Text(user.displayName ?? "ユーザー")
                     .font(.headline)
-
-                if let email = user.email {
-                    Text(email)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
             }
 
             Spacer()
@@ -384,34 +432,6 @@ struct GalleryDetailImageView: View {
                 )
                 .cornerRadius(12)
         }
-    }
-}
-
-// MARK: - Gallery Detail ViewModel
-
-@MainActor
-class GalleryDetailViewModel: ObservableObject {
-    @Published var author: User?
-    @Published var isLoadingAuthor = false
-    @Published var errorMessage: String?
-
-    private let firestoreService: FirestoreServiceProtocol
-
-    init(firestoreService: FirestoreServiceProtocol = FirestoreService()) {
-        self.firestoreService = firestoreService
-    }
-
-    func loadAuthor(userId: String) async {
-        isLoadingAuthor = true
-        errorMessage = nil
-
-        do {
-            author = try await firestoreService.fetchUser(userId: userId)
-        } catch {
-            errorMessage = "投稿者情報の取得に失敗しました: \(error.localizedDescription)"
-        }
-
-        isLoadingAuthor = false
     }
 }
 
