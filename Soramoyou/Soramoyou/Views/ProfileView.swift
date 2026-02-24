@@ -53,14 +53,21 @@ struct ProfileView: View {
                             // プロフィール表示
                             profileContent(user: user)
                         } else {
-                            // ユーザー情報が取得できない場合
+                            // ユーザー情報が取得できない場合 - リトライを促す
                             VStack(spacing: DesignTokens.Spacing.md) {
                                 Image(systemName: "person.circle")
                                     .font(.system(size: 60))
                                     .foregroundColor(DesignTokens.Colors.textTertiary)
-                                Text("プロフィール情報を取得できませんでした")
+                                Text("プロフィールを読み込み中...")
                                     .font(.headline)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
+                                Button("再読み込み") {
+                                    Task {
+                                        await viewModel.loadProfile()
+                                        await viewModel.loadUserPosts()
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
                             }
                         }
                     }

@@ -206,14 +206,78 @@ class ProfileViewModel: ObservableObject {
             if let firestoreError = error as? FirestoreServiceError {
                 switch firestoreError {
                 case .notFound:
-                    // ドキュメントが存在しない場合はデフォルト状態で表示
+                    // ドキュメントが存在しない場合はAuth情報からデフォルトUserを生成して表示
+                    if isOwnProfile, let currentAuthUser = authService.currentUser() {
+                        user = User(
+                            id: currentAuthUser.id,
+                            email: currentAuthUser.email,
+                            displayName: currentAuthUser.displayName ?? "ユーザー",
+                            photoURL: nil,
+                            bio: nil,
+                            customEditTools: nil,
+                            customEditToolsOrder: nil,
+                            followersCount: 0,
+                            followingCount: 0,
+                            postsCount: 0,
+                            blockedUserIds: nil,
+                            createdAt: Date(),
+                            updatedAt: Date()
+                        )
+                        editingDisplayName = user?.displayName ?? ""
+                        editingBio = ""
+
+                        // Firestoreにドキュメントを自動作成（バックグラウンド）
+                        Task { [weak self] in
+                            guard let self = self else { return }
+                            if let newUser = self.user {
+                                try? await self.firestoreService.updateUser(newUser)
+                                try? await self.firestoreService.createPublicProfile(from: newUser)
+                            }
+                        }
+                    } else if !isOwnProfile {
+                        // 他ユーザーのプロフィールが見つからない場合は最小限の情報で表示
+                        user = User(
+                            id: userId,
+                            email: nil,
+                            displayName: "ユーザー",
+                            photoURL: nil,
+                            bio: nil,
+                            customEditTools: nil,
+                            customEditToolsOrder: nil,
+                            followersCount: 0,
+                            followingCount: 0,
+                            postsCount: 0,
+                            blockedUserIds: nil,
+                            createdAt: Date(),
+                            updatedAt: Date()
+                        )
+                    }
                     setDefaultEditTools()
                     return
                 case .fetchFailed(let underlyingError):
-                    // 権限エラーの場合もエラーを表示しない
+                    // 権限エラーの場合もデフォルトUserを生成してエラーを表示しない
                     if let nsError = underlyingError as NSError?,
                        nsError.domain == "FIRFirestoreErrorDomain",
                        nsError.code == 7 { // PERMISSION_DENIED
+                        if isOwnProfile, let currentAuthUser = authService.currentUser(), user == nil {
+                            user = User(
+                                id: currentAuthUser.id,
+                                email: currentAuthUser.email,
+                                displayName: currentAuthUser.displayName ?? "ユーザー",
+                                photoURL: nil,
+                                bio: nil,
+                                customEditTools: nil,
+                                customEditToolsOrder: nil,
+                                followersCount: 0,
+                                followingCount: 0,
+                                postsCount: 0,
+                                blockedUserIds: nil,
+                                createdAt: Date(),
+                                updatedAt: Date()
+                            )
+                            editingDisplayName = user?.displayName ?? ""
+                            editingBio = ""
+                        }
                         setDefaultEditTools()
                         return
                     }
@@ -370,10 +434,10 @@ class ProfileViewModel: ObservableObject {
                     if let nsError = underlyingError as NSError?,
                        nsError.domain == "FIRFirestoreErrorDomain" {
                         print("❌ [ProfileVM] loadUserPosts: Firestore error code=\(nsError.code), desc=\(nsError.localizedDescription)")
-                        // 権限エラー（code 7）やインデックス未作成（code 9）はログのみ
+                        // 権限エラー（code 7）やインデックス未作成（code 9）はサイレントに処理
+                        // 新規ユーザーや権限設定中の場合にエラーダイアログを表示しない
                         if nsError.code == 7 || nsError.code == 9 {
-                            // PERMISSION_DENIED(7)やFAILED_PRECONDITION(9)はUIにも通知
-                            errorMessage = "投稿の読み込みに失敗しました。しばらくしてから再試行してください。"
+                            print("⚠️ [ProfileVM] loadUserPosts: permission/index error (code \(nsError.code)), silently handled")
                             return
                         }
                     }
