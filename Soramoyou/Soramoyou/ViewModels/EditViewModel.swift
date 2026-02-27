@@ -19,7 +19,24 @@ class EditViewModel: ObservableObject {
     @Published var originalImages: [UIImage] = []
     @Published var currentImageIndex: Int = 0
     @Published var previewImage: UIImage?
-    @Published var editSettings: EditSettings = EditSettings()
+
+    // MARK: - 編集状態（内部は EditRecipe で管理）
+
+    /// 編集レシピ（不変データ構造）
+    /// 【改善】mutable な EditSettings から immutable な EditRecipe に移行。
+    /// Undo/Redo・状態管理が値コピーで安全に行える。
+    @Published var editRecipe: EditRecipe = EditRecipe()
+
+    /// 後方互換 computed property
+    ///
+    /// View 側のコード（`viewModel.editSettings`）を変更せずに EditRecipe へ移行できる。
+    /// get: EditRecipe を EditSettings に変換して返す
+    /// set: EditSettings を EditRecipe に変換して保存
+    var editSettings: EditSettings {
+        get { editRecipe.toEditSettings() }
+        set { editRecipe = EditRecipe(from: newValue) }
+    }
+
     @Published var equippedTools: [EditTool] = []
     @Published var equippedToolsOrder: [String] = []
     @Published var isLoading = false
@@ -108,7 +125,7 @@ class EditViewModel: ObservableObject {
     func setImages(_ images: [UIImage]) {
         originalImages = images
         currentImageIndex = 0
-        editSettings = EditSettings()
+        editRecipe = EditRecipe()   // 編集レシピをリセット
         invalidateLowResCache()
         Task { [weak self] in
             await self?.generatePreview()
@@ -299,7 +316,7 @@ class EditViewModel: ObservableObject {
 
     /// すべての編集をリセット
     func resetAllEdits() {
-        editSettings = EditSettings()
+        editRecipe = EditRecipe()   // 編集レシピをリセット
         rotationDegrees = 0
         isFlippedHorizontal = false
         isFlippedVertical = false
