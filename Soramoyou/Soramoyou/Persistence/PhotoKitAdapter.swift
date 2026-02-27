@@ -103,36 +103,36 @@ final class PhotoKitAdapter {
             let output = PHContentEditingOutput(contentEditingInput: input)
 
             // レンダ済み画像を書き出し
-            if let outputURL = output.renderedContentURL {
-                let pool     = CIContextPool.shared
-                let ciImage  = CIImage(cgImage: renderedImage)
+            // renderedContentURL は iOS 17+ では non-optional URL
+            let outputURL = output.renderedContentURL
+            let pool      = CIContextPool.shared
+            let ciImage   = CIImage(cgImage: renderedImage)
 
-                do {
-                    switch exportFormat {
-                    case .heif:
-                        try pool.ciContext.writeHEIFRepresentation(
-                            of:         ciImage,
-                            to:         outputURL,
-                            format:     .RGBA8,
-                            colorSpace: pool.outputColorSpace
-                        )
-                    case .jpeg:
-                        try pool.ciContext.writeJPEGRepresentation(
-                            of:         ciImage,
-                            to:         outputURL,
-                            colorSpace: pool.outputColorSpace
-                        )
-                    default:
-                        try pool.ciContext.writeHEIFRepresentation(
-                            of:         ciImage,
-                            to:         outputURL,
-                            format:     .RGBA8,
-                            colorSpace: pool.outputColorSpace
-                        )
-                    }
-                } catch {
-                    print("[PhotoKitAdapter] レンダ済み画像の書き出し失敗: \(error)")
+            do {
+                switch exportFormat {
+                case .heif:
+                    try pool.ciContext.writeHEIFRepresentation(
+                        of:         ciImage,
+                        to:         outputURL,
+                        format:     .RGBA8,
+                        colorSpace: pool.outputColorSpace
+                    )
+                case .jpeg:
+                    try pool.ciContext.writeJPEGRepresentation(
+                        of:         ciImage,
+                        to:         outputURL,
+                        colorSpace: pool.outputColorSpace
+                    )
+                default:
+                    try pool.ciContext.writeHEIFRepresentation(
+                        of:         ciImage,
+                        to:         outputURL,
+                        format:     .RGBA8,
+                        colorSpace: pool.outputColorSpace
+                    )
                 }
+            } catch {
+                print("[PhotoKitAdapter] レンダ済み画像の書き出し失敗: \(error)")
             }
 
             // 編集レシピを PHAdjustmentData として設定

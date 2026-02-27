@@ -423,7 +423,7 @@ final class FilterGraphBuilder {
             "inputRVector":  CIVector(x: 0, y: 0, z: 0, w: 0),
             "inputGVector":  CIVector(x: 0, y: 0, z: 0, w: 0),
             "inputBVector":  CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputAVector":  CIVector(x: 0, y: 0, z: 0, w: Float(abs(v) * 0.15)),
+            "inputAVector":  CIVector(x: 0, y: 0, z: 0, w: CGFloat(abs(v) * 0.15)),
             "inputBiasVector": CIVector(x: 1, y: 1, z: 1, w: 0)
         ])
         return blendFilter.outputImage ?? image
