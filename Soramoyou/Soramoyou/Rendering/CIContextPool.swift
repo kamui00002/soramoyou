@@ -32,6 +32,10 @@ final class CIContextPool {
     /// 作業色空間（フィルターチェーン内部で使用）
     let workingColorSpace: CGColorSpace
 
+    /// Metal デバイス（Metal シェーダーパイプラインで共有）
+    /// Metal 非対応端末では nil
+    private(set) var mtlDevice: MTLDevice?
+
     // MARK: - Private Init（シングルトンのため private）
 
     private init() {
@@ -50,9 +54,11 @@ final class CIContextPool {
 
         if let device = MTLCreateSystemDefaultDevice() {
             // Metal GPU アクセラレーション（推奨）
+            self.mtlDevice = device
             self.ciContext = CIContext(mtlDevice: device, options: options)
         } else {
             // Metal 非対応端末（シミュレーターなど）: CPU フォールバック
+            self.mtlDevice = nil
             var fallbackOptions = options
             fallbackOptions[.useSoftwareRenderer] = false
             self.ciContext = CIContext(options: fallbackOptions)

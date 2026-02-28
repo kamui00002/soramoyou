@@ -72,6 +72,26 @@ struct EditView: View {
 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
+                        // Undo ボタン
+                        Button(action: {
+                            viewModel.undo()
+                        }) {
+                            Image(systemName: "arrow.uturn.backward")
+                                .font(.body)
+                        }
+                        .disabled(!viewModel.canUndo)
+                        .foregroundColor(viewModel.canUndo ? .white : .gray)
+
+                        // Redo ボタン
+                        Button(action: {
+                            viewModel.redo()
+                        }) {
+                            Image(systemName: "arrow.uturn.forward")
+                                .font(.body)
+                        }
+                        .disabled(!viewModel.canRedo)
+                        .foregroundColor(viewModel.canRedo ? .white : .gray)
+
                         // 編集ツール設定ボタン
                         Button(action: {
                             showEditToolsSettings = true
@@ -307,9 +327,14 @@ struct EditView: View {
 
     private var adjustmentContentView: some View {
         VStack(spacing: 0) {
-            // ツール選択中はスライダーを表示
+            // ツール選択中の表示
             if let tool = selectedTool {
-                improvedSliderView(tool: tool)
+                if tool == .curves {
+                    // カーブ調整ツール: ToneCurveView を表示
+                    toneCurveEditorView
+                } else {
+                    improvedSliderView(tool: tool)
+                }
             }
 
             // ツール一覧
@@ -336,7 +361,40 @@ struct EditView: View {
                 .padding(.vertical, 12)
             }
         }
-        .frame(minHeight: selectedTool != nil ? 180 : 100)
+        .frame(minHeight: selectedTool == .curves ? 280 : (selectedTool != nil ? 180 : 100))
+    }
+
+    // MARK: - Tone Curve Editor View
+
+    /// カーブ調整ツール用のトーンカーブエディター
+    private var toneCurveEditorView: some View {
+        VStack(spacing: 8) {
+            // ヘッダー
+            HStack {
+                Text(EditTool.curves.displayName)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.top, 8)
+
+            // ToneCurveView（Binding でリアルタイム更新、ドラッグ終了時に Undo 履歴へ積む）
+            ToneCurveView(
+                points: Binding(
+                    get: { viewModel.editRecipe.toneCurvePoints ?? ToneCurvePoints() },
+                    set: { newPoints in
+                        viewModel.editRecipe.toneCurvePoints = newPoints
+                        Task { await viewModel.generatePreview() }
+                    }
+                ),
+                onEditEnd: {
+                    viewModel.finalizeToolValue(for: .curves)
+                }
+            )
+            .frame(height: 220)
+            .padding(.horizontal)
+        }
     }
 
     // MARK: - Improved Slider View (目盛り付き)

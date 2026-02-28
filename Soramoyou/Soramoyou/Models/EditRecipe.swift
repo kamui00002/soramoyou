@@ -128,6 +128,14 @@ struct EditRecipe: Codable, Equatable {
     /// 二重露光風合成（正規化）
     var doubleExposureNorm: Double?
 
+    // MARK: - トーンカーブ
+
+    /// トーンカーブ制御点（5点ベジェ）
+    ///
+    /// nil のとき FilterGraphBuilder は curvesNorm を使用する。
+    /// ToneCurveView で設定されると nil ではなくなる。
+    var toneCurvePoints: ToneCurvePoints?
+
     // MARK: - フィルター
 
     /// 適用済みフィルター
@@ -284,6 +292,7 @@ struct EditRecipe: Codable, Equatable {
         if let v = lensCorrectionNorm    { data["lensCorrectionNorm"]    = v }
         if let v = doubleExposureNorm    { data["doubleExposureNorm"]    = v }
         if let f = appliedFilter         { data["appliedFilter"]         = f.rawValue }
+        if let tp = toneCurvePoints      { data["toneCurvePoints"]       = tp.toFirestoreData() }
 
         return data
     }
@@ -324,5 +333,78 @@ struct EditRecipe: Codable, Equatable {
         if let filterString = firestoreData["appliedFilter"] as? String {
             self.appliedFilter = FilterType(rawValue: filterString)
         }
+
+        // トーンカーブ制御点（Phase 3 追加フィールド）
+        if let ptData = firestoreData["toneCurvePoints"] as? [String: Any] {
+            self.toneCurvePoints = ToneCurvePoints(from: ptData)
+        }
     }
+}
+
+// MARK: - CurvePoint
+
+/// トーンカーブ制御点（x: 入力輝度、y: 出力輝度、各 0.0...1.0）
+struct CurvePoint: Codable, Equatable {
+    var x: Double
+    var y: Double
+
+    init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
+
+    var cgPoint: CGPoint { CGPoint(x: x, y: y) }
+}
+
+// MARK: - ToneCurvePoints
+
+/// CIToneCurve に渡す 5 点の制御点セット
+///
+/// デフォルト値はリニア（恒等変換）。
+/// `isIdentity` が true のとき FilterGraphBuilder はトーンカーブ処理をスキップできる。
+struct ToneCurvePoints: Codable, Equatable {
+    var point0: CurvePoint = CurvePoint(x: 0.0,  y: 0.0)
+    var point1: CurvePoint = CurvePoint(x: 0.25, y: 0.25)
+    var point2: CurvePoint = CurvePoint(x: 0.5,  y: 0.5)
+    var point3: CurvePoint = CurvePoint(x: 0.75, y: 0.75)
+    var point4: CurvePoint = CurvePoint(x: 1.0,  y: 1.0)
+
+    static let identity = ToneCurvePoints()
+
+    /// すべての点がリニアカーブ（恒等変換）かどうか
+    var isIdentity: Bool { self == .identity }
+
+    // MARK: - Firestore 変換
+
+    func toFirestoreData() -> [String: Any] {
+        func pt(_ p: CurvePoint) -> [String: Double] { ["x": p.x, "y": p.y] }
+        return [
+            "point0": pt(point0),
+            "point1": pt(point1),
+            "point2": pt(point2),
+            "point3": pt(point3),
+            "point4": pt(point4)
+        ]
+    }
+
+    init?(from data: [String: Any]) {
+        func parse(_ key: String) -> CurvePoint? {
+            guard let d = data[key] as? [String: Any],
+                  let x = d["x"] as? Double,
+                  let y = d["y"] as? Double else { return nil }
+            return CurvePoint(x: x, y: y)
+        }
+        guard let p0 = parse("point0"),
+              let p1 = parse("point1"),
+              let p2 = parse("point2"),
+              let p3 = parse("point3"),
+              let p4 = parse("point4") else { return nil }
+        self.point0 = p0
+        self.point1 = p1
+        self.point2 = p2
+        self.point3 = p3
+        self.point4 = p4
+    }
+
+    init() {}
 }

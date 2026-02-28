@@ -39,22 +39,34 @@ final class FilterGraphBuilder {
             img = applyFilter(filter, to: img)
         }
 
-        // 2. 露出（EV 値）
-        if recipe.exposureEV != 0 {
-            img = applyExposure(ev: recipe.exposureEV, to: img)
-        }
-
-        // 3. 明るさ・コントラスト・彩度（まとめて CIColorControls で処理）
-        let hasColorControls = recipe.brightnessCI != 0
-            || recipe.contrastCI != 1.0
+        // 2. 露出 + 明るさ + コントラスト + 彩度
+        //    Metal CIKernel が使用可能なら 1 パスで処理、フォールバック時は CIFilter 2 パス
+        let needsECS = recipe.exposureEV != 0
+            || recipe.brightnessCI != 0
+            || recipe.contrastCI   != 1.0
             || recipe.saturationCI != 1.0
-        if hasColorControls {
-            img = applyColorControls(
-                brightness: recipe.brightnessCI,
-                contrast:   recipe.contrastCI,
-                saturation: recipe.saturationCI,
-                to: img
-            )
+        if needsECS {
+            if let metalResult = MetalShaderPipeline.shared.applyExposureContrastSaturation(
+                image:      img,
+                exposureEV: Float(recipe.exposureEV),
+                brightness: Float(recipe.brightnessCI),
+                contrast:   Float(recipe.contrastCI),
+                saturation: Float(recipe.saturationCI)
+            ) {
+                // Metal 1 パスで完了
+                img = metalResult
+            } else {
+                // CIFilter フォールバック（Metal 未対応環境・シミュレーター等）
+                if recipe.exposureEV != 0 {
+                    img = applyExposure(ev: recipe.exposureEV, to: img)
+                }
+                img = applyColorControls(
+                    brightness: recipe.brightnessCI,
+                    contrast:   recipe.contrastCI,
+                    saturation: recipe.saturationCI,
+                    to: img
+                )
+            }
         }
 
         // 4. ガンマ/中間調
@@ -142,8 +154,10 @@ final class FilterGraphBuilder {
             img = applyNoiseReduction(normalized: v, to: img)
         }
 
-        // 19. カーブ調整
-        if let v = recipe.curvesNorm, v != 0 {
+        // 19. カーブ調整（toneCurvePoints が設定されていれば優先使用）
+        if let points = recipe.toneCurvePoints, !points.isIdentity {
+            img = applyToneCurvePoints(points, to: img)
+        } else if let v = recipe.curvesNorm, v != 0 {
             img = applyCurves(normalized: v, to: img)
         }
 
@@ -165,6 +179,11 @@ final class FilterGraphBuilder {
         // 23. 二重露光風合成（最後に適用: 元画像参照が必要なため）
         if let v = recipe.doubleExposureNorm, v != 0 {
             img = applyDoubleExposure(normalized: v, original: source, blended: img)
+        }
+
+        // 24. iOS 18+ HDR トーンマッピング（Display P3 出力時に HDR 輝度を抑制）
+        if #available(iOS 18.0, *) {
+            img = applyHDRToneMapping(to: img)
         }
 
         return img
@@ -451,6 +470,18 @@ final class FilterGraphBuilder {
         return f.outputImage ?? image
     }
 
+    // ── トーンカーブ（ToneCurvePoints による 5点制御）──
+    private static func applyToneCurvePoints(_ points: ToneCurvePoints, to image: CIImage) -> CIImage {
+        let f = CIFilter.toneCurve()
+        f.inputImage = image
+        f.point0 = points.point0.cgPoint
+        f.point1 = points.point1.cgPoint
+        f.point2 = points.point2.cgPoint
+        f.point3 = points.point3.cgPoint
+        f.point4 = points.point4.cgPoint
+        return f.outputImage ?? image
+    }
+
     // ── カーブ調整（S字/逆S字）──
     private static func applyCurves(normalized v: Double, to image: CIImage) -> CIImage {
         let f = CIFilter.toneCurve()
@@ -521,5 +552,23 @@ final class FilterGraphBuilder {
         mix?.setValue(screenResult, forKey: kCIInputTargetImageKey)
         mix?.setValue(abs(v),       forKey: kCIInputTimeKey)
         return mix?.outputImage?.cropped(to: original.extent) ?? blended
+    }
+
+    // ── iOS 18+ HDR トーンマッピング ──
+    ///
+    /// iOS 18+ の HDR 展開（PreviewRenderer.renderExport で `.expandToHDR = true`）を使用した場合、
+    /// 輝度が 1.0 を超える HDR 値が含まれる可能性がある。
+    /// CIToneCurve で輝度を SDR 範囲（0〜1）に収める。
+    @available(iOS 18.0, *)
+    private static func applyHDRToneMapping(to image: CIImage) -> CIImage {
+        let f = CIFilter.toneCurve()
+        f.inputImage = image
+        // Reinhard-like トーンマップ（1.0 を超える輝度を 1.0 にソフトクランプ）
+        f.point0 = CGPoint(x: 0.0,  y: 0.0)
+        f.point1 = CGPoint(x: 0.25, y: 0.25)
+        f.point2 = CGPoint(x: 0.5,  y: 0.5)
+        f.point3 = CGPoint(x: 0.75, y: 0.73)   // 圧縮開始
+        f.point4 = CGPoint(x: 1.0,  y: 0.95)   // ハイライト圧縮
+        return f.outputImage ?? image
     }
 }
