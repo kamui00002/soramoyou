@@ -92,8 +92,8 @@ struct GalleryView: View {
             }
             .sheet(item: $selectedPost) { post in
                 GalleryDetailView(post: post) {
-                    // 削除後にローカルの一覧から除去
-                    viewModel.posts.removeAll { $0.id == post.id }
+                    // 削除後にローカルの一覧から除去（ViewModel経由でカプセル化）
+                    viewModel.removePost(postId: post.id)
                 }
             }
         }

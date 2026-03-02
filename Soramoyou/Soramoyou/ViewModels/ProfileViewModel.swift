@@ -527,6 +527,7 @@ class ProfileViewModel: ObservableObject {
         guard let userId = authService.currentUser()?.id else { return }
         isLoading = true
         errorMessage = nil
+        defer { isLoading = false }
 
         do {
             // Firestoreから投稿を削除（postsCountもデクリメント）
@@ -534,7 +535,7 @@ class ProfileViewModel: ObservableObject {
                 try await self.firestoreService.deletePost(postId: post.id, userId: userId)
             }
 
-            // Firebase Storageから画像を削除（ベストエフォート）
+            // Firebase Storageから画像を並列削除（ベストエフォート）
             await deletePostImages(post)
 
             // ローカルの投稿配列からも削除
@@ -547,31 +548,39 @@ class ProfileViewModel: ObservableObject {
             }
         } catch {
             ErrorHandler.logError(error, context: "ProfileViewModel.deletePost", userId: userId)
-            errorMessage = "投稿の削除に失敗しました"
+            errorMessage = error.userFriendlyMessage
         }
-        isLoading = false
     }
 
-    /// Storageから投稿に関連する画像を削除（エラーは無視）
+    /// Storageから投稿に関連する画像を並列削除（エラーは無視）
     private func deletePostImages(_ post: Post) async {
-        // 編集済み画像を削除
-        for image in post.images {
-            if let url = URL(string: image.url),
-               let pathComponents = url.pathComponents.last {
-                let path = "users/\(post.userId)/posts/\(post.id)/\(pathComponents)"
-                try? await storageService.deleteImage(path: path)
+        await withTaskGroup(of: Void.self) { group in
+            // 編集済み画像を並列削除
+            for image in post.images {
+                if let url = URL(string: image.url) {
+                    let path = storagePathFromURL(url, postId: post.id, userId: post.userId, isOriginal: false)
+                    group.addTask { try? await self.storageService.deleteImage(path: path) }
+                }
             }
-        }
-        // オリジナル画像を削除
-        if let originals = post.originalImages {
-            for image in originals {
-                if let url = URL(string: image.url),
-                   let pathComponents = url.pathComponents.last {
-                    let path = "users/\(post.userId)/posts/\(post.id)/originals/\(pathComponents)"
-                    try? await storageService.deleteImage(path: path)
+            // オリジナル画像を並列削除
+            if let originals = post.originalImages {
+                for image in originals {
+                    if let url = URL(string: image.url) {
+                        let path = storagePathFromURL(url, postId: post.id, userId: post.userId, isOriginal: true)
+                        group.addTask { try? await self.storageService.deleteImage(path: path) }
+                    }
                 }
             }
         }
+    }
+
+    /// Firebase Storage URL から削除パスを構築する
+    /// Firebase Storage URL 例: https://firebasestorage.googleapis.com/v0/b/<bucket>/o/users%2F<uid>%2Fposts%2F<postId>%2F<file>?token=...
+    private func storagePathFromURL(_ url: URL, postId: String, userId: String, isOriginal: Bool) -> String {
+        // URLの最後のパスコンポーネントはデコードされたファイル名
+        let fileName = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+        let subfolder = isOriginal ? "originals/" : ""
+        return "users/\(userId)/posts/\(postId)/\(subfolder)\(fileName)"
     }
 
     // MARK: - Edit Tools Management

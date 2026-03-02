@@ -109,14 +109,26 @@ struct GalleryDetailView: View {
             .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
                 Button("削除", role: .destructive) {
                     Task {
-                        try? await viewModel.deletePost(post)
-                        onPostDeleted?()
-                        dismiss()
+                        let success = await viewModel.deletePost(post)
+                        if success {
+                            onPostDeleted?()
+                            dismiss()
+                        }
+                        // 失敗時は viewModel.deleteError がセットされ、下の alert で表示
                     }
                 }
                 Button("キャンセル", role: .cancel) { }
             } message: {
                 Text("この投稿を削除しますか？この操作は取り消せません。")
+            }
+            // 削除失敗アラート
+            .alert("削除に失敗しました", isPresented: Binding(
+                get: { viewModel.deleteError != nil },
+                set: { if !$0 { viewModel.deleteError = nil } }
+            )) {
+                Button("OK") { viewModel.deleteError = nil }
+            } message: {
+                Text(viewModel.deleteError ?? "")
             }
             // 通報理由選択シート
             .confirmationDialog("通報理由を選択", isPresented: $showingReportSheet) {
