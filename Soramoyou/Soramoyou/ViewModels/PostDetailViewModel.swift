@@ -69,4 +69,42 @@ class PostDetailViewModel: ObservableObject {
             reportError = error.userFriendlyMessage
         }
     }
+
+    // MARK: - Delete Post
+
+    /// ログイン中のユーザーが自分の投稿かどうか
+    func isOwnPost(_ post: Post) -> Bool {
+        guard let currentUserId = authService.currentUser()?.id else { return false }
+        return post.userId == currentUserId
+    }
+
+    /// 投稿を削除する（自分の投稿のみ）
+    /// - Parameters:
+    ///   - post: 削除する投稿
+    ///   - storageService: Storage サービス（画像削除用）
+    func deletePost(_ post: Post, storageService: StorageServiceProtocol = StorageService()) async throws {
+        guard let userId = authService.currentUser()?.id else { return }
+
+        try await RetryableOperation.executeIfRetryable {
+            try await self.firestoreService.deletePost(postId: post.id, userId: userId)
+        }
+
+        // Storage 画像の削除（ベストエフォート）
+        for image in post.images {
+            if let url = URL(string: image.url),
+               let fileName = url.pathComponents.last {
+                let path = "users/\(post.userId)/posts/\(post.id)/\(fileName)"
+                try? await storageService.deleteImage(path: path)
+            }
+        }
+        if let originals = post.originalImages {
+            for image in originals {
+                if let url = URL(string: image.url),
+                   let fileName = url.pathComponents.last {
+                    let path = "users/\(post.userId)/posts/\(post.id)/originals/\(fileName)"
+                    try? await storageService.deleteImage(path: path)
+                }
+            }
+        }
+    }
 }

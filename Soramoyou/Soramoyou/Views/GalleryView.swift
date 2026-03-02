@@ -91,7 +91,10 @@ struct GalleryView: View {
                 }
             }
             .sheet(item: $selectedPost) { post in
-                GalleryDetailView(post: post)
+                GalleryDetailView(post: post) {
+                    // 削除後にローカルの一覧から除去
+                    viewModel.posts.removeAll { $0.id == post.id }
+                }
             }
         }
         .navigationViewStyle(.stack)

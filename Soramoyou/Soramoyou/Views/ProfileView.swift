@@ -17,6 +17,8 @@ struct ProfileView: View {
     @State private var showingEditTools = false
     @State private var showingSettings = false
     @State private var displayMode: DisplayMode = .grid
+    @State private var postToDelete: Post?
+    @State private var showDeleteConfirmation = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     enum DisplayMode {
@@ -160,6 +162,20 @@ struct ProfileView: View {
                 if let errorMessage = viewModel.errorMessage {
                     Text(errorMessage)
                 }
+            }
+            // 投稿削除確認アラート
+            .alert("投稿を削除", isPresented: $showDeleteConfirmation) {
+                Button("削除", role: .destructive) {
+                    if let post = postToDelete {
+                        Task { await viewModel.deletePost(post) }
+                    }
+                    postToDelete = nil
+                }
+                Button("キャンセル", role: .cancel) {
+                    postToDelete = nil
+                }
+            } message: {
+                Text("この投稿を削除しますか？この操作は取り消せません。")
             }
             .sheet(isPresented: $showingEditProfile) {
                 if viewModel.isOwnProfile {
@@ -380,6 +396,14 @@ struct ProfileView: View {
                             PostGridItem(post: post)
                         }
                         .buttonStyle(CardButtonStyle())
+                        .contextMenu(viewModel.isOwnProfile ? ContextMenu {
+                            Button(role: .destructive) {
+                                postToDelete = post
+                                showDeleteConfirmation = true
+                            } label: {
+                                Label("投稿を削除", systemImage: "trash")
+                            }
+                        } : nil)
                     }
                 }
             } else {
@@ -392,6 +416,14 @@ struct ProfileView: View {
                             PostCard(post: post)
                         }
                         .buttonStyle(CardButtonStyle())
+                        .contextMenu(viewModel.isOwnProfile ? ContextMenu {
+                            Button(role: .destructive) {
+                                postToDelete = post
+                                showDeleteConfirmation = true
+                            } label: {
+                                Label("投稿を削除", systemImage: "trash")
+                            }
+                        } : nil)
                     }
                 }
             }

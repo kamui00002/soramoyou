@@ -11,6 +11,8 @@ import Kingfisher
 
 struct GalleryDetailView: View {
     let post: Post
+    /// 投稿削除時に呼ばれるコールバック（一覧からの除去などに使用）
+    var onPostDeleted: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     /// 投稿者情報の取得にはPostDetailViewModelを使用（GalleryDetailViewModelとの二重定義を解消）
     @StateObject private var viewModel = PostDetailViewModel()
@@ -18,6 +20,7 @@ struct GalleryDetailView: View {
     @State private var showingReportSheet = false
     @State private var showingBlockConfirmation = false
     @State private var showingReportConfirmation = false
+    @State private var showingDeleteConfirmation = false
 
     // オリジナル画像が利用可能かどうか
     private var hasOriginalImages: Bool {
@@ -72,12 +75,21 @@ struct GalleryDetailView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
+                        // 自分の投稿の場合のみ削除ボタンを表示
+                        if viewModel.isOwnPost(post) {
+                            Button(role: .destructive) {
+                                showingDeleteConfirmation = true
+                            } label: {
+                                Label("投稿を削除", systemImage: "trash")
+                            }
+                            Divider()
+                        }
                         Button(role: .destructive) {
                             showingReportSheet = true
                         } label: {
                             Label("この投稿を通報", systemImage: "flag")
                         }
-                        
+
                         Button(role: .destructive) {
                             showingBlockConfirmation = true
                         } label: {
@@ -92,6 +104,19 @@ struct GalleryDetailView: View {
                 Task {
                     await viewModel.loadAuthor(userId: post.userId)
                 }
+            }
+            // 投稿削除確認アラート
+            .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
+                Button("削除", role: .destructive) {
+                    Task {
+                        try? await viewModel.deletePost(post)
+                        onPostDeleted?()
+                        dismiss()
+                    }
+                }
+                Button("キャンセル", role: .cancel) { }
+            } message: {
+                Text("この投稿を削除しますか？この操作は取り消せません。")
             }
             // 通報理由選択シート
             .confirmationDialog("通報理由を選択", isPresented: $showingReportSheet) {

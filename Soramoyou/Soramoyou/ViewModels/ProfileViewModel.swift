@@ -519,8 +519,63 @@ class ProfileViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Delete Post
+
+    /// 投稿を削除する（自分の投稿のみ）
+    /// - Parameter post: 削除する投稿
+    func deletePost(_ post: Post) async {
+        guard let userId = authService.currentUser()?.id else { return }
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            // Firestoreから投稿を削除（postsCountもデクリメント）
+            try await RetryableOperation.executeIfRetryable {
+                try await self.firestoreService.deletePost(postId: post.id, userId: userId)
+            }
+
+            // Firebase Storageから画像を削除（ベストエフォート）
+            await deletePostImages(post)
+
+            // ローカルの投稿配列からも削除
+            userPosts.removeAll { $0.id == post.id }
+
+            // postsCountをローカルでも更新
+            if var updatedUser = user {
+                updatedUser.postsCount = max(0, updatedUser.postsCount - 1)
+                user = updatedUser
+            }
+        } catch {
+            ErrorHandler.logError(error, context: "ProfileViewModel.deletePost", userId: userId)
+            errorMessage = "投稿の削除に失敗しました"
+        }
+        isLoading = false
+    }
+
+    /// Storageから投稿に関連する画像を削除（エラーは無視）
+    private func deletePostImages(_ post: Post) async {
+        // 編集済み画像を削除
+        for image in post.images {
+            if let url = URL(string: image.url),
+               let pathComponents = url.pathComponents.last {
+                let path = "users/\(post.userId)/posts/\(post.id)/\(pathComponents)"
+                try? await storageService.deleteImage(path: path)
+            }
+        }
+        // オリジナル画像を削除
+        if let originals = post.originalImages {
+            for image in originals {
+                if let url = URL(string: image.url),
+                   let pathComponents = url.pathComponents.last {
+                    let path = "users/\(post.userId)/posts/\(post.id)/originals/\(pathComponents)"
+                    try? await storageService.deleteImage(path: path)
+                }
+            }
+        }
+    }
+
     // MARK: - Edit Tools Management
-    
+
     /// 編集装備の順序を更新（Firestoreに保存）
     func updateEditTools() async {
         guard let userId = userId else {
