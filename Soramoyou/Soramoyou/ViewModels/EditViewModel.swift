@@ -70,8 +70,8 @@ class EditViewModel: ObservableObject {
     /// Redo 可能かどうか
     @Published var canRedo: Bool = false
 
-    /// スライダーのドラッグ開始時の EditRecipe（ドラッグ終了時に履歴へ積む）
-    private var preDragRecipe: EditRecipe?
+    /// スライダーのドラッグ開始時のスナップショット（ドラッグ終了時に履歴へ積む）
+    private var preDragSnapshot: EditorSnapshot?
 
     private let imageService: ImageServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
@@ -134,6 +134,29 @@ class EditViewModel: ObservableObject {
 
     // MARK: - Image Management
     
+    // MARK: - スナップショット ヘルパー
+
+    /// 現在の編集状態を EditorSnapshot として取得
+    private var currentSnapshot: EditorSnapshot {
+        EditorSnapshot(
+            recipe:              editRecipe,
+            rotationDegrees:     rotationDegrees,
+            isFlippedHorizontal: isFlippedHorizontal,
+            isFlippedVertical:   isFlippedVertical,
+            cropAspectRatio:     cropAspectRatio
+        )
+    }
+
+    /// EditorSnapshot を現在の状態に復元する
+    private func applySnapshot(_ snap: EditorSnapshot) {
+        editRecipe          = snap.recipe
+        rotationDegrees     = snap.rotationDegrees
+        isFlippedHorizontal = snap.isFlippedHorizontal
+        isFlippedVertical   = snap.isFlippedVertical
+        cropAspectRatio     = snap.cropAspectRatio
+        invalidateLowResCache()
+    }
+
     // MARK: - 履歴状態更新ヘルパー
 
     /// historyManager の状態を @Published プロパティに同期する
@@ -144,10 +167,10 @@ class EditViewModel: ObservableObject {
 
     // MARK: - Undo/Redo 操作
 
-    /// 直前の編集状態に戻す
+    /// 直前の編集状態に戻す（recipe + 回転/反転/クロップを含む完全復元）
     func undo() {
-        guard let previous = historyManager.undo(current: editRecipe) else { return }
-        editRecipe = previous
+        guard let previous = historyManager.undo(current: currentSnapshot) else { return }
+        applySnapshot(previous)
         syncHistoryState()
         Task { [weak self] in
             await self?.generatePreview()
@@ -156,8 +179,8 @@ class EditViewModel: ObservableObject {
 
     /// Undo した変更を再適用する
     func redo() {
-        guard let next = historyManager.redo(current: editRecipe) else { return }
-        editRecipe = next
+        guard let next = historyManager.redo(current: currentSnapshot) else { return }
+        applySnapshot(next)
         syncHistoryState()
         Task { [weak self] in
             await self?.generatePreview()
@@ -209,7 +232,7 @@ class EditViewModel: ObservableObject {
     
     /// フィルターを適用
     func applyFilter(_ filter: FilterType) {
-        historyManager.push(editRecipe)
+        historyManager.push(currentSnapshot)
         syncHistoryState()
         editSettings.appliedFilter = filter
         Task { [weak self] in
@@ -219,7 +242,7 @@ class EditViewModel: ObservableObject {
 
     /// フィルターを解除
     func removeFilter() {
-        historyManager.push(editRecipe)
+        historyManager.push(currentSnapshot)
         syncHistoryState()
         editSettings.appliedFilter = nil
         Task { [weak self] in
@@ -284,6 +307,10 @@ class EditViewModel: ObservableObject {
     
     /// 編集ツールの値を設定
     func setToolValue(_ value: Float, for tool: EditTool) {
+        // 非リアルタイム変更前の状態を Undo スタックに積む
+        historyManager.push(currentSnapshot)
+        syncHistoryState()
+
         // 値の範囲を-1.0から1.0に制限
         let clampedValue = max(-1.0, min(1.0, value))
         editSettings.setValue(clampedValue, for: tool)
@@ -298,8 +325,8 @@ class EditViewModel: ObservableObject {
     /// 最小間隔33ms（約30fps）でスロットリングし、間隔内の最後の値を遅延実行
     func setToolValueRealtime(_ value: Float, for tool: EditTool) {
         // ドラッグ開始時点の状態をキャプチャ（Undo 用）
-        if preDragRecipe == nil {
-            preDragRecipe = editRecipe
+        if preDragSnapshot == nil {
+            preDragSnapshot = currentSnapshot
         }
 
         // 値の範囲を-1.0から1.0に制限
@@ -351,10 +378,10 @@ class EditViewModel: ObservableObject {
         isEditingRealtime = false
 
         // ドラッグ開始時の状態を履歴に積む
-        if let preDrag = preDragRecipe {
+        if let preDrag = preDragSnapshot {
             historyManager.push(preDrag)
             syncHistoryState()
-            preDragRecipe = nil
+            preDragSnapshot = nil
         }
 
         // 高速プレビューを通常プレビューに昇格（同解像度なので品質ジャンプなし）
@@ -371,7 +398,7 @@ class EditViewModel: ObservableObject {
 
     /// 編集ツールの値をリセット
     func resetToolValue(for tool: EditTool) {
-        historyManager.push(editRecipe)
+        historyManager.push(currentSnapshot)
         syncHistoryState()
         editSettings.setValue(nil, for: tool)
         Task { [weak self] in
@@ -381,7 +408,7 @@ class EditViewModel: ObservableObject {
 
     /// すべての編集をリセット
     func resetAllEdits() {
-        historyManager.push(editRecipe)
+        historyManager.push(currentSnapshot)
         syncHistoryState()
         editRecipe = EditRecipe()   // 編集レシピをリセット
         rotationDegrees = 0
@@ -399,8 +426,8 @@ class EditViewModel: ObservableObject {
     /// 回転角度を設定（リアルタイム・スロットリング付き）
     func setRotationRealtime(_ degrees: Double) {
         // ドラッグ開始時点の状態をキャプチャ（Undo 用）
-        if preDragRecipe == nil {
-            preDragRecipe = editRecipe
+        if preDragSnapshot == nil {
+            preDragSnapshot = currentSnapshot
         }
 
         rotationDegrees = degrees
@@ -439,10 +466,10 @@ class EditViewModel: ObservableObject {
         isEditingRealtime = false
 
         // ドラッグ開始時の状態を履歴に積む
-        if let preDrag = preDragRecipe {
+        if let preDrag = preDragSnapshot {
             historyManager.push(preDrag)
             syncHistoryState()
-            preDragRecipe = nil
+            preDragSnapshot = nil
         }
 
         // 高速プレビューを通常プレビューに昇格
@@ -458,7 +485,7 @@ class EditViewModel: ObservableObject {
 
     /// 左右反転を切り替え
     func toggleFlipHorizontal() {
-        historyManager.push(editRecipe)
+        historyManager.push(currentSnapshot)
         syncHistoryState()
         isFlippedHorizontal.toggle()
         invalidateLowResCache()
@@ -469,7 +496,7 @@ class EditViewModel: ObservableObject {
 
     /// 上下反転を切り替え
     func toggleFlipVertical() {
-        historyManager.push(editRecipe)
+        historyManager.push(currentSnapshot)
         syncHistoryState()
         isFlippedVertical.toggle()
         invalidateLowResCache()
@@ -480,7 +507,7 @@ class EditViewModel: ObservableObject {
 
     /// 左に90度回転
     func rotateLeft() {
-        historyManager.push(editRecipe)
+        historyManager.push(currentSnapshot)
         syncHistoryState()
         rotationDegrees -= 90
         if rotationDegrees < -180 {
@@ -494,7 +521,7 @@ class EditViewModel: ObservableObject {
 
     /// 右に90度回転
     func rotateRight() {
-        historyManager.push(editRecipe)
+        historyManager.push(currentSnapshot)
         syncHistoryState()
         rotationDegrees += 90
         if rotationDegrees > 180 {
@@ -508,11 +535,15 @@ class EditViewModel: ObservableObject {
 
     /// アスペクト比を設定
     func setCropAspectRatio(_ ratio: CropAspectRatio) {
+        historyManager.push(currentSnapshot)
+        syncHistoryState()
         cropAspectRatio = ratio
     }
 
     /// 切り取り・回転のリセット
     func resetCropSettings() {
+        historyManager.push(currentSnapshot)
+        syncHistoryState()
         rotationDegrees = 0
         isFlippedHorizontal = false
         isFlippedVertical = false

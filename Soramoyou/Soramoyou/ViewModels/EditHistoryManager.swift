@@ -7,10 +7,25 @@
 
 import Foundation
 
-/// EditRecipe スナップショットを値コピーで積むシンプルな履歴マネージャー
+// MARK: - EditorSnapshot
+
+/// 編集画面の完全な状態スナップショット
+///
+/// EditRecipe（色調整・フィルター）と変形状態（回転・反転・クロップ）を
+/// 一体として保持することで、Undo/Redo が全操作を正しく復元できる。
+struct EditorSnapshot: Equatable {
+    let recipe:             EditRecipe
+    let rotationDegrees:    Double
+    let isFlippedHorizontal: Bool
+    let isFlippedVertical:  Bool
+    let cropAspectRatio:    CropAspectRatio
+}
+
+// MARK: - EditHistoryManager
+
+/// EditorSnapshot を値コピーで積む履歴マネージャー
 ///
 /// 設計方針:
-/// - EditRecipe が immutable struct なので、値コピーで安全に履歴を積める
 /// - undoStack: 「前の状態」を積む（Undo するとここから取り出す）
 /// - redoStack: 「Undo で戻った状態を再適用するための次の状態」を積む
 /// - 新規変更時に redoStack を全クリア（分岐履歴は持たない）
@@ -19,8 +34,8 @@ final class EditHistoryManager {
 
     // MARK: - Properties
 
-    private(set) var undoStack: [EditRecipe] = []
-    private(set) var redoStack: [EditRecipe] = []
+    private(set) var undoStack: [EditorSnapshot] = []
+    private(set) var redoStack: [EditorSnapshot] = []
 
     /// 最大履歴数（超えた分は先頭から削除）
     let maxSize: Int
@@ -40,9 +55,9 @@ final class EditHistoryManager {
 
     /// 現在の状態を Undo スタックに積む（新規変更前に呼ぶ）
     ///
-    /// - Parameter recipe: 変更前の EditRecipe（現在の状態）
-    func push(_ recipe: EditRecipe) {
-        undoStack.append(recipe)
+    /// - Parameter snapshot: 変更前の EditorSnapshot（現在の状態）
+    func push(_ snapshot: EditorSnapshot) {
+        undoStack.append(snapshot)
         if undoStack.count > maxSize {
             undoStack.removeFirst()
         }
@@ -52,9 +67,9 @@ final class EditHistoryManager {
 
     /// Undo: 直前の状態に戻す
     ///
-    /// - Parameter current: 現在の EditRecipe（Redo のために保存される）
-    /// - Returns: 戻すべき EditRecipe、スタックが空なら nil
-    func undo(current: EditRecipe) -> EditRecipe? {
+    /// - Parameter current: 現在の EditorSnapshot（Redo のために保存される）
+    /// - Returns: 戻すべき EditorSnapshot、スタックが空なら nil
+    func undo(current: EditorSnapshot) -> EditorSnapshot? {
         guard let previous = undoStack.popLast() else { return nil }
         redoStack.append(current)
         return previous
@@ -62,9 +77,9 @@ final class EditHistoryManager {
 
     /// Redo: Undo した変更を再適用する
     ///
-    /// - Parameter current: 現在の EditRecipe（Undo のために保存される）
-    /// - Returns: 再適用すべき EditRecipe、スタックが空なら nil
-    func redo(current: EditRecipe) -> EditRecipe? {
+    /// - Parameter current: 現在の EditorSnapshot（Undo のために保存される）
+    /// - Returns: 再適用すべき EditorSnapshot、スタックが空なら nil
+    func redo(current: EditorSnapshot) -> EditorSnapshot? {
         guard let next = redoStack.popLast() else { return nil }
         undoStack.append(current)
         return next

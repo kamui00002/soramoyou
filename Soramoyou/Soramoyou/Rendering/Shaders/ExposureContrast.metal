@@ -49,8 +49,9 @@ extern "C" float4 exposureContrastSaturation(
     float luminance = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
     color = mix(float3(luminance), color, saturation);
 
-    // クランプ（linear sRGB の正規化範囲）
-    color = clamp(color, 0.0f, 1.0f);
+    // NOTE: SDR 時は clamp してもよいが、HDR トーンマッパー（iOS 18+）が
+    //       後段で処理するため 0...1 を超える値をそのまま通す。
+    //       負値のみ alpha 保護目的で 0 クランプする（RGB は HDR のため不要）。
 
     return float4(color, sample.a);
 }

@@ -88,7 +88,10 @@ struct ToneCurveView: View {
                     HStack {
                         Spacer()
                         if points != .identity {
-                            Button(action: { withAnimation { points = .identity } }) {
+                            Button(action: {
+                                withAnimation { points = .identity }
+                                onEditEnd?()   // Undo 履歴にリセット前の状態を記録
+                            }) {
                                 Text("リセット")
                                     .font(.caption2)
                                     .foregroundColor(.white.opacity(0.7))
