@@ -100,7 +100,7 @@ class PostDetailViewModel: ObservableObject {
             }
 
             // Storage 画像の削除（ベストエフォート・並列実行）
-            await deletePostImages(post)
+            await storageService.deletePostImages(post)
             return true
         } catch {
             ErrorHandler.logError(error, context: "PostDetailViewModel.deletePost", userId: userId)
@@ -109,31 +109,4 @@ class PostDetailViewModel: ObservableObject {
         }
     }
 
-    /// Storage から投稿に関連する画像を並列削除（エラーは無視）
-    private func deletePostImages(_ post: Post) async {
-        await withTaskGroup(of: Void.self) { group in
-            for image in post.images {
-                if let url = URL(string: image.url) {
-                    let path = storagePathFromURL(url, postId: post.id, userId: post.userId, isOriginal: false)
-                    group.addTask { try? await self.storageService.deleteImage(path: path) }
-                }
-            }
-            if let originals = post.originalImages {
-                for image in originals {
-                    if let url = URL(string: image.url) {
-                        let path = storagePathFromURL(url, postId: post.id, userId: post.userId, isOriginal: true)
-                        group.addTask { try? await self.storageService.deleteImage(path: path) }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Firebase Storage URL から削除パスを構築する
-    /// Firebase Storage URL 例: https://firebasestorage.googleapis.com/v0/b/<bucket>/o/users%2F<uid>%2Fposts%2F<postId>%2F<file>?token=...
-    private func storagePathFromURL(_ url: URL, postId: String, userId: String, isOriginal: Bool) -> String {
-        let fileName = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
-        let subfolder = isOriginal ? "originals/" : ""
-        return "users/\(userId)/posts/\(postId)/\(subfolder)\(fileName)"
-    }
 }

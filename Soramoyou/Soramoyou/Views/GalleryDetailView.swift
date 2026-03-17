@@ -21,6 +21,14 @@ struct GalleryDetailView: View {
     @State private var showingBlockConfirmation = false
     @State private var showingReportConfirmation = false
     @State private var showingDeleteConfirmation = false
+    @State private var showingSaveOptions = false
+    @State private var showingShareSheet = false
+    @State private var isSaving = false
+    @State private var saveResultMessage: String?
+    @State private var showingSaveResult = false
+    @State private var shareImages: [UIImage] = []
+
+    private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
     // オリジナル画像が利用可能かどうか
     private var hasOriginalImages: Bool {
@@ -75,6 +83,22 @@ struct GalleryDetailView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
+                        // 写真に保存
+                        Button {
+                            showingSaveOptions = true
+                        } label: {
+                            Label("写真に保存", systemImage: "square.and.arrow.down")
+                        }
+
+                        // 共有
+                        Button {
+                            Task { await shareCurrentImage() }
+                        } label: {
+                            Label("共有", systemImage: "square.and.arrow.up")
+                        }
+
+                        Divider()
+
                         // 自分の投稿の場合のみ削除ボタンを表示
                         if viewModel.isOwnPost(post) {
                             Button(role: .destructive) {
@@ -164,8 +188,111 @@ struct GalleryDetailView: View {
             } message: {
                 Text("ご報告ありがとうございます。内容を確認いたします。")
             }
+            // 保存オプション選択
+            .confirmationDialog("保存オプション", isPresented: $showingSaveOptions) {
+                Button("この画像を保存（編集済み）") {
+                    Task { await saveImage(edited: true, all: false) }
+                }
+                if hasOriginalImages {
+                    Button("この画像を保存（オリジナル）") {
+                        Task { await saveImage(edited: false, all: false) }
+                    }
+                }
+                if post.images.count > 1 {
+                    Button("すべての画像を保存（編集済み）") {
+                        Task { await saveImage(edited: true, all: true) }
+                    }
+                }
+                if hasOriginalImages && (post.originalImages?.count ?? 0) > 1 {
+                    Button("すべての画像を保存（オリジナル）") {
+                        Task { await saveImage(edited: false, all: true) }
+                    }
+                }
+                Button("キャンセル", role: .cancel) { }
+            }
+            // 保存結果アラート
+            .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {
+                Button("OK") { saveResultMessage = nil }
+            }
+            // 共有シート
+            .sheet(isPresented: $showingShareSheet) {
+                ImageShareSheet(images: shareImages)
+            }
+            // 保存中オーバーレイ
+            .overlay {
+                if isSaving {
+                    ZStack {
+                        Color.black.opacity(0.4)
+                            .ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.2)
+                            Text("保存中...")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                        }
+                        .padding(24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(UIColor.systemBackground).opacity(0.9))
+                        )
+                    }
+                }
+            }
         }
         .navigationViewStyle(.stack)
+    }
+
+    // MARK: - Save / Share Methods
+
+    /// 画像を写真ライブラリに保存
+    private func saveImage(edited: Bool, all: Bool) async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            let urlStrings: [String]
+            if edited {
+                urlStrings = all ? post.images.map(\.url) : [post.images.first?.url].compactMap { $0 }
+            } else {
+                let originals = post.originalImages ?? []
+                urlStrings = all ? originals.map(\.url) : [originals.first?.url].compactMap { $0 }
+            }
+
+            let savedCount = try await downloadService.downloadAndSaveImages(from: urlStrings)
+            saveResultMessage = savedCount == 1 ? "画像を保存しました" : "\(savedCount)枚の画像を保存しました"
+            showingSaveResult = true
+        } catch {
+            saveResultMessage = error.localizedDescription
+            showingSaveResult = true
+        }
+    }
+
+    /// 現在表示中の画像を共有シートで共有
+    private func shareCurrentImage() async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            let urlString: String
+            if showingOriginalImage, let original = post.originalImages?.first {
+                urlString = original.url
+            } else if let first = post.images.first {
+                urlString = first.url
+            } else {
+                saveResultMessage = "共有する画像がありません"
+                showingSaveResult = true
+                return
+            }
+
+            let image = try await downloadService.downloadImage(from: urlString)
+            shareImages = [image]
+            showingShareSheet = true
+        } catch {
+            saveResultMessage = error.localizedDescription
+            showingSaveResult = true
+        }
     }
 
     // MARK: - Image Section

@@ -282,6 +282,37 @@ class StorageService: StorageServiceProtocol {
     }
 }
 
+// MARK: - 投稿画像の一括削除ヘルパー
+
+extension StorageServiceProtocol {
+    /// 投稿に関連する全画像を並列削除（ベストエフォート・エラーは無視）
+    func deletePostImages(_ post: Post) async {
+        await withTaskGroup(of: Void.self) { group in
+            for image in post.images {
+                if let url = URL(string: image.url) {
+                    let path = Self.storagePathFromURL(url, postId: post.id, userId: post.userId, isOriginal: false)
+                    group.addTask { try? await self.deleteImage(path: path) }
+                }
+            }
+            if let originals = post.originalImages {
+                for image in originals {
+                    if let url = URL(string: image.url) {
+                        let path = Self.storagePathFromURL(url, postId: post.id, userId: post.userId, isOriginal: true)
+                        group.addTask { try? await self.deleteImage(path: path) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Firebase Storage URL から削除パスを構築する
+    static func storagePathFromURL(_ url: URL, postId: String, userId: String, isOriginal: Bool) -> String {
+        let fileName = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+        let subfolder = isOriginal ? "originals/" : ""
+        return "users/\(userId)/posts/\(postId)/\(subfolder)\(fileName)"
+    }
+}
+
 // MARK: - StorageServiceError
 
 enum StorageServiceError: LocalizedError {

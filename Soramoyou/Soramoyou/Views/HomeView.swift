@@ -406,192 +406,299 @@ struct PostDetailView: View {
     @State private var showingReportConfirmation = false
     @State private var selectedReportReason: ReportReason?
     @State private var showingDeleteConfirmation = false
+    @State private var showingSaveOptions = false
+    @State private var showingShareSheet = false
+    @State private var isSaving = false
+    @State private var saveResultMessage: String?
+    @State private var showingSaveResult = false
+    @State private var shareImages: [UIImage] = []
+
+    private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
+
+    private var hasOriginalImages: Bool {
+        post.originalImages != nil && !(post.originalImages?.isEmpty ?? true)
+    }
     
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // 投稿者情報
-                    if let user = viewModel.author {
-                        authorSection(user: user)
-                    } else if viewModel.isLoadingAuthor {
-                        HStack {
-                            ProgressView()
-                            Text("投稿者情報を読み込み中...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .padding()
+            postDetailContent
+                .navigationTitle("投稿詳細")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { postDetailToolbar }
+                .onAppear {
+                    Task {
+                        await viewModel.loadAuthor(userId: post.userId)
                     }
-                    
-                    // フルサイズ画像
-                    if let firstImage = post.images.first {
-                        PostDetailImageView(imageInfo: firstImage)
+                }
+                .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
+                    Button("削除", role: .destructive) {
+                        Task {
+                            let success = await viewModel.deletePost(post)
+                            if success { dismiss() }
+                        }
                     }
-                    
-                    // 投稿情報
-                    VStack(alignment: .leading, spacing: 12) {
-                        // キャプション
-                        if let caption = post.caption {
-                            Text(caption)
-                                .font(.body)
+                    Button("キャンセル", role: .cancel) { }
+                } message: {
+                    Text("この投稿を削除しますか？この操作は取り消せません。")
+                }
+                .alert("削除に失敗しました", isPresented: Binding(
+                    get: { viewModel.deleteError != nil },
+                    set: { if !$0 { viewModel.deleteError = nil } }
+                )) {
+                    Button("OK") { viewModel.deleteError = nil }
+                } message: {
+                    Text(viewModel.deleteError ?? "")
+                }
+                .confirmationDialog("通報理由を選択", isPresented: $showingReportSheet) {
+                    ForEach(ReportReason.allCases, id: \.self) { reason in
+                        Button(reason.displayName) {
+                            selectedReportReason = reason
+                            Task { await submitReport(reason: reason) }
                         }
-                        
-                        // ハッシュタグ
-                        if let hashtags = post.hashtags, !hashtags.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(hashtags, id: \.self) { hashtag in
-                                        Text("#\(hashtag)")
-                                            .font(.body)
-                                            .foregroundColor(.blue)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 6)
-                                            .background(Color.blue.opacity(0.1))
-                                            .cornerRadius(12)
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // 位置情報
-                        if let location = post.location {
-                            HStack {
-                                Image(systemName: "location.fill")
-                                    .foregroundColor(.blue)
-                                if let city = location.city, let prefecture = location.prefecture {
-                                    Text("\(prefecture) \(city)")
-                                        .font(.body)
-                                }
-                                if let landmark = location.landmark {
-                                    Text("（\(landmark)）")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                        
-                        // 空の種類・時間帯・色温度
-                        VStack(alignment: .leading, spacing: 8) {
-                            if let skyType = post.skyType {
-                                Label(skyType.displayName, systemImage: "cloud.fill")
-                                    .font(.body)
-                            }
-                            if let timeOfDay = post.timeOfDay {
-                                Label(timeOfDay.displayName, systemImage: "clock.fill")
-                                    .font(.body)
-                            }
-                            if let colorTemperature = post.colorTemperature {
-                                Label("\(colorTemperature)K", systemImage: "thermometer")
-                                    .font(.body)
-                            }
-                        }
-                        
-                        // 統計情報
-                        HStack(spacing: 24) {
-                            Label("\(post.likesCount)", systemImage: "heart.fill")
-                                .font(.headline)
-                            Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
-                                .font(.headline)
-                        }
-                        .foregroundColor(.secondary)
+                    }
+                    Button("キャンセル", role: .cancel) { }
+                }
+                .alert("ユーザーをブロック", isPresented: $showingBlockConfirmation) {
+                    Button("キャンセル", role: .cancel) { }
+                    Button("ブロック", role: .destructive) {
+                        Task { await blockPostAuthor() }
+                    }
+                } message: {
+                    Text("このユーザーをブロックすると、このユーザーの投稿がフィードに表示されなくなります。")
+                }
+                .alert("通報しました", isPresented: $showingReportConfirmation) {
+                    Button("OK") { }
+                } message: {
+                    Text("ご報告ありがとうございます。内容を確認いたします。")
+                }
+                .confirmationDialog("保存オプション", isPresented: $showingSaveOptions) {
+                    saveOptionButtons
+                }
+                .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {
+                    Button("OK") { saveResultMessage = nil }
+                }
+                .sheet(isPresented: $showingShareSheet) {
+                    ImageShareSheet(images: shareImages)
+                }
+                .overlay { savingOverlay }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    @ViewBuilder
+    private var saveOptionButtons: some View {
+        Button("この画像を保存（編集済み）") {
+            Task { await saveImage(edited: true, all: false) }
+        }
+        if hasOriginalImages {
+            Button("この画像を保存（オリジナル）") {
+                Task { await saveImage(edited: false, all: false) }
+            }
+        }
+        if post.images.count > 1 {
+            Button("すべての画像を保存（編集済み）") {
+                Task { await saveImage(edited: true, all: true) }
+            }
+        }
+        if hasOriginalImages && (post.originalImages?.count ?? 0) > 1 {
+            Button("すべての画像を保存（オリジナル）") {
+                Task { await saveImage(edited: false, all: true) }
+            }
+        }
+        Button("キャンセル", role: .cancel) { }
+    }
+
+    @ViewBuilder
+    private var savingOverlay: some View {
+        if isSaving {
+            ZStack {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.2)
+                    Text("保存中...")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                }
+                .padding(24)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(UIColor.systemBackground).opacity(0.9))
+                )
+            }
+        }
+    }
+
+    private var postDetailContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let user = viewModel.author {
+                    authorSection(user: user)
+                } else if viewModel.isLoadingAuthor {
+                    HStack {
+                        ProgressView()
+                        Text("投稿者情報を読み込み中...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                     .padding()
                 }
-            }
-            .navigationTitle("投稿詳細")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("閉じる") {
-                        dismiss()
-                    }
+                if let firstImage = post.images.first {
+                    PostDetailImageView(imageInfo: firstImage)
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        // 自分の投稿の場合のみ削除ボタンを表示
-                        if viewModel.isOwnPost(post) {
-                            Button(role: .destructive) {
-                                showingDeleteConfirmation = true
-                            } label: {
-                                Label("投稿を削除", systemImage: "trash")
-                            }
-                            Divider()
-                        }
-                        Button(role: .destructive) {
-                            showingReportSheet = true
-                        } label: {
-                            Label("この投稿を通報", systemImage: "flag")
-                        }
-
-                        Button(role: .destructive) {
-                            showingBlockConfirmation = true
-                        } label: {
-                            Label("このユーザーをブロック", systemImage: "hand.raised")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                }
-            }
-            .onAppear {
-                Task {
-                    await viewModel.loadAuthor(userId: post.userId)
-                }
-            }
-            // 投稿削除確認アラート
-            .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
-                Button("削除", role: .destructive) {
-                    Task {
-                        let success = await viewModel.deletePost(post)
-                        if success { dismiss() }
-                        // 失敗時は viewModel.deleteError がセットされ、下の alert で表示
-                    }
-                }
-                Button("キャンセル", role: .cancel) { }
-            } message: {
-                Text("この投稿を削除しますか？この操作は取り消せません。")
-            }
-            // 削除失敗アラート
-            .alert("削除に失敗しました", isPresented: Binding(
-                get: { viewModel.deleteError != nil },
-                set: { if !$0 { viewModel.deleteError = nil } }
-            )) {
-                Button("OK") { viewModel.deleteError = nil }
-            } message: {
-                Text(viewModel.deleteError ?? "")
-            }
-            // 通報理由選択シート
-            .confirmationDialog("通報理由を選択", isPresented: $showingReportSheet) {
-                ForEach(ReportReason.allCases, id: \.self) { reason in
-                    Button(reason.displayName) {
-                        selectedReportReason = reason
-                        Task {
-                            await submitReport(reason: reason)
-                        }
-                    }
-                }
-                Button("キャンセル", role: .cancel) { }
-            }
-            // ブロック確認アラート
-            .alert("ユーザーをブロック", isPresented: $showingBlockConfirmation) {
-                Button("キャンセル", role: .cancel) { }
-                Button("ブロック", role: .destructive) {
-                    Task {
-                        await blockPostAuthor()
-                    }
-                }
-            } message: {
-                Text("このユーザーをブロックすると、このユーザーの投稿がフィードに表示されなくなります。")
-            }
-            // 通報完了アラート
-            .alert("通報しました", isPresented: $showingReportConfirmation) {
-                Button("OK") { }
-            } message: {
-                Text("ご報告ありがとうございます。内容を確認いたします。")
+                postInfoSection
             }
         }
-        .navigationViewStyle(.stack)
+    }
+
+    private var postInfoSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let caption = post.caption {
+                Text(caption)
+                    .font(.body)
+            }
+            if let hashtags = post.hashtags, !hashtags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(hashtags, id: \.self) { hashtag in
+                            Text("#\(hashtag)")
+                                .font(.body)
+                                .foregroundColor(.blue)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.blue.opacity(0.1))
+                                .cornerRadius(12)
+                        }
+                    }
+                }
+            }
+            if let location = post.location {
+                HStack {
+                    Image(systemName: "location.fill")
+                        .foregroundColor(.blue)
+                    if let city = location.city, let prefecture = location.prefecture {
+                        Text("\(prefecture) \(city)")
+                            .font(.body)
+                    }
+                    if let landmark = location.landmark {
+                        Text("（\(landmark)）")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                if let skyType = post.skyType {
+                    Label(skyType.displayName, systemImage: "cloud.fill")
+                        .font(.body)
+                }
+                if let timeOfDay = post.timeOfDay {
+                    Label(timeOfDay.displayName, systemImage: "clock.fill")
+                        .font(.body)
+                }
+                if let colorTemperature = post.colorTemperature {
+                    Label("\(colorTemperature)K", systemImage: "thermometer")
+                        .font(.body)
+                }
+            }
+            HStack(spacing: 24) {
+                Label("\(post.likesCount)", systemImage: "heart.fill")
+                    .font(.headline)
+                Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
+                    .font(.headline)
+            }
+            .foregroundColor(.secondary)
+        }
+        .padding()
+    }
+
+    @ToolbarContentBuilder
+    private var postDetailToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button("閉じる") {
+                dismiss()
+            }
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Menu {
+                Button {
+                    showingSaveOptions = true
+                } label: {
+                    Label("写真に保存", systemImage: "square.and.arrow.down")
+                }
+                Button {
+                    Task { await shareCurrentImage() }
+                } label: {
+                    Label("共有", systemImage: "square.and.arrow.up")
+                }
+                Divider()
+                if viewModel.isOwnPost(post) {
+                    Button(role: .destructive) {
+                        showingDeleteConfirmation = true
+                    } label: {
+                        Label("投稿を削除", systemImage: "trash")
+                    }
+                    Divider()
+                }
+                Button(role: .destructive) {
+                    showingReportSheet = true
+                } label: {
+                    Label("この投稿を通報", systemImage: "flag")
+                }
+                Button(role: .destructive) {
+                    showingBlockConfirmation = true
+                } label: {
+                    Label("このユーザーをブロック", systemImage: "hand.raised")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+        }
+    }
+
+    // MARK: - Save / Share Methods
+
+    private func saveImage(edited: Bool, all: Bool) async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            let urlStrings: [String]
+            if edited {
+                urlStrings = all ? post.images.map(\.url) : [post.images.first?.url].compactMap { $0 }
+            } else {
+                let originals = post.originalImages ?? []
+                urlStrings = all ? originals.map(\.url) : [originals.first?.url].compactMap { $0 }
+            }
+
+            let savedCount = try await downloadService.downloadAndSaveImages(from: urlStrings)
+            saveResultMessage = savedCount == 1 ? "画像を保存しました" : "\(savedCount)枚の画像を保存しました"
+            showingSaveResult = true
+        } catch {
+            saveResultMessage = error.localizedDescription
+            showingSaveResult = true
+        }
+    }
+
+    private func shareCurrentImage() async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            guard let urlString = post.images.first?.url else {
+                saveResultMessage = "共有する画像がありません"
+                showingSaveResult = true
+                return
+            }
+            let image = try await downloadService.downloadImage(from: urlString)
+            shareImages = [image]
+            showingShareSheet = true
+        } catch {
+            saveResultMessage = error.localizedDescription
+            showingSaveResult = true
+        }
     }
 
     /// 通報を送信（ViewModelに委譲）

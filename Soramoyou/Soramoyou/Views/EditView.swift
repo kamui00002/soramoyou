@@ -384,6 +384,8 @@ struct EditView: View {
                 points: Binding(
                     get: { viewModel.editRecipe.toneCurvePoints ?? ToneCurvePoints() },
                     set: { newPoints in
+                        // ドラッグ開始時のスナップショットをキャプチャ（Undo 用）
+                        viewModel.capturePreDragSnapshot()
                         viewModel.editRecipe.toneCurvePoints = newPoints
                         Task { await viewModel.generatePreview() }
                     }

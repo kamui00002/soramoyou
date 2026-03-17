@@ -98,6 +98,7 @@ serviceAccountKey.json
 # API Keys
 *.plist
 !Info.plist
+!GoogleService-Info.plist
 
 # Environment variables
 .env

@@ -364,22 +364,26 @@ final class FilterGraphBuilder {
         return f.outputImage ?? image
     }
 
-    // ── 色温度（独立）──
-    private static func applyColorTemperature(normalized v: Double, to image: CIImage) -> CIImage {
+    // ── 色温度シフト共通ヘルパー ──
+    /// 中性色温度 6500K を基準に、normalized 値とスケール係数で色温度をシフト
+    private static func applyTemperatureShift(
+        normalized v: Double, scale: Double, to image: CIImage
+    ) -> CIImage {
         let f = CIFilter.temperatureAndTint()
         f.inputImage    = image
         f.neutral       = CIVector(x: 6500, y: 0)
-        f.targetNeutral = CIVector(x: 6500 + v * 1500, y: 0)
+        f.targetNeutral = CIVector(x: 6500 + v * scale, y: 0)
         return f.outputImage ?? image
+    }
+
+    // ── 色温度（独立）──
+    private static func applyColorTemperature(normalized v: Double, to image: CIImage) -> CIImage {
+        applyTemperatureShift(normalized: v, scale: 1500, to: image)
     }
 
     // ── ホワイトバランス ──
     private static func applyWhiteBalance(normalized v: Double, to image: CIImage) -> CIImage {
-        let f = CIFilter.temperatureAndTint()
-        f.inputImage    = image
-        f.neutral       = CIVector(x: 6500, y: 0)
-        f.targetNeutral = CIVector(x: 6500 + v * 1000, y: 0)
-        return f.outputImage ?? image
+        applyTemperatureShift(normalized: v, scale: 1000, to: image)
     }
 
     // ── シャープネス ──

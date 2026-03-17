@@ -98,15 +98,29 @@ final class PhotoKitAdapter {
             }
         }
 
+        // レンダ済み画像をクロージャ外で事前に書き出し用データに変換
+        // （performChanges クロージャは non-throwing のため、書き出し失敗は事前に検出）
+        let pool    = CIContextPool.shared
+        let ciImage = CIImage(cgImage: renderedImage)
+
+        // 書き出し用のデータを事前に準備（throwing 可能）
+        let writeData: Data?
+        switch exportFormat {
+        case .heif, .jpeg:
+            writeData = nil // CIContext で直接 URL に書き出す
+        case .png:
+            guard let pngData = UIImage(cgImage: renderedImage).pngData() else {
+                throw PhotoKitAdapterError.renderFailed
+            }
+            writeData = pngData
+        }
+
         // 変更を Photos ライブラリに書き込む
         try await PHPhotoLibrary.shared().performChanges {
             let output = PHContentEditingOutput(contentEditingInput: input)
 
             // レンダ済み画像を書き出し
-            // renderedContentURL は iOS 17+ では non-optional URL
             let outputURL = output.renderedContentURL
-            let pool      = CIContextPool.shared
-            let ciImage   = CIImage(cgImage: renderedImage)
 
             do {
                 switch exportFormat {
@@ -123,16 +137,12 @@ final class PhotoKitAdapter {
                         to:         outputURL,
                         colorSpace: pool.outputColorSpace
                     )
-                default:
-                    try pool.ciContext.writeHEIFRepresentation(
-                        of:         ciImage,
-                        to:         outputURL,
-                        format:     .RGBA8,
-                        colorSpace: pool.outputColorSpace
-                    )
+                case .png:
+                    try writeData?.write(to: outputURL)
                 }
             } catch {
                 print("[PhotoKitAdapter] レンダ済み画像の書き出し失敗: \(error)")
+                return
             }
 
             // 編集レシピを PHAdjustmentData として設定
@@ -174,11 +184,14 @@ final class PhotoKitAdapter {
 
 enum PhotoKitAdapterError: LocalizedError {
     case contentEditingInputFailed
+    case renderFailed
 
     var errorDescription: String? {
         switch self {
         case .contentEditingInputFailed:
             return "ContentEditingInput の取得に失敗しました"
+        case .renderFailed:
+            return "レンダ済み画像の書き出しに失敗しました"
         }
     }
 }
