@@ -10,8 +10,9 @@ import Kingfisher
 
 struct ProfileView: View {
     let userId: String?
-    
+
     @StateObject private var viewModel: ProfileViewModel
+    @EnvironmentObject private var likeManager: LikeManager
     @State private var selectedPost: Post?
     @State private var showingEditProfile = false
     @State private var showingEditTools = false
@@ -154,10 +155,12 @@ struct ProfileView: View {
                     await viewModel.loadProfile()
                     await viewModel.loadUserPosts()
                 }
+                await likeManager.checkLikeStatus(for: viewModel.userPosts)
             }
             .refreshable {
                 await viewModel.loadProfile()
                 await viewModel.loadUserPosts()
+                await likeManager.checkLikeStatus(for: viewModel.userPosts)
             }
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
@@ -197,6 +200,7 @@ struct ProfileView: View {
             }
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
+                    .environmentObject(likeManager)
             }
             // 保存結果アラート
             .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {
@@ -471,12 +475,17 @@ struct ProfileView: View {
                 // リスト表示
                 LazyVStack(spacing: 16) {
                     ForEach(viewModel.userPosts) { post in
-                        Button {
-                            selectedPost = post
-                        } label: {
-                            PostCard(post: post)
-                        }
-                        .buttonStyle(CardButtonStyle())
+                        PostCard(
+                            post: post,
+                            isLiked: likeManager.isLiked(post.id),
+                            likeCount: likeManager.likeCount(for: post),
+                            onLikeTapped: {
+                                Task { await likeManager.toggleLike(post: post) }
+                            },
+                            onCardTapped: {
+                                selectedPost = post
+                            }
+                        )
                         .contextMenu {
                             Button {
                                 Task { await savePostImage(post: post) }

@@ -11,6 +11,7 @@ import Kingfisher
 
 struct GalleryView: View {
     @StateObject private var viewModel = GalleryViewModel()
+    @EnvironmentObject private var likeManager: LikeManager
     @State private var selectedPost: Post?
     @State private var isSaving = false
     @State private var saveResultMessage: String?
@@ -100,6 +101,7 @@ struct GalleryView: View {
                     // 削除後にローカルの一覧から除去（ViewModel経由でカプセル化）
                     viewModel.removePost(postId: post.id)
                 }
+                .environmentObject(likeManager)
             }
             // 保存結果アラート
             .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {

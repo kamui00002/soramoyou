@@ -56,6 +56,16 @@ protocol FirestoreServiceProtocol {
         colorThreshold: Double?,
         limit: Int
     ) async throws -> [Post]
+
+    // Likes
+    func toggleLike(postId: String, userId: String) async throws -> Bool
+    func checkLikeStatus(postId: String, userId: String) async throws -> Bool
+    func batchCheckLikeStatus(postIds: [String], userId: String) async throws -> Set<String>
+
+    // Comments
+    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?)
+    func addComment(postId: String, userId: String, content: String) async throws -> Comment
+    func deleteComment(commentId: String, postId: String, userId: String) async throws
 }
 
 class FirestoreService: FirestoreServiceProtocol {
@@ -78,6 +88,14 @@ class FirestoreService: FirestoreServiceProtocol {
 
     private var publicProfilesCollection: CollectionReference {
         db.collection("publicProfiles")
+    }
+
+    private var likesCollection: CollectionReference {
+        db.collection("likes")
+    }
+
+    private var commentsCollection: CollectionReference {
+        db.collection("comments")
     }
 
     init(db: Firestore = Firestore.firestore(), authService: AuthServiceProtocol = AuthService()) {
@@ -622,6 +640,151 @@ class FirestoreService: FirestoreServiceProtocol {
             try await docRef.setData(publicProfile.toFirestoreData())
         } catch {
             throw FirestoreServiceError.createFailed(error)
+        }
+    }
+
+    // MARK: - Likes
+
+    /// いいねをトグル（追加/削除）する
+    /// - Returns: トグル後のいいね状態（true = いいね済み）
+    func toggleLike(postId: String, userId: String) async throws -> Bool {
+        let likeDocId = Like.documentId(userId: userId, postId: postId)
+        let likeRef = likesCollection.document(likeDocId)
+        let postRef = postsCollection.document(postId)
+
+        do {
+            let result = try await db.runTransaction { transaction, errorPointer in
+                // いいねドキュメントの存在チェック
+                let likeDoc: DocumentSnapshot
+                do {
+                    likeDoc = try transaction.getDocument(likeRef)
+                } catch let fetchError as NSError {
+                    errorPointer?.pointee = fetchError
+                    return nil
+                }
+
+                if likeDoc.exists {
+                    // いいね削除
+                    transaction.deleteDocument(likeRef)
+                    transaction.updateData(["likesCount": FieldValue.increment(Int64(-1))], forDocument: postRef)
+                    return NSNumber(value: false)
+                } else {
+                    // いいね追加
+                    let like = Like(userId: userId, postId: postId)
+                    transaction.setData(like.toFirestoreData(), forDocument: likeRef)
+                    transaction.updateData(["likesCount": FieldValue.increment(Int64(1))], forDocument: postRef)
+                    return NSNumber(value: true)
+                }
+            }
+
+            guard let isLiked = (result as? NSNumber)?.boolValue else {
+                throw FirestoreServiceError.updateFailed(NSError(domain: "FirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "トランザクション結果の取得に失敗"]))
+            }
+            return isLiked
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// 特定の投稿に対するいいね状態を確認
+    func checkLikeStatus(postId: String, userId: String) async throws -> Bool {
+        let likeDocId = Like.documentId(userId: userId, postId: postId)
+        do {
+            let document = try await likesCollection.document(likeDocId).getDocument()
+            return document.exists
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    /// 複数投稿のいいね状態を一括確認
+    /// - Returns: いいね済みの投稿IDセット
+    func batchCheckLikeStatus(postIds: [String], userId: String) async throws -> Set<String> {
+        guard !postIds.isEmpty else { return [] }
+
+        return try await withThrowingTaskGroup(of: (String, Bool).self) { group in
+            for postId in postIds {
+                group.addTask { [self] in
+                    let likeDocId = Like.documentId(userId: userId, postId: postId)
+                    let document = try await self.likesCollection.document(likeDocId).getDocument()
+                    return (postId, document.exists)
+                }
+            }
+
+            var likedIds: Set<String> = []
+            for try await (postId, exists) in group {
+                if exists {
+                    likedIds.insert(postId)
+                }
+            }
+            return likedIds
+        }
+    }
+
+    // MARK: - Comments
+
+    /// コメント一覧を取得（ページネーション対応）
+    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?) {
+        do {
+            var query: Query = commentsCollection
+                .whereField("postId", isEqualTo: postId)
+                .order(by: "createdAt", descending: true)
+                .limit(to: limit)
+
+            if let lastDocument = lastDocument {
+                query = query.start(afterDocument: lastDocument)
+            }
+
+            let snapshot = try await query.getDocuments()
+
+            let comments: [Comment] = try snapshot.documents.map { document in
+                try Comment(from: document.data(), documentId: document.documentID)
+            }
+
+            return (comments: comments, lastDocument: snapshot.documents.last)
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    /// コメントを追加
+    func addComment(postId: String, userId: String, content: String) async throws -> Comment {
+        let comment = Comment(userId: userId, postId: postId, content: content)
+
+        do {
+            let batch = db.batch()
+
+            // コメントドキュメント作成
+            let commentRef = commentsCollection.document(comment.id)
+            batch.setData(comment.toFirestoreData(), forDocument: commentRef)
+
+            // 投稿の commentsCount をインクリメント
+            let postRef = postsCollection.document(postId)
+            batch.updateData(["commentsCount": FieldValue.increment(Int64(1))], forDocument: postRef)
+
+            try await batch.commit()
+            return comment
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
+        }
+    }
+
+    /// コメントを削除
+    func deleteComment(commentId: String, postId: String, userId: String) async throws {
+        do {
+            let batch = db.batch()
+
+            // コメントドキュメント削除
+            let commentRef = commentsCollection.document(commentId)
+            batch.deleteDocument(commentRef)
+
+            // 投稿の commentsCount をデクリメント
+            let postRef = postsCollection.document(postId)
+            batch.updateData(["commentsCount": FieldValue.increment(Int64(-1))], forDocument: postRef)
+
+            try await batch.commit()
+        } catch {
+            throw FirestoreServiceError.deleteFailed(error)
         }
     }
 }

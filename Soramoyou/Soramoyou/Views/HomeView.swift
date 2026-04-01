@@ -10,6 +10,7 @@ import Kingfisher
 
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
+    @EnvironmentObject private var likeManager: LikeManager
     @State private var selectedPost: Post?
     @State private var animateCards = false  // フィードアニメーション用 ☀️
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -65,10 +66,12 @@ struct HomeView: View {
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .refreshable {
                 await viewModel.refresh()
+                await likeManager.checkLikeStatus(for: viewModel.posts)
             }
             .onAppear {
                 Task {
                     await viewModel.fetchPosts()
+                    await likeManager.checkLikeStatus(for: viewModel.posts)
                     // フィードアニメーションを開始
                     withAnimation {
                         animateCards = true
@@ -86,6 +89,7 @@ struct HomeView: View {
             }
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
+                    .environmentObject(likeManager)
             }
         }
         .navigationViewStyle(.stack)
@@ -97,15 +101,21 @@ struct HomeView: View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: DesignTokens.Spacing.lg) {
                 ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
-                    Button {
-                        // ハプティックフィードバック
-                        let impact = UIImpactFeedbackGenerator(style: .light)
-                        impact.impactOccurred()
-                        selectedPost = post
-                    } label: {
-                        PostCard(post: post)
-                    }
-                    .buttonStyle(CardButtonStyle())
+                    PostCard(
+                        post: post,
+                        isLiked: likeManager.isLiked(post.id),
+                        likeCount: likeManager.likeCount(for: post),
+                        onLikeTapped: {
+                            Task {
+                                await likeManager.toggleLike(post: post)
+                            }
+                        },
+                        onCardTapped: {
+                            let impact = UIImpactFeedbackGenerator(style: .light)
+                            impact.impactOccurred()
+                            selectedPost = post
+                        }
+                    )
                     // スタガードアニメーション（改善）
                     .opacity(animateCards ? 1 : 0)
                     .offset(y: animateCards ? 0 : 30)
@@ -122,7 +132,11 @@ struct HomeView: View {
                                 && !viewModel.isLoadingMore
                                 && viewModel.hasMorePosts {
                                 Task {
+                                    let previousCount = viewModel.posts.count
                                     await viewModel.loadMorePosts()
+                                    // 新しく読み込んだ投稿のいいね状態をチェック
+                                    let newPosts = Array(viewModel.posts.dropFirst(previousCount))
+                                    await likeManager.checkLikeStatus(for: newPosts)
                                 }
                             }
                         }
@@ -167,10 +181,14 @@ struct HomeView: View {
 
 struct PostCard: View {
     let post: Post
+    var isLiked: Bool = false
+    var likeCount: Int? = nil
+    var onLikeTapped: (() -> Void)? = nil
+    var onCardTapped: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 画像表示（サムネイル優先、遅延読み込み）
+            // 画像表示（サムネイル優先、遅延読み込み）— タップでカード遷移
             ZStack(alignment: .bottomLeading) {
                 if let firstImage = post.images.first {
                     PostImageView(imageInfo: firstImage)
@@ -204,15 +222,22 @@ struct PostCard: View {
                     .padding(DesignTokens.Spacing.sm)
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                let impact = UIImpactFeedbackGenerator(style: .light)
+                impact.impactOccurred()
+                onCardTapped?()
+            }
 
             // 投稿情報
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                // キャプション
+                // キャプション — タップでカード遷移
                 if let caption = post.caption {
                     Text(caption)
                         .font(.system(size: DesignTokens.Typography.bodySize, weight: .regular, design: .rounded))
                         .foregroundColor(DesignTokens.Colors.textDark)
                         .lineLimit(3)
+                        .onTapGesture { onCardTapped?() }
                 }
 
                 // ハッシュタグ
@@ -266,25 +291,38 @@ struct PostCard: View {
                     }
                 }
 
-                // アクション行
+                // アクション行（ボタンが独立してタップ可能）
                 HStack(spacing: DesignTokens.Spacing.lg) {
                     // いいねボタン
-                    HStack(spacing: 6) {
-                        Image(systemName: "heart")
-                            .font(.system(size: 16, weight: .medium))
-                        Text("\(post.likesCount)")
-                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                    Button {
+                        let impact = UIImpactFeedbackGenerator(style: .light)
+                        impact.impactOccurred()
+                        onLikeTapped?()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: isLiked ? "heart.fill" : "heart")
+                                .font(.system(size: 16, weight: .medium))
+                                .animation(.easeInOut(duration: 0.2), value: isLiked)
+                            Text("\(likeCount ?? post.likesCount)")
+                                .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundColor(isLiked ? DesignTokens.Colors.softPink : DesignTokens.Colors.textTertiary)
                     }
-                    .foregroundColor(DesignTokens.Colors.softPink)
+                    .buttonStyle(.plain)
 
-                    // コメントボタン
-                    HStack(spacing: 6) {
-                        Image(systemName: "bubble.right")
-                            .font(.system(size: 16, weight: .medium))
-                        Text("\(post.commentsCount)")
-                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                    // コメントボタン — タップで詳細画面へ遷移
+                    Button {
+                        onCardTapped?()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "bubble.right")
+                                .font(.system(size: 16, weight: .medium))
+                            Text("\(post.commentsCount)")
+                                .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundColor(DesignTokens.Colors.skyBlue)
                     }
-                    .foregroundColor(DesignTokens.Colors.skyBlue)
+                    .buttonStyle(.plain)
 
                     Spacer()
 
@@ -317,8 +355,6 @@ struct PostCard: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
         .shadow(DesignTokens.Shadow.card)
-        // タップ時のアニメーションはButtonStyle側で制御（ScrollViewとの競合を回避）
-        .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
     }
 }
 
@@ -400,7 +436,9 @@ struct CardButtonStyle: ButtonStyle {
 struct PostDetailView: View {
     let post: Post
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var likeManager: LikeManager
     @StateObject private var viewModel = PostDetailViewModel()
+    @StateObject private var commentViewModel = CommentViewModel()
     @State private var showingReportSheet = false
     @State private var showingBlockConfirmation = false
     @State private var showingReportConfirmation = false
@@ -412,6 +450,7 @@ struct PostDetailView: View {
     @State private var saveResultMessage: String?
     @State private var showingSaveResult = false
     @State private var shareImages: [UIImage] = []
+    @State private var commentText = ""
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
@@ -428,6 +467,7 @@ struct PostDetailView: View {
                 .onAppear {
                     Task {
                         await viewModel.loadAuthor(userId: post.userId)
+                        await commentViewModel.fetchComments(postId: post.id)
                     }
                 }
                 .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
@@ -603,13 +643,35 @@ struct PostDetailView: View {
                         .font(.body)
                 }
             }
+            // いいね・コメント数
             HStack(spacing: 24) {
-                Label("\(post.likesCount)", systemImage: "heart.fill")
+                Button {
+                    let impact = UIImpactFeedbackGenerator(style: .light)
+                    impact.impactOccurred()
+                    Task { await likeManager.toggleLike(post: post) }
+                } label: {
+                    Label(
+                        "\(likeManager.likeCount(for: post))",
+                        systemImage: likeManager.isLiked(post.id) ? "heart.fill" : "heart"
+                    )
                     .font(.headline)
+                    .foregroundColor(likeManager.isLiked(post.id) ? DesignTokens.Colors.softPink : .secondary)
+                    .animation(.easeInOut(duration: 0.2), value: likeManager.isLiked(post.id))
+                }
+                .buttonStyle(.plain)
+
                 Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
                     .font(.headline)
+                    .foregroundColor(.secondary)
             }
-            .foregroundColor(.secondary)
+
+            // コメントセクション
+            CommentSection(
+                postId: post.id,
+                postUserId: post.userId,
+                commentViewModel: commentViewModel,
+                commentText: $commentText
+            )
         }
         .padding()
     }
