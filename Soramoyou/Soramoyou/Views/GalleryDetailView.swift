@@ -14,8 +14,11 @@ struct GalleryDetailView: View {
     /// 投稿削除時に呼ばれるコールバック（一覧からの除去などに使用）
     var onPostDeleted: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var likeManager: LikeManager
     /// 投稿者情報の取得にはPostDetailViewModelを使用（GalleryDetailViewModelとの二重定義を解消）
     @StateObject private var viewModel = PostDetailViewModel()
+    @StateObject private var commentViewModel = CommentViewModel()
+    @State private var commentText = ""
     @State private var showingOriginalImage = false
     @State private var showingReportSheet = false
     @State private var showingBlockConfirmation = false
@@ -69,6 +72,14 @@ struct GalleryDetailView: View {
 
                     // 統計情報
                     statsSection
+
+                    // コメントセクション
+                    CommentSection(
+                        postId: post.id,
+                        postUserId: post.userId,
+                        commentViewModel: commentViewModel,
+                        commentText: $commentText
+                    )
                 }
                 .padding()
             }
@@ -127,6 +138,7 @@ struct GalleryDetailView: View {
             .onAppear {
                 Task {
                     await viewModel.loadAuthor(userId: post.userId)
+                    await commentViewModel.fetchComments(postId: post.id)
                 }
             }
             // 投稿削除確認アラート
@@ -514,12 +526,25 @@ struct GalleryDetailView: View {
 
     private var statsSection: some View {
         HStack(spacing: 24) {
-            Label("\(post.likesCount)", systemImage: "heart.fill")
+            Button {
+                let impact = UIImpactFeedbackGenerator(style: .light)
+                impact.impactOccurred()
+                Task { await likeManager.toggleLike(post: post) }
+            } label: {
+                Label(
+                    "\(likeManager.likeCount(for: post))",
+                    systemImage: likeManager.isLiked(post.id) ? "heart.fill" : "heart"
+                )
                 .font(.headline)
+                .foregroundColor(likeManager.isLiked(post.id) ? DesignTokens.Colors.softPink : .secondary)
+                .animation(.easeInOut(duration: 0.2), value: likeManager.isLiked(post.id))
+            }
+            .buttonStyle(.plain)
+
             Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
                 .font(.headline)
+                .foregroundColor(.secondary)
         }
-        .foregroundColor(.secondary)
     }
 
     // MARK: - Author Section
