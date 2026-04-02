@@ -380,7 +380,7 @@ struct CommentRow: View {
                     .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 16)
-                            .fill(Color(UIColor.systemGray6))
+                            .fill(Color.white.opacity(0.1))
                     )
 
                 // 日時

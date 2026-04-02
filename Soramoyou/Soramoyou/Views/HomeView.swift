@@ -461,8 +461,12 @@ struct PostDetailView: View {
     var body: some View {
         NavigationView {
             postDetailContent
+                .background(DesignTokens.Colors.detailBackground)
                 .navigationTitle("投稿詳細")
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbarBackground(DesignTokens.Colors.detailBackground, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+                .toolbarColorScheme(.dark, for: .navigationBar)
                 .toolbar { postDetailToolbar }
                 .onAppear {
                     Task {
@@ -565,7 +569,7 @@ struct PostDetailView: View {
                 .padding(24)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(Color(UIColor.systemBackground).opacity(0.9))
+                        .fill(DesignTokens.Colors.detailBackground.opacity(0.9))
                 )
             }
         }
@@ -579,9 +583,10 @@ struct PostDetailView: View {
                 } else if viewModel.isLoadingAuthor {
                     HStack {
                         ProgressView()
+                            .tint(.white)
                         Text("投稿者情報を読み込み中...")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                     .padding()
                 }
@@ -598,6 +603,7 @@ struct PostDetailView: View {
             if let caption = post.caption {
                 Text(caption)
                     .font(.body)
+                    .foregroundColor(.white)
             }
             if let hashtags = post.hashtags, !hashtags.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -605,10 +611,10 @@ struct PostDetailView: View {
                         ForEach(hashtags, id: \.self) { hashtag in
                             Text("#\(hashtag)")
                                 .font(.body)
-                                .foregroundColor(.blue)
+                                .foregroundColor(DesignTokens.Colors.skyBlue)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
-                                .background(Color.blue.opacity(0.1))
+                                .background(Color.white.opacity(0.1))
                                 .cornerRadius(12)
                         }
                     }
@@ -617,15 +623,16 @@ struct PostDetailView: View {
             if let location = post.location {
                 HStack {
                     Image(systemName: "location.fill")
-                        .foregroundColor(.blue)
+                        .foregroundColor(DesignTokens.Colors.skyBlue)
                     if let city = location.city, let prefecture = location.prefecture {
                         Text("\(prefecture) \(city)")
                             .font(.body)
+                            .foregroundColor(.white)
                     }
                     if let landmark = location.landmark {
                         Text("（\(landmark)）")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                 }
             }
@@ -633,14 +640,17 @@ struct PostDetailView: View {
                 if let skyType = post.skyType {
                     Label(skyType.displayName, systemImage: "cloud.fill")
                         .font(.body)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
                 if let timeOfDay = post.timeOfDay {
                     Label(timeOfDay.displayName, systemImage: "clock.fill")
                         .font(.body)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
                 if let colorTemperature = post.colorTemperature {
                     Label("\(colorTemperature)K", systemImage: "thermometer")
                         .font(.body)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
             }
             // いいね・コメント数
@@ -655,14 +665,14 @@ struct PostDetailView: View {
                         systemImage: likeManager.isLiked(post.id) ? "heart.fill" : "heart"
                     )
                     .font(.headline)
-                    .foregroundColor(likeManager.isLiked(post.id) ? DesignTokens.Colors.softPink : .secondary)
+                    .foregroundColor(likeManager.isLiked(post.id) ? DesignTokens.Colors.softPink : DesignTokens.Colors.textSecondary)
                     .animation(.easeInOut(duration: 0.2), value: likeManager.isLiked(post.id))
                 }
                 .buttonStyle(.plain)
 
                 Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
                     .font(.headline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
 
             // コメントセクション
@@ -813,12 +823,13 @@ struct PostDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(user.displayName ?? "ユーザー")
                     .font(.headline)
+                    .foregroundColor(.white)
             }
-            
+
             Spacer()
         }
         .padding()
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(DesignTokens.Colors.detailCardBackground)
         .cornerRadius(12)
     }
 }

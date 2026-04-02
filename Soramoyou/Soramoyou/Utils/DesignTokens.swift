@@ -131,6 +131,14 @@ enum DesignTokens {
             Color(red: 0.50, green: 0.70, blue: 0.95),
             Color(red: 0.60, green: 0.45, blue: 0.90)
         ]
+
+        // MARK: Detail Background（投稿詳細画面用）
+
+        /// 投稿詳細画面のメイン背景（深いダークネイビー）
+        static let detailBackground = Color(red: 0.10, green: 0.10, blue: 0.18)
+
+        /// 投稿詳細画面のカード背景（少し明るいダーク）
+        static let detailCardBackground = Color.white.opacity(0.08)
     }
 
     // MARK: - Spacing（スペーシング）

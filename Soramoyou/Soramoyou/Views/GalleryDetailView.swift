@@ -83,9 +83,12 @@ struct GalleryDetailView: View {
                 }
                 .padding()
             }
-            .background(Color(UIColor.systemBackground))
+            .background(DesignTokens.Colors.detailBackground)
             .navigationTitle("投稿詳細")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(DesignTokens.Colors.detailBackground, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") {
@@ -247,7 +250,7 @@ struct GalleryDetailView: View {
                         .padding(24)
                         .background(
                             RoundedRectangle(cornerRadius: 12)
-                                .fill(Color(UIColor.systemBackground).opacity(0.9))
+                                .fill(DesignTokens.Colors.detailBackground.opacity(0.9))
                         )
                     }
                 }
@@ -381,9 +384,10 @@ struct GalleryDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Image(systemName: "slider.horizontal.3")
-                    .foregroundColor(.blue)
+                    .foregroundColor(DesignTokens.Colors.skyBlue)
                 Text("編集設定")
                     .font(.headline)
+                    .foregroundColor(.white)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -432,7 +436,7 @@ struct GalleryDetailView: View {
             .padding()
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(UIColor.secondarySystemBackground))
+                    .fill(DesignTokens.Colors.detailCardBackground)
             )
         }
     }
@@ -441,12 +445,12 @@ struct GalleryDetailView: View {
         HStack {
             Image(systemName: icon)
                 .frame(width: 24)
-                .foregroundColor(.secondary)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
             Text(label)
-                .foregroundColor(.primary)
+                .foregroundColor(.white)
             Spacer()
             Text(value)
-                .foregroundColor(.blue)
+                .foregroundColor(DesignTokens.Colors.skyBlue)
                 .fontWeight(.medium)
         }
         .font(.subheadline)
@@ -465,6 +469,7 @@ struct GalleryDetailView: View {
             if let caption = post.caption {
                 Text(caption)
                     .font(.body)
+                    .foregroundColor(.white)
             }
 
             // ハッシュタグ
@@ -474,10 +479,10 @@ struct GalleryDetailView: View {
                         ForEach(hashtags, id: \.self) { hashtag in
                             Text("#\(hashtag)")
                                 .font(.body)
-                                .foregroundColor(.blue)
+                                .foregroundColor(DesignTokens.Colors.skyBlue)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
-                                .background(Color.blue.opacity(0.1))
+                                .background(Color.white.opacity(0.1))
                                 .cornerRadius(12)
                         }
                     }
@@ -488,15 +493,16 @@ struct GalleryDetailView: View {
             if let location = post.location {
                 HStack {
                     Image(systemName: "location.fill")
-                        .foregroundColor(.blue)
+                        .foregroundColor(DesignTokens.Colors.skyBlue)
                     if let city = location.city, let prefecture = location.prefecture {
                         Text("\(prefecture) \(city)")
                             .font(.body)
+                            .foregroundColor(.white)
                     }
                     if let landmark = location.landmark {
                         Text("（\(landmark)）")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                 }
             }
@@ -510,14 +516,17 @@ struct GalleryDetailView: View {
             if let skyType = post.skyType {
                 Label(skyType.displayName, systemImage: "cloud.fill")
                     .font(.body)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
             if let timeOfDay = post.timeOfDay {
                 Label(timeOfDay.displayName, systemImage: "clock.fill")
                     .font(.body)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
             if let colorTemperature = post.colorTemperature {
                 Label("\(colorTemperature)K", systemImage: "thermometer")
                     .font(.body)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
         }
     }
@@ -536,14 +545,14 @@ struct GalleryDetailView: View {
                     systemImage: likeManager.isLiked(post.id) ? "heart.fill" : "heart"
                 )
                 .font(.headline)
-                .foregroundColor(likeManager.isLiked(post.id) ? DesignTokens.Colors.softPink : .secondary)
+                .foregroundColor(likeManager.isLiked(post.id) ? DesignTokens.Colors.softPink : DesignTokens.Colors.textSecondary)
                 .animation(.easeInOut(duration: 0.2), value: likeManager.isLiked(post.id))
             }
             .buttonStyle(.plain)
 
             Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
                 .font(.headline)
-                .foregroundColor(.secondary)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
         }
     }
 
@@ -581,12 +590,13 @@ struct GalleryDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(user.displayName ?? "ユーザー")
                     .font(.headline)
+                    .foregroundColor(.white)
             }
 
             Spacer()
         }
         .padding()
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(DesignTokens.Colors.detailCardBackground)
         .cornerRadius(12)
     }
 }
