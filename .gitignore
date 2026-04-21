@@ -118,6 +118,15 @@ node_modules/
 screenshots/generator/node_modules/
 package-lock.json
 
+# AI tool working files
+# .cursor は IDE の作業状態・内部ログ（Firebase 権限エラー等を含む）を保持するため全体を除外
+.cursor/
+# .claude は settings.json / commands/ などチーム共有したい設定を含むため選択的に除外
+.claude/debug.log
+.claude/settings.local.json
+# 一般ログ（debug.log, build.log など）を全階層で除外
+*.log
+
 
 
 
