@@ -4,26 +4,37 @@
 //  PreviewRenderer.swift
 //  Soramoyou
 //
+// 🔧 Phase 0 修正 (2026-04-22):
+//   - previewMaxPixel 1000 → 2400（電線ぶれ解消）
+//   - applyRecipe を Preview(.RGBA8) / Export(CIImage) に分離
+//   - renderExport の戻り値を CGImage → CIImage に変更
+//     （呼び出し側で HEIF 書き出し時に CIImage のまま使用することで二重ラスタライズ回避）
+//   - PNG 等の旧 CGImage 互換用に renderExportCGImage を追加（.RGBAh 高ビット深度）
+//   - テスト可視化のため定数 / 内部ヘルパを internal に公開
+//
 
 import CoreImage
+import CoreImage.CIFilterBuiltins
 import ImageIO
 import UIKit
 
 /// プレビューと書き出し処理を担うレンダラー
 ///
 /// 設計原則:
-/// - プレビュー: CGImageSource でダウンサンプリング → CIImage グラフ適用（高速）
-/// - 書き出し: フル解像度で CIImage グラフ適用（高品質）
-/// - EXIF 回転は CGImageSourceCreateThumbnailAtIndex で自動処理（`kCGImageSourceCreateThumbnailWithTransform: true`）
-///
-/// EditViewModel.normalizeImageOrientation の責務を担うため、
-/// 将来的には EditViewModel の正規化処理をこのクラスに集約できる。
+/// - プレビュー: CGImageSource でダウンサンプリング → CIImage グラフ適用（高速、.RGBA8 / 8bpc）
+/// - 書き出し: フル解像度で CIImage グラフ適用（高品質、CIImage のまま返却）
+/// - EXIF 回転は CGImageSourceCreateThumbnailAtIndex で自動処理
 final class PreviewRenderer {
 
     // MARK: - 定数
 
     /// プレビュー最大ピクセルサイズ
-    private static let previewMaxPixel: Int = 1000
+    ///
+    /// iPhone Pro Max (1290pt × 3x = 3870px) に対して旧値 1000px は不足しており
+    /// 電線などの細線でアップスケール劣化が目立つ。Retina + ピンチズーム余裕で 2400px に拡大。
+    ///
+    /// Phase0RegressionTests から参照するため internal 公開。
+    static let previewMaxPixel: Int = 2400
 
     // MARK: - プレビューレンダリング（URL ベース）
 
@@ -32,8 +43,8 @@ final class PreviewRenderer {
     /// - Parameters:
     ///   - url: 元画像の URL
     ///   - recipe: 編集レシピ
-    ///   - maxPixel: 最大ピクセルサイズ（デフォルト: 1000px）
-    /// - Returns: プレビュー用 CGImage
+    ///   - maxPixel: 最大ピクセルサイズ（デフォルト: `previewMaxPixel`）
+    /// - Returns: プレビュー用 CGImage（8bpc / RGBA8）
     static func renderPreview(
         from url: URL,
         recipe: EditRecipe,
@@ -44,10 +55,8 @@ final class PreviewRenderer {
         }
 
         let options: [CFString: Any] = [
-            // ソース画像からサムネイルを生成
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceThumbnailMaxPixelSize:          maxPixel,
-            // EXIF の向き情報を適用（手動回転処理不要）
             kCGImageSourceCreateThumbnailWithTransform:   true
         ]
 
@@ -55,21 +64,25 @@ final class PreviewRenderer {
             throw PreviewRendererError.thumbnailCreationFailed
         }
 
-        return try applyRecipe(recipe, to: CIImage(cgImage: thumb))
+        let graph = applyRecipeForPreview(recipe, to: CIImage(cgImage: thumb))
+        let pool = CIContextPool.shared
+        guard let cgImage = pool.ciContext.createCGImage(
+            graph,
+            from: graph.extent,
+            format: .RGBA8,
+            colorSpace: pool.outputColorSpace
+        ) else {
+            throw PreviewRendererError.renderingFailed
+        }
+        return cgImage
     }
 
     /// UIImage からプレビューを生成する（キャッシュ済み画像対応）
-    ///
-    /// - Parameters:
-    ///   - image: 元画像
-    ///   - recipe: 編集レシピ
-    /// - Returns: プレビュー用 UIImage
     static func renderPreview(from image: UIImage, recipe: EditRecipe) throws -> UIImage {
         guard let cgImage = image.cgImage else {
             throw PreviewRendererError.invalidImage
         }
 
-        // ダウンサンプリング
         let sourceImage = CIImage(cgImage: cgImage)
         let pool = CIContextPool.shared
         let maxPixel = CGFloat(previewMaxPixel)
@@ -87,11 +100,15 @@ final class PreviewRenderer {
             scaled = sourceImage
         }
 
-        let outputGraph = FilterGraphBuilder.buildGraph(recipe: recipe, source: scaled)
+        let graph = applyRecipeForPreview(recipe, to: scaled)
 
-        guard let outputCGImage = pool.ciContext.createCGImage(outputGraph, from: outputGraph.extent,
-                                                               format: .RGBA8,
-                                                               colorSpace: pool.outputColorSpace) else {
+        // プレビュー表示用は .RGBA8 で十分（メモリ節約・描画速度優先）
+        guard let outputCGImage = pool.ciContext.createCGImage(
+            graph,
+            from: graph.extent,
+            format: .RGBA8,
+            colorSpace: pool.outputColorSpace
+        ) else {
             throw PreviewRendererError.renderingFailed
         }
 
@@ -100,13 +117,18 @@ final class PreviewRenderer {
 
     // MARK: - 書き出しレンダリング（フル解像度）
 
-    /// URL からフル解像度で書き出しレンダリングを行う
+    /// URL からフル解像度で書き出しレンダリングを行う（CIImage 返却版）
+    ///
+    /// 🔧 Phase 0 修正: 戻り値を CGImage → CIImage に変更。
+    /// HEIF/JPEG 書き出し時に中間 CGImage を介さず、CIImage のまま
+    /// `writeHEIFRepresentation` / `writeJPEGRepresentation` に渡すことで
+    /// 二重ラスタライズ（8bit 化 → 再エンコード）による画質低下を回避する。
     ///
     /// - Parameters:
     ///   - url: 元画像の URL
     ///   - recipe: 編集レシピ
-    /// - Returns: 書き出し用 CGImage
-    static func renderExport(from url: URL, recipe: EditRecipe) throws -> CGImage {
+    /// - Returns: 書き出し用 CIImage（遅延評価グラフ、実レンダは writeXxxRepresentation で実行される）
+    static func renderExport(from url: URL, recipe: EditRecipe) throws -> CIImage {
         var options: [CIImageOption: Any] = [
             .applyOrientationProperty: true
         ]
@@ -120,26 +142,41 @@ final class PreviewRenderer {
             throw PreviewRendererError.sourceCreationFailed
         }
 
-        return try applyRecipe(recipe, to: input)
+        return applyRecipeForExport(recipe, to: input)
     }
 
-    // MARK: - 共通処理
-
-    /// CIImage にレシピを適用して CGImage を生成する
-    private static func applyRecipe(_ recipe: EditRecipe, to image: CIImage) throws -> CGImage {
+    /// 書き出し用 CGImage 版（レガシー呼び出し互換、PNG 用途など）
+    ///
+    /// PNG 等で CGImage が必要な場合のみ使用。HEIF/JPEG は `renderExport(from:recipe:)` → CIImage 版を推奨。
+    static func renderExportCGImage(from url: URL, recipe: EditRecipe) throws -> CGImage {
+        let ciImage = try renderExport(from: url, recipe: recipe)
         let pool = CIContextPool.shared
-        let outputGraph = FilterGraphBuilder.buildGraph(recipe: recipe, source: image)
-
         guard let cgImage = pool.ciContext.createCGImage(
-            outputGraph,
-            from: outputGraph.extent,
-            format: .RGBA8,
+            ciImage,
+            from: ciImage.extent,
+            format: .RGBAh,
             colorSpace: pool.outputColorSpace
         ) else {
             throw PreviewRendererError.renderingFailed
         }
-
         return cgImage
+    }
+
+    // MARK: - 共通処理
+
+    /// プレビュー表示用のレシピ適用（CIImage グラフを返す）
+    ///
+    /// 呼び出し側で `.RGBA8` / `.RGBA16` 等を選んで `createCGImage` する。
+    /// Phase0RegressionTests から参照するため internal 公開。
+    static func applyRecipeForPreview(_ recipe: EditRecipe, to image: CIImage) -> CIImage {
+        FilterGraphBuilder.buildGraph(recipe: recipe, source: image)
+    }
+
+    /// 書き出し用のレシピ適用（CIImage のまま返す → 二重ラスタライズ回避）
+    ///
+    /// Phase0RegressionTests から参照するため internal 公開。
+    static func applyRecipeForExport(_ recipe: EditRecipe, to image: CIImage) -> CIImage {
+        FilterGraphBuilder.buildGraph(recipe: recipe, source: image)
     }
 }
 

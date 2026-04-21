@@ -5,9 +5,26 @@
 //  PhotoKitAdapter.swift
 //  Soramoyou
 //
+// 🔧 Phase 0 修正 (2026-04-22):
+//   - saveEdit のシグネチャ変更: renderedImage: CGImage → renderedCIImage: CIImage
+//     （二重ラスタライズ回避：CIImage を最後まで持つ）
+//   - HEIF 書き出しを .RGBA8 → .RGBAh（10bit HEIF で iPhone 純正と同等画質）
+//   - JPEG 書き出しに compressionQuality: 0.95 を明示指定
+//   - PNG は引き続き CGImage 経由（PNG は 8bit 上限なので問題なし）
+//   - print ログを os.Logger に置換（rules/swift.md 準拠）
+//
+// 🔧 Phase 2 追加 (2026-04-22):
+//   - EditRecipe.targetDynamicRange == .hdr で iOS 17+ 時に
+//     `writeHEIF10Representation` を呼び出し、10bit HDR HEIF として書き出す
+//   - 投稿用 (JPEG 8bit, StorageService) と写真保存用 (HEIF10, ここ) の動線分離
+//
 
+import CoreImage
+import os
 import Photos
 import UIKit
+
+private let logger = Logger(subsystem: "com.soramoyou.photo-editor", category: "PhotoKitAdapter")
 
 /// PhotoKit との連携アダプター
 ///
@@ -46,30 +63,21 @@ final class PhotoKitAdapter {
     }
 
     /// PHAdjustmentData から EditRecipe を復元する
-    ///
-    /// - Parameter adjustmentData: Photos から渡される調整データ
-    /// - Returns: 復元されたレシピ、または nil（デコード失敗時）
     static func recipe(from adjustmentData: PHAdjustmentData) -> EditRecipe? {
-        // 自アプリのデータかチェック
         guard adjustmentData.formatIdentifier == formatIdentifier else {
-            // 他アプリの編集データ → 復元不可
             return nil
         }
 
-        // バージョン互換チェック
         if adjustmentData.formatVersion != formatVersion {
-            // 将来: バージョンに応じたマイグレーション処理を追加
-            print("[PhotoKitAdapter] formatVersion の不一致: \(adjustmentData.formatVersion) vs \(formatVersion)")
+            logger.info("formatVersion の不一致: \(adjustmentData.formatVersion, privacy: .public) vs \(Self.formatVersion, privacy: .public)")
         }
 
-        // デコード
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
             return try decoder.decode(EditRecipe.self, from: adjustmentData.data)
         } catch {
-            // デコード失敗 → nil を返してフォールバック（レンダ済み画像のみ使用）
-            print("[PhotoKitAdapter] レシピのデコードに失敗: \(error)")
+            logger.error("レシピのデコードに失敗: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
@@ -78,16 +86,18 @@ final class PhotoKitAdapter {
 
     /// PHAsset に編集を保存する（Resume Editing 対応）
     ///
-    /// PhotoKit の「Editing Asset Content」ワークフロー:
-    /// 1. PHContentEditingOutput.renderedContentURL にレンダ済みコンテンツを書く
-    /// 2. PHContentEditingOutput.adjustmentData に編集レシピを設定
+    /// 🔧 Phase 0 修正: `renderedImage: CGImage` → `renderedCIImage: CIImage`
+    /// CIImage を最後まで保持することで「8bit CGImage → CIImage → HEIF」の二重劣化を回避。
+    /// HEIF 10bit (RGBAh) 保存で iPhone 純正写真アプリと同等の画質を維持する。
+    ///
+    /// 🔧 Phase 2 追加: `recipe.targetDynamicRange == .hdr` かつ iOS 17+ で
+    /// `writeHEIF10Representation` を使用（EDR 対応端末で真の HDR 表示が可能）。
     static func saveEdit(
-        asset:         PHAsset,
-        recipe:        EditRecipe,
-        renderedImage: CGImage,
-        exportFormat:  ExportFormat = .heif
+        asset:            PHAsset,
+        recipe:           EditRecipe,
+        renderedCIImage:  CIImage,
+        exportFormat:     ExportFormat = .heif
     ) async throws {
-        // PHAsset の ContentEditingInput を取得
         let input = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<PHContentEditingInput, Error>) in
             asset.requestContentEditingInput(with: nil) { input, _ in
                 if let input = input {
@@ -98,57 +108,76 @@ final class PhotoKitAdapter {
             }
         }
 
-        // レンダ済み画像をクロージャ外で事前に書き出し用データに変換
-        // （performChanges クロージャは non-throwing のため、書き出し失敗は事前に検出）
-        let pool    = CIContextPool.shared
-        let ciImage = CIImage(cgImage: renderedImage)
+        let pool = CIContextPool.shared
 
-        // 書き出し用のデータを事前に準備（throwing 可能）
+        // PNG は CGImage 経由で pngData を生成（事前準備）
+        // HEIF/JPEG は CIImage のまま writeXxxRepresentation に渡す
         let writeData: Data?
         switch exportFormat {
         case .heif, .jpeg:
-            writeData = nil // CIContext で直接 URL に書き出す
+            writeData = nil
         case .png:
-            guard let pngData = UIImage(cgImage: renderedImage).pngData() else {
+            guard let cgImage = pool.ciContext.createCGImage(
+                renderedCIImage,
+                from: renderedCIImage.extent,
+                format: .RGBAh,
+                colorSpace: pool.outputColorSpace
+            ) else {
                 throw PhotoKitAdapterError.renderFailed
             }
-            writeData = pngData
+            writeData = UIImage(cgImage: cgImage).pngData()
+            if writeData == nil {
+                throw PhotoKitAdapterError.renderFailed
+            }
         }
 
-        // 変更を Photos ライブラリに書き込む
+        let useHDR = recipe.targetDynamicRange == .hdr
+
         try await PHPhotoLibrary.shared().performChanges {
             let output = PHContentEditingOutput(contentEditingInput: input)
-
-            // レンダ済み画像を書き出し
             let outputURL = output.renderedContentURL
 
             do {
                 switch exportFormat {
                 case .heif:
-                    try pool.ciContext.writeHEIFRepresentation(
-                        of:         ciImage,
-                        to:         outputURL,
-                        format:     .RGBA8,
-                        colorSpace: pool.outputColorSpace
-                    )
+                    if useHDR, #available(iOS 17.0, *) {
+                        // Phase 2: HDR 書き出し（10bit HEIF、EDR 表示対応）
+                        try pool.ciContext.writeHEIF10Representation(
+                            of:         renderedCIImage,
+                            to:         outputURL,
+                            colorSpace: pool.outputColorSpace,
+                            options:    [:]
+                        )
+                        logger.info("HEIF10 (HDR) 書き出し完了")
+                    } else {
+                        // Phase 0: 10bit HEIF（SDR）
+                        try pool.ciContext.writeHEIFRepresentation(
+                            of:         renderedCIImage,
+                            to:         outputURL,
+                            format:     .RGBAh,
+                            colorSpace: pool.outputColorSpace
+                        )
+                    }
                 case .jpeg:
+                    // Phase 0: compressionQuality 0.95 を明示指定
                     try pool.ciContext.writeJPEGRepresentation(
-                        of:         ciImage,
+                        of:         renderedCIImage,
                         to:         outputURL,
-                        colorSpace: pool.outputColorSpace
+                        colorSpace: pool.outputColorSpace,
+                        options: [
+                            CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.95
+                        ]
                     )
                 case .png:
                     try writeData?.write(to: outputURL)
                 }
             } catch {
-                print("[PhotoKitAdapter] レンダ済み画像の書き出し失敗: \(error)")
+                logger.error("レンダ済み画像の書き出し失敗: \(error.localizedDescription, privacy: .public)")
                 return
             }
 
-            // 編集レシピを PHAdjustmentData として設定
             output.adjustmentData = try? adjustmentData(from: recipe)
 
-            // 変更リクエスト
             let changeRequest = PHAssetChangeRequest(for: asset)
             changeRequest.contentEditingOutput = output
         }
@@ -156,10 +185,6 @@ final class PhotoKitAdapter {
 
     // MARK: - 既存編集の読み込み（Resume Editing）
 
-    /// PHAsset から既存の編集レシピを読み込む
-    ///
-    /// - Parameter asset: Photos のアセット
-    /// - Returns: 自アプリの編集レシピ、または nil（他アプリ編集時）
     static func loadExistingRecipe(from asset: PHAsset) async -> EditRecipe? {
         await withCheckedContinuation { continuation in
             asset.requestContentEditingInput(with: nil) { input, _ in
@@ -174,7 +199,6 @@ final class PhotoKitAdapter {
 
     // MARK: - 編集可能判定
 
-    /// この PHAdjustmentData が自アプリで再編集可能か
     static func canHandle(_ adjustmentData: PHAdjustmentData) -> Bool {
         adjustmentData.formatIdentifier == formatIdentifier
     }

@@ -11,6 +11,7 @@
 
 import CoreImage
 import Foundation
+import os
 
 /// Metal CIKernel ラッパー
 ///
@@ -35,11 +36,16 @@ final class MetalShaderPipeline {
     /// `exposureContrastSaturation` カーネル（ロード失敗時は nil）
     private let exposureContrastKernel: CIKernel?
 
+    // Phase 1 #I: print → os.Logger に統一
+    // subsystem を揃えることで Console.app / Instruments で一括フィルタ可能
+    private static let logger = Logger(
+        subsystem: "com.soramoyou.photo-editor",
+        category: "MetalShaderPipeline"
+    )
+
     // MARK: - Init
 
     private init() {
-        // Xcode は .metal ファイルを自動コンパイルして `default.metallib` に結合する
-        // Bundle.main からロードして CIKernel を初期化
         if let url  = Bundle.main.url(forResource: "default", withExtension: "metallib"),
            let data = try? Data(contentsOf: url) {
             self.exposureContrastKernel = try? CIKernel(
@@ -47,11 +53,13 @@ final class MetalShaderPipeline {
                 fromMetalLibraryData: data
             )
             if exposureContrastKernel == nil {
-                print("[MetalShaderPipeline] CIKernel の初期化に失敗（フォールバック使用）")
+                Self.logger.error("CIKernel 初期化失敗 — exposureContrastSaturation。CPU フォールバック使用")
+            } else {
+                Self.logger.info("CIKernel 初期化成功 — exposureContrastSaturation")
             }
         } else {
             self.exposureContrastKernel = nil
-            print("[MetalShaderPipeline] metallib が見つかりません（フォールバック使用）")
+            Self.logger.error("default.metallib が Bundle に存在しません。CPU フォールバック使用")
         }
     }
 

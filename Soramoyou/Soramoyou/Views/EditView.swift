@@ -168,16 +168,20 @@ struct EditView: View {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
             } else if let displayImage = viewModel.displayPreviewImage {
-                // リアルタイム編集中は高速プレビュー、それ以外は通常プレビュー
+                // Phase 1 #L: iOS 17+ の EDR（Extended Dynamic Range）対応。
+                // HDR 写真（HEIC / ProRAW）を XDR ディスプレイで「光るハイライト」として表示する。
+                // 対応端末以外では .standard 相当の挙動に自動フォールバックする。
                 Image(uiImage: displayImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .modifier(HDRDynamicRangeModifier())
             } else if let currentImage = viewModel.currentImage {
                 Image(uiImage: currentImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .modifier(HDRDynamicRangeModifier())
             } else {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -580,6 +584,22 @@ struct EditView: View {
             .padding(.bottom, 12)
         }
         .frame(minHeight: 180)
+    }
+
+}
+
+// MARK: - HDR Dynamic Range Modifier
+
+/// Phase 1 #L: EDR（Extended Dynamic Range）対応の View 変換子。
+/// iOS 17+ で `.allowedDynamicRange(.high)` を適用し、HDR 写真を XDR ディスプレイで
+/// 「光るハイライト」として表示する。対応端末以外では自動的に SDR にフォールバックする。
+private struct HDRDynamicRangeModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 17.0, *) {
+            content.allowedDynamicRange(.high)
+        } else {
+            content
+        }
     }
 }
 

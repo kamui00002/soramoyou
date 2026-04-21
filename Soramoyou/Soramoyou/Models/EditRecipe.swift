@@ -141,6 +141,16 @@ struct EditRecipe: Codable, Equatable {
     /// 適用済みフィルター
     var appliedFilter: FilterType?
 
+    // MARK: - ダイナミックレンジ（Phase 2 追加）
+
+    /// 書き出し時のダイナミックレンジ指定
+    ///
+    /// - `.sdr`（default）: 従来どおり 8bit JPEG / 10bit HEIF（SDR トーンマップ後の表示域）
+    /// - `.hdr`: iOS 17+ で `writeHEIF10Representation` + 作業色空間を拡張ガマットで書き出す
+    ///
+    /// 旧レシピ互換のため Optional。nil は `.sdr` 相当として扱う。
+    var targetDynamicRange: DynamicRange?
+
     // MARK: - タイムスタンプ
 
     var createdAt: Date?
@@ -293,6 +303,7 @@ struct EditRecipe: Codable, Equatable {
         if let v = doubleExposureNorm    { data["doubleExposureNorm"]    = v }
         if let f = appliedFilter         { data["appliedFilter"]         = f.rawValue }
         if let tp = toneCurvePoints      { data["toneCurvePoints"]       = tp.toFirestoreData() }
+        if let dr = targetDynamicRange   { data["targetDynamicRange"]    = dr.rawValue }
 
         return data
     }
@@ -338,7 +349,24 @@ struct EditRecipe: Codable, Equatable {
         if let ptData = firestoreData["toneCurvePoints"] as? [String: Any] {
             self.toneCurvePoints = ToneCurvePoints(from: ptData)
         }
+
+        // ダイナミックレンジ（Phase 2 追加フィールド）
+        if let dr = firestoreData["targetDynamicRange"] as? String {
+            self.targetDynamicRange = DynamicRange(rawValue: dr)
+        }
     }
+}
+
+// MARK: - DynamicRange
+
+/// 書き出し時のダイナミックレンジ
+///
+/// Phase 2 で投稿用（SDR JPEG 8bit）と写真保存用（HDR HEIF 10bit）の動線分離に使用する。
+enum DynamicRange: String, Codable, Equatable {
+    /// Standard Dynamic Range（8bit JPEG / 10bit HEIF の SDR トーン範囲）
+    case sdr
+    /// High Dynamic Range（iOS 17+ の `writeHEIF10Representation` を使用）
+    case hdr
 }
 
 // MARK: - CurvePoint

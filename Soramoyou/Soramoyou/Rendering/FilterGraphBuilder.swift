@@ -415,16 +415,17 @@ final class FilterGraphBuilder {
     }
 
     // ── かすみの除去 ──
+    // Phase 1 #J: CIFogEffect は CIFilterBuiltins に型安全 API が存在しないため
+    // 文字列キーのまま維持（変更するとランタイムで入力キー mismatch を起こすリスク）。
+    // Grain / DoubleExposure 側は型安全 API に移行済み。
     private static func applyDehaze(normalized v: Double, to image: CIImage) -> CIImage {
         guard abs(v) > 0.01 else { return image }
-        // HEIF/P3 対応端末では CIFilter.dehaze() が利用可能
         if #available(iOS 15.0, *) {
             let f = CIFilter(name: "CIFogEffect")
             f?.setValue(image, forKey: kCIInputImageKey)
             f?.setValue(-Float(v * 0.8), forKey: "inputAmount")
             return f?.outputImage ?? image
         } else {
-            // フォールバック: コントラスト + 彩度で擬似的に表現
             let f = CIFilter.colorControls()
             f.inputImage  = image
             f.contrast    = Float(1.0 + v * 0.3)
@@ -434,21 +435,28 @@ final class FilterGraphBuilder {
     }
 
     // ── グレイン ──
+    // Phase 1 #J: 文字列キー API → CIFilterBuiltins に移行（型安全化）
     private static func applyGrain(normalized v: Double, to image: CIImage) -> CIImage {
         guard abs(v) > 0.01 else { return image }
-        let noise = CIFilter(name: "CIRandomGenerator")
-        guard let noiseImage = noise?.outputImage else { return image }
+
+        let random = CIFilter.randomGenerator()
+        guard let noiseImage = random.outputImage else { return image }
 
         let cropped = noiseImage.cropped(to: image.extent)
+
+        // モノクロ化 + アルファ減衰を CIColorMatrix（型安全 API）で実装
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = cropped
+        matrix.rVector    = CIVector(x: 0, y: 0, z: 0, w: 0)
+        matrix.gVector    = CIVector(x: 0, y: 0, z: 0, w: 0)
+        matrix.bVector    = CIVector(x: 0, y: 0, z: 0, w: 0)
+        matrix.aVector    = CIVector(x: 0, y: 0, z: 0, w: CGFloat(abs(v) * 0.15))
+        matrix.biasVector = CIVector(x: 1, y: 1, z: 1, w: 0)
+        let monochromeNoise = matrix.outputImage ?? cropped
+
         let blendFilter = CIFilter.multiplyBlendMode()
-        blendFilter.inputImage       = image
-        blendFilter.backgroundImage  = cropped.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector":  CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputGVector":  CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputBVector":  CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputAVector":  CIVector(x: 0, y: 0, z: 0, w: CGFloat(abs(v) * 0.15)),
-            "inputBiasVector": CIVector(x: 1, y: 1, z: 1, w: 0)
-        ])
+        blendFilter.inputImage      = image
+        blendFilter.backgroundImage = monochromeNoise
         return blendFilter.outputImage ?? image
     }
 
@@ -517,15 +525,21 @@ final class FilterGraphBuilder {
     }
 
     // ── レンズ補正 ──
+    // Phase 1 #M: `cropped(to:)` 前に `clampedToExtent()` を挟み、
+    // 歪みで押し出されたエッジ近傍の黒帯・コピー縞アーティファクトを抑制する。
+    // radius を画像対角線長まで広げ、歪みの連続性を確保。
     private static func applyLensCorrection(normalized v: Double, to image: CIImage) -> CIImage {
         guard abs(v) > 0.01 else { return image }
         let extent = image.extent
         let f = CIFilter.bumpDistortion()
         f.inputImage = image
         f.center     = CGPoint(x: extent.midX, y: extent.midY)
-        f.radius     = min(Float(extent.width), Float(extent.height)) * 0.5
+        f.radius     = Float(hypot(extent.width, extent.height))
         f.scale      = Float(-v * 0.3)
-        return f.outputImage?.cropped(to: extent) ?? image
+        let distorted = f.outputImage ?? image
+        return distorted
+            .clampedToExtent()
+            .cropped(to: extent)
     }
 
     // ── 二重露光風合成 ──
@@ -551,28 +565,63 @@ final class FilterGraphBuilder {
         guard let screenResult = screen.outputImage else { return blended }
 
         // ディゾルブで強度をコントロール
-        let mix = CIFilter(name: "CIDissolveTransition")
-        mix?.setValue(blended,      forKey: kCIInputImageKey)
-        mix?.setValue(screenResult, forKey: kCIInputTargetImageKey)
-        mix?.setValue(abs(v),       forKey: kCIInputTimeKey)
-        return mix?.outputImage?.cropped(to: original.extent) ?? blended
+        // Phase 1 #J: 文字列キー API → CIFilterBuiltins に移行（型安全化）
+        let mix = CIFilter.dissolveTransition()
+        mix.inputImage  = blended
+        mix.targetImage = screenResult
+        mix.time        = Float(abs(v))
+        return mix.outputImage?.cropped(to: original.extent) ?? blended
     }
 
     // ── iOS 18+ HDR トーンマッピング ──
     ///
-    /// iOS 18+ の HDR 展開（PreviewRenderer.renderExport で `.expandToHDR = true`）を使用した場合、
-    /// 輝度が 1.0 を超える HDR 値が含まれる可能性がある。
-    /// CIToneCurve で輝度を SDR 範囲（0〜1）に収める。
+    /// Phase 1 #K: Reinhard 近似 → ACES Filmic 近似に差し替え。
+    /// ACES Filmic は映画業界標準の S 字カーブで、
+    /// - ハイライトのロールオフが滑らか（Reinhard の急峻なクリップ感を解消）
+    /// - シャドウが深く保たれる（コントラスト確保）
+    /// - 中間域のサチュレーションが自然
+    ///
+    /// `CIColorCurves` を 16 点 LUT として定義し、GPU で 1 パス評価する。
     @available(iOS 18.0, *)
     private static func applyHDRToneMapping(to image: CIImage) -> CIImage {
-        let f = CIFilter.toneCurve()
-        f.inputImage = image
-        // Reinhard-like トーンマップ（1.0 を超える輝度を 1.0 にソフトクランプ）
-        f.point0 = CGPoint(x: 0.0,  y: 0.0)
-        f.point1 = CGPoint(x: 0.25, y: 0.25)
-        f.point2 = CGPoint(x: 0.5,  y: 0.5)
-        f.point3 = CGPoint(x: 0.75, y: 0.73)   // 圧縮開始
-        f.point4 = CGPoint(x: 1.0,  y: 0.95)   // ハイライト圧縮
-        return f.outputImage ?? image
+        applyACESFilmicToneMap(to: image)
+    }
+
+    /// ACES Filmic トーンマップ近似（Krzysztof Narkowicz の簡易版）
+    ///
+    /// f(x) = (x * (a*x + b)) / (x * (c*x + d) + e)
+    /// a=2.51, b=0.03, c=2.43, d=0.59, e=0.14
+    ///
+    /// 16 点の LUT（0.0〜1.0 範囲、HDR 入力は事前に線形に正規化されている前提）を
+    /// `CIColorCurves` に流し、各色チャネル独立にトーンカーブを適用する。
+    private static func applyACESFilmicToneMap(to image: CIImage) -> CIImage {
+        let lutSize = 16
+        var lut: [Float] = []
+        lut.reserveCapacity(lutSize * 4)
+
+        for i in 0..<lutSize {
+            let x = Float(i) / Float(lutSize - 1)
+            let a: Float = 2.51
+            let b: Float = 0.03
+            let c: Float = 2.43
+            let d: Float = 0.59
+            let e: Float = 0.14
+            let y = max(0.0, min(1.0, (x * (a * x + b)) / (x * (c * x + d) + e)))
+            lut.append(y)
+            lut.append(y)
+            lut.append(y)
+            lut.append(1.0)
+        }
+
+        let data = lut.withUnsafeBufferPointer { buffer -> Data in
+            Data(buffer: buffer)
+        }
+
+        let curves = CIFilter.colorCurves()
+        curves.inputImage      = image
+        curves.curvesData      = data
+        curves.curvesDomain    = CIVector(x: 0.0, y: 1.0)
+        curves.colorSpace      = CIContextPool.shared.workingColorSpace
+        return curves.outputImage ?? image
     }
 }
