@@ -143,22 +143,12 @@ final class Phase0RegressionTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let recipe = EditRecipe()
 
-        // Act: 現行は CGImage 返却だが、Phase 0 後は CIImage も可（分岐で両対応）
-        let output = try PreviewRenderer.renderExport(from: url, recipe: recipe)
+        // Act: Phase 0 以降は CIImage を返す設計に統一済み
+        let output: CIImage = try PreviewRenderer.renderExport(from: url, recipe: recipe)
 
-        // Assert
-        // Option 1: CIImage を直接返すようになったら `as? CIImage` で判定
-        if let _ = output as? CIImage {
-            return // CIImage 返却ならテスト成功（理想形）
-        }
-
-        // Option 2: CGImage のままなら最低でも 16bit/component 以上であること
-        if let cg = output as? CGImage {
-            XCTAssertGreaterThanOrEqual(cg.bitsPerComponent, 16,
-                "書き出し用 CGImage は高ビット深度 (>=16bpc) であるべき。現行 RGBA8 (8bpc) は Phase 0 で RGBAh (16bpc) に変更する")
-        } else {
-            XCTFail("renderExport の返り値が CIImage でも CGImage でもない: \(type(of: output))")
-        }
+        // Assert: CIImage を返していれば理想形（二重ラスタライズ解消済み）
+        // extent がゼロ以外であることで実画像が得られていることも確認
+        XCTAssertFalse(output.extent.isEmpty, "renderExport の CIImage が空である")
     }
 
     /// `applyRecipeForPreview` と `applyRecipeForExport` の両メソッドが存在することを確認。
@@ -188,21 +178,17 @@ final class Phase0RegressionTests: XCTestCase {
         let url = try writeTempJPEG(input)
         defer { try? FileManager.default.removeItem(at: url) }
         let recipe = EditRecipe()
-        let output = try PreviewRenderer.renderExport(from: url, recipe: recipe)
+        let output: CIImage = try PreviewRenderer.renderExport(from: url, recipe: recipe)
 
-        // output は Phase 0 後 CIImage or 16bpc CGImage を想定
-        let cgImage: CGImage
-        if let ci = output as? CIImage {
-            let ctx = CIContext()
-            guard let rendered = ctx.createCGImage(ci, from: ci.extent, format: .RGBAh, colorSpace: CGColorSpace(name: CGColorSpace.displayP3)) else {
-                XCTFail("RGBAh CGImage 変換に失敗")
-                return
-            }
-            cgImage = rendered
-        } else if let cg = output as? CGImage {
-            cgImage = cg
-        } else {
-            XCTFail("renderExport の返り値が想定外")
+        // Phase 0 以降は CIImage 返却で統一。RGBAh フォーマットで CGImage 化
+        let ctx = CIContext()
+        guard let cgImage = ctx.createCGImage(
+            output,
+            from: output.extent,
+            format: .RGBAh,
+            colorSpace: CGColorSpace(name: CGColorSpace.displayP3)
+        ) else {
+            XCTFail("RGBAh CGImage 変換に失敗")
             return
         }
 

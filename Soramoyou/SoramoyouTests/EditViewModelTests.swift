@@ -178,6 +178,38 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.editSettings.brilliance, -0.3)
     }
 
+    /// H-3 対応: ノイズリダクションは片側スライダ（0...1）にクランプされる
+    func testSetToolValueNoiseReductionClampsNegative() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        // 負値を入力しても 0 にクランプされ、Firestore や Recipe に負値が入り込まない
+        viewModel.setToolValue(-0.7, for: .noiseReduction)
+        XCTAssertEqual(viewModel.editSettings.noiseReduction, 0,
+                       "ノイズリダクションの負値がクランプされていない（H-3 回帰）")
+
+        // 正値はそのまま通る
+        viewModel.setToolValue(0.6, for: .noiseReduction)
+        XCTAssertEqual(viewModel.editSettings.noiseReduction ?? 0, 0.6, accuracy: 0.001)
+    }
+
+    /// H-3 対応: EditTool.sliderRange は .noiseReduction のみ 0...1、他は -1...1
+    func testEditToolSliderRange() {
+        for tool in EditTool.allCases {
+            let range = tool.sliderRange
+            if tool == .noiseReduction {
+                XCTAssertEqual(range.lowerBound, 0,
+                               "ノイズリダクションは片側スライダである必要がある")
+                XCTAssertEqual(range.upperBound, 1)
+            } else {
+                XCTAssertEqual(range.lowerBound, -1,
+                               "\(tool.displayName) は両側スライダである必要がある")
+                XCTAssertEqual(range.upperBound, 1)
+            }
+        }
+    }
+
     /// 新規追加ツール（自然な彩度）の値設定テスト
     func testSetToolValueNaturalSaturation() async {
         let testImage = createTestImage()
@@ -294,6 +326,25 @@ class MockImageService: ImageServiceProtocol {
             return nil
         }
         return UIImage(cgImage: cgImage)
+    }
+
+    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage {
+        generatePreviewCalled = true
+        return image
+    }
+
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage? {
+        generatePreviewCalled = true
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
+    }
+
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage {
+        applyEditSettingsCalled = true
+        return image
     }
 
     func resizeCIImage(_ ciImage: CIImage, maxSize: CGSize) -> CIImage {

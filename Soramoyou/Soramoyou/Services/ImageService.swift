@@ -34,6 +34,12 @@ protocol ImageServiceProtocol {
     /// 既にリサイズ済みのCIImageを受け取り、フィルターチェーンを適用して一度だけレンダリング
     func generatePreviewFromCIImage(_ ciImage: CIImage, edits: EditSettings) -> UIImage?
 
+    /// EditRecipe 直接受け取り版（toneCurvePoints 等の EditSettings にない情報を脱落させない）
+    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage?
+    /// EditRecipe を UIImage に適用（フル解像度・最終書き出し用）
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage
+
     /// CIImageをリサイズ（CIFilter.lanczosScaleTransformを使用）
     func resizeCIImage(_ ciImage: CIImage, maxSize: CGSize) -> CIImage
 
@@ -691,6 +697,51 @@ class ImageService: ImageServiceProtocol {
             return nil
         }
         return UIImage(cgImage: cgImage)
+    }
+
+    // MARK: - EditRecipe 直接パス（toneCurvePoints 等を保全）
+
+    /// EditRecipe を直接受け取ってプレビューを生成。
+    /// `EditSettings` への往復では `toneCurvePoints` / `targetDynamicRange` が脱落するため、
+    /// トーンカーブ編集時は必ずこちらを呼ぶ。
+    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage {
+        let thumbnailSize = CGSize(width: 750, height: 750)
+        let resizedImage = try await resizeImage(image, maxSize: thumbnailSize)
+        return try await applyEditRecipe(recipe, to: resizedImage)
+    }
+
+    /// 低解像度 CIImage + EditRecipe から同期的にプレビュー生成（リアルタイム用）
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage? {
+        let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage)
+        guard let cgImage = context.createCGImage(result, from: result.extent) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
+    }
+
+    /// EditRecipe を UIImage に直接適用（フル解像度）
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage {
+        return try await withCheckedThrowingContinuation { continuation in
+            Task.detached(priority: .userInitiated) {
+                do {
+                    guard let ciImage = CIImage(image: image) else {
+                        throw ImageServiceError.invalidImage
+                    }
+                    let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage)
+                    guard let cgImage = self.context.createCGImage(result, from: result.extent) else {
+                        throw ImageServiceError.processingFailed
+                    }
+                    let finalImage = UIImage(
+                        cgImage: cgImage,
+                        scale: image.scale,
+                        orientation: image.imageOrientation
+                    )
+                    continuation.resume(returning: finalImage)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     /// CIImageをリサイズ

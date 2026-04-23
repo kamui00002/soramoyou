@@ -32,9 +32,22 @@ class EditViewModel: ObservableObject {
     /// View 側のコード（`viewModel.editSettings`）を変更せずに EditRecipe へ移行できる。
     /// get: EditRecipe を EditSettings に変換して返す
     /// set: EditSettings を EditRecipe に変換して保存
+    ///
+    /// 注意: `EditSettings` には `toneCurvePoints` / `targetDynamicRange` が含まれないため、
+    /// set の時点で既存の値を保全してから再構築する（スライダー操作でトーンカーブが
+    /// 失われる不具合を防止）。
     var editSettings: EditSettings {
         get { editRecipe.toEditSettings() }
-        set { editRecipe = EditRecipe(from: newValue) }
+        set {
+            let existingPoints = editRecipe.toneCurvePoints
+            let existingDynamicRange = editRecipe.targetDynamicRange
+            let existingCropRect = editRecipe.cropRectNorm
+            var newRecipe = EditRecipe(from: newValue)
+            newRecipe.toneCurvePoints = existingPoints
+            newRecipe.targetDynamicRange = existingDynamicRange
+            newRecipe.cropRectNorm = existingCropRect
+            editRecipe = newRecipe
+        }
     }
 
     @Published var equippedTools: [EditTool] = []
@@ -313,8 +326,9 @@ class EditViewModel: ObservableObject {
         historyManager.push(currentSnapshot)
         notifyHistoryChange()
 
-        // 値の範囲を-1.0から1.0に制限
-        let clampedValue = max(-1.0, min(1.0, value))
+        // 値はツールごとの有効範囲に制限（例: .noiseReduction は 0...1 の片側）
+        let range = tool.sliderRange
+        let clampedValue = min(max(value, range.lowerBound), range.upperBound)
         editSettings.setValue(clampedValue, for: tool)
 
         // プレビューを生成（デバウンス処理）
@@ -331,8 +345,9 @@ class EditViewModel: ObservableObject {
             preDragSnapshot = currentSnapshot
         }
 
-        // 値の範囲を-1.0から1.0に制限
-        let clampedValue = max(-1.0, min(1.0, value))
+        // 値はツールごとの有効範囲に制限（例: .noiseReduction は 0...1 の片側）
+        let range = tool.sliderRange
+        let clampedValue = min(max(value, range.lowerBound), range.upperBound)
         editSettings.setValue(clampedValue, for: tool)
         isEditingRealtime = true
 
@@ -365,7 +380,7 @@ class EditViewModel: ObservableObject {
            cachedImageIndex == currentImageIndex,
            cachedTransformKey == transformKey {
             // キャッシュ有効 → 同期レンダリング（Task overhead なし）
-            fastPreviewImage = imageService.generatePreviewFromCIImage(lowResCIImage, edits: editSettings)
+            fastPreviewImage = imageService.generatePreviewFromCIImage(lowResCIImage, recipe: editRecipe)
         } else {
             // キャッシュ無効 → 非同期でキャッシュ再構築してからレンダリング
             fastPreviewTask?.cancel()
@@ -381,6 +396,34 @@ class EditViewModel: ObservableObject {
     func capturePreDragSnapshot() {
         if preDragSnapshot == nil {
             preDragSnapshot = currentSnapshot
+        }
+    }
+
+    /// トーンカーブ等、スライダー以外の外部 Binding からリアルタイムプレビューを走らせる。
+    ///
+    /// 内部では `setToolValueRealtime` と同じスロットリング（約 30fps）＋
+    /// 低解像度キャッシュ再利用のパスを通るため、ドラッグ中も同期的に画像が更新される。
+    /// 呼び出し側は `editRecipe` を先に更新してから本メソッドを呼ぶこと。
+    func triggerRealtimePreview() {
+        isEditingRealtime = true
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsed = now - lastFastPreviewTime
+
+        if elapsed >= fastPreviewMinInterval {
+            throttledPreviewTask?.cancel()
+            lastFastPreviewTime = now
+            renderFastPreviewOrAsync()
+        } else {
+            throttledPreviewTask?.cancel()
+            throttledPreviewTask = Task { [weak self] in
+                guard let self = self else { return }
+                let waitNano = UInt64((self.fastPreviewMinInterval - elapsed) * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: waitNano)
+                guard !Task.isCancelled else { return }
+                self.lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
+                self.renderFastPreviewOrAsync()
+            }
         }
     }
 
@@ -545,10 +588,116 @@ class EditViewModel: ObservableObject {
     }
 
     /// アスペクト比を設定
+    /// アスペクト比変更時はクロップ矩形も自動で中央配置・比率一致に整える
     func setCropAspectRatio(_ ratio: CropAspectRatio) {
         historyManager.push(currentSnapshot)
         notifyHistoryChange()
         cropAspectRatio = ratio
+
+        // `.free` 以外が選ばれたらクロップ矩形を中央配置で比率合わせ
+        if let aspect = ratio.ratio {
+            editRecipe.cropRectNorm = centeredCropRect(aspect: aspect)
+        } else {
+            // `.free`: 現在の矩形は維持（なければフル）
+            if editRecipe.cropRectNorm == nil {
+                editRecipe.cropRectNorm = CGRect(x: 0, y: 0, width: 1, height: 1)
+            }
+        }
+
+        Task { [weak self] in
+            await self?.generatePreview()
+        }
+    }
+
+    /// 指定アスペクト比（幅/高さ）で画像中央に内接するクロップ矩形（正規化）を計算
+    private func centeredCropRect(aspect: CGFloat) -> CGRect {
+        guard let image = currentImage else {
+            return CGRect(x: 0, y: 0, width: 1, height: 1)
+        }
+
+        // 表示用の画像サイズ（回転/反転は UI 上の見た目。クロップは
+        // applyTransform 後の画像に対して適用されるため size をそのまま使う）
+        let w = image.size.width
+        let h = image.size.height
+        guard w > 0, h > 0 else {
+            return CGRect(x: 0, y: 0, width: 1, height: 1)
+        }
+
+        let imageAspect = w / h
+        let cropW: CGFloat
+        let cropH: CGFloat
+        if imageAspect > aspect {
+            // 画像のほうが横長 → 高さいっぱい、幅を絞る
+            cropH = 1.0
+            cropW = aspect / imageAspect
+        } else {
+            cropW = 1.0
+            cropH = imageAspect / aspect
+        }
+        let x = (1.0 - cropW) / 2.0
+        let y = (1.0 - cropH) / 2.0
+        return CGRect(x: x, y: y, width: cropW, height: cropH)
+    }
+
+    /// クロップ矩形を直接更新（インタラクティブ UI 用）
+    /// `finalize` を true にすると Undo 履歴にも積む
+    func updateCropRect(_ rect: CGRect, finalize: Bool) {
+        if finalize {
+            if preDragSnapshot == nil {
+                preDragSnapshot = currentSnapshot
+            }
+            historyManager.push(preDragSnapshot ?? currentSnapshot)
+            notifyHistoryChange()
+            preDragSnapshot = nil
+        } else if preDragSnapshot == nil {
+            preDragSnapshot = currentSnapshot
+        }
+
+        editRecipe.cropRectNorm = rect
+
+        if finalize {
+            Task { [weak self] in
+                await self?.generatePreview()
+            }
+        }
+    }
+
+    /// 切り取りタブ遷移時のクロップ UI 可視化。
+    ///
+    /// `editRecipe.cropRectNorm` が未設定、またはフル画面 (1.0x1.0) のままだと
+    /// CropOverlayView の矩形・4隅のハンドルが画像の端と重なって視認できず、
+    /// ユーザーに「トリミング機能がある」ことが伝わらない。
+    /// 既定値として上下左右に約 8% のインセットを持つ矩形をセットし、
+    /// マスク外側の暗転でトリミング UI が明確に見えるようにする。
+    ///
+    /// すでに何らかの矩形が設定されている場合は尊重（上書きしない）。
+    func ensureVisibleCropRect() {
+        let current = editRecipe.cropRectNorm
+        let isFullFrame = current == nil
+            || (current?.origin == .zero
+                && current?.size == CGSize(width: 1, height: 1))
+        guard isFullFrame else { return }
+
+        let inset: CGFloat = 0.08
+        let rect = CGRect(
+            x: inset,
+            y: inset,
+            width: 1.0 - inset * 2,
+            height: 1.0 - inset * 2
+        )
+        // 履歴は積まない（自動セットのため）
+        editRecipe.cropRectNorm = rect
+    }
+
+    /// クロップをリセット（矩形だけクリア）
+    func resetCropRect() {
+        historyManager.push(currentSnapshot)
+        notifyHistoryChange()
+        editRecipe.cropRectNorm = nil
+        cropAspectRatio = .free
+        Task { [weak self] in
+            await self?.generatePreview()
+        }
     }
 
     /// 切り取り・回転のリセット
@@ -559,6 +708,7 @@ class EditViewModel: ObservableObject {
         isFlippedHorizontal = false
         isFlippedVertical = false
         cropAspectRatio = .free
+        editRecipe.cropRectNorm = nil
         invalidateLowResCache()
         Task { [weak self] in
             await self?.generatePreview()
@@ -609,7 +759,8 @@ class EditViewModel: ObservableObject {
             // リクエストIDが変わっていたら結果を破棄
             guard requestId == currentPreviewRequestId else { return }
 
-            let preview = try await imageService.generatePreview(processedImage, edits: editSettings)
+            // EditRecipe を直接渡す（toneCurvePoints などを保全するため）
+            let preview = try await imageService.generatePreview(processedImage, recipe: editRecipe)
 
             // リクエストIDが変わっていたら結果を破棄
             guard requestId == currentPreviewRequestId else { return }
@@ -659,7 +810,7 @@ class EditViewModel: ObservableObject {
         }
 
         // CIImageベースでプレビュー生成
-        let preview = imageService.generatePreviewFromCIImage(lowResCIImage, edits: editSettings)
+        let preview = imageService.generatePreviewFromCIImage(lowResCIImage, recipe: editRecipe)
 
         // リクエストIDが変わっていたら結果を破棄
         guard requestId == currentFastPreviewRequestId else { return }
@@ -808,13 +959,13 @@ class EditViewModel: ObservableObject {
     // MARK: - Final Image Generation
 
     /// 最終的な編集済み画像を生成（全画像）
+    /// EditRecipe を直接適用することで toneCurvePoints などを保全する
     func generateFinalImages() async throws -> [UIImage] {
         var editedImages: [UIImage] = []
 
         for image in originalImages {
-            // 回転・反転を適用
             let transformedImage = applyTransform(to: image)
-            let editedImage = try await imageService.applyEditSettings(editSettings, to: transformedImage)
+            let editedImage = try await imageService.applyEditRecipe(editRecipe, to: transformedImage)
             editedImages.append(editedImage)
         }
 
@@ -822,14 +973,14 @@ class EditViewModel: ObservableObject {
     }
 
     /// 現在の画像の最終的な編集済み画像を生成
+    /// EditRecipe を直接適用することで toneCurvePoints などを保全する
     func generateFinalImage() async throws -> UIImage {
         guard let image = currentImage else {
             throw EditViewModelError.noImage
         }
 
-        // 回転・反転を適用
         let transformedImage = applyTransform(to: image)
-        return try await imageService.applyEditSettings(editSettings, to: transformedImage)
+        return try await imageService.applyEditRecipe(editRecipe, to: transformedImage)
     }
 
     /// 表示用のプレビュー画像を取得

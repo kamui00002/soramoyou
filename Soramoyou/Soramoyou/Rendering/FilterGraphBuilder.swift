@@ -80,11 +80,15 @@ final class FilterGraphBuilder {
         }
 
         // 6. ハイライト・シャドウ
-        let hasHS = recipe.highlights != 1.0 || recipe.shadowAmount != 1.0
-        if hasHS {
+        //    Recipe 側は物理スケール (0..2, 中立 1.0) で保持するが、
+        //    フィルター側は正規化 (-1..+1) で扱う方が実装が単純なため
+        //    ここで `-1.0` を減算して正規化に揃える（M-3: 往復を排除）。
+        let hlNorm = recipe.highlights   - 1.0
+        let shNorm = recipe.shadowAmount - 1.0
+        if abs(hlNorm) > 0.001 || abs(shNorm) > 0.001 {
             img = applyHighlightShadow(
-                highlights: recipe.highlights,
-                shadows:    recipe.shadowAmount,
+                highlightsNorm: hlNorm,
+                shadowsNorm:    shNorm,
                 to: img
             )
         }
@@ -186,7 +190,42 @@ final class FilterGraphBuilder {
             img = applyHDRToneMapping(to: img)
         }
 
+        // 25. クロップ適用（最終出力に反映）
+        if let normRect = recipe.cropRectNorm,
+           normRect != CGRect(x: 0, y: 0, width: 1, height: 1) {
+            img = applyCrop(normalizedRect: normRect, to: img)
+        }
+
         return img
+    }
+
+    // ── クロップ ──
+    /// 正規化矩形 (0.0〜1.0, 左上原点) を CIImage の座標系（左下原点）に変換して切り出す
+    private static func applyCrop(normalizedRect: CGRect, to image: CIImage) -> CIImage {
+        let extent = image.extent
+        guard extent.width > 0, extent.height > 0 else { return image }
+
+        let clamped = CGRect(
+            x: max(0, min(1, normalizedRect.origin.x)),
+            y: max(0, min(1, normalizedRect.origin.y)),
+            width:  max(0.01, min(1, normalizedRect.size.width)),
+            height: max(0.01, min(1, normalizedRect.size.height))
+        )
+
+        let pixelRect = CGRect(
+            x: extent.origin.x + clamped.origin.x * extent.width,
+            // 左上原点 → 左下原点に変換（y 軸反転）
+            y: extent.origin.y + (1.0 - clamped.origin.y - clamped.size.height) * extent.height,
+            width:  clamped.size.width  * extent.width,
+            height: clamped.size.height * extent.height
+        )
+
+        let cropped = image.cropped(to: pixelRect)
+        // 原点を 0,0 に戻す（出力座標を正規化）
+        return cropped.transformed(by: CGAffineTransform(
+            translationX: -pixelRect.origin.x,
+            y: -pixelRect.origin.y
+        ))
     }
 
     // MARK: - フィルタープリセット
@@ -315,16 +354,56 @@ final class FilterGraphBuilder {
     }
 
     // ── ハイライト・シャドウ ──
+    /// リアルタイム応答性の改善:
+    /// 旧実装は `CIHighlightShadowAdjust` を使用していたが、
+    /// 同フィルターは内部でマルチスケール解析を行うため GPU 負荷が高く、
+    /// スライダー操作時のプレビューが遅延していた（フレーム落ち）。
+    ///
+    /// 本実装では `CIToneCurve` による 5 点の非線形マッピングで近似する。
+    /// - トーンカーブは 1D LUT に近い軽量処理で、60fps のスライダー更新にも追従できる
+    /// - ハイライト正/負、シャドウ正/負の 4 方向すべてを単一フィルターでカバー可能
+    /// - 見た目はアップル純正の「ハイライト/シャドウ」に近い階調変化を提供
+    ///
+    /// 引数:
+    /// - `highlightsNorm`: -1.0 (下端へ) 〜 +1.0 (上端へ) の正規化値
+    /// - `shadowsNorm`:    -1.0 (下端へ) 〜 +1.0 (上端へ) の正規化値
+    ///
+    /// カーブ設計:
+    /// - 制御点は (0, y0), (0.25, y1), (0.5, 0.5), (0.75, y3), (1, y4)
+    /// - シャドウは下端付近（point0〜point1）を上下させる
+    /// - ハイライトは上端付近（point3〜point4）を上下させる
+    /// - 中央（point2）は必ず 0.5 に固定し、中間調への影響を最小化
+    ///
+    /// H-1 対応: 旧実装は `hlStrength = hlNorm * 0.35`、`y3 = 0.75 + hlStrength * 0.6`
+    /// で v=+0.5 のとき y3 が 0.855 までしか持ち上がらず、正方向が視認困難だった。
+    /// ストレングス係数を 0.5、y3/y1 の係数を 0.55 に引き上げ、
+    /// v=+0.5 で y3 ≈ 0.89、v=+1.0 で y3 は 1.0（飽和）に到達させる。
     private static func applyHighlightShadow(
-        highlights: Double,
-        shadows: Double,
+        highlightsNorm: Double,
+        shadowsNorm: Double,
         to image: CIImage
     ) -> CIImage {
-        let f = CIFilter.highlightShadowAdjust()
-        f.inputImage      = image
-        f.highlightAmount = Float(highlights)
-        f.shadowAmount    = Float(shadows)
-        return f.outputImage ?? image
+        // どちらも中立なら処理スキップ
+        guard abs(highlightsNorm) > 0.001 || abs(shadowsNorm) > 0.001 else { return image }
+
+        // シャドウ: 負値 → 下端を落として暗く、正値 → 下端を持ち上げて明るく
+        let shStrength = CGFloat(shadowsNorm) * 0.5
+        let y0 = max(0.0, min(1.0, 0.0 + shStrength * 0.4))
+        let y1 = max(0.0, min(1.0, 0.25 + shStrength * 0.55))
+
+        // ハイライト: 負値 → 上端を下げて暗く、正値 → 上端を持ち上げて明るく
+        let hlStrength = CGFloat(highlightsNorm) * 0.5
+        let y4 = max(0.0, min(1.0, 1.0 + hlStrength * 0.4))
+        let y3 = max(0.0, min(1.0, 0.75 + hlStrength * 0.55))
+
+        let curves = CIFilter.toneCurve()
+        curves.inputImage = image
+        curves.point0 = CGPoint(x: 0.0,  y: y0)
+        curves.point1 = CGPoint(x: 0.25, y: y1)
+        curves.point2 = CGPoint(x: 0.5,  y: 0.5)
+        curves.point3 = CGPoint(x: 0.75, y: y3)
+        curves.point4 = CGPoint(x: 1.0,  y: y4)
+        return curves.outputImage ?? image
     }
 
     // ── ブラックポイント ──
@@ -349,6 +428,10 @@ final class FilterGraphBuilder {
     }
 
     // ── 暖かみ・色合い（同一フィルターで処理）──
+    /// M-2 対応: tint の係数 100 はケルビン軸に対して非常に小さく、
+    /// スライダを目一杯動かしても色転びが微細だった。
+    /// Apple `CITemperatureAndTint` の y 軸（tint）は「色温度に垂直なマゼンタ↔グリーン補正」で、
+    /// 実務的には ±150〜300 程度まで振ってようやく視認域に入るため 250 を採用する。
     private static func applyTemperatureAndTint(
         warmthNorm: Double,
         tintNorm: Double,
@@ -359,7 +442,7 @@ final class FilterGraphBuilder {
         f.neutral       = CIVector(x: 6500, y: 0)
         f.targetNeutral = CIVector(
             x: 6500 - warmthNorm * 1500,
-            y: tintNorm * 100
+            y: tintNorm * 250
         )
         return f.outputImage ?? image
     }
@@ -382,36 +465,83 @@ final class FilterGraphBuilder {
     }
 
     // ── ホワイトバランス ──
+    /// M-2 対応: スケール 1000K は視認域を下回っていたため 2000K に引き上げ。
+    /// これで v=+0.5 → +1000K（暖色）、v=+1.0 → +2000K（強い暖色）となり
+    /// 色温度ツール（scale 1500）と違って「より緩やかなホワイトバランス補正」という
+    /// 立ち位置は維持したまま、体感できる変化幅を確保する。
     private static func applyWhiteBalance(normalized v: Double, to image: CIImage) -> CIImage {
-        applyTemperatureShift(normalized: v, scale: 1000, to: image)
+        applyTemperatureShift(normalized: v, scale: 2000, to: image)
     }
 
     // ── シャープネス ──
+    /// B3 修正: `CISharpenLuminance` は負の sharpness を受け付けないため、
+    /// 負値側では代わりに `CIGaussianBlur` でソフト化する。
+    /// 正値側は従来通り輝度シャープ。
     private static func applySharpness(normalized v: Double, to image: CIImage) -> CIImage {
-        let f = CIFilter.sharpenLuminance()
-        f.inputImage  = image
-        f.sharpness   = Float(v * 2.0)
-        return f.outputImage ?? image
+        guard abs(v) > 0.01 else { return image }
+        if v > 0 {
+            let f = CIFilter.sharpenLuminance()
+            f.inputImage  = image
+            f.sharpness   = Float(v * 2.0)
+            return f.outputImage ?? image
+        } else {
+            let f = CIFilter.gaussianBlur()
+            f.inputImage = image
+            f.radius     = Float(-v * 3.0)
+            // gaussianBlur は境界で画像が広がるので元の extent に cropped する
+            return f.outputImage?.cropped(to: image.extent) ?? image
+        }
     }
 
     // ── テクスチャ ──
+    /// B4 修正: 旧実装は `abs(v)` でしか処理していなかったため、
+    /// 負値側でもディテール強調になっていた。
+    /// 正値: unsharpMask（ディテール強調）
+    /// 負値: gaussianBlur（微細なディテールを抑えるソフトブラー）
+    ///
+    /// M-1 対応: 正方向の半径 `v * 3.0` は 750px プレビューでは 1px 未満に縮退し、
+    /// ほぼ視認できなかった。最低半径を底上げしつつ上限を少し広げ、
+    /// v=+0.5 で 3.0 px、v=+1.0 で 5.0 px に拡大する（750px プレビューでも残る帯域）。
     private static func applyTexture(normalized v: Double, to image: CIImage) -> CIImage {
         guard abs(v) > 0.01 else { return image }
-        let f = CIFilter.unsharpMask()
-        f.inputImage  = image
-        f.radius      = Float(abs(v) * 3.0)
-        f.intensity   = Float(abs(v))
-        return f.outputImage ?? image
+        if v > 0 {
+            let f = CIFilter.unsharpMask()
+            f.inputImage  = image
+            f.radius      = Float(v * 4.0 + 1.0)
+            f.intensity   = Float(v)
+            return f.outputImage ?? image
+        } else {
+            let f = CIFilter.gaussianBlur()
+            f.inputImage = image
+            f.radius     = Float(-v * 1.5)
+            return f.outputImage?.cropped(to: image.extent) ?? image
+        }
     }
 
     // ── クラリティ ──
+    /// B5 修正: 旧実装は `abs(v)` のため負値でも同じ強調が入っていた。
+    /// 正値: unsharpMask でミッドコントラスト強調
+    /// 負値: colorControls.contrast を下げて柔らかな印象に
+    ///
+    /// H-2 対応: 旧係数は `radius = v * 0.8 + 0.01`（v=+0.5 で 0.41px）と
+    /// UnsharpMask の実用帯域（1.5〜5.0px）を大きく下回り、写真上ではほとんど
+    /// 変化が見えなかった。半径を「ミッドコントラスト強調」に適した
+    /// 1.0〜3.5 px 帯に再設計し、intensity も 0.75 相当まで引き上げる。
+    /// 負方向のコントラスト低下も +0.2 → +0.35 で体感できる幅にする。
     private static func applyClarity(normalized v: Double, to image: CIImage) -> CIImage {
         guard abs(v) > 0.01 else { return image }
-        let f = CIFilter.unsharpMask()
-        f.inputImage  = image
-        f.radius      = Float(abs(v) * 0.8 + 0.01)
-        f.intensity   = Float(abs(v) * 0.5)
-        return f.outputImage ?? image
+        if v > 0 {
+            let f = CIFilter.unsharpMask()
+            f.inputImage  = image
+            f.radius      = Float(v * 2.5 + 1.0)
+            f.intensity   = Float(v * 0.75)
+            return f.outputImage ?? image
+        } else {
+            let f = CIFilter.colorControls()
+            f.inputImage  = image
+            f.contrast    = Float(1.0 + v * 0.35)
+            return f.outputImage ?? image
+        }
     }
 
     // ── かすみの除去 ──
@@ -436,6 +566,17 @@ final class FilterGraphBuilder {
 
     // ── グレイン ──
     // Phase 1 #J: 文字列キー API → CIFilterBuiltins に移行（型安全化）
+    /// B7 修正: 旧実装は `multiplyBlendMode` を使っていたため、
+    /// ノイズが暗部を強くし「全体が暗くなる」方向にしか働かなかった。
+    /// `overlayBlendMode` + 中心 0.5 のグレーノイズに変更することで、
+    /// 中間調を保ちながら粒状感を上乗せする（フィルムグレイン相当）。
+    ///
+    /// ノイズの生成:
+    /// - `randomGenerator` は各画素 0..1 の独立乱数
+    /// - それを `colorMatrix` で中心 0.5 の「偏差 ±(v*0.25)」のグレーに再マップ
+    ///   （計算: out = random * (v*0.5) + (0.5 - v*0.25)）
+    /// - このグレーに対して `overlayBlendMode` を適用すると、入力値が 0.5 に近いほど変化が少なく、
+    ///   明暗に応じて適度にグレインが乗る
     private static func applyGrain(normalized v: Double, to image: CIImage) -> CIImage {
         guard abs(v) > 0.01 else { return image }
 
@@ -444,41 +585,68 @@ final class FilterGraphBuilder {
 
         let cropped = noiseImage.cropped(to: image.extent)
 
-        // モノクロ化 + アルファ減衰を CIColorMatrix（型安全 API）で実装
+        let strength = CGFloat(abs(v))
+        let scale    = strength * 0.5
+        let bias     = 0.5 - strength * 0.25
+
         let matrix = CIFilter.colorMatrix()
         matrix.inputImage = cropped
-        matrix.rVector    = CIVector(x: 0, y: 0, z: 0, w: 0)
-        matrix.gVector    = CIVector(x: 0, y: 0, z: 0, w: 0)
-        matrix.bVector    = CIVector(x: 0, y: 0, z: 0, w: 0)
-        matrix.aVector    = CIVector(x: 0, y: 0, z: 0, w: CGFloat(abs(v) * 0.15))
-        matrix.biasVector = CIVector(x: 1, y: 1, z: 1, w: 0)
-        let monochromeNoise = matrix.outputImage ?? cropped
+        matrix.rVector    = CIVector(x: scale, y: 0,     z: 0,     w: 0)
+        matrix.gVector    = CIVector(x: 0,     y: scale, z: 0,     w: 0)
+        matrix.bVector    = CIVector(x: 0,     y: 0,     z: scale, w: 0)
+        matrix.aVector    = CIVector(x: 0,     y: 0,     z: 0,     w: 1)
+        matrix.biasVector = CIVector(x: bias,  y: bias,  z: bias,  w: 0)
+        let midGrayNoise = matrix.outputImage ?? cropped
 
-        let blendFilter = CIFilter.multiplyBlendMode()
-        blendFilter.inputImage      = image
-        blendFilter.backgroundImage = monochromeNoise
-        return blendFilter.outputImage ?? image
+        // overlayBlendMode: 中心 0.5 のグレーが中立、偏差で明暗を付ける
+        let blend = CIFilter.overlayBlendMode()
+        blend.inputImage      = midGrayNoise
+        blend.backgroundImage = image
+        return blend.outputImage?.cropped(to: image.extent) ?? image
     }
 
+    // NOTE: M-1（プレビュー縮小で粒状感が潰れる）の本格対応について
+    //
+    // `applyGrain` ではノイズを `transformed(by: scaleX: 2)` でセル拡大する案を
+    // 検証したが、CI の randomGenerator は working color space 上で生成される一方、
+    // 入力画像はビットマップ（sRGB 解釈）として投入されるため、アフィン変換後に
+    // overlayBlend / additionCompositing を掛けると、色空間不一致により中間調が
+    // 10〜30/255 程度系統的にシフトしてしまう（B7 の平均保存要件を満たせない）。
+    //
+    // 粒子のサイズはネイティブ解像度で 1px 固定のまま、書き出し系の解像度で
+    // 初めてフィルムグレインらしい粒感が見える設計とする。プレビューでの粒感低下は
+    // 別 PR でプレビュー解像度の引き上げで対応する。
+
     // ── フェード ──
+    /// M-2 対応: bias 係数を 0.1 → 0.2 に引き上げ。
+    /// フェードは「黒を持ち上げ白を引き下げることでコントラストを緩め、色あせ感を出す」効果。
+    /// 係数 0.1 だと v=+1 でも +10%（+25/255）に留まり写真によっては見えなかったため、
+    /// ±20% へ拡張し、典型的な SNS 向けフェード量を取り得るようにする。
+    /// 同時に rVector/gVector/bVector の傾き（= ゲイン）を 1.0 → 1.0 - v*0.15 にして
+    /// 白側も実際に沈み、フェードらしい S 字低コントラストになるよう再設計する。
     private static func applyFade(normalized v: Double, to image: CIImage) -> CIImage {
         let f = CIFilter.colorMatrix()
         f.inputImage = image
-        let bias = Float(v * 0.1)
+        let bias = Float(v * 0.2)
+        let gain = Float(1.0 - v * 0.15)
         f.biasVector = CIVector(x: CGFloat(bias), y: CGFloat(bias), z: CGFloat(bias), w: 0)
-        f.rVector    = CIVector(x: 1, y: 0, z: 0, w: 0)
-        f.gVector    = CIVector(x: 0, y: 1, z: 0, w: 0)
-        f.bVector    = CIVector(x: 0, y: 0, z: 1, w: 0)
+        f.rVector    = CIVector(x: CGFloat(gain), y: 0, z: 0, w: 0)
+        f.gVector    = CIVector(x: 0, y: CGFloat(gain), z: 0, w: 0)
+        f.bVector    = CIVector(x: 0, y: 0, z: CGFloat(gain), w: 0)
         f.aVector    = CIVector(x: 0, y: 0, z: 0, w: 1)
         return f.outputImage ?? image
     }
 
     // ── ノイズリダクション ──
+    /// B6 修正: ノイズリダクションは本来一方向の処理（ノイズを「足す」操作ではない）。
+    /// 旧実装は `abs(v)` で負値も正値と同等に扱っていたため意味が曖昧だった。
+    /// 正値のみ CI フィルターを適用し、負値は no-op とする。
     private static func applyNoiseReduction(normalized v: Double, to image: CIImage) -> CIImage {
+        guard v > 0.01 else { return image }
         let f = CIFilter.noiseReduction()
         f.inputImage  = image
-        f.noiseLevel  = Float(abs(v) * 0.05)
-        f.sharpness   = Float(0.5 + abs(v) * 0.3)
+        f.noiseLevel  = Float(v * 0.05)
+        f.sharpness   = Float(0.5 + v * 0.3)
         return f.outputImage ?? image
     }
 

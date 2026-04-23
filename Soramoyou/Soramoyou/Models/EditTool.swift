@@ -70,6 +70,20 @@ enum EditTool: String, Codable, CaseIterable {
         }
     }
 
+    /// スライダーの有効範囲
+    ///
+    /// ほとんどのツールは ±1.0 の両側スライダだが、
+    /// 「ノイズリダクション」は負方向に意味のある処理が存在しないため
+    /// 0...1 の片側スライダに固定する（UI ミスリード防止・H-3 対応）。
+    var sliderRange: ClosedRange<Float> {
+        switch self {
+        case .noiseReduction:
+            return 0.0...1.0
+        default:
+            return -1.0...1.0
+        }
+    }
+
     /// SF Symbolsアイコン名
     var iconName: String {
         switch self {

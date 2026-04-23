@@ -136,6 +136,14 @@ struct EditRecipe: Codable, Equatable {
     /// ToneCurveView で設定されると nil ではなくなる。
     var toneCurvePoints: ToneCurvePoints?
 
+    // MARK: - クロップ
+
+    /// クロップ領域（正規化 0.0〜1.0 の矩形、左上原点）
+    ///
+    /// - `nil` または `CGRect(0,0,1,1)` の場合はクロップなし
+    /// - 回転・反転適用後の画像に対して、この割合で切り出す
+    var cropRectNorm: CGRect?
+
     // MARK: - フィルター
 
     /// 適用済みフィルター
@@ -304,6 +312,14 @@ struct EditRecipe: Codable, Equatable {
         if let f = appliedFilter         { data["appliedFilter"]         = f.rawValue }
         if let tp = toneCurvePoints      { data["toneCurvePoints"]       = tp.toFirestoreData() }
         if let dr = targetDynamicRange   { data["targetDynamicRange"]    = dr.rawValue }
+        if let cr = cropRectNorm {
+            data["cropRectNorm"] = [
+                "x": cr.origin.x,
+                "y": cr.origin.y,
+                "w": cr.size.width,
+                "h": cr.size.height
+            ]
+        }
 
         return data
     }
@@ -353,6 +369,15 @@ struct EditRecipe: Codable, Equatable {
         // ダイナミックレンジ（Phase 2 追加フィールド）
         if let dr = firestoreData["targetDynamicRange"] as? String {
             self.targetDynamicRange = DynamicRange(rawValue: dr)
+        }
+
+        // クロップ矩形
+        if let cr = firestoreData["cropRectNorm"] as? [String: Any],
+           let x = cr["x"] as? Double,
+           let y = cr["y"] as? Double,
+           let w = cr["w"] as? Double,
+           let h = cr["h"] as? Double {
+            self.cropRectNorm = CGRect(x: x, y: y, width: w, height: h)
         }
     }
 }
