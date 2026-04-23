@@ -11,8 +11,14 @@ import Kingfisher
 
 struct GalleryView: View {
     @StateObject private var viewModel = GalleryViewModel()
+    @EnvironmentObject private var likeManager: LikeManager
     @State private var selectedPost: Post?
+    @State private var isSaving = false
+    @State private var saveResultMessage: String?
+    @State private var showingSaveResult = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
     /// iPad対応: 画面サイズに応じて列数を動的に変更
     private var columns: [GridItem] {
@@ -91,10 +97,62 @@ struct GalleryView: View {
                 }
             }
             .sheet(item: $selectedPost) { post in
-                GalleryDetailView(post: post)
+                GalleryDetailView(post: post) {
+                    // 削除後にローカルの一覧から除去（ViewModel経由でカプセル化）
+                    viewModel.removePost(postId: post.id)
+                }
+                .environmentObject(likeManager)
+            }
+            // 保存結果アラート
+            .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {
+                Button("OK") { saveResultMessage = nil }
+            }
+            // 保存中オーバーレイ
+            .overlay {
+                if isSaving {
+                    ZStack {
+                        Color.black.opacity(0.4)
+                            .ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.2)
+                            Text("保存中...")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                        }
+                        .padding(24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(UIColor.systemBackground).opacity(0.9))
+                        )
+                    }
+                }
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    // MARK: - Save Method
+
+    private func savePostImage(post: Post) async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            guard let urlString = post.images.first?.url else {
+                saveResultMessage = "保存する画像がありません"
+                showingSaveResult = true
+                return
+            }
+            let image = try await downloadService.downloadImage(from: urlString)
+            try await downloadService.saveToPhotoLibrary(image)
+            saveResultMessage = "画像を保存しました"
+            showingSaveResult = true
+        } catch {
+            saveResultMessage = error.localizedDescription
+            showingSaveResult = true
+        }
     }
 
     // MARK: - Gallery Grid
@@ -109,6 +167,13 @@ struct GalleryView: View {
                         GalleryGridItem(post: post)
                     }
                     .buttonStyle(CardButtonStyle())
+                    .contextMenu {
+                        Button {
+                            Task { await savePostImage(post: post) }
+                        } label: {
+                            Label("写真に保存", systemImage: "square.and.arrow.down")
+                        }
+                    }
                     .onAppear {
                             // ページネーション: 最後の投稿が表示されたら次のページを読み込む
                             if post.id == viewModel.posts.last?.id {

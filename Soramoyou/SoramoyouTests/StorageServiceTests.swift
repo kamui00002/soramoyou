@@ -11,7 +11,12 @@ import UIKit
 
 final class StorageServiceTests: XCTestCase {
     var storageService: StorageService!
-    
+
+    /// Firebase（GoogleService-Info.plist）が設定されているか確認する
+    private func isFirebaseConfigured() -> Bool {
+        Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil
+    }
+
     override func setUp() {
         super.setUp()
         storageService = StorageService()
@@ -47,6 +52,9 @@ final class StorageServiceTests: XCTestCase {
     }
     
     func testUploadThumbnail() async throws {
+        // Firebase が設定されていない環境（CI・シミュレータ等）ではスキップ
+        try XCTSkipUnless(isFirebaseConfigured(), "Firebase not configured in test environment")
+
         // Given
         let testImage = createTestImage(size: CGSize(width: 1024, height: 768))
         let path = "test/path/thumbnail.jpg"
@@ -83,6 +91,9 @@ final class StorageServiceTests: XCTestCase {
     }
     
     func testUploadProgress() async throws {
+        // Firebase が設定されていない環境（CI・シミュレータ等）ではスキップ
+        try XCTSkipUnless(isFirebaseConfigured(), "Firebase not configured in test environment")
+
         // Given
         let testImage = createTestImage(size: CGSize(width: 2048, height: 2048))
         let path = "test/path/progress.jpg"

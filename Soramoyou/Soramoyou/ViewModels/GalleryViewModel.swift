@@ -58,4 +58,9 @@ class GalleryViewModel: PaginatedPostsViewModel {
         guard !blockedUserIds.isEmpty else { return }
         posts = posts.filter { !blockedUserIds.contains($0.userId) }
     }
+
+    /// 投稿をローカル一覧から削除する（削除完了後のUI更新用）
+    func removePost(postId: String) {
+        posts.removeAll { $0.id == postId }
+    }
 }

@@ -11,13 +11,27 @@ import Kingfisher
 
 struct GalleryDetailView: View {
     let post: Post
+    /// 投稿削除時に呼ばれるコールバック（一覧からの除去などに使用）
+    var onPostDeleted: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var likeManager: LikeManager
     /// 投稿者情報の取得にはPostDetailViewModelを使用（GalleryDetailViewModelとの二重定義を解消）
     @StateObject private var viewModel = PostDetailViewModel()
+    @StateObject private var commentViewModel = CommentViewModel()
+    @State private var commentText = ""
     @State private var showingOriginalImage = false
     @State private var showingReportSheet = false
     @State private var showingBlockConfirmation = false
     @State private var showingReportConfirmation = false
+    @State private var showingDeleteConfirmation = false
+    @State private var showingSaveOptions = false
+    @State private var showingShareSheet = false
+    @State private var isSaving = false
+    @State private var saveResultMessage: String?
+    @State private var showingSaveResult = false
+    @State private var shareImages: [UIImage] = []
+
+    private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
     // オリジナル画像が利用可能かどうか
     private var hasOriginalImages: Bool {
@@ -58,12 +72,23 @@ struct GalleryDetailView: View {
 
                     // 統計情報
                     statsSection
+
+                    // コメントセクション
+                    CommentSection(
+                        postId: post.id,
+                        postUserId: post.userId,
+                        commentViewModel: commentViewModel,
+                        commentText: $commentText
+                    )
                 }
                 .padding()
             }
-            .background(Color(UIColor.systemBackground))
+            .background(DesignTokens.Colors.detailBackground)
             .navigationTitle("投稿詳細")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(DesignTokens.Colors.detailBackground, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") {
@@ -72,12 +97,37 @@ struct GalleryDetailView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
+                        // 写真に保存
+                        Button {
+                            showingSaveOptions = true
+                        } label: {
+                            Label("写真に保存", systemImage: "square.and.arrow.down")
+                        }
+
+                        // 共有
+                        Button {
+                            Task { await shareCurrentImage() }
+                        } label: {
+                            Label("共有", systemImage: "square.and.arrow.up")
+                        }
+
+                        Divider()
+
+                        // 自分の投稿の場合のみ削除ボタンを表示
+                        if viewModel.isOwnPost(post) {
+                            Button(role: .destructive) {
+                                showingDeleteConfirmation = true
+                            } label: {
+                                Label("投稿を削除", systemImage: "trash")
+                            }
+                            Divider()
+                        }
                         Button(role: .destructive) {
                             showingReportSheet = true
                         } label: {
                             Label("この投稿を通報", systemImage: "flag")
                         }
-                        
+
                         Button(role: .destructive) {
                             showingBlockConfirmation = true
                         } label: {
@@ -91,7 +141,33 @@ struct GalleryDetailView: View {
             .onAppear {
                 Task {
                     await viewModel.loadAuthor(userId: post.userId)
+                    await commentViewModel.fetchComments(postId: post.id)
                 }
+            }
+            // 投稿削除確認アラート
+            .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
+                Button("削除", role: .destructive) {
+                    Task {
+                        let success = await viewModel.deletePost(post)
+                        if success {
+                            onPostDeleted?()
+                            dismiss()
+                        }
+                        // 失敗時は viewModel.deleteError がセットされ、下の alert で表示
+                    }
+                }
+                Button("キャンセル", role: .cancel) { }
+            } message: {
+                Text("この投稿を削除しますか？この操作は取り消せません。")
+            }
+            // 削除失敗アラート
+            .alert("削除に失敗しました", isPresented: Binding(
+                get: { viewModel.deleteError != nil },
+                set: { if !$0 { viewModel.deleteError = nil } }
+            )) {
+                Button("OK") { viewModel.deleteError = nil }
+            } message: {
+                Text(viewModel.deleteError ?? "")
             }
             // 通報理由選択シート
             .confirmationDialog("通報理由を選択", isPresented: $showingReportSheet) {
@@ -127,8 +203,111 @@ struct GalleryDetailView: View {
             } message: {
                 Text("ご報告ありがとうございます。内容を確認いたします。")
             }
+            // 保存オプション選択
+            .confirmationDialog("保存オプション", isPresented: $showingSaveOptions) {
+                Button("この画像を保存（編集済み）") {
+                    Task { await saveImage(edited: true, all: false) }
+                }
+                if hasOriginalImages {
+                    Button("この画像を保存（オリジナル）") {
+                        Task { await saveImage(edited: false, all: false) }
+                    }
+                }
+                if post.images.count > 1 {
+                    Button("すべての画像を保存（編集済み）") {
+                        Task { await saveImage(edited: true, all: true) }
+                    }
+                }
+                if hasOriginalImages && (post.originalImages?.count ?? 0) > 1 {
+                    Button("すべての画像を保存（オリジナル）") {
+                        Task { await saveImage(edited: false, all: true) }
+                    }
+                }
+                Button("キャンセル", role: .cancel) { }
+            }
+            // 保存結果アラート
+            .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {
+                Button("OK") { saveResultMessage = nil }
+            }
+            // 共有シート
+            .sheet(isPresented: $showingShareSheet) {
+                ImageShareSheet(images: shareImages)
+            }
+            // 保存中オーバーレイ
+            .overlay {
+                if isSaving {
+                    ZStack {
+                        Color.black.opacity(0.4)
+                            .ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.2)
+                            Text("保存中...")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                        }
+                        .padding(24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(DesignTokens.Colors.detailBackground.opacity(0.9))
+                        )
+                    }
+                }
+            }
         }
         .navigationViewStyle(.stack)
+    }
+
+    // MARK: - Save / Share Methods
+
+    /// 画像を写真ライブラリに保存
+    private func saveImage(edited: Bool, all: Bool) async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            let urlStrings: [String]
+            if edited {
+                urlStrings = all ? post.images.map(\.url) : [post.images.first?.url].compactMap { $0 }
+            } else {
+                let originals = post.originalImages ?? []
+                urlStrings = all ? originals.map(\.url) : [originals.first?.url].compactMap { $0 }
+            }
+
+            let savedCount = try await downloadService.downloadAndSaveImages(from: urlStrings)
+            saveResultMessage = savedCount == 1 ? "画像を保存しました" : "\(savedCount)枚の画像を保存しました"
+            showingSaveResult = true
+        } catch {
+            saveResultMessage = error.localizedDescription
+            showingSaveResult = true
+        }
+    }
+
+    /// 現在表示中の画像を共有シートで共有
+    private func shareCurrentImage() async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            let urlString: String
+            if showingOriginalImage, let original = post.originalImages?.first {
+                urlString = original.url
+            } else if let first = post.images.first {
+                urlString = first.url
+            } else {
+                saveResultMessage = "共有する画像がありません"
+                showingSaveResult = true
+                return
+            }
+
+            let image = try await downloadService.downloadImage(from: urlString)
+            shareImages = [image]
+            showingShareSheet = true
+        } catch {
+            saveResultMessage = error.localizedDescription
+            showingSaveResult = true
+        }
     }
 
     // MARK: - Image Section
@@ -205,9 +384,10 @@ struct GalleryDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Image(systemName: "slider.horizontal.3")
-                    .foregroundColor(.blue)
+                    .foregroundColor(DesignTokens.Colors.skyBlue)
                 Text("編集設定")
                     .font(.headline)
+                    .foregroundColor(.white)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -256,7 +436,7 @@ struct GalleryDetailView: View {
             .padding()
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(UIColor.secondarySystemBackground))
+                    .fill(DesignTokens.Colors.detailCardBackground)
             )
         }
     }
@@ -265,12 +445,12 @@ struct GalleryDetailView: View {
         HStack {
             Image(systemName: icon)
                 .frame(width: 24)
-                .foregroundColor(.secondary)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
             Text(label)
-                .foregroundColor(.primary)
+                .foregroundColor(.white)
             Spacer()
             Text(value)
-                .foregroundColor(.blue)
+                .foregroundColor(DesignTokens.Colors.skyBlue)
                 .fontWeight(.medium)
         }
         .font(.subheadline)
@@ -289,6 +469,7 @@ struct GalleryDetailView: View {
             if let caption = post.caption {
                 Text(caption)
                     .font(.body)
+                    .foregroundColor(.white)
             }
 
             // ハッシュタグ
@@ -298,10 +479,10 @@ struct GalleryDetailView: View {
                         ForEach(hashtags, id: \.self) { hashtag in
                             Text("#\(hashtag)")
                                 .font(.body)
-                                .foregroundColor(.blue)
+                                .foregroundColor(DesignTokens.Colors.skyBlue)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
-                                .background(Color.blue.opacity(0.1))
+                                .background(Color.white.opacity(0.1))
                                 .cornerRadius(12)
                         }
                     }
@@ -312,15 +493,16 @@ struct GalleryDetailView: View {
             if let location = post.location {
                 HStack {
                     Image(systemName: "location.fill")
-                        .foregroundColor(.blue)
+                        .foregroundColor(DesignTokens.Colors.skyBlue)
                     if let city = location.city, let prefecture = location.prefecture {
                         Text("\(prefecture) \(city)")
                             .font(.body)
+                            .foregroundColor(.white)
                     }
                     if let landmark = location.landmark {
                         Text("（\(landmark)）")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                 }
             }
@@ -334,14 +516,17 @@ struct GalleryDetailView: View {
             if let skyType = post.skyType {
                 Label(skyType.displayName, systemImage: "cloud.fill")
                     .font(.body)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
             if let timeOfDay = post.timeOfDay {
                 Label(timeOfDay.displayName, systemImage: "clock.fill")
                     .font(.body)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
             if let colorTemperature = post.colorTemperature {
                 Label("\(colorTemperature)K", systemImage: "thermometer")
                     .font(.body)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
         }
     }
@@ -350,12 +535,25 @@ struct GalleryDetailView: View {
 
     private var statsSection: some View {
         HStack(spacing: 24) {
-            Label("\(post.likesCount)", systemImage: "heart.fill")
+            Button {
+                let impact = UIImpactFeedbackGenerator(style: .light)
+                impact.impactOccurred()
+                Task { await likeManager.toggleLike(post: post) }
+            } label: {
+                Label(
+                    "\(likeManager.likeCount(for: post))",
+                    systemImage: likeManager.isLiked(post.id) ? "heart.fill" : "heart"
+                )
                 .font(.headline)
+                .foregroundColor(likeManager.isLiked(post.id) ? DesignTokens.Colors.softPink : DesignTokens.Colors.textSecondary)
+                .animation(.easeInOut(duration: 0.2), value: likeManager.isLiked(post.id))
+            }
+            .buttonStyle(.plain)
+
             Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
                 .font(.headline)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
         }
-        .foregroundColor(.secondary)
     }
 
     // MARK: - Author Section
@@ -392,12 +590,13 @@ struct GalleryDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(user.displayName ?? "ユーザー")
                     .font(.headline)
+                    .foregroundColor(.white)
             }
 
             Spacer()
         }
         .padding()
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(DesignTokens.Colors.detailCardBackground)
         .cornerRadius(12)
     }
 }

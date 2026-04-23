@@ -15,19 +15,35 @@ struct Draft: Identifiable, Codable {
     let images: [ImageInfo]
     let editedImages: [ImageInfo]?
     let editSettings: EditSettings?
+    /// 【Phase 2 追加】EditRecipe V1 フォーマット（新形式）
+    ///
+    /// 読み込み優先順位: editRecipeV1 → editSettings → デフォルト値
+    ///
+    /// 後方互換戦略: 旧 `editSettings` フィールドはそのまま維持し、
+    /// 旧バージョンのアプリでも読み込めるようにする。
+    /// `editRecipeV1` は新フィールドとして並列で追加。
+    let editRecipeV1: EditRecipe?
     let caption: String?
     let hashtags: [String]?
     let location: Location?
     let visibility: Visibility
     let createdAt: Date
     var updatedAt: Date
-    
+
+    /// 最も適切な EditRecipe を返す（優先度: editRecipeV1 > editSettings > default）
+    var resolvedRecipe: EditRecipe {
+        if let recipe = editRecipeV1 { return recipe }
+        if let settings = editSettings { return EditRecipe(from: settings) }
+        return EditRecipe()
+    }
+
     init(
         id: String,
         userId: String,
         images: [ImageInfo],
         editedImages: [ImageInfo]? = nil,
         editSettings: EditSettings? = nil,
+        editRecipeV1: EditRecipe? = nil,
         caption: String? = nil,
         hashtags: [String]? = nil,
         location: Location? = nil,
@@ -40,6 +56,7 @@ struct Draft: Identifiable, Codable {
         self.images = images
         self.editedImages = editedImages
         self.editSettings = editSettings
+        self.editRecipeV1 = editRecipeV1
         self.caption = caption
         self.hashtags = hashtags
         self.location = location
@@ -69,7 +86,13 @@ struct Draft: Identifiable, Codable {
         if let editSettings = editSettings {
             data["editSettings"] = editSettings.toFirestoreData()
         }
-        
+
+        // 【Phase 2】editRecipeV1 を新フィールドとして並列で保存
+        // 旧 editSettings フィールドはそのまま維持（旧バージョンのアプリでも読める）
+        if let recipe = editRecipeV1 {
+            data["editRecipeV1"] = recipe.toFirestoreData()
+        }
+
         if let caption = caption {
             data["caption"] = caption
         }
@@ -111,13 +134,21 @@ struct Draft: Identifiable, Codable {
             self.editedImages = nil
         }
         
-        // editSettingsの変換
+        // editSettingsの変換（後方互換: 旧フィールドを維持）
         if let editSettingsData = documentData["editSettings"] as? [String: Any] {
             self.editSettings = EditSettings(from: editSettingsData)
         } else {
             self.editSettings = nil
         }
-        
+
+        // 【Phase 2】editRecipeV1 の読み込み（新フィールド）
+        // 優先度: editRecipeV1 > editSettings（resolvedRecipe で処理）
+        if let recipeData = documentData["editRecipeV1"] as? [String: Any] {
+            self.editRecipeV1 = EditRecipe(from: recipeData)
+        } else {
+            self.editRecipeV1 = nil
+        }
+
         self.caption = documentData["caption"] as? String
         self.hashtags = documentData["hashtags"] as? [String]
         

@@ -342,6 +342,15 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
         colorThreshold: Double?,
         limit: Int
     ) async throws -> [Post] { return [] }
+    func syncPostsCount(userId: String, count: Int) async throws {}
+    func fetchPublicProfile(userId: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
+    func updatePublicProfile(_ profile: PublicProfile) async throws {}
+    func createPublicProfile(from user: User) async throws {}
+    func deleteUserData(userId: String) async throws {}
+    func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {}
+    func blockUser(userId: String, blockedUserId: String) async throws {}
+    func unblockUser(userId: String, blockedUserId: String) async throws {}
+    func fetchBlockedUserIds(userId: String) async throws -> [String] { return [] }
 }
 
 class MockStorageServiceForProfile: StorageServiceProtocol {

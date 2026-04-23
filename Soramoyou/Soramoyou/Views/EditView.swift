@@ -72,6 +72,26 @@ struct EditView: View {
 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
+                        // Undo ボタン
+                        Button(action: {
+                            viewModel.undo()
+                        }) {
+                            Image(systemName: "arrow.uturn.backward")
+                                .font(.body)
+                        }
+                        .disabled(!viewModel.canUndo)
+                        .foregroundColor(viewModel.canUndo ? .white : .gray)
+
+                        // Redo ボタン
+                        Button(action: {
+                            viewModel.redo()
+                        }) {
+                            Image(systemName: "arrow.uturn.forward")
+                                .font(.body)
+                        }
+                        .disabled(!viewModel.canRedo)
+                        .foregroundColor(viewModel.canRedo ? .white : .gray)
+
                         // 編集ツール設定ボタン
                         Button(action: {
                             showEditToolsSettings = true
@@ -148,16 +168,20 @@ struct EditView: View {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
             } else if let displayImage = viewModel.displayPreviewImage {
-                // リアルタイム編集中は高速プレビュー、それ以外は通常プレビュー
+                // Phase 1 #L: iOS 17+ の EDR（Extended Dynamic Range）対応。
+                // HDR 写真（HEIC / ProRAW）を XDR ディスプレイで「光るハイライト」として表示する。
+                // 対応端末以外では .standard 相当の挙動に自動フォールバックする。
                 Image(uiImage: displayImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .modifier(HDRDynamicRangeModifier())
             } else if let currentImage = viewModel.currentImage {
                 Image(uiImage: currentImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .modifier(HDRDynamicRangeModifier())
             } else {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -307,9 +331,14 @@ struct EditView: View {
 
     private var adjustmentContentView: some View {
         VStack(spacing: 0) {
-            // ツール選択中はスライダーを表示
+            // ツール選択中の表示
             if let tool = selectedTool {
-                improvedSliderView(tool: tool)
+                if tool == .curves {
+                    // カーブ調整ツール: ToneCurveView を表示
+                    toneCurveEditorView
+                } else {
+                    improvedSliderView(tool: tool)
+                }
             }
 
             // ツール一覧
@@ -336,7 +365,42 @@ struct EditView: View {
                 .padding(.vertical, 12)
             }
         }
-        .frame(minHeight: selectedTool != nil ? 180 : 100)
+        .frame(minHeight: selectedTool == .curves ? 280 : (selectedTool != nil ? 180 : 100))
+    }
+
+    // MARK: - Tone Curve Editor View
+
+    /// カーブ調整ツール用のトーンカーブエディター
+    private var toneCurveEditorView: some View {
+        VStack(spacing: 8) {
+            // ヘッダー
+            HStack {
+                Text(EditTool.curves.displayName)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.top, 8)
+
+            // ToneCurveView（Binding でリアルタイム更新、ドラッグ終了時に Undo 履歴へ積む）
+            ToneCurveView(
+                points: Binding(
+                    get: { viewModel.editRecipe.toneCurvePoints ?? ToneCurvePoints() },
+                    set: { newPoints in
+                        // ドラッグ開始時のスナップショットをキャプチャ（Undo 用）
+                        viewModel.capturePreDragSnapshot()
+                        viewModel.editRecipe.toneCurvePoints = newPoints
+                        Task { await viewModel.generatePreview() }
+                    }
+                ),
+                onEditEnd: {
+                    viewModel.finalizeToolValue(for: .curves)
+                }
+            )
+            .frame(height: 220)
+            .padding(.horizontal)
+        }
     }
 
     // MARK: - Improved Slider View (目盛り付き)
@@ -520,6 +584,22 @@ struct EditView: View {
             .padding(.bottom, 12)
         }
         .frame(minHeight: 180)
+    }
+
+}
+
+// MARK: - HDR Dynamic Range Modifier
+
+/// Phase 1 #L: EDR（Extended Dynamic Range）対応の View 変換子。
+/// iOS 17+ で `.allowedDynamicRange(.high)` を適用し、HDR 写真を XDR ディスプレイで
+/// 「光るハイライト」として表示する。対応端末以外では自動的に SDR にフォールバックする。
+private struct HDRDynamicRangeModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 17.0, *) {
+            content.allowedDynamicRange(.high)
+        } else {
+            content
+        }
     }
 }
 

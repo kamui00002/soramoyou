@@ -49,17 +49,19 @@ protocol ImageServiceProtocol {
 }
 
 class ImageService: ImageServiceProtocol {
+    /// 共有 CIContext（CIContextPool シングルトンから取得）
+    /// 【修正】以前は各メソッドで毎回 CIContext を生成していたが、
+    ///         CIContextPool.shared.ciContext を使用することで再利用するよう変更。
+    ///         色空間も linear sRGB → Display P3 に改善。
     private let context: CIContext
 
     init(context: CIContext? = nil) {
         if let context = context {
+            // テスト時など外部からの注入を許容
             self.context = context
-        } else if let device = MTLCreateSystemDefaultDevice() {
-            // Metal GPU アクセラレーションを使用（大幅に高速化）
-            self.context = CIContext(mtlDevice: device)
         } else {
-            // Metal が利用できない場合はCPUフォールバック
-            self.context = CIContext()
+            // CIContextPool のシングルトンを使用（Metal + 適切な色空間設定済み）
+            self.context = CIContextPool.shared.ciContext
         }
     }
 
@@ -656,44 +658,13 @@ class ImageService: ImageServiceProtocol {
     }
 
     /// 全編集設定を適用する共通メソッド
+    ///
+    /// 【改善】EditSettings → EditRecipe に変換し、FilterGraphBuilder に委譲することで
+    /// フィルター + 全27ツールを 1 本の CIImage グラフとして処理する。
+    /// UIImage への変換が不要になり品質劣化・速度低下を解消。
     private func applyAllEdits(_ settings: EditSettings, on ciImage: CIImage) -> CIImage {
-        var result = ciImage
-
-        // フィルターを適用
-        if let filter = settings.appliedFilter {
-            result = processFilterSync(filter, on: result)
-        }
-
-        // 全27種類の編集ツールを順次適用
-        // 適用順序：露出系 → カラー系 → ディテール系 → エフェクト系
-        if let v = settings.exposure { result = applyExposure(v, to: result) }
-        if let v = settings.brightness { result = applyBrightness(v, to: result) }
-        if let v = settings.contrast { result = applyContrast(v, to: result) }
-        if let v = settings.tone { result = applyTone(v, to: result) }
-        if let v = settings.brilliance { result = applyBrilliance(v, to: result) }
-        if let v = settings.highlight { result = applyHighlight(v, to: result) }
-        if let v = settings.shadow { result = applyShadow(v, to: result) }
-        if let v = settings.blackPoint { result = applyBlackPoint(v, to: result) }
-        if let v = settings.saturation { result = applySaturation(v, to: result) }
-        if let v = settings.naturalSaturation { result = applyNaturalSaturation(v, to: result) }
-        if let v = settings.warmth { result = applyWarmth(v, to: result) }
-        if let v = settings.tint { result = applyTint(v, to: result) }
-        if let v = settings.colorTemperature { result = applyColorTemperature(v, to: result) }
-        if let v = settings.whiteBalance { result = applyWhiteBalance(v, to: result) }
-        if let v = settings.sharpness { result = applySharpness(v, to: result) }
-        if let v = settings.texture { result = applyTexture(v, to: result) }
-        if let v = settings.clarity { result = applyClarity(v, to: result) }
-        if let v = settings.dehaze { result = applyDehaze(v, to: result) }
-        if let v = settings.grain { result = applyGrain(v, to: result) }
-        if let v = settings.fade { result = applyFade(v, to: result) }
-        if let v = settings.noiseReduction { result = applyNoiseReduction(v, to: result) }
-        if let v = settings.curves { result = applyCurves(v, to: result) }
-        if let v = settings.hsl { result = applyHSL(v, to: result) }
-        if let v = settings.vignette { result = applyVignette(v, to: result) }
-        if let v = settings.lensCorrection { result = applyLensCorrection(v, to: result) }
-        if let v = settings.doubleExposure { result = applyDoubleExposure(v, to: result) }
-
-        return result
+        let recipe = EditRecipe(from: settings)
+        return FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage)
     }
 
     // MARK: - Preview
@@ -808,8 +779,8 @@ class ImageService: ImageServiceProtocol {
                 let scale = min(scaleX, scaleY)
 
                 let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-                let context = CIContext(options: [.useSoftwareRenderer: false])
-                guard let outputCGImage = context.createCGImage(scaled, from: scaled.extent) else {
+                // 【修正】CIContext を毎回生成せず CIContextPool.shared.ciContext を再利用
+                guard let outputCGImage = CIContextPool.shared.ciContext.createCGImage(scaled, from: scaled.extent) else {
                     continuation.resume(returning: image)
                     return
                 }

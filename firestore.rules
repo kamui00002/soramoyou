@@ -221,10 +221,10 @@ service cloud.firestore {
     // ドキュメントID: {userId}_{postId}
     // ============================================
     match /likes/{likeId} {
-      // 読み取り権限: 自分のいいね、または投稿の所有者
-      allow read: if isAuthenticated()
-                  && (resource.data.userId == request.auth.uid
-                      || isPostOwner(resource.data.postId));
+      // 読み取り権限: 認証済みユーザーなら読み取り可能
+      // いいねデータは機密情報ではなく、存在チェック（getDocument）で
+      // ドキュメントが存在しない場合も resource が null にならずアクセスできる必要がある
+      allow read: if isAuthenticated();
 
       // いいね作成: 認証済みユーザーのみ、自分のIDで作成
       allow create: if isAuthenticated()

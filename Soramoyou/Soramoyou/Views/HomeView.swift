@@ -10,6 +10,7 @@ import Kingfisher
 
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
+    @EnvironmentObject private var likeManager: LikeManager
     @State private var selectedPost: Post?
     @State private var animateCards = false  // フィードアニメーション用 ☀️
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -65,10 +66,12 @@ struct HomeView: View {
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .refreshable {
                 await viewModel.refresh()
+                await likeManager.checkLikeStatus(for: viewModel.posts)
             }
             .onAppear {
                 Task {
                     await viewModel.fetchPosts()
+                    await likeManager.checkLikeStatus(for: viewModel.posts)
                     // フィードアニメーションを開始
                     withAnimation {
                         animateCards = true
@@ -86,6 +89,7 @@ struct HomeView: View {
             }
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
+                    .environmentObject(likeManager)
             }
         }
         .navigationViewStyle(.stack)
@@ -97,15 +101,21 @@ struct HomeView: View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: DesignTokens.Spacing.lg) {
                 ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
-                    Button {
-                        // ハプティックフィードバック
-                        let impact = UIImpactFeedbackGenerator(style: .light)
-                        impact.impactOccurred()
-                        selectedPost = post
-                    } label: {
-                        PostCard(post: post)
-                    }
-                    .buttonStyle(CardButtonStyle())
+                    PostCard(
+                        post: post,
+                        isLiked: likeManager.isLiked(post.id),
+                        likeCount: likeManager.likeCount(for: post),
+                        onLikeTapped: {
+                            Task {
+                                await likeManager.toggleLike(post: post)
+                            }
+                        },
+                        onCardTapped: {
+                            let impact = UIImpactFeedbackGenerator(style: .light)
+                            impact.impactOccurred()
+                            selectedPost = post
+                        }
+                    )
                     // スタガードアニメーション（改善）
                     .opacity(animateCards ? 1 : 0)
                     .offset(y: animateCards ? 0 : 30)
@@ -122,7 +132,11 @@ struct HomeView: View {
                                 && !viewModel.isLoadingMore
                                 && viewModel.hasMorePosts {
                                 Task {
+                                    let previousCount = viewModel.posts.count
                                     await viewModel.loadMorePosts()
+                                    // 新しく読み込んだ投稿のいいね状態をチェック
+                                    let newPosts = Array(viewModel.posts.dropFirst(previousCount))
+                                    await likeManager.checkLikeStatus(for: newPosts)
                                 }
                             }
                         }
@@ -167,10 +181,14 @@ struct HomeView: View {
 
 struct PostCard: View {
     let post: Post
+    var isLiked: Bool = false
+    var likeCount: Int? = nil
+    var onLikeTapped: (() -> Void)? = nil
+    var onCardTapped: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 画像表示（サムネイル優先、遅延読み込み）
+            // 画像表示（サムネイル優先、遅延読み込み）— タップでカード遷移
             ZStack(alignment: .bottomLeading) {
                 if let firstImage = post.images.first {
                     PostImageView(imageInfo: firstImage)
@@ -204,15 +222,22 @@ struct PostCard: View {
                     .padding(DesignTokens.Spacing.sm)
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                let impact = UIImpactFeedbackGenerator(style: .light)
+                impact.impactOccurred()
+                onCardTapped?()
+            }
 
             // 投稿情報
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                // キャプション
+                // キャプション — タップでカード遷移
                 if let caption = post.caption {
                     Text(caption)
                         .font(.system(size: DesignTokens.Typography.bodySize, weight: .regular, design: .rounded))
                         .foregroundColor(DesignTokens.Colors.textDark)
                         .lineLimit(3)
+                        .onTapGesture { onCardTapped?() }
                 }
 
                 // ハッシュタグ
@@ -266,25 +291,38 @@ struct PostCard: View {
                     }
                 }
 
-                // アクション行
+                // アクション行（ボタンが独立してタップ可能）
                 HStack(spacing: DesignTokens.Spacing.lg) {
                     // いいねボタン
-                    HStack(spacing: 6) {
-                        Image(systemName: "heart")
-                            .font(.system(size: 16, weight: .medium))
-                        Text("\(post.likesCount)")
-                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                    Button {
+                        let impact = UIImpactFeedbackGenerator(style: .light)
+                        impact.impactOccurred()
+                        onLikeTapped?()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: isLiked ? "heart.fill" : "heart")
+                                .font(.system(size: 16, weight: .medium))
+                                .animation(.easeInOut(duration: 0.2), value: isLiked)
+                            Text("\(likeCount ?? post.likesCount)")
+                                .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundColor(isLiked ? DesignTokens.Colors.softPink : DesignTokens.Colors.textTertiary)
                     }
-                    .foregroundColor(DesignTokens.Colors.softPink)
+                    .buttonStyle(.plain)
 
-                    // コメントボタン
-                    HStack(spacing: 6) {
-                        Image(systemName: "bubble.right")
-                            .font(.system(size: 16, weight: .medium))
-                        Text("\(post.commentsCount)")
-                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                    // コメントボタン — タップで詳細画面へ遷移
+                    Button {
+                        onCardTapped?()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "bubble.right")
+                                .font(.system(size: 16, weight: .medium))
+                            Text("\(post.commentsCount)")
+                                .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundColor(DesignTokens.Colors.skyBlue)
                     }
-                    .foregroundColor(DesignTokens.Colors.skyBlue)
+                    .buttonStyle(.plain)
 
                     Spacer()
 
@@ -317,8 +355,6 @@ struct PostCard: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
         .shadow(DesignTokens.Shadow.card)
-        // タップ時のアニメーションはButtonStyle側で制御（ScrollViewとの競合を回避）
-        .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
     }
 }
 
@@ -400,168 +436,343 @@ struct CardButtonStyle: ButtonStyle {
 struct PostDetailView: View {
     let post: Post
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var likeManager: LikeManager
     @StateObject private var viewModel = PostDetailViewModel()
+    @StateObject private var commentViewModel = CommentViewModel()
     @State private var showingReportSheet = false
     @State private var showingBlockConfirmation = false
     @State private var showingReportConfirmation = false
     @State private var selectedReportReason: ReportReason?
+    @State private var showingDeleteConfirmation = false
+    @State private var showingSaveOptions = false
+    @State private var showingShareSheet = false
+    @State private var isSaving = false
+    @State private var saveResultMessage: String?
+    @State private var showingSaveResult = false
+    @State private var shareImages: [UIImage] = []
+    @State private var commentText = ""
+
+    private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
+
+    private var hasOriginalImages: Bool {
+        post.originalImages != nil && !(post.originalImages?.isEmpty ?? true)
+    }
     
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // 投稿者情報
-                    if let user = viewModel.author {
-                        authorSection(user: user)
-                    } else if viewModel.isLoadingAuthor {
-                        HStack {
-                            ProgressView()
-                            Text("投稿者情報を読み込み中...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .padding()
-                    }
-                    
-                    // フルサイズ画像
-                    if let firstImage = post.images.first {
-                        PostDetailImageView(imageInfo: firstImage)
-                    }
-                    
-                    // 投稿情報
-                    VStack(alignment: .leading, spacing: 12) {
-                        // キャプション
-                        if let caption = post.caption {
-                            Text(caption)
-                                .font(.body)
-                        }
-                        
-                        // ハッシュタグ
-                        if let hashtags = post.hashtags, !hashtags.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(hashtags, id: \.self) { hashtag in
-                                        Text("#\(hashtag)")
-                                            .font(.body)
-                                            .foregroundColor(.blue)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 6)
-                                            .background(Color.blue.opacity(0.1))
-                                            .cornerRadius(12)
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // 位置情報
-                        if let location = post.location {
-                            HStack {
-                                Image(systemName: "location.fill")
-                                    .foregroundColor(.blue)
-                                if let city = location.city, let prefecture = location.prefecture {
-                                    Text("\(prefecture) \(city)")
-                                        .font(.body)
-                                }
-                                if let landmark = location.landmark {
-                                    Text("（\(landmark)）")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                        
-                        // 空の種類・時間帯・色温度
-                        VStack(alignment: .leading, spacing: 8) {
-                            if let skyType = post.skyType {
-                                Label(skyType.displayName, systemImage: "cloud.fill")
-                                    .font(.body)
-                            }
-                            if let timeOfDay = post.timeOfDay {
-                                Label(timeOfDay.displayName, systemImage: "clock.fill")
-                                    .font(.body)
-                            }
-                            if let colorTemperature = post.colorTemperature {
-                                Label("\(colorTemperature)K", systemImage: "thermometer")
-                                    .font(.body)
-                            }
-                        }
-                        
-                        // 統計情報
-                        HStack(spacing: 24) {
-                            Label("\(post.likesCount)", systemImage: "heart.fill")
-                                .font(.headline)
-                            Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
-                                .font(.headline)
-                        }
-                        .foregroundColor(.secondary)
-                    }
-                    .padding()
-                }
-            }
-            .navigationTitle("投稿詳細")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("閉じる") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Button(role: .destructive) {
-                            showingReportSheet = true
-                        } label: {
-                            Label("この投稿を通報", systemImage: "flag")
-                        }
-                        
-                        Button(role: .destructive) {
-                            showingBlockConfirmation = true
-                        } label: {
-                            Label("このユーザーをブロック", systemImage: "hand.raised")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                }
-            }
-            .onAppear {
-                Task {
-                    await viewModel.loadAuthor(userId: post.userId)
-                }
-            }
-            // 通報理由選択シート
-            .confirmationDialog("通報理由を選択", isPresented: $showingReportSheet) {
-                ForEach(ReportReason.allCases, id: \.self) { reason in
-                    Button(reason.displayName) {
-                        selectedReportReason = reason
-                        Task {
-                            await submitReport(reason: reason)
-                        }
-                    }
-                }
-                Button("キャンセル", role: .cancel) { }
-            }
-            // ブロック確認アラート
-            .alert("ユーザーをブロック", isPresented: $showingBlockConfirmation) {
-                Button("キャンセル", role: .cancel) { }
-                Button("ブロック", role: .destructive) {
+            postDetailContent
+                .background(DesignTokens.Colors.detailBackground)
+                .navigationTitle("投稿詳細")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbarBackground(DesignTokens.Colors.detailBackground, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+                .toolbarColorScheme(.dark, for: .navigationBar)
+                .toolbar { postDetailToolbar }
+                .onAppear {
                     Task {
-                        await blockPostAuthor()
+                        await viewModel.loadAuthor(userId: post.userId)
+                        await commentViewModel.fetchComments(postId: post.id)
                     }
                 }
-            } message: {
-                Text("このユーザーをブロックすると、このユーザーの投稿がフィードに表示されなくなります。")
-            }
-            // 通報完了アラート
-            .alert("通報しました", isPresented: $showingReportConfirmation) {
-                Button("OK") { }
-            } message: {
-                Text("ご報告ありがとうございます。内容を確認いたします。")
-            }
+                .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
+                    Button("削除", role: .destructive) {
+                        Task {
+                            let success = await viewModel.deletePost(post)
+                            if success { dismiss() }
+                        }
+                    }
+                    Button("キャンセル", role: .cancel) { }
+                } message: {
+                    Text("この投稿を削除しますか？この操作は取り消せません。")
+                }
+                .alert("削除に失敗しました", isPresented: Binding(
+                    get: { viewModel.deleteError != nil },
+                    set: { if !$0 { viewModel.deleteError = nil } }
+                )) {
+                    Button("OK") { viewModel.deleteError = nil }
+                } message: {
+                    Text(viewModel.deleteError ?? "")
+                }
+                .confirmationDialog("通報理由を選択", isPresented: $showingReportSheet) {
+                    ForEach(ReportReason.allCases, id: \.self) { reason in
+                        Button(reason.displayName) {
+                            selectedReportReason = reason
+                            Task { await submitReport(reason: reason) }
+                        }
+                    }
+                    Button("キャンセル", role: .cancel) { }
+                }
+                .alert("ユーザーをブロック", isPresented: $showingBlockConfirmation) {
+                    Button("キャンセル", role: .cancel) { }
+                    Button("ブロック", role: .destructive) {
+                        Task { await blockPostAuthor() }
+                    }
+                } message: {
+                    Text("このユーザーをブロックすると、このユーザーの投稿がフィードに表示されなくなります。")
+                }
+                .alert("通報しました", isPresented: $showingReportConfirmation) {
+                    Button("OK") { }
+                } message: {
+                    Text("ご報告ありがとうございます。内容を確認いたします。")
+                }
+                .confirmationDialog("保存オプション", isPresented: $showingSaveOptions) {
+                    saveOptionButtons
+                }
+                .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {
+                    Button("OK") { saveResultMessage = nil }
+                }
+                .sheet(isPresented: $showingShareSheet) {
+                    ImageShareSheet(images: shareImages)
+                }
+                .overlay { savingOverlay }
         }
         .navigationViewStyle(.stack)
     }
-    
+
+    @ViewBuilder
+    private var saveOptionButtons: some View {
+        Button("この画像を保存（編集済み）") {
+            Task { await saveImage(edited: true, all: false) }
+        }
+        if hasOriginalImages {
+            Button("この画像を保存（オリジナル）") {
+                Task { await saveImage(edited: false, all: false) }
+            }
+        }
+        if post.images.count > 1 {
+            Button("すべての画像を保存（編集済み）") {
+                Task { await saveImage(edited: true, all: true) }
+            }
+        }
+        if hasOriginalImages && (post.originalImages?.count ?? 0) > 1 {
+            Button("すべての画像を保存（オリジナル）") {
+                Task { await saveImage(edited: false, all: true) }
+            }
+        }
+        Button("キャンセル", role: .cancel) { }
+    }
+
+    @ViewBuilder
+    private var savingOverlay: some View {
+        if isSaving {
+            ZStack {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.2)
+                    Text("保存中...")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                }
+                .padding(24)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(DesignTokens.Colors.detailBackground.opacity(0.9))
+                )
+            }
+        }
+    }
+
+    private var postDetailContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let user = viewModel.author {
+                    authorSection(user: user)
+                } else if viewModel.isLoadingAuthor {
+                    HStack {
+                        ProgressView()
+                            .tint(.white)
+                        Text("投稿者情報を読み込み中...")
+                            .font(.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                    .padding()
+                }
+                if let firstImage = post.images.first {
+                    PostDetailImageView(imageInfo: firstImage)
+                }
+                postInfoSection
+            }
+        }
+    }
+
+    private var postInfoSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let caption = post.caption {
+                Text(caption)
+                    .font(.body)
+                    .foregroundColor(.white)
+            }
+            if let hashtags = post.hashtags, !hashtags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(hashtags, id: \.self) { hashtag in
+                            Text("#\(hashtag)")
+                                .font(.body)
+                                .foregroundColor(DesignTokens.Colors.skyBlue)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.white.opacity(0.1))
+                                .cornerRadius(12)
+                        }
+                    }
+                }
+            }
+            if let location = post.location {
+                HStack {
+                    Image(systemName: "location.fill")
+                        .foregroundColor(DesignTokens.Colors.skyBlue)
+                    if let city = location.city, let prefecture = location.prefecture {
+                        Text("\(prefecture) \(city)")
+                            .font(.body)
+                            .foregroundColor(.white)
+                    }
+                    if let landmark = location.landmark {
+                        Text("（\(landmark)）")
+                            .font(.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                if let skyType = post.skyType {
+                    Label(skyType.displayName, systemImage: "cloud.fill")
+                        .font(.body)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+                if let timeOfDay = post.timeOfDay {
+                    Label(timeOfDay.displayName, systemImage: "clock.fill")
+                        .font(.body)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+                if let colorTemperature = post.colorTemperature {
+                    Label("\(colorTemperature)K", systemImage: "thermometer")
+                        .font(.body)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+            }
+            // いいね・コメント数
+            HStack(spacing: 24) {
+                Button {
+                    let impact = UIImpactFeedbackGenerator(style: .light)
+                    impact.impactOccurred()
+                    Task { await likeManager.toggleLike(post: post) }
+                } label: {
+                    Label(
+                        "\(likeManager.likeCount(for: post))",
+                        systemImage: likeManager.isLiked(post.id) ? "heart.fill" : "heart"
+                    )
+                    .font(.headline)
+                    .foregroundColor(likeManager.isLiked(post.id) ? DesignTokens.Colors.softPink : DesignTokens.Colors.textSecondary)
+                    .animation(.easeInOut(duration: 0.2), value: likeManager.isLiked(post.id))
+                }
+                .buttonStyle(.plain)
+
+                Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
+                    .font(.headline)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+            }
+
+            // コメントセクション
+            CommentSection(
+                postId: post.id,
+                postUserId: post.userId,
+                commentViewModel: commentViewModel,
+                commentText: $commentText
+            )
+        }
+        .padding()
+    }
+
+    @ToolbarContentBuilder
+    private var postDetailToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button("閉じる") {
+                dismiss()
+            }
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Menu {
+                Button {
+                    showingSaveOptions = true
+                } label: {
+                    Label("写真に保存", systemImage: "square.and.arrow.down")
+                }
+                Button {
+                    Task { await shareCurrentImage() }
+                } label: {
+                    Label("共有", systemImage: "square.and.arrow.up")
+                }
+                Divider()
+                if viewModel.isOwnPost(post) {
+                    Button(role: .destructive) {
+                        showingDeleteConfirmation = true
+                    } label: {
+                        Label("投稿を削除", systemImage: "trash")
+                    }
+                    Divider()
+                }
+                Button(role: .destructive) {
+                    showingReportSheet = true
+                } label: {
+                    Label("この投稿を通報", systemImage: "flag")
+                }
+                Button(role: .destructive) {
+                    showingBlockConfirmation = true
+                } label: {
+                    Label("このユーザーをブロック", systemImage: "hand.raised")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+        }
+    }
+
+    // MARK: - Save / Share Methods
+
+    private func saveImage(edited: Bool, all: Bool) async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            let urlStrings: [String]
+            if edited {
+                urlStrings = all ? post.images.map(\.url) : [post.images.first?.url].compactMap { $0 }
+            } else {
+                let originals = post.originalImages ?? []
+                urlStrings = all ? originals.map(\.url) : [originals.first?.url].compactMap { $0 }
+            }
+
+            let savedCount = try await downloadService.downloadAndSaveImages(from: urlStrings)
+            saveResultMessage = savedCount == 1 ? "画像を保存しました" : "\(savedCount)枚の画像を保存しました"
+            showingSaveResult = true
+        } catch {
+            saveResultMessage = error.localizedDescription
+            showingSaveResult = true
+        }
+    }
+
+    private func shareCurrentImage() async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            guard let urlString = post.images.first?.url else {
+                saveResultMessage = "共有する画像がありません"
+                showingSaveResult = true
+                return
+            }
+            let image = try await downloadService.downloadImage(from: urlString)
+            shareImages = [image]
+            showingShareSheet = true
+        } catch {
+            saveResultMessage = error.localizedDescription
+            showingSaveResult = true
+        }
+    }
+
     /// 通報を送信（ViewModelに委譲）
     private func submitReport(reason: ReportReason) async {
         await viewModel.submitReport(post: post, reason: reason)
@@ -612,12 +823,13 @@ struct PostDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(user.displayName ?? "ユーザー")
                     .font(.headline)
+                    .foregroundColor(.white)
             }
-            
+
             Spacer()
         }
         .padding()
-        .background(Color(UIColor.secondarySystemBackground))
+        .background(DesignTokens.Colors.detailCardBackground)
         .cornerRadius(12)
     }
 }

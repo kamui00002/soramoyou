@@ -519,8 +519,41 @@ class ProfileViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Delete Post
+
+    /// 投稿を削除する（自分の投稿のみ）
+    /// - Parameter post: 削除する投稿
+    func deletePost(_ post: Post) async {
+        guard let userId = authService.currentUser()?.id else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            // Firestoreから投稿を削除（postsCountもデクリメント）
+            try await RetryableOperation.executeIfRetryable {
+                try await self.firestoreService.deletePost(postId: post.id, userId: userId)
+            }
+
+            // Firebase Storageから画像を並列削除（ベストエフォート）
+            await storageService.deletePostImages(post)
+
+            // ローカルの投稿配列からも削除
+            userPosts.removeAll { $0.id == post.id }
+
+            // postsCountをローカルでも更新
+            if var updatedUser = user {
+                updatedUser.postsCount = max(0, updatedUser.postsCount - 1)
+                user = updatedUser
+            }
+        } catch {
+            ErrorHandler.logError(error, context: "ProfileViewModel.deletePost", userId: userId)
+            errorMessage = error.userFriendlyMessage
+        }
+    }
+
     // MARK: - Edit Tools Management
-    
+
     /// 編集装備の順序を更新（Firestoreに保存）
     func updateEditTools() async {
         guard let userId = userId else {
