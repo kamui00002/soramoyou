@@ -186,7 +186,12 @@ final class FilterGraphBuilder {
         }
 
         // 24. iOS 18+ HDR トーンマッピング（Display P3 出力時に HDR 輝度を抑制）
-        if #available(iOS 18.0, *) {
+        //
+        // 🔧 2026-04-24 修正 (コードレビュー M6):
+        // ACES filmic カーブは HDR 入力の EDR ヘッドルーム圧縮を前提としたトーンマップ。
+        // SDR 画像にも適用すると中間グレーがわずかに持ち上がり、ハイライトが抑えられる
+        // 「フィルム風」効果が常時かかってしまう。`targetDynamicRange == .hdr` のときのみ適用する。
+        if recipe.targetDynamicRange == .hdr, #available(iOS 18.0, *) {
             img = applyHDRToneMapping(to: img)
         }
 
@@ -545,23 +550,28 @@ final class FilterGraphBuilder {
     }
 
     // ── かすみの除去 ──
-    // Phase 1 #J: CIFogEffect は CIFilterBuiltins に型安全 API が存在しないため
-    // 文字列キーのまま維持（変更するとランタイムで入力キー mismatch を起こすリスク）。
-    // Grain / DoubleExposure 側は型安全 API に移行済み。
+    //
+    // 🔧 2026-04-24 修正 (コードレビュー M4):
+    // 旧実装は CIFogEffect に負値の inputAmount を渡して「霧除去」として使っていたが、
+    // Apple 公式仕様では CIFogEffect は霧を「追加」するフィルタであり、負値の扱いは
+    // 未ドキュメント挙動。iOS バージョンアップで 0 クランプされると silent に効かなく
+    // なるリスクがあったため、CIColorControls（コントラスト + 彩度） + わずかな露出補正
+    // の合成に置き換える。全 iOS バージョンで動作が保証され、挙動も予測可能。
     private static func applyDehaze(normalized v: Double, to image: CIImage) -> CIImage {
         guard abs(v) > 0.01 else { return image }
-        if #available(iOS 15.0, *) {
-            let f = CIFilter(name: "CIFogEffect")
-            f?.setValue(image, forKey: kCIInputImageKey)
-            f?.setValue(-Float(v * 0.8), forKey: "inputAmount")
-            return f?.outputImage ?? image
-        } else {
-            let f = CIFilter.colorControls()
-            f.inputImage  = image
-            f.contrast    = Float(1.0 + v * 0.3)
-            f.saturation  = Float(1.0 + v * 0.2)
-            return f.outputImage ?? image
-        }
+
+        // Step 1: コントラストと彩度を持ち上げる（霧っぽさの主因を除去）
+        let cc = CIFilter.colorControls()
+        cc.inputImage  = image
+        cc.contrast    = Float(1.0 + v * 0.4)
+        cc.saturation  = Float(1.0 + v * 0.25)
+        guard let step1 = cc.outputImage else { return image }
+
+        // Step 2: 露出を微調整（霧を剥がすと全体が明るくなりすぎる傾向があるので抑制）
+        let ev = CIFilter.exposureAdjust()
+        ev.inputImage = step1
+        ev.ev         = Float(-v * 0.3)
+        return ev.outputImage ?? step1
     }
 
     // ── グレイン ──
