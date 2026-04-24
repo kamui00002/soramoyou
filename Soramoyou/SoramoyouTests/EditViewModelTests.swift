@@ -256,6 +256,40 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isEditingRealtime)
     }
 
+    /// 🔧 H2 回帰テスト:
+    /// スライダー操作 (editSettings 経由の書き込み) をしても、EditSettings に存在しない
+    /// toneCurvePoints / targetDynamicRange / cropRectNorm が脱落しないことを検証する。
+    /// これらは EditRecipe → EditSettings 変換で失われるため、setter 側で明示的に保全する
+    /// 必要がある (コードレビュー H2)。
+    func testEditSettingsSetterPreservesRecipeOnlyFields() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        // 事前条件: recipe-only なフィールドを手動でセット
+        var curve = ToneCurvePoints()
+        curve.point0 = CurvePoint(x: 0.0, y: 0.05)
+        curve.point1 = CurvePoint(x: 0.25, y: 0.2)
+        curve.point2 = CurvePoint(x: 0.5, y: 0.5)
+        curve.point3 = CurvePoint(x: 0.75, y: 0.8)
+        curve.point4 = CurvePoint(x: 1.0, y: 0.95)
+        viewModel.editRecipe.toneCurvePoints = curve
+        viewModel.editRecipe.targetDynamicRange = .hdr
+        viewModel.editRecipe.cropRectNorm = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+
+        // スライダー操作をシミュレート (editSettings.setValue 経由 → 内部で setter 発火)
+        viewModel.setToolValue(0.3, for: .brightness)
+        viewModel.setToolValue(-0.2, for: .contrast)
+        viewModel.setToolValue(0.5, for: .exposure)
+
+        // recipe-only フィールドが保持されていること
+        XCTAssertNotNil(viewModel.editRecipe.toneCurvePoints, "toneCurvePoints が脱落している")
+        XCTAssertEqual(viewModel.editRecipe.toneCurvePoints?.point1.y ?? -1, 0.2, accuracy: 0.0001)
+        XCTAssertEqual(viewModel.editRecipe.targetDynamicRange, DynamicRange.hdr)
+        XCTAssertEqual(viewModel.editRecipe.cropRectNorm?.origin.x ?? -1, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(viewModel.editRecipe.cropRectNorm?.width ?? -1, 0.8, accuracy: 0.0001)
+    }
+
     func testLoadEquippedToolsWithoutUser() async {
         // Given
         viewModel = EditViewModel(
@@ -289,43 +323,14 @@ final class EditViewModelTests: XCTestCase {
 
 class MockImageService: ImageServiceProtocol {
     var applyFilterCalled = false
-    var applyEditToolCalled = false
     var generatePreviewCalled = false
+    /// 旧 applyEditTool/applyEditSettings 呼び出し痕跡テスト用の互換フラグ。
+    /// 現行実装では applyEditRecipe が呼ばれたときに true になる。
     var applyEditSettingsCalled = false
-    
+
     func applyFilter(_ filter: FilterType, to image: UIImage) async throws -> UIImage {
         applyFilterCalled = true
         return image
-    }
-    
-    func applyEditTool(_ tool: EditTool, value: Float, to image: UIImage) async throws -> UIImage {
-        applyEditToolCalled = true
-        return image
-    }
-    
-    func applyEditSettings(_ settings: EditSettings, to image: UIImage) async throws -> UIImage {
-        applyEditSettingsCalled = true
-        return image
-    }
-    
-    func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
-        generatePreviewCalled = true
-        return image
-    }
-
-    func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
-        generatePreviewCalled = true
-        return image
-    }
-
-    func generatePreviewFromCIImage(_ ciImage: CIImage, edits: EditSettings) -> UIImage? {
-        generatePreviewCalled = true
-        // テスト用: CIImageから1x1のUIImageを返す
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
-            return nil
-        }
-        return UIImage(cgImage: cgImage)
     }
 
     func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage {
