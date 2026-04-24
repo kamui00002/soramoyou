@@ -133,6 +133,20 @@ final class PhotoKitAdapter {
 
         let useHDR = recipe.targetDynamicRange == .hdr
 
+        // ultrareview bug_006 / M2 修正:
+        // performChanges のクロージャは非 throwing のため、内部 catch で `return` しても
+        // 外側の `try await` に例外が伝搬せず silent data loss になる。
+        // クロージャ内のエラーを保持し、performChanges 完了後に throw する。
+        //
+        // `@Sendable` クロージャからローカル `var` を直接キャプチャすると Swift 6 strict
+        // concurrency でエラーになるため、参照型のボックスを使って境界を越える。
+        // `try await performChanges` が完了するまで呼び出し側はサスペンドしているので
+        // 実行時のデータ競合は起きない（@unchecked Sendable として安全）。
+        final class ErrorBox: @unchecked Sendable {
+            var value: Error?
+        }
+        let errorBox = ErrorBox()
+
         try await PHPhotoLibrary.shared().performChanges {
             let output = PHContentEditingOutput(contentEditingInput: input)
             let outputURL = output.renderedContentURL
@@ -173,6 +187,7 @@ final class PhotoKitAdapter {
                 }
             } catch {
                 logger.error("レンダ済み画像の書き出し失敗: \(error.localizedDescription, privacy: .public)")
+                errorBox.value = error
                 return
             }
 
@@ -180,6 +195,10 @@ final class PhotoKitAdapter {
 
             let changeRequest = PHAssetChangeRequest(for: asset)
             changeRequest.contentEditingOutput = output
+        }
+
+        if errorBox.value != nil {
+            throw PhotoKitAdapterError.renderFailed
         }
     }
 

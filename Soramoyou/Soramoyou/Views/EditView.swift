@@ -247,9 +247,14 @@ struct EditView: View {
     }
 
     /// 切り取り編集モードのプレビュー（クロップ前の画像 + ドラッグ可能な矩形オーバーレイ）
+    ///
+    /// 🔧 2026-04-24 修正 (ultrareview bug_003):
+    /// currentImage ではなく currentImageForCrop（applyTransform 適用済み）を使う。
+    /// こうしないと回転・反転を行った後にトリミングすると、UI で選んだ領域と最終出力で
+    /// 切り出される領域がまったく違う場所になる。
     @ViewBuilder
     private var cropEditorPreview: some View {
-        if let image = viewModel.currentImage {
+        if let image = viewModel.currentImageForCrop {
             GeometryReader { geo in
                 cropEditorBody(image: image, geoSize: geo.size)
             }

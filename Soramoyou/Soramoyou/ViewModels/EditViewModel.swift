@@ -222,6 +222,18 @@ class EditViewModel: ObservableObject {
         guard currentImageIndex < originalImages.count else { return nil }
         return originalImages[currentImageIndex]
     }
+
+    /// 切り取り UI 用: 回転・反転適用済みの表示画像。
+    ///
+    /// 🔧 2026-04-24 修正 (ultrareview bug_003):
+    /// generateFinalImage() は applyTransform(回転・反転) → applyCrop の順で適用するため、
+    /// 切り取り UI が未変換画像を表示していると crop UI の矩形と最終出力の切り出し領域が
+    /// 座標系レベルで一致しない (90°回転後に crop すると意図と全く違う領域が切り出される)。
+    /// UI 表示側も applyTransform 適用後の画像を使うことで、UI と出力の一致を保証する。
+    var currentImageForCrop: UIImage? {
+        guard let image = currentImage else { return nil }
+        return applyTransform(to: image)
+    }
     
     /// 次の画像に切り替え
     func nextImage() {

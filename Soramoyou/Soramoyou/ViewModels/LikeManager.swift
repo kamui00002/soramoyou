@@ -63,6 +63,10 @@ class LikeManager: ObservableObject {
         // Firestore に反映
         do {
             _ = try await firestoreService.toggleLike(postId: postId, userId: userId)
+            // サーバー側で likesCount が更新済みのため、ローカル調整値は用済み。
+            // これを残すと次回 pull-to-refresh で Post.likesCount（サーバー最新値）+ adjustment となり
+            // 二重カウントされる（ultrareview bug_001）。
+            likeCountAdjustments.removeValue(forKey: postId)
         } catch {
             // エラー時にリバート
             if wasLiked {
@@ -86,6 +90,11 @@ class LikeManager: ObservableObject {
             let likedIds = try await firestoreService.batchCheckLikeStatus(postIds: postIds, userId: userId)
             // 既存のセットにマージ（ページネーションで追加読み込み時に上書きしない）
             likedPostIds.formUnion(likedIds)
+            // サーバー最新値が Post.likesCount として渡ってくる前提のため、
+            // refresh 対象の postId に残っている調整値は古い（二重カウント源）。破棄する。
+            for postId in postIds {
+                likeCountAdjustments.removeValue(forKey: postId)
+            }
         } catch {
             ErrorHandler.logError(error, context: "LikeManager.checkLikeStatus", userId: userId)
         }

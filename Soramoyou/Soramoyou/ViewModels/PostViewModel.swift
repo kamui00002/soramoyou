@@ -219,7 +219,7 @@ class PostViewModel: ObservableObject {
             }
 
             // 2. オリジナル画像をアップロード（ユーザーが選択した場合のみ）
-            var originalImageURLs: [(url: String, thumbnail: String?, width: Int, height: Int)]? = nil
+            var originalImageURLs: [UploadedOriginalImage]? = nil
             if saveOriginalImages && !selectedImages.isEmpty {
                 originalImageURLs = try await RetryableOperation.executeIfRetryable(
                     operationName: "PostViewModel.uploadOriginalImages"
@@ -257,7 +257,11 @@ class PostViewModel: ObservableObject {
     }
     
     /// 画像をアップロード
-    private func uploadImages() async throws -> [(url: String, thumbnail: String?, width: Int, height: Int)] {
+    ///
+    /// 🔧 2026-04-24 修正 (ultrareview bug_002):
+    /// アップロード時の Storage パスを返すようにし、Post.images[].storagePath として
+    /// Firestore に永続化する。投稿削除時に URL から不正なパスを組み立てる問題を解消。
+    private func uploadImages() async throws -> [UploadedImage] {
         guard let userId = userId else {
             throw PostViewModelError.userNotAuthenticated
         }
@@ -265,7 +269,7 @@ class PostViewModel: ObservableObject {
         // 配列のスナップショットを取得（async待機中の変更を防ぐ）
         let imagesToUpload = editedImages
 
-        var imageURLs: [(url: String, thumbnail: String?, width: Int, height: Int)] = []
+        var uploaded: [UploadedImage] = []
         let totalImages = Double(imagesToUpload.count)
 
         // visibility に基づいてサブパスを決定（storage.rules に合わせる）
@@ -297,15 +301,18 @@ class PostViewModel: ObservableObject {
 
             // サムネイルをアップロード（storage.rules のパス形式: thumbnails/{userId}/{visibility}/{imageId}）
             let thumbnailBasePath = "\(userId)/\(visibilityPath)/\(imageId)_thumb.jpg"
+            let thumbnailFullPath = "thumbnails/\(thumbnailBasePath)"
             let thumbnailURL = try await storageService.uploadThumbnail(resizedImage, path: thumbnailBasePath)
-            uploadedThumbnailURLs.append("thumbnails/\(thumbnailBasePath)")
+            uploadedThumbnailURLs.append(thumbnailFullPath)
 
             // サイズ情報もスナップショット時点で収集
-            imageURLs.append((
+            uploaded.append(UploadedImage(
                 url: imageURL.absoluteString,
                 thumbnail: thumbnailURL.absoluteString,
                 width: Int(image.size.width),
-                height: Int(image.size.height)
+                height: Int(image.size.height),
+                storagePath: imagePath,
+                thumbnailStoragePath: thumbnailFullPath
             ))
 
             // 進捗を更新（オリジナル画像保存時は70%まで、保存しない場合は90%まで）
@@ -313,11 +320,11 @@ class PostViewModel: ObservableObject {
             uploadProgress = Double(index + 1) / totalImages * progressMax
         }
 
-        return imageURLs
+        return uploaded
     }
 
     /// オリジナル画像をアップロード
-    private func uploadOriginalImages() async throws -> [(url: String, thumbnail: String?, width: Int, height: Int)] {
+    private func uploadOriginalImages() async throws -> [UploadedOriginalImage] {
         guard let userId = userId else {
             throw PostViewModelError.userNotAuthenticated
         }
@@ -325,7 +332,7 @@ class PostViewModel: ObservableObject {
         // 配列のスナップショットを取得（async待機中の変更を防ぐ）
         let imagesToUpload = selectedImages
 
-        var originalURLs: [(url: String, thumbnail: String?, width: Int, height: Int)] = []
+        var uploaded: [UploadedOriginalImage] = []
         let totalImages = Double(imagesToUpload.count)
 
         // visibility に基づいてサブパスを決定
@@ -353,50 +360,54 @@ class PostViewModel: ObservableObject {
             uploadedOriginalImageURLs.append(imagePath)
 
             // サイズ情報もスナップショット時点で収集
-            originalURLs.append((
+            uploaded.append(UploadedOriginalImage(
                 url: imageURL.absoluteString,
-                thumbnail: nil,
                 width: Int(image.size.width),
-                height: Int(image.size.height)
+                height: Int(image.size.height),
+                storagePath: imagePath
             ))
 
             // 進捗を更新（70% 〜 90%）
             uploadProgress = 0.7 + (Double(index + 1) / totalImages * 0.2)
         }
 
-        return originalURLs
+        return uploaded
     }
 
     /// 投稿データを作成
     private func createPost(
-        imageURLs: [(url: String, thumbnail: String?, width: Int, height: Int)],
-        originalImageURLs: [(url: String, thumbnail: String?, width: Int, height: Int)]? = nil
+        imageURLs: [UploadedImage],
+        originalImageURLs: [UploadedOriginalImage]? = nil
     ) throws -> Post {
         guard let userId = userId else {
             throw PostViewModelError.userNotAuthenticated
         }
 
         // ImageInfo配列を作成（アップロード時に収集したサイズ情報を使用）
-        let imageInfos = imageURLs.enumerated().map { index, urls in
+        let imageInfos = imageURLs.enumerated().map { index, uploaded in
             ImageInfo(
-                url: urls.url,
-                thumbnail: urls.thumbnail,
-                width: urls.width,
-                height: urls.height,
-                order: index
+                url: uploaded.url,
+                thumbnail: uploaded.thumbnail,
+                width: uploaded.width,
+                height: uploaded.height,
+                order: index,
+                storagePath: uploaded.storagePath,
+                thumbnailStoragePath: uploaded.thumbnailStoragePath
             )
         }
 
         // オリジナル画像のImageInfo配列を作成（オプション）
         var originalImageInfos: [ImageInfo]? = nil
         if let originalURLs = originalImageURLs {
-            originalImageInfos = originalURLs.enumerated().map { index, urls in
+            originalImageInfos = originalURLs.enumerated().map { index, uploaded in
                 ImageInfo(
-                    url: urls.url,
-                    thumbnail: urls.thumbnail,
-                    width: urls.width,
-                    height: urls.height,
-                    order: index
+                    url: uploaded.url,
+                    thumbnail: nil,
+                    width: uploaded.width,
+                    height: uploaded.height,
+                    order: index,
+                    storagePath: uploaded.storagePath,
+                    thumbnailStoragePath: nil
                 )
             }
         }
@@ -525,6 +536,27 @@ struct ExtractedImageInfo {
     let skyColors: [String]
     let colorTemperature: Int?
     let skyType: SkyType?
+}
+
+// MARK: - アップロード結果 Value Object
+
+/// 編集済み本体画像のアップロード結果。
+/// Storage パスを保持することで、投稿削除時に URL から不正なパスを組み立てる問題を回避する。
+struct UploadedImage {
+    let url: String
+    let thumbnail: String?
+    let width: Int
+    let height: Int
+    let storagePath: String
+    let thumbnailStoragePath: String
+}
+
+/// オリジナル画像（編集前）のアップロード結果。サムネイル生成は行わない。
+struct UploadedOriginalImage {
+    let url: String
+    let width: Int
+    let height: Int
+    let storagePath: String
 }
 
 // MARK: - PostViewModelError
