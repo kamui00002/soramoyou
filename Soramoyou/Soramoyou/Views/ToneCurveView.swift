@@ -4,6 +4,18 @@
 //  ToneCurveView.swift
 //  Soramoyou
 //
+// 🔧 2026-04-26 修正:
+//   旧実装は各ハンドルに `.position(screenPt) → .contentShape(Circle().size(28x28))`
+//   の順で modifier を適用していた。`.position` は view を「親と同じサイズで埋める
+//   wrapper」に変換するため、後続の `.contentShape` が指定する 28x28 円は親の左上
+//   (0,0) を中心に登録され、screenPt 上のタップを一切拾わない壊れ方をしていた
+//   （5 個のハンドルすべてが原点に重なった当たり判定を持つ状態）。
+//
+//   `.position × .contentShape` の脆い相互作用を避けるため、ハンドル本体は純粋な
+//   視覚要素（`.allowsHitTesting(false)`）にして、ZStack 全体に 1 つの DragGesture
+//   を貼り、ドラッグ開始時に最近傍ハンドルを検出してロックするロバストなパターンに
+//   置き換えた。
+//
 
 import SwiftUI
 
@@ -24,8 +36,8 @@ struct ToneCurveView: View {
 
     // MARK: - Constants
 
-    /// タッチ可能エリアの半径（pts）
-    private let handleRadius: CGFloat = 14
+    /// タッチ可能な最大半径（pts）。この距離以内にある最も近いハンドルがドラッグ対象になる。
+    private let handleRadius: CGFloat = 22
     /// 操作ハンドルの描画半径（pts）
     private let dotRadius: CGFloat = 6
     /// グリッド分割数
@@ -41,9 +53,8 @@ struct ToneCurveView: View {
     var body: some View {
         GeometryReader { geo in
             let size = min(geo.size.width, geo.size.height)
-            let frame = CGSize(width: size, height: size)
 
-            ZStack {
+            ZStack(alignment: .topLeading) {
                 // グリッド背景
                 gridView(size: size)
 
@@ -54,33 +65,20 @@ struct ToneCurveView: View {
                 curveShape(size: size)
                     .stroke(Color.white, lineWidth: 2)
 
-                // 制御点ハンドル
+                // 制御点ハンドル（純粋な視覚要素。ジェスチャは下の親 ZStack に集約）
                 ForEach(0..<5, id: \.self) { i in
                     let pt = point(at: i)
                     let screenPt = toScreen(pt, size: size)
 
                     Circle()
                         .fill(draggingIndex == i ? Color.yellow : Color.white)
-                        .frame(width: dotRadius * 2, height: dotRadius * 2)
                         .overlay(
                             Circle()
                                 .stroke(Color.black.opacity(0.5), lineWidth: 1)
                         )
+                        .frame(width: dotRadius * 2, height: dotRadius * 2)
                         .position(screenPt)
-                        // 当たり判定は handleRadius の円
-                        .contentShape(Circle().size(CGSize(width: handleRadius * 2, height: handleRadius * 2)))
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    draggingIndex = i
-                                    let normalized = toNormalized(value.location, size: size)
-                                    updatePoint(at: i, to: normalized)
-                                }
-                                .onEnded { _ in
-                                    draggingIndex = nil
-                                    onEditEnd?()
-                                }
-                        )
+                        .allowsHitTesting(false)
                 }
 
                 // リセットボタン
@@ -109,6 +107,41 @@ struct ToneCurveView: View {
             .frame(width: size, height: size)
             .background(Color.black.opacity(0.4))
             .cornerRadius(8)
+            // ZStack 全体を当たり判定領域にして、最近傍ハンドル検出方式でドラッグを処理する
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if draggingIndex == nil {
+                            // 最初の接触: handleRadius 以内で最も近いハンドルをロック
+                            var nearestIndex: Int? = nil
+                            var nearestDistance: CGFloat = .greatestFiniteMagnitude
+                            for idx in 0..<5 {
+                                let p = toScreen(point(at: idx), size: size)
+                                let d = hypot(value.location.x - p.x, value.location.y - p.y)
+                                if d < nearestDistance {
+                                    nearestDistance = d
+                                    nearestIndex = idx
+                                }
+                            }
+                            guard let nearest = nearestIndex,
+                                  nearestDistance <= handleRadius else {
+                                return  // どのハンドルにも近くない
+                            }
+                            draggingIndex = nearest
+                        }
+                        if let i = draggingIndex {
+                            let normalized = toNormalized(value.location, size: size)
+                            updatePoint(at: i, to: normalized)
+                        }
+                    }
+                    .onEnded { _ in
+                        if draggingIndex != nil {
+                            draggingIndex = nil
+                            onEditEnd?()
+                        }
+                    }
+            )
         }
         .aspectRatio(1, contentMode: .fit)
     }
@@ -198,7 +231,8 @@ struct ToneCurveView: View {
 
     /// ドラッグで制御点を更新（x 軸は固定・ソート維持、y 軸のみ変化）
     private func updatePoint(at index: Int, to normalized: CurvePoint) {
-        // x 軸は固定（制御点を移動させると補間が破綻するため）
+        // x 軸は固定（制御点を移動させると補間が破綻するため）。
+        // 両端 (0, 4) も含めて x は常に元の値で保持する。
         // y 軸のみ 0...1 にクランプ
         let newY = max(0.0, min(1.0, normalized.y))
         let originalX = point(at: index).x
