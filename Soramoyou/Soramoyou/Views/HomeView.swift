@@ -749,7 +749,7 @@ struct PostDetailView: View {
             saveResultMessage = savedCount == 1 ? "画像を保存しました" : "\(savedCount)枚の画像を保存しました"
             showingSaveResult = true
         } catch {
-            saveResultMessage = error.localizedDescription
+            saveResultMessage = error.userFriendlyMessage
             showingSaveResult = true
         }
     }
@@ -768,7 +768,7 @@ struct PostDetailView: View {
             shareImages = [image]
             showingShareSheet = true
         } catch {
-            saveResultMessage = error.localizedDescription
+            saveResultMessage = error.userFriendlyMessage
             showingSaveResult = true
         }
     }

@@ -7,6 +7,12 @@
 
 import SwiftUI
 import MapKit
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "com.soramoyou.photo-editor",
+    category: "PostInfoView"
+)
 
 struct PostInfoView: View {
     @StateObject private var viewModel: PostViewModel
@@ -798,7 +804,7 @@ struct PostInfoView: View {
             
             viewModel.setLocation(locationData)
         } catch {
-            viewModel.errorMessage = error.localizedDescription
+            viewModel.errorMessage = error.userFriendlyMessage
         }
     }
 }
@@ -960,7 +966,7 @@ struct MapView: View {
             searchResults = results
         } catch {
             // エラーハンドリング（簡易版）
-            print("ランドマーク検索エラー: \(error)")
+            logger.error("ランドマーク検索エラー: \(error.localizedDescription)")
         }
     }
 }

@@ -150,7 +150,7 @@ struct GalleryView: View {
             saveResultMessage = "画像を保存しました"
             showingSaveResult = true
         } catch {
-            saveResultMessage = error.localizedDescription
+            saveResultMessage = error.userFriendlyMessage
             showingSaveResult = true
         }
     }
