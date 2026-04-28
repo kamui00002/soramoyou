@@ -98,7 +98,7 @@ serviceAccountKey.json
 # API Keys
 *.plist
 !Info.plist
-!GoogleService-Info.plist
+# !GoogleService-Info.plist  ← 削除: Firebase API key 漏洩防止のため git 管理から外す（93 行目で ignore 済）
 
 # Environment variables
 .env
