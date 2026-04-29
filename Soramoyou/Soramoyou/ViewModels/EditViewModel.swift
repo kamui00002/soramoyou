@@ -75,8 +75,22 @@ class EditViewModel: ObservableObject {
 
     // MARK: - Undo/Redo ☁️
 
-    /// 編集履歴マネージャー
-    @Published private var historyManager = EditHistoryManager()
+    /// 画像ごとの履歴マネージャー（historyManagers[i] が originalImages[i] に対応）
+    ///
+    /// 各画像で独立した Undo/Redo 履歴を持たせるため配列で管理する。
+    /// `class EditHistoryManager` は参照型なので、`historyManager` computed
+    /// property 経由でも push/undo/redo は配列要素に反映される。
+    @Published private var historyManagers: [EditHistoryManager] = []
+
+    /// 画像が空の状態（init 直後など）でアクセスされたときのフォールバック
+    private let fallbackHistoryManager = EditHistoryManager()
+
+    /// 現在の画像インデックスに対応する履歴マネージャー
+    private var historyManager: EditHistoryManager {
+        historyManagers.indices.contains(currentImageIndex)
+            ? historyManagers[currentImageIndex]
+            : fallbackHistoryManager
+    }
 
     /// Undo 可能かどうか（historyManager から直接参照）
     var canUndo: Bool { historyManager.canUndo }
@@ -85,6 +99,14 @@ class EditViewModel: ObservableObject {
 
     /// スライダーのドラッグ開始時のスナップショット（ドラッグ終了時に履歴へ積む）
     private var preDragSnapshot: EditorSnapshot?
+
+    // MARK: - 画像ごとの編集状態スロット ☁️
+
+    /// 各画像ごとに保存する編集状態（imageStates[i] が originalImages[i] に対応）
+    ///
+    /// 画像切替時に **現在の状態を保存 → 切替先の状態を復元** することで、
+    /// 1枚目に施した編集が2,3枚目に伝染しないようにする。
+    private var imageStates: [EditorSnapshot] = []
 
     private let imageService: ImageServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
@@ -127,7 +149,18 @@ class EditViewModel: ObservableObject {
         self.userId = userId
         self.imageService = imageService
         self.firestoreService = firestoreService
-        
+
+        // 画像ごとの編集状態スロットと履歴を初期化（画像枚数と1:1で対応）
+        let defaultSnapshot = EditorSnapshot(
+            recipe:              EditRecipe(),
+            rotationDegrees:     0,
+            isFlippedHorizontal: false,
+            isFlippedVertical:   false,
+            cropAspectRatio:     .free
+        )
+        self.imageStates = Array(repeating: defaultSnapshot, count: images.count)
+        self.historyManagers = images.map { _ in EditHistoryManager() }
+
         // 初期プレビューを生成（メモリリーク防止のため weak self を使用）
         if !images.isEmpty {
             Task { [weak self] in
@@ -208,13 +241,52 @@ class EditViewModel: ObservableObject {
     func setImages(_ images: [UIImage]) {
         originalImages = images
         currentImageIndex = 0
-        editRecipe = EditRecipe()   // 編集レシピをリセット
-        historyManager.clear()
+
+        // 現在の編集状態をリセット（1枚目用のクリーンな状態）
+        editRecipe          = EditRecipe()
+        rotationDegrees     = 0
+        isFlippedHorizontal = false
+        isFlippedVertical   = false
+        cropAspectRatio     = .free
+
+        // 画像ごとのスロットを再構築（既存スロットは破棄）
+        let defaultSnapshot = EditorSnapshot(
+            recipe:              EditRecipe(),
+            rotationDegrees:     0,
+            isFlippedHorizontal: false,
+            isFlippedVertical:   false,
+            cropAspectRatio:     .free
+        )
+        imageStates     = Array(repeating: defaultSnapshot, count: images.count)
+        historyManagers = images.map { _ in EditHistoryManager() }
+
         notifyHistoryChange()
         invalidateLowResCache()
         Task { [weak self] in
             await self?.generatePreview()
         }
+    }
+
+    // MARK: - 画像ごとの状態の保存・復元
+
+    /// 現在の編集状態を imageStates[currentImageIndex] に保存する
+    private func saveCurrentImageState() {
+        guard imageStates.indices.contains(currentImageIndex) else { return }
+        imageStates[currentImageIndex] = currentSnapshot
+    }
+
+    /// 指定インデックスの保存済みスナップショットを画面に復元する
+    private func restoreImageState(at index: Int) {
+        guard imageStates.indices.contains(index) else { return }
+        // 履歴通知のためコピーを取り、UI 状態をスナップショットへ揃える
+        let snap = imageStates[index]
+        editRecipe          = snap.recipe
+        rotationDegrees     = snap.rotationDegrees
+        isFlippedHorizontal = snap.isFlippedHorizontal
+        isFlippedVertical   = snap.isFlippedVertical
+        cropAspectRatio     = snap.cropAspectRatio
+        // 画像が変われば履歴マネージャーも切り替わるため、UI に通知
+        notifyHistoryChange()
     }
     
     /// 現在の画像を取得
@@ -238,7 +310,11 @@ class EditViewModel: ObservableObject {
     /// 次の画像に切り替え
     func nextImage() {
         guard currentImageIndex < originalImages.count - 1 else { return }
+        // 切替前に現在の編集状態を保存し、切替後にその画像の状態を復元することで
+        // 各画像が独立した編集パラメータを保持するようにする
+        saveCurrentImageState()
         currentImageIndex += 1
+        restoreImageState(at: currentImageIndex)
         invalidateLowResCache()
         Task { [weak self] in
             await self?.generatePreview()
@@ -248,7 +324,9 @@ class EditViewModel: ObservableObject {
     /// 前の画像に切り替え
     func previousImage() {
         guard currentImageIndex > 0 else { return }
+        saveCurrentImageState()
         currentImageIndex -= 1
+        restoreImageState(at: currentImageIndex)
         invalidateLowResCache()
         Task { [weak self] in
             await self?.generatePreview()
@@ -924,10 +1002,28 @@ class EditViewModel: ObservableObject {
         cachedLowResCIImage = nil
     }
 
-    /// 回転・反転を画像に適用
+    /// 回転・反転を画像に適用（現在の UI 状態を使用）
     private func applyTransform(to image: UIImage) -> UIImage {
+        applyTransform(
+            to: image,
+            rotation: rotationDegrees,
+            flipH: isFlippedHorizontal,
+            flipV: isFlippedVertical
+        )
+    }
+
+    /// 回転・反転を画像に適用（パラメータ明示版）
+    ///
+    /// 画像ごとに独立したパラメータで変換を適用する `generateFinalImages()` から
+    /// 利用するため、`self.*` を経由しない引数版を用意している。
+    private func applyTransform(
+        to image: UIImage,
+        rotation: Double,
+        flipH: Bool,
+        flipV: Bool
+    ) -> UIImage {
         // 回転も反転もない場合はそのまま返す
-        guard rotationDegrees != 0 || isFlippedHorizontal || isFlippedVertical else {
+        guard rotation != 0 || flipH || flipV else {
             return image
         }
 
@@ -946,16 +1042,16 @@ class EditViewModel: ObservableObject {
             // 反転を適用
             var scaleX: CGFloat = 1.0
             var scaleY: CGFloat = 1.0
-            if isFlippedHorizontal {
+            if flipH {
                 scaleX = -1.0
             }
-            if isFlippedVertical {
+            if flipV {
                 scaleY = -1.0
             }
             context.scaleBy(x: scaleX, y: scaleY)
 
             // 回転を適用
-            let radians = rotationDegrees * .pi / 180.0
+            let radians = rotation * .pi / 180.0
             context.rotate(by: CGFloat(radians))
 
             // 画像を描画
@@ -972,16 +1068,49 @@ class EditViewModel: ObservableObject {
 
     /// 最終的な編集済み画像を生成（全画像）
     /// EditRecipe を直接適用することで toneCurvePoints などを保全する
+    ///
+    /// 画像ごとに独立した編集パラメータを反映するため、現在編集中の画像の状態を
+    /// `imageStates` に保存してから、各 index のスナップショットを使ってループで
+    /// 適用する。
     func generateFinalImages() async throws -> [UIImage] {
+        // 現在画像の編集状態を imageStates へ保存（最新化）
+        saveCurrentImageState()
+
         var editedImages: [UIImage] = []
 
-        for image in originalImages {
-            let transformedImage = applyTransform(to: image)
-            let editedImage = try await imageService.applyEditRecipe(editRecipe, to: transformedImage)
+        for (index, image) in originalImages.enumerated() {
+            let snapshot: EditorSnapshot = imageStates.indices.contains(index)
+                ? imageStates[index]
+                : EditorSnapshot(
+                    recipe:              EditRecipe(),
+                    rotationDegrees:     0,
+                    isFlippedHorizontal: false,
+                    isFlippedVertical:   false,
+                    cropAspectRatio:     .free
+                )
+
+            let transformedImage = applyTransform(
+                to: image,
+                rotation: snapshot.rotationDegrees,
+                flipH:    snapshot.isFlippedHorizontal,
+                flipV:    snapshot.isFlippedVertical
+            )
+            let editedImage = try await imageService.applyEditRecipe(
+                snapshot.recipe,
+                to: transformedImage
+            )
             editedImages.append(editedImage)
         }
 
         return editedImages
+    }
+
+    /// 全画像分の最終的な編集レシピ（画像ごとの独立した EditRecipe）を取得する。
+    /// 投稿時に Firestore へ画像ごとの編集情報を保存する用途で利用する。
+    func currentEditRecipes() -> [EditRecipe] {
+        // 現在画像の編集状態を最新化した上で配列を返す
+        saveCurrentImageState()
+        return imageStates.map { $0.recipe }
     }
 
     /// 現在の画像の最終的な編集済み画像を生成
