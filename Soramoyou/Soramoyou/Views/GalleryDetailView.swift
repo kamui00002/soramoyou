@@ -64,6 +64,11 @@ struct GalleryDetailView: View {
                         editSettingsSection(editSettings: editSettings)
                     }
 
+                    // 外部アプリ（写真App等）の編集情報・撮影特性表示 ⭐️ Issue #4
+                    if hasAnyExternalEditInfo {
+                        externalEditInfoSection
+                    }
+
                     // 投稿情報
                     postInfoSection
 
@@ -375,6 +380,90 @@ struct GalleryDetailView: View {
                         )
                     )
             )
+        }
+    }
+
+    // MARK: - External Edit Info Section ⭐️ Issue #4
+
+    /// 投稿の画像群に1つでも外部編集情報があるか
+    private var hasAnyExternalEditInfo: Bool {
+        post.images.contains { $0.externalEditInfo != nil }
+    }
+
+    /// 写真Appや他社アプリ由来の編集情報・HDR/Live/Pano フラグ等を表示
+    private var externalEditInfoSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "photo.badge.checkmark")
+                    .foregroundColor(DesignTokens.Colors.skyBlue)
+                Text("撮影・外部編集情報")
+                    .font(.headline)
+                    .foregroundColor(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(post.images.enumerated()), id: \.offset) { index, info in
+                    if let ext = info.externalEditInfo {
+                        externalEditInfoRow(index: index, info: ext)
+                    }
+                }
+
+                // Apple 純正写真App編集の場合は、数値が取得不可な旨を注記
+                if post.images.contains(where: {
+                    $0.externalEditInfo?.formatIdentifier == "com.apple.photo"
+                }) {
+                    Text("※ iPhone「写真」アプリの調整値（露出 / コントラスト等）は Apple の API で公開されていないため、本アプリでは数値を取得できません。")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.55))
+                        .padding(.top, 4)
+                }
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(DesignTokens.Colors.detailCardBackground)
+            )
+        }
+    }
+
+    private func externalEditInfoRow(index: Int, info: ExternalEditInfo) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            // 複数枚の場合は何枚目かを示す
+            if post.images.count > 1 {
+                Text("画像\(index + 1)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                    .frame(width: 50, alignment: .leading)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                if let badge = info.badgeLabel {
+                    Label(badge, systemImage: "wand.and.stars")
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(DesignTokens.Colors.selectionAccent)
+                }
+                if !info.subtypeBadges.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(info.subtypeBadges, id: \.self) { sub in
+                            Text(sub)
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule()
+                                        .fill(DesignTokens.Colors.skyBlue.opacity(0.25))
+                                )
+                                .foregroundColor(.white)
+                        }
+                    }
+                }
+                if let date = info.creationDate {
+                    Text("撮影: \(date.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.6))
+                }
+            }
+            Spacer()
         }
     }
 

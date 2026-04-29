@@ -26,6 +26,10 @@ struct ImageInfo: Codable, Equatable {
     let storagePath: String?
     /// サムネイル画像の Firebase Storage パス。
     let thumbnailStoragePath: String?
+    /// PHAsset から取得した外部編集情報（写真Appで編集済みバッジ表示用）。 ⭐️
+    /// 写真ライブラリへのアクセス権限がない、または Camera Roll 以外のソースの
+    /// 場合は nil。
+    let externalEditInfo: ExternalEditInfo?
 
     init(
         url: String,
@@ -34,7 +38,8 @@ struct ImageInfo: Codable, Equatable {
         height: Int,
         order: Int,
         storagePath: String? = nil,
-        thumbnailStoragePath: String? = nil
+        thumbnailStoragePath: String? = nil,
+        externalEditInfo: ExternalEditInfo? = nil
     ) {
         self.url = url
         self.thumbnail = thumbnail
@@ -43,6 +48,7 @@ struct ImageInfo: Codable, Equatable {
         self.order = order
         self.storagePath = storagePath
         self.thumbnailStoragePath = thumbnailStoragePath
+        self.externalEditInfo = externalEditInfo
     }
 
     /// Firestoreドキュメントデータに変換
@@ -62,6 +68,9 @@ struct ImageInfo: Codable, Equatable {
         }
         if let thumbnailStoragePath = thumbnailStoragePath {
             data["thumbnailStoragePath"] = thumbnailStoragePath
+        }
+        if let externalEditInfo = externalEditInfo {
+            data["externalEditInfo"] = externalEditInfo.toFirestoreData()
         }
 
         return data
@@ -83,5 +92,10 @@ struct ImageInfo: Codable, Equatable {
         self.order = order
         self.storagePath = documentData["storagePath"] as? String
         self.thumbnailStoragePath = documentData["thumbnailStoragePath"] as? String
+        if let externalDict = documentData["externalEditInfo"] as? [String: Any] {
+            self.externalEditInfo = ExternalEditInfo(from: externalDict)
+        } else {
+            self.externalEditInfo = nil
+        }
     }
 }

@@ -29,10 +29,13 @@ struct PostInfoView: View {
         editedImages: [UIImage],
         editSettings: EditSettings,
         userId: String?,
+        externalEditInfos: [ExternalEditInfo?] = [],
         locationService: LocationServiceProtocol = LocationService()
     ) {
         let postViewModel = PostViewModel(userId: userId)
         postViewModel.setSelectedImages(images)
+        // 各画像の外部編集情報を保持（ギャラリーで写真Appバッジ表示用）⭐️ Issue #4
+        postViewModel.setExternalEditInfos(externalEditInfos)
         if !editedImages.isEmpty {
             postViewModel.setEditedImages(editedImages, editSettings: editSettings)
         } else {

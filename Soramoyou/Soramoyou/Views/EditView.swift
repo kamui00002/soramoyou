@@ -36,10 +36,17 @@ struct EditView: View {
 
     private let userId: String?
     private let originalImages: [UIImage]
+    /// 各画像の外部編集情報（写真Appバッジ表示用）⭐️ Issue #4
+    private let externalEditInfos: [ExternalEditInfo?]
 
-    init(images: [UIImage], userId: String?) {
+    init(
+        images: [UIImage],
+        userId: String?,
+        externalEditInfos: [ExternalEditInfo?] = []
+    ) {
         self.userId = userId
         self.originalImages = images
+        self.externalEditInfos = externalEditInfos
         _viewModel = StateObject(wrappedValue: EditViewModel(images: images, userId: userId))
     }
 
@@ -142,7 +149,8 @@ struct EditView: View {
                         images: originalImages,
                         editedImages: finalEditedImages.isEmpty ? [] : finalEditedImages,
                         editSettings: viewModel.editSettings,
-                        userId: userId
+                        userId: userId,
+                        externalEditInfos: externalEditInfos
                     )
                 }
                 .navigationViewStyle(.stack)

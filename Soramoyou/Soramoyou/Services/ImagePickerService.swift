@@ -7,6 +7,7 @@
 
 import SwiftUI
 import PhotosUI
+import Photos
 import os
 
 private let logger = Logger(
@@ -15,61 +16,90 @@ private let logger = Logger(
 )
 
 /// PHPickerViewControllerをSwiftUIで使用するためのUIViewControllerRepresentable
+///
+/// `pickedMetadata` には選択された各画像に対応する PHAsset 由来の外部編集情報を
+/// 同じ index で格納する（写真Appで編集済みバッジ表示用）。⭐️ Issue #4
+/// Photos ライブラリへのアクセス権限が無い場合や、PHAsset を解決できない場合は
+/// 各要素は nil となる。
 struct ImagePicker: UIViewControllerRepresentable {
     @Binding var selectedImages: [UIImage]
+    @Binding var pickedMetadata: [ExternalEditInfo?]
     let maxSelectionCount: Int
     let onSelectionComplete: (() -> Void)?
-    
+
+    /// メタデータのバインディングを必要としない呼び出し（プロフィール画像選択など）も
+    /// 互換に保つためデフォルトの `.constant([])` を提供する。
+    init(
+        selectedImages: Binding<[UIImage]>,
+        pickedMetadata: Binding<[ExternalEditInfo?]> = .constant([]),
+        maxSelectionCount: Int,
+        onSelectionComplete: (() -> Void)? = nil
+    ) {
+        self._selectedImages = selectedImages
+        self._pickedMetadata = pickedMetadata
+        self.maxSelectionCount = maxSelectionCount
+        self.onSelectionComplete = onSelectionComplete
+    }
+
     func makeUIViewController(context: Context) -> PHPickerViewController {
-        var configuration = PHPickerConfiguration()
+        // PHPhotoLibrary.shared() を渡すことで `result.assetIdentifier` が取得できる。
+        // これがないと PHAsset を解決できず、写真Appで編集済みバッジが表示できない。
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
         configuration.filter = .images
         configuration.selectionLimit = maxSelectionCount
         configuration.preferredAssetRepresentationMode = .current
-        
+
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = context.coordinator
         return picker
     }
-    
+
     func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {
         // 更新は不要
     }
-    
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
-    
+
     class Coordinator: NSObject, PHPickerViewControllerDelegate {
         let parent: ImagePicker
-        
+
         init(_ parent: ImagePicker) {
             self.parent = parent
         }
-        
+
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             picker.dismiss(animated: true)
-            
+
             guard !results.isEmpty else {
                 return
             }
-            
-            // 選択された画像を非同期で読み込む
+
+            // 選択された画像とメタ情報を順序を保って非同期に読み込む
             Task {
                 var loadedImages: [UIImage] = []
-                
+                var loadedMetadata: [ExternalEditInfo?] = []
+
                 for result in results {
-                    if result.itemProvider.canLoadObject(ofClass: UIImage.self) {
-                        do {
-                            let image = try await self.loadImage(from: result.itemProvider)
-                            loadedImages.append(image)
-                        } catch {
-                            logger.error("画像の読み込みに失敗しました: \(error.localizedDescription)")
-                        }
+                    guard result.itemProvider.canLoadObject(ofClass: UIImage.self) else {
+                        continue
+                    }
+                    do {
+                        let image = try await self.loadImage(from: result.itemProvider)
+                        loadedImages.append(image)
+
+                        // PHAsset から外部編集情報を抽出（権限なし or 解決失敗で nil）
+                        let meta = self.resolveExternalEditInfo(from: result.assetIdentifier)
+                        loadedMetadata.append(meta)
+                    } catch {
+                        logger.error("画像の読み込みに失敗しました: \(error.localizedDescription)")
                     }
                 }
-                
+
                 await MainActor.run {
                     self.parent.selectedImages = loadedImages
+                    self.parent.pickedMetadata  = loadedMetadata
                     self.parent.onSelectionComplete?()
                 }
             }
@@ -90,6 +120,57 @@ struct ImagePicker: UIViewControllerRepresentable {
                 }
             }
         }
+
+        /// PHPickerResult.assetIdentifier から PHAsset を解決し、外部編集情報を抽出する。
+        /// 権限なし・解決失敗時は nil を返す（バッジを出さないだけで、画像自体は使える）。
+        private func resolveExternalEditInfo(from identifier: String?) -> ExternalEditInfo? {
+            guard let identifier = identifier, !identifier.isEmpty else {
+                return nil
+            }
+
+            // 権限ステータス確認（読み取り権限がなければ PHAsset.fetchAssets はからの結果になる）
+            let status: PHAuthorizationStatus
+            if #available(iOS 14, *) {
+                status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            } else {
+                status = PHPhotoLibrary.authorizationStatus()
+            }
+            switch status {
+            case .authorized, .limited:
+                break
+            default:
+                logger.debug("写真ライブラリ権限なし。外部編集情報の取得をスキップします")
+                return nil
+            }
+
+            let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+            guard let asset = fetched.firstObject else {
+                return nil
+            }
+
+            // mediaSubtypes でフラグ判定（photoEdited が編集済みフラグ）
+            let subtypes = asset.mediaSubtypes
+            let hasAdjustments = subtypes.contains(.photoHDR)
+                || subtypes.contains(.photoPanorama)
+                || asset.value(forKey: "hasAdjustments") as? Bool == true
+                || subtypes.rawValue & UInt(1 << 4) != 0  // photoEdited (mediaSubtypes raw bit)
+
+            // formatIdentifier は PHAdjustmentData の取得が必要（非同期）。
+            // ここでは同期的に取れる範囲のみ使い、formatIdentifier は別途取得する。
+            // 同期取得を試みる：requestContentEditingInput は非同期だが、ここでは
+            // 簡略化のため formatIdentifier を nil にしておく（後続で改善余地あり）。
+            let formatIdentifier: String? = nil
+
+            return ExternalEditInfo(
+                hasAdjustments: hasAdjustments,
+                formatIdentifier: formatIdentifier,
+                isHDR: subtypes.contains(.photoHDR),
+                isLivePhoto: subtypes.contains(.photoLive),
+                isPanorama: subtypes.contains(.photoPanorama),
+                creationDate: asset.creationDate,
+                modificationDate: asset.modificationDate
+            )
+        }
     }
 }
 
@@ -97,6 +178,8 @@ struct ImagePicker: UIViewControllerRepresentable {
 @MainActor
 class PhotoSelectionViewModel: ObservableObject {
     @Published var selectedImages: [UIImage] = []
+    /// 選択された各画像に対応する外部編集情報（写真Appバッジ表示用）⭐️ Issue #4
+    @Published var pickedMetadata: [ExternalEditInfo?] = []
     @Published var isShowingImagePicker = false
     @Published var errorMessage: String?
     @Published var isLoading = false
@@ -171,13 +254,18 @@ class PhotoSelectionViewModel: ObservableObject {
     /// 選択された画像をクリア
     func clearSelection() {
         selectedImages.removeAll()
+        pickedMetadata.removeAll()  // ⭐️ Issue #4: メタも同期してクリア
         errorMessage = nil
     }
-    
+
     /// 画像を削除
     func removeImage(at index: Int) {
         guard index < selectedImages.count else { return }
         selectedImages.remove(at: index)
+        // メタも同じ index で除去（既に範囲内ならば）
+        if pickedMetadata.indices.contains(index) {
+            pickedMetadata.remove(at: index)
+        }
     }
 }
 

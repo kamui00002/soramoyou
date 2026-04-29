@@ -58,6 +58,7 @@ struct PostView: View {
             .sheet(isPresented: $viewModel.isShowingImagePicker) {
                 ImagePicker(
                     selectedImages: $viewModel.selectedImages,
+                    pickedMetadata: $viewModel.pickedMetadata,
                     maxSelectionCount: maxSelectionCount,
                     onSelectionComplete: {
                         viewModel.isShowingImagePicker = false
@@ -79,7 +80,8 @@ struct PostView: View {
             }) {
                 EditView(
                     images: viewModel.selectedImages,
-                    userId: authViewModel.currentUser?.id
+                    userId: authViewModel.currentUser?.id,
+                    externalEditInfos: viewModel.pickedMetadata
                 )
             }
         }

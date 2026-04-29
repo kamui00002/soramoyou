@@ -14,6 +14,10 @@ class PostViewModel: ObservableObject {
     @Published var selectedImages: [UIImage] = []
     @Published var editedImages: [UIImage] = []
     @Published var editSettings: EditSettings?
+    /// 各画像の外部編集情報（写真Appバッジ表示用）⭐️ Issue #4
+    /// 配列の index は selectedImages と対応する。Photos ライブラリ権限なしや
+    /// 解決失敗時は対応する要素が nil。
+    @Published var externalEditInfos: [ExternalEditInfo?] = []
     @Published var caption: String = ""
     @Published var hashtags: [String] = []
     @Published var location: Location?
@@ -69,6 +73,11 @@ class PostViewModel: ObservableObject {
     func setEditedImages(_ images: [UIImage], editSettings: EditSettings) {
         editedImages = images
         self.editSettings = editSettings
+    }
+
+    /// 各画像の外部編集情報を設定（PHAsset 由来のメタ情報）⭐️ Issue #4
+    func setExternalEditInfos(_ infos: [ExternalEditInfo?]) {
+        externalEditInfos = infos
     }
     
     // MARK: - Post Info Management
@@ -384,15 +393,20 @@ class PostViewModel: ObservableObject {
         }
 
         // ImageInfo配列を作成（アップロード時に収集したサイズ情報を使用）
-        let imageInfos = imageURLs.enumerated().map { index, uploaded in
-            ImageInfo(
+        // 外部編集情報は selectedImages と同じ index で externalEditInfos から取得 ⭐️ Issue #4
+        let imageInfos = imageURLs.enumerated().map { index, uploaded -> ImageInfo in
+            let externalEditInfo = externalEditInfos.indices.contains(index)
+                ? externalEditInfos[index]
+                : nil
+            return ImageInfo(
                 url: uploaded.url,
                 thumbnail: uploaded.thumbnail,
                 width: uploaded.width,
                 height: uploaded.height,
                 order: index,
                 storagePath: uploaded.storagePath,
-                thumbnailStoragePath: uploaded.thumbnailStoragePath
+                thumbnailStoragePath: uploaded.thumbnailStoragePath,
+                externalEditInfo: externalEditInfo
             )
         }
 
@@ -511,6 +525,7 @@ class PostViewModel: ObservableObject {
         selectedImages = []
         editedImages = []
         editSettings = nil
+        externalEditInfos = []  // ⭐️ Issue #4
         caption = ""
         hashtags = []
         location = nil
