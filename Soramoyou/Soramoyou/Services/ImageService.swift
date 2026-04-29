@@ -1,11 +1,20 @@
 // ⭐️ ImageService.swift
 // 画像処理サービス
-// 全27種類の編集ツール実装 + 高速プレビュー生成
+// FilterGraphBuilder を経由した編集レシピ適用 + 高速プレビュー生成
 //
 //  ImageService.swift
 //  Soramoyou
 //
 //  Created on 2025-12-06.
+//
+// 🔧 2026-04-24 大規模リファクタ (コードレビュー H1 / M1 対応):
+//   - applyEditTool / processEditTool および 27 個の applyXxx 独自実装を全削除。
+//     FilterGraphBuilder と係数が乖離していて、テストは通るのにプレビューと結果が一致しない
+//     構造的な不具合の温床になっていた。プレビューと最終書き出しが同じ経路を通るよう
+//     FilterGraphBuilder 1 本に統一した。
+//   - EditSettings ベースの applyEditSettings / generatePreview(_:edits:) / generatePreviewFast /
+//     generatePreviewFromCIImage(_:edits:) も削除。EditRecipe 経路に一本化 (M1)。
+//     toneCurvePoints / targetDynamicRange 脱落の再発を防ぐ。
 //
 
 import Foundation
@@ -20,19 +29,11 @@ protocol ImageServiceProtocol {
     // Filter
     func applyFilter(_ filter: FilterType, to image: UIImage) async throws -> UIImage
 
-    // Edit Tools
-    func applyEditTool(_ tool: EditTool, value: Float, to image: UIImage) async throws -> UIImage
-    func applyEditSettings(_ settings: EditSettings, to image: UIImage) async throws -> UIImage
-
-    // Preview
-    func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage
-    /// 高速プレビュー生成（256x256の低解像度）
-    /// スライダー操作中のリアルタイム表示用
-    func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage
-
-    /// CIImageベースの高速プレビュー生成（同期処理）
-    /// 既にリサイズ済みのCIImageを受け取り、フィルターチェーンを適用して一度だけレンダリング
-    func generatePreviewFromCIImage(_ ciImage: CIImage, edits: EditSettings) -> UIImage?
+    /// EditRecipe 直接受け取り版（toneCurvePoints 等の EditSettings にない情報を脱落させない）
+    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage?
+    /// EditRecipe を UIImage に適用（フル解像度・最終書き出し用）
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage
 
     /// CIImageをリサイズ（CIFilter.lanczosScaleTransformを使用）
     func resizeCIImage(_ ciImage: CIImage, maxSize: CGSize) -> CIImage
@@ -48,18 +49,23 @@ protocol ImageServiceProtocol {
     func extractEXIFData(_ image: UIImage) async throws -> EXIFData
 }
 
-class ImageService: ImageServiceProtocol {
+/// 🔧 2026-04-24 修正: final を付与して `@Sendable` クロージャ (Task.detached) での
+/// self キャプチャを Swift 6 Strict Concurrency 下でも許容するようにする。
+/// `context` は既に `let` 宣言なので、final + let で自動的に Sendable 候補になる。
+final class ImageService: ImageServiceProtocol {
+    /// 共有 CIContext（CIContextPool シングルトンから取得）
+    /// 【修正】以前は各メソッドで毎回 CIContext を生成していたが、
+    ///         CIContextPool.shared.ciContext を使用することで再利用するよう変更。
+    ///         色空間も linear sRGB → Display P3 に改善。
     private let context: CIContext
 
     init(context: CIContext? = nil) {
         if let context = context {
+            // テスト時など外部からの注入を許容
             self.context = context
-        } else if let device = MTLCreateSystemDefaultDevice() {
-            // Metal GPU アクセラレーションを使用（大幅に高速化）
-            self.context = CIContext(mtlDevice: device)
         } else {
-            // Metal が利用できない場合はCPUフォールバック
-            self.context = CIContext()
+            // CIContextPool のシングルトンを使用（Metal + 適切な色空間設定済み）
+            self.context = CIContextPool.shared.ciContext
         }
     }
 
@@ -197,529 +203,64 @@ class ImageService: ImageServiceProtocol {
         return filter.outputImage ?? image
     }
 
-    // MARK: - Edit Tools
+    // MARK: - EditRecipe 直接パス（toneCurvePoints 等を保全）
+    //
+    // 🔧 2026-04-24 H1 削除:
+    // 旧 applyEditTool / processEditTool / 27 個の applyXxx 独自実装は FilterGraphBuilder と
+    // 係数が乖離しておりプレビュー挙動とテストが一致しない温床だったため削除。
+    // 全ツールの正規実装は `FilterGraphBuilder.buildGraph` に集約済み。
+    //
+    // 🔧 2026-04-24 M1 削除:
+    // applyEditSettings / generatePreview(_:edits:) / generatePreviewFast / generatePreviewFromCIImage(_:edits:)
+    // も削除。EditRecipe 経路に一本化することで toneCurvePoints / targetDynamicRange 脱落の
+    // 再発を防ぐ。
 
-    func applyEditTool(_ tool: EditTool, value: Float, to image: UIImage) async throws -> UIImage {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                do {
-                    guard let ciImage = CIImage(image: image) else {
-                        throw ImageServiceError.invalidImage
-                    }
-
-                    let editedImage = self.processEditTool(tool, value: value, on: ciImage)
-
-                    guard let cgImage = self.context.createCGImage(editedImage, from: editedImage.extent) else {
-                        throw ImageServiceError.processingFailed
-                    }
-
-                    let result = UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
-                    continuation.resume(returning: result)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
-    }
-
-    /// 全27種類の編集ツールを処理
-    private func processEditTool(_ tool: EditTool, value: Float, on ciImage: CIImage) -> CIImage {
-        let v = max(-1.0, min(1.0, value))
-
-        switch tool {
-        case .exposure:          return applyExposure(v, to: ciImage)
-        case .brightness:        return applyBrightness(v, to: ciImage)
-        case .contrast:          return applyContrast(v, to: ciImage)
-        case .tone:              return applyTone(v, to: ciImage)
-        case .brilliance:        return applyBrilliance(v, to: ciImage)
-        case .highlight:         return applyHighlight(v, to: ciImage)
-        case .shadow:            return applyShadow(v, to: ciImage)
-        case .blackPoint:        return applyBlackPoint(v, to: ciImage)
-        case .saturation:        return applySaturation(v, to: ciImage)
-        case .naturalSaturation: return applyNaturalSaturation(v, to: ciImage)
-        case .warmth:            return applyWarmth(v, to: ciImage)
-        case .tint:              return applyTint(v, to: ciImage)
-        case .sharpness:         return applySharpness(v, to: ciImage)
-        case .vignette:          return applyVignette(v, to: ciImage)
-        case .colorTemperature:  return applyColorTemperature(v, to: ciImage)
-        case .whiteBalance:      return applyWhiteBalance(v, to: ciImage)
-        case .texture:           return applyTexture(v, to: ciImage)
-        case .clarity:           return applyClarity(v, to: ciImage)
-        case .dehaze:            return applyDehaze(v, to: ciImage)
-        case .grain:             return applyGrain(v, to: ciImage)
-        case .fade:              return applyFade(v, to: ciImage)
-        case .noiseReduction:    return applyNoiseReduction(v, to: ciImage)
-        case .curves:            return applyCurves(v, to: ciImage)
-        case .hsl:               return applyHSL(v, to: ciImage)
-        case .lensCorrection:    return applyLensCorrection(v, to: ciImage)
-        case .doubleExposure:    return applyDoubleExposure(v, to: ciImage)
-        case .cropAndRotate:     return ciImage
-        }
-    }
-
-    // MARK: - 編集ツール実装（全27種類）
-
-    // ── 1. 露出（Exposure）──
-    /// EV値を調整（-2.0〜+2.0）
-    private func applyExposure(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.exposureAdjust()
-        filter.inputImage = image
-        filter.ev = value * 2.0
-        return filter.outputImage ?? image
-    }
-
-    // ── 2. 明るさ（Brightness）──
-    /// 画像全体の明度を調整（-1.0〜+1.0）
-    private func applyBrightness(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.colorControls()
-        filter.inputImage = image
-        filter.brightness = value * 0.5
-        return filter.outputImage ?? image
-    }
-
-    // ── 3. コントラスト（Contrast）──
-    /// 明暗差を調整（0.5〜1.5）
-    private func applyContrast(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.colorControls()
-        filter.inputImage = image
-        filter.contrast = 1.0 + value * 0.5
-        return filter.outputImage ?? image
-    }
-
-    // ── 4. トーン（Tone）──
-    /// ガンマカーブで中間調を調整
-    /// 正値：中間調を明るく、負値：中間調を暗く
-    private func applyTone(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.gammaAdjust()
-        filter.inputImage = image
-        // gamma < 1.0 で明るく、> 1.0 で暗く
-        // value = -1.0 → gamma = 1.5（暗い）, value = 1.0 → gamma = 0.5（明るい）
-        filter.power = 1.0 - value * 0.5
-        return filter.outputImage ?? image
-    }
-
-    // ── 5. ブリリアンス（Brilliance）──
-    /// 暗部を持ち上げつつハイライトを維持（スマート露出補正）
-    /// シャドウを明るく + わずかにコントラスト追加
-    private func applyBrilliance(_ value: Float, to image: CIImage) -> CIImage {
-        // ハイライト・シャドウ調整で暗部を持ち上げ
-        let hsFilter = CIFilter.highlightShadowAdjust()
-        hsFilter.inputImage = image
-        hsFilter.shadowAmount = 1.0 + value * 0.5
-        hsFilter.highlightAmount = 1.0 - value * 0.3
-        guard let step1 = hsFilter.outputImage else { return image }
-
-        // わずかにコントラストを追加
-        let ccFilter = CIFilter.colorControls()
-        ccFilter.inputImage = step1
-        ccFilter.contrast = 1.0 + value * 0.15
-        return ccFilter.outputImage ?? step1
-    }
-
-    // ── 6. ハイライト（Highlight）──
-    /// 明るい部分の明度を調整
-    private func applyHighlight(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.highlightShadowAdjust()
-        filter.inputImage = image
-        // highlightAmount: 0.0（完全抑制）〜 1.0（通常）
-        // value=-1 → 0.0, value=0 → 1.0, value=1 → 2.0
-        filter.highlightAmount = 1.0 + value
-        return filter.outputImage ?? image
-    }
-
-    // ── 7. シャドウ（Shadow）──
-    /// 暗い部分の明度を調整
-    private func applyShadow(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.highlightShadowAdjust()
-        filter.inputImage = image
-        // shadowAmount: -1.0〜1.0 → 0.0〜2.0
-        filter.shadowAmount = 1.0 + value
-        return filter.outputImage ?? image
-    }
-
-    // ── 8. ブラックポイント（Black Point）──
-    /// 最も暗い点のレベルを調整
-    /// 正値：黒を持ち上げて軽やかに、負値：黒をより深く
-    private func applyBlackPoint(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.colorMatrix()
-        filter.inputImage = image
-        // ブラックポイントを持ち上げる（正値）または下げる（負値）
-        let offset = value * 0.15
-        filter.biasVector = CIVector(x: CGFloat(offset), y: CGFloat(offset), z: CGFloat(offset), w: 0)
-        filter.rVector = CIVector(x: 1, y: 0, z: 0, w: 0)
-        filter.gVector = CIVector(x: 0, y: 1, z: 0, w: 0)
-        filter.bVector = CIVector(x: 0, y: 0, z: 1, w: 0)
-        filter.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
-        return filter.outputImage ?? image
-    }
-
-    // ── 9. 彩度（Saturation）──
-    /// 全体的な色の鮮やかさを調整
-    private func applySaturation(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.colorControls()
-        filter.inputImage = image
-        // value=-1 → 0.0（モノクロ）, value=0 → 1.0, value=1 → 2.0
-        filter.saturation = 1.0 + value
-        return filter.outputImage ?? image
-    }
-
-    // ── 10. 自然な彩度（Natural Saturation / Vibrance）──
-    /// 彩度が低い色を優先的に鮮やかにする（肌色を保護）
-    private func applyNaturalSaturation(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.vibrance()
-        filter.inputImage = image
-        // CIVibrance の amount: -1.0〜1.0
-        filter.amount = value
-        return filter.outputImage ?? image
-    }
-
-    // ── 11. 暖かみ（Warmth）──
-    /// 暖色（オレンジ）⇔ 寒色（ブルー）のシフト
-    private func applyWarmth(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.temperatureAndTint()
-        filter.inputImage = image
-        filter.neutral = CIVector(x: 6500, y: 0)
-        // 正値で暖色（低いK値方向）、負値で寒色（高いK値方向）
-        filter.targetNeutral = CIVector(x: 6500 - Double(value * 1500), y: 0)
-        return filter.outputImage ?? image
-    }
-
-    // ── 12. 色合い（Tint）──
-    /// グリーン ⇔ マゼンタのシフト
-    private func applyTint(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.temperatureAndTint()
-        filter.inputImage = image
-        filter.neutral = CIVector(x: 6500, y: 0)
-        // Y成分がティント（グリーン−マゼンタ軸）
-        filter.targetNeutral = CIVector(x: 6500, y: Double(value * 100))
-        return filter.outputImage ?? image
-    }
-
-    // ── 13. シャープネス（Sharpness）──
-    /// エッジの鮮明さを調整
-    private func applySharpness(_ value: Float, to image: CIImage) -> CIImage {
-        if value >= 0 {
-            // 正値：シャープ強化
-            let filter = CIFilter.sharpenLuminance()
-            filter.inputImage = image
-            filter.sharpness = value * 2.0
-            filter.radius = 1.5
-            return filter.outputImage ?? image
-        } else {
-            // 負値：ソフト化（ガウスぼかし）
-            let filter = CIFilter.gaussianBlur()
-            filter.inputImage = image
-            filter.radius = Float(abs(value) * 3.0)
-            return filter.outputImage ?? image
-        }
-    }
-
-    // ── 14. ビネット（Vignette）──
-    /// 画像の四隅を暗く/明るく
-    private func applyVignette(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.vignette()
-        filter.inputImage = image
-        // 正値で四隅を暗く、負値で四隅を明るく
-        filter.intensity = value * 2.0
-        filter.radius = 1.0 + abs(value)
-        return filter.outputImage ?? image
-    }
-
-    // ── 15. 色温度（Color Temperature）──
-    /// ケルビン単位の色温度調整（暖かみより広い範囲）
-    private func applyColorTemperature(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.temperatureAndTint()
-        filter.inputImage = image
-        filter.neutral = CIVector(x: 6500, y: 0)
-        // 広い範囲で調整：3500K〜9500K
-        filter.targetNeutral = CIVector(x: 6500 - Double(value * 3000), y: 0)
-        return filter.outputImage ?? image
-    }
-
-    // ── 16. ホワイトバランス（White Balance）──
-    /// 温度+ティントの複合調整
-    private func applyWhiteBalance(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.temperatureAndTint()
-        filter.inputImage = image
-        // ニュートラルポイントをシフト
-        filter.neutral = CIVector(x: 6500 + Double(value * 2000), y: Double(value * 30))
-        filter.targetNeutral = CIVector(x: 6500, y: 0)
-        return filter.outputImage ?? image
-    }
-
-    // ── 17. テクスチャ（Texture）──
-    /// 細部のディテールを強調/抑制（中程度の半径でアンシャープマスク）
-    private func applyTexture(_ value: Float, to image: CIImage) -> CIImage {
-        if value >= 0 {
-            let filter = CIFilter.unsharpMask()
-            filter.inputImage = image
-            filter.radius = 2.0
-            filter.intensity = value * 1.5
-            return filter.outputImage ?? image
-        } else {
-            // 負値：テクスチャを滑らかに
-            let filter = CIFilter.gaussianBlur()
-            filter.inputImage = image
-            filter.radius = Float(abs(value) * 2.0)
-            return filter.outputImage ?? image
-        }
-    }
-
-    // ── 18. クラリティ（Clarity）──
-    /// 中間調のコントラストを強調（大きな半径でアンシャープマスク）
-    private func applyClarity(_ value: Float, to image: CIImage) -> CIImage {
-        if value >= 0 {
-            let filter = CIFilter.unsharpMask()
-            filter.inputImage = image
-            filter.radius = 10.0
-            filter.intensity = value * 1.0
-            return filter.outputImage ?? image
-        } else {
-            // 負値：中間調コントラストを低下
-            let filter = CIFilter.unsharpMask()
-            filter.inputImage = image
-            filter.radius = 10.0
-            filter.intensity = value * 0.5
-            return filter.outputImage ?? image
-        }
-    }
-
-    // ── 19. かすみの除去（Dehaze）──
-    /// コントラスト + 彩度を上げてかすみを除去
-    private func applyDehaze(_ value: Float, to image: CIImage) -> CIImage {
-        // コントラスト調整
-        let ccFilter = CIFilter.colorControls()
-        ccFilter.inputImage = image
-        ccFilter.contrast = 1.0 + value * 0.4
-        ccFilter.saturation = 1.0 + value * 0.2
-        guard let step1 = ccFilter.outputImage else { return image }
-
-        // 露出を微調整（かすみ除去時にわずかに暗く）
-        let expFilter = CIFilter.exposureAdjust()
-        expFilter.inputImage = step1
-        expFilter.ev = -value * 0.3
-        return expFilter.outputImage ?? step1
-    }
-
-    // ── 20. グレイン（Grain / Film Grain）──
-    /// フィルム風のノイズを追加
-    private func applyGrain(_ value: Float, to image: CIImage) -> CIImage {
-        guard abs(value) > 0.01 else { return image }
-
-        let extent = image.extent
-
-        // ランダムノイズを生成
-        let noiseFilter = CIFilter.randomGenerator()
-        guard let noise = noiseFilter.outputImage?.cropped(to: extent) else { return image }
-
-        // ノイズをモノクロ化
-        let monoFilter = CIFilter.colorMatrix()
-        monoFilter.inputImage = noise
-        let noiseLevel = CGFloat(abs(value) * 0.15)
-        monoFilter.rVector = CIVector(x: noiseLevel, y: 0, z: 0, w: 0)
-        monoFilter.gVector = CIVector(x: 0, y: noiseLevel, z: 0, w: 0)
-        monoFilter.bVector = CIVector(x: 0, y: 0, z: noiseLevel, w: 0)
-        monoFilter.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
-        monoFilter.biasVector = CIVector(x: CGFloat(-abs(value) * 0.075), y: CGFloat(-abs(value) * 0.075), z: CGFloat(-abs(value) * 0.075), w: 0)
-        guard let monoNoise = monoFilter.outputImage else { return image }
-
-        // 元画像にノイズを加算合成
-        let blendFilter = CIFilter.additionCompositing()
-        blendFilter.inputImage = monoNoise
-        blendFilter.backgroundImage = image
-        return blendFilter.outputImage?.cropped(to: extent) ?? image
-    }
-
-    // ── 21. フェード（Fade）──
-    /// 黒を持ち上げてコントラストを下げ、フィルム風の退色効果
-    private func applyFade(_ value: Float, to image: CIImage) -> CIImage {
-        guard abs(value) > 0.01 else { return image }
-
-        // 黒レベルを持ち上げ
-        let matrixFilter = CIFilter.colorMatrix()
-        matrixFilter.inputImage = image
-        let lift = abs(value) * 0.2
-        matrixFilter.biasVector = CIVector(x: CGFloat(lift), y: CGFloat(lift), z: CGFloat(lift), w: 0)
-        // コントラストを下げる（RGB係数を1未満に）
-        let scale = 1.0 - abs(value) * 0.15
-        matrixFilter.rVector = CIVector(x: CGFloat(scale), y: 0, z: 0, w: 0)
-        matrixFilter.gVector = CIVector(x: 0, y: CGFloat(scale), z: 0, w: 0)
-        matrixFilter.bVector = CIVector(x: 0, y: 0, z: CGFloat(scale), w: 0)
-        matrixFilter.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
-        return matrixFilter.outputImage ?? image
-    }
-
-    // ── 22. ノイズリダクション（Noise Reduction）──
-    /// ノイズを低減してスムーズな画像に
-    private func applyNoiseReduction(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.noiseReduction()
-        filter.inputImage = image
-        // noiseLevel: 0.0〜0.1
-        filter.noiseLevel = abs(value) * 0.05
-        // sharpness: ノイズ除去後のシャープネス補正
-        filter.sharpness = 0.5 + abs(value) * 0.3
-        return filter.outputImage ?? image
-    }
-
-    // ── 23. カーブ調整（Curves）──
-    /// S字カーブ（コントラスト強調）/ 逆S字カーブ（コントラスト低下）
-    private func applyCurves(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.toneCurve()
-        filter.inputImage = image
-        // S字カーブの強さを value で制御
-        let shift = value * 0.15
-        filter.point0 = CGPoint(x: 0.0, y: CGFloat(max(0, 0.0 - shift)))
-        filter.point1 = CGPoint(x: 0.25, y: CGFloat(max(0, min(1, 0.25 - shift))))
-        filter.point2 = CGPoint(x: 0.5, y: 0.5)
-        filter.point3 = CGPoint(x: 0.75, y: CGFloat(max(0, min(1, 0.75 + shift))))
-        filter.point4 = CGPoint(x: 1.0, y: CGFloat(min(1, 1.0 + shift)))
-        return filter.outputImage ?? image
-    }
-
-    // ── 24. HSL調整（Hue Shift）──
-    /// 色相をシフト（-180°〜+180°）
-    private func applyHSL(_ value: Float, to image: CIImage) -> CIImage {
-        let filter = CIFilter.hueAdjust()
-        filter.inputImage = image
-        // ラジアンで指定：value * π
-        filter.angle = value * .pi
-        return filter.outputImage ?? image
-    }
-
-    // ── 25. レンズ補正（Lens Correction）──
-    /// 樽型/糸巻き型歪みを補正
-    private func applyLensCorrection(_ value: Float, to image: CIImage) -> CIImage {
-        guard abs(value) > 0.01 else { return image }
-
-        let extent = image.extent
-        let center = CGPoint(x: extent.midX, y: extent.midY)
-        let radius = Float(min(extent.width, extent.height)) * 0.5
-
-        let filter = CIFilter.bumpDistortion()
-        filter.inputImage = image
-        filter.center = center
-        filter.radius = radius
-        // 正値：樽型補正（膨らみ除去）、負値：糸巻き型補正
-        filter.scale = -value * 0.3
-        return filter.outputImage?.cropped(to: extent) ?? image
-    }
-
-    // ── 26. 二重露光風合成（Double Exposure）──
-    /// 元画像のぼかし版をスクリーンブレンドして幻想的な効果
-    private func applyDoubleExposure(_ value: Float, to image: CIImage) -> CIImage {
-        guard abs(value) > 0.01 else { return image }
-
-        // ぼかし版を生成
-        let blurFilter = CIFilter.gaussianBlur()
-        blurFilter.inputImage = image
-        blurFilter.radius = 15.0
-        guard let blurred = blurFilter.outputImage?.cropped(to: image.extent) else { return image }
-
-        // スクリーンブレンド
-        let screenFilter = CIFilter.screenBlendMode()
-        screenFilter.inputImage = blurred
-        screenFilter.backgroundImage = image
-        guard let blended = screenFilter.outputImage else { return image }
-
-        // 元画像とブレンド結果をvalue量でミックス
-        let amount = abs(value)
-        let mixFilter = CIFilter(name: "CIDissolveTransition")
-        mixFilter?.setValue(image, forKey: kCIInputImageKey)
-        mixFilter?.setValue(blended, forKey: kCIInputTargetImageKey)
-        mixFilter?.setValue(amount, forKey: kCIInputTimeKey)
-        return mixFilter?.outputImage?.cropped(to: image.extent) ?? image
-    }
-
-    // MARK: - Edit Settings
-
-    func applyEditSettings(_ settings: EditSettings, to image: UIImage) async throws -> UIImage {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                do {
-                    guard let ciImage = CIImage(image: image) else {
-                        throw ImageServiceError.invalidImage
-                    }
-
-                    let result = self.applyAllEdits(settings, on: ciImage)
-
-                    guard let cgImage = self.context.createCGImage(result, from: result.extent) else {
-                        throw ImageServiceError.processingFailed
-                    }
-
-                    let finalImage = UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
-                    continuation.resume(returning: finalImage)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
-    }
-
-    /// 全編集設定を適用する共通メソッド
-    private func applyAllEdits(_ settings: EditSettings, on ciImage: CIImage) -> CIImage {
-        var result = ciImage
-
-        // フィルターを適用
-        if let filter = settings.appliedFilter {
-            result = processFilterSync(filter, on: result)
-        }
-
-        // 全27種類の編集ツールを順次適用
-        // 適用順序：露出系 → カラー系 → ディテール系 → エフェクト系
-        if let v = settings.exposure { result = applyExposure(v, to: result) }
-        if let v = settings.brightness { result = applyBrightness(v, to: result) }
-        if let v = settings.contrast { result = applyContrast(v, to: result) }
-        if let v = settings.tone { result = applyTone(v, to: result) }
-        if let v = settings.brilliance { result = applyBrilliance(v, to: result) }
-        if let v = settings.highlight { result = applyHighlight(v, to: result) }
-        if let v = settings.shadow { result = applyShadow(v, to: result) }
-        if let v = settings.blackPoint { result = applyBlackPoint(v, to: result) }
-        if let v = settings.saturation { result = applySaturation(v, to: result) }
-        if let v = settings.naturalSaturation { result = applyNaturalSaturation(v, to: result) }
-        if let v = settings.warmth { result = applyWarmth(v, to: result) }
-        if let v = settings.tint { result = applyTint(v, to: result) }
-        if let v = settings.colorTemperature { result = applyColorTemperature(v, to: result) }
-        if let v = settings.whiteBalance { result = applyWhiteBalance(v, to: result) }
-        if let v = settings.sharpness { result = applySharpness(v, to: result) }
-        if let v = settings.texture { result = applyTexture(v, to: result) }
-        if let v = settings.clarity { result = applyClarity(v, to: result) }
-        if let v = settings.dehaze { result = applyDehaze(v, to: result) }
-        if let v = settings.grain { result = applyGrain(v, to: result) }
-        if let v = settings.fade { result = applyFade(v, to: result) }
-        if let v = settings.noiseReduction { result = applyNoiseReduction(v, to: result) }
-        if let v = settings.curves { result = applyCurves(v, to: result) }
-        if let v = settings.hsl { result = applyHSL(v, to: result) }
-        if let v = settings.vignette { result = applyVignette(v, to: result) }
-        if let v = settings.lensCorrection { result = applyLensCorrection(v, to: result) }
-        if let v = settings.doubleExposure { result = applyDoubleExposure(v, to: result) }
-
-        return result
-    }
-
-    // MARK: - Preview
-
-    func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
+    /// EditRecipe を直接受け取ってプレビューを生成。
+    /// `EditSettings` への往復では `toneCurvePoints` / `targetDynamicRange` が脱落するため、
+    /// トーンカーブ編集時は必ずこちらを呼ぶ。
+    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage {
         let thumbnailSize = CGSize(width: 750, height: 750)
         let resizedImage = try await resizeImage(image, maxSize: thumbnailSize)
-        return try await applyEditSettings(edits, to: resizedImage)
+        return try await applyEditRecipe(recipe, to: resizedImage)
     }
 
-    /// 高速プレビュー生成（256x256の低解像度）
-    func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
-        let fastThumbnailSize = CGSize(width: 750, height: 750)
-        let resizedImage = try await resizeImage(image, maxSize: fastThumbnailSize)
-        return try await applyEditSettings(edits, to: resizedImage)
-    }
-
-    // MARK: - CIImage ベースの高速プレビュー
-
-    /// CIImageベースの高速プレビュー生成（同期処理）
-    func generatePreviewFromCIImage(_ ciImage: CIImage, edits: EditSettings) -> UIImage? {
-        let result = buildEditFilterChain(on: ciImage, edits: edits)
+    /// 低解像度 CIImage + EditRecipe から同期的にプレビュー生成（リアルタイム用）
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage? {
+        let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage)
         guard let cgImage = context.createCGImage(result, from: result.extent) else {
             return nil
         }
         return UIImage(cgImage: cgImage)
+    }
+
+    /// EditRecipe を UIImage に直接適用（フル解像度）
+    ///
+    /// 🔧 2026-04-24 修正 (コードレビュー M7):
+    /// 旧実装は Task.detached 内で実行していたためキャンセルが伝搬せず、ユーザーが指を
+    /// 高速に動かしている間に古い計算が GPU / CPU を占有していた。
+    /// withTaskCancellationHandler + Task.checkCancellation で
+    /// 親 Task のキャンセルを detached task にも伝搬させる。
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage {
+        try Task.checkCancellation()
+
+        let workTask = Task.detached(priority: .userInitiated) { () throws -> UIImage in
+            guard let ciImage = CIImage(image: image) else {
+                throw ImageServiceError.invalidImage
+            }
+            try Task.checkCancellation()
+            let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage)
+            try Task.checkCancellation()
+            guard let cgImage = self.context.createCGImage(result, from: result.extent) else {
+                throw ImageServiceError.processingFailed
+            }
+            return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+        }
+
+        return try await withTaskCancellationHandler {
+            try await workTask.value
+        } onCancel: {
+            workTask.cancel()
+        }
     }
 
     /// CIImageをリサイズ
@@ -741,11 +282,6 @@ class ImageService: ImageServiceProtocol {
         filter.scale = Float(scale)
         filter.aspectRatio = 1.0
         return filter.outputImage ?? ciImage
-    }
-
-    /// 編集設定のCIFilterチェーンを構築（リアルタイムプレビュー用）
-    private func buildEditFilterChain(on ciImage: CIImage, edits: EditSettings) -> CIImage {
-        return applyAllEdits(edits, on: ciImage)
     }
 
     /// フィルター適用（同期版）
@@ -808,8 +344,8 @@ class ImageService: ImageServiceProtocol {
                 let scale = min(scaleX, scaleY)
 
                 let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-                let context = CIContext(options: [.useSoftwareRenderer: false])
-                guard let outputCGImage = context.createCGImage(scaled, from: scaled.extent) else {
+                // 【修正】CIContext を毎回生成せず CIContextPool.shared.ciContext を再利用
+                guard let outputCGImage = CIContextPool.shared.ciContext.createCGImage(scaled, from: scaled.extent) else {
                     continuation.resume(returning: image)
                     return
                 }

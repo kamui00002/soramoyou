@@ -8,6 +8,12 @@
 import Foundation
 import Combine
 import UIKit
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "com.soramoyou.photo-editor",
+    category: "ProfileViewModel"
+)
 
 @MainActor
 class ProfileViewModel: ObservableObject {
@@ -369,12 +375,12 @@ class ProfileViewModel: ObservableObject {
     /// ユーザーの投稿一覧を読み込む ☁️
     func loadUserPosts() async {
         guard let userId = userId else {
-            print("⚠️ [ProfileVM] loadUserPosts: userId is nil, skipping")
+            logger.warning("loadUserPosts: userId is nil, skipping")
             return
         }
 
         let currentAuthId = authService.currentUser()?.id
-        print("📋 [ProfileVM] loadUserPosts: userId=\(userId), authId=\(currentAuthId ?? "nil"), isOwnProfile=\(isOwnProfile)")
+        logger.debug("loadUserPosts: userId=\(userId, privacy: .private), authId=\(currentAuthId ?? "nil", privacy: .private), isOwnProfile=\(self.isOwnProfile)")
 
         isLoadingPosts = true
         // エラーメッセージはリセットしない（loadProfileで設定されている可能性があるため）
@@ -391,12 +397,12 @@ class ProfileViewModel: ObservableObject {
                 )
             }
 
-            print("✅ [ProfileVM] loadUserPosts: fetched \(posts.count) posts")
+            logger.info("loadUserPosts: fetched \(posts.count) posts")
 
             // 他ユーザーのプロフィールの場合は公開投稿のみフィルタリング
             if !isOwnProfile {
                 userPosts = posts.filter { $0.visibility == .public }
-                print("📋 [ProfileVM] loadUserPosts: filtered to \(userPosts.count) public posts (not own profile)")
+                logger.debug("loadUserPosts: filtered to \(self.userPosts.count) public posts (not own profile)")
             } else {
                 userPosts = posts
             }
@@ -406,7 +412,7 @@ class ProfileViewModel: ObservableObject {
             // いったん取り出して代入し直すことで ObservableObject の変更通知を確実に発行する。
             let actualCount = isOwnProfile ? posts.count : userPosts.count
             if user?.postsCount != actualCount {
-                print("📋 [ProfileVM] loadUserPosts: postsCount mismatch (\(user?.postsCount ?? -1) → \(actualCount)), correcting")
+                logger.debug("loadUserPosts: postsCount mismatch (\(self.user?.postsCount ?? -1) → \(actualCount)), correcting")
                 if var updatedUser = user {
                     updatedUser.postsCount = actualCount
                     user = updatedUser  // @Published への再代入でUI更新を発火
@@ -421,23 +427,23 @@ class ProfileViewModel: ObservableObject {
             }
         } catch {
             // エラーをログに記録（デバッグ用に詳細を出力）
-            print("❌ [ProfileVM] loadUserPosts error: \(error)")
+            logger.error("loadUserPosts error: \(error.localizedDescription)")
             ErrorHandler.logError(error, context: "ProfileViewModel.loadUserPosts", userId: userId)
 
             if let firestoreError = error as? FirestoreServiceError {
                 switch firestoreError {
                 case .notFound:
                     // 投稿がない場合は正常
-                    print("📋 [ProfileVM] loadUserPosts: notFound (no posts yet)")
+                    logger.debug("loadUserPosts: notFound (no posts yet)")
                     return
                 case .fetchFailed(let underlyingError):
                     if let nsError = underlyingError as NSError?,
                        nsError.domain == "FIRFirestoreErrorDomain" {
-                        print("❌ [ProfileVM] loadUserPosts: Firestore error code=\(nsError.code), desc=\(nsError.localizedDescription)")
+                        logger.error("loadUserPosts: Firestore error code=\(nsError.code), desc=\(nsError.localizedDescription)")
                         // 権限エラー（code 7）やインデックス未作成（code 9）はサイレントに処理
                         // 新規ユーザーや権限設定中の場合にエラーダイアログを表示しない
                         if nsError.code == 7 || nsError.code == 9 {
-                            print("⚠️ [ProfileVM] loadUserPosts: permission/index error (code \(nsError.code)), silently handled")
+                            logger.warning("loadUserPosts: permission/index error (code \(nsError.code)), silently handled")
                             return
                         }
                     }
@@ -519,8 +525,41 @@ class ProfileViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Delete Post
+
+    /// 投稿を削除する（自分の投稿のみ）
+    /// - Parameter post: 削除する投稿
+    func deletePost(_ post: Post) async {
+        guard let userId = authService.currentUser()?.id else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            // Firestoreから投稿を削除（postsCountもデクリメント）
+            try await RetryableOperation.executeIfRetryable {
+                try await self.firestoreService.deletePost(postId: post.id, userId: userId)
+            }
+
+            // Firebase Storageから画像を並列削除（ベストエフォート）
+            await storageService.deletePostImages(post)
+
+            // ローカルの投稿配列からも削除
+            userPosts.removeAll { $0.id == post.id }
+
+            // postsCountをローカルでも更新
+            if var updatedUser = user {
+                updatedUser.postsCount = max(0, updatedUser.postsCount - 1)
+                user = updatedUser
+            }
+        } catch {
+            ErrorHandler.logError(error, context: "ProfileViewModel.deletePost", userId: userId)
+            errorMessage = error.userFriendlyMessage
+        }
+    }
+
     // MARK: - Edit Tools Management
-    
+
     /// 編集装備の順序を更新（Firestoreに保存）
     func updateEditTools() async {
         guard let userId = userId else {

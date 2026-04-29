@@ -103,6 +103,35 @@ service cloud.firestore {
     }
 
     // ============================================
+    // Follow Counter Update Validation ⭐️
+    // ============================================
+    // フォロー操作（follows コレクション create/delete）に伴う
+    // users.{followersCount,followingCount} の ±1 更新のみを許可する。
+    // FollowRepository は Firestore トランザクションで以下 2 件を原子的に更新する:
+    //   1. 自分の users.followingCount ±1
+    //   2. 相手の users.followersCount ±1
+    // 相手のドキュメントを書き換える必要があるため `isOwner` だけでは
+    // 検証できない。本関数で「変更されるフィールドが followersCount/
+    // followingCount のみで、それぞれ +1 か -1 か変更なし」の場合のみ
+    // 許可する。第三者による任意フィールド改ざんは引き続き拒否される。
+    function isFollowCounterUpdate() {
+      let data = request.resource.data;
+      let existing = resource.data;
+      // 変更されたキーのみ取得
+      let changedKeys = data.diff(existing).affectedKeys();
+      return isAuthenticated()
+             && changedKeys.hasOnly(['followersCount', 'followingCount'])
+             // followersCount は変更なし or ±1
+             && (data.get('followersCount', 0) == existing.get('followersCount', 0)
+                 || data.get('followersCount', 0) == existing.get('followersCount', 0) + 1
+                 || data.get('followersCount', 0) == existing.get('followersCount', 0) - 1)
+             // followingCount は変更なし or ±1
+             && (data.get('followingCount', 0) == existing.get('followingCount', 0)
+                 || data.get('followingCount', 0) == existing.get('followingCount', 0) + 1
+                 || data.get('followingCount', 0) == existing.get('followingCount', 0) - 1);
+    }
+
+    // ============================================
     // Users collection (機密情報のみ - 所有者のみアクセス可能)
     // ============================================
     match /users/{userId} {
@@ -117,9 +146,12 @@ service cloud.firestore {
 
       // 所有者のみ更新可能
       // idは変更不可。emailは存在する場合のみ変更不可（匿名ユーザーはemailなし）
-      allow update: if isOwner(userId)
-                    && request.resource.data.id == resource.data.id
-                    && request.resource.data.get('email', null) == resource.data.get('email', null);
+      // または、認証済みユーザーによる「followersCount/followingCount のみ±1」更新を許可
+      // （follows トランザクションで相手のカウントを更新するために必要）⭐️
+      allow update: if (isOwner(userId)
+                        && request.resource.data.id == resource.data.id
+                        && request.resource.data.get('email', null) == resource.data.get('email', null))
+                    || isFollowCounterUpdate();
 
       allow delete: if isOwner(userId);
     }
@@ -221,10 +253,10 @@ service cloud.firestore {
     // ドキュメントID: {userId}_{postId}
     // ============================================
     match /likes/{likeId} {
-      // 読み取り権限: 自分のいいね、または投稿の所有者
-      allow read: if isAuthenticated()
-                  && (resource.data.userId == request.auth.uid
-                      || isPostOwner(resource.data.postId));
+      // 読み取り権限: 認証済みユーザーなら読み取り可能
+      // いいねデータは機密情報ではなく、存在チェック（getDocument）で
+      // ドキュメントが存在しない場合も resource が null にならずアクセスできる必要がある
+      allow read: if isAuthenticated();
 
       // いいね作成: 認証済みユーザーのみ、自分のIDで作成
       allow create: if isAuthenticated()

@@ -12,6 +12,7 @@ import FirebaseCrashlytics
 @main
 struct SoramoyouApp: App {
     @StateObject private var authViewModel = AuthViewModel()
+    @StateObject private var likeManager = LikeManager()
     
     init() {
         // Firebase初期化
@@ -34,6 +35,7 @@ struct SoramoyouApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(authViewModel)
+                .environmentObject(likeManager)
         }
     }
 }

@@ -169,8 +169,8 @@ class LoggingService {
         Analytics.setUserID(userID)
         Crashlytics.crashlytics().setUserID(userID)
         
-        // ログにも記録
-        logger.info("User ID set: \(userID)")
+        // ログにも記録（userID は個人情報なので privacy: .private で第三者には <private> 表示にする）
+        logger.info("User ID set: \(userID, privacy: .private)")
     }
     
     // MARK: - Sanitization

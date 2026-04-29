@@ -10,14 +10,22 @@ import Kingfisher
 
 struct ProfileView: View {
     let userId: String?
-    
+
     @StateObject private var viewModel: ProfileViewModel
+    @EnvironmentObject private var likeManager: LikeManager
     @State private var selectedPost: Post?
     @State private var showingEditProfile = false
     @State private var showingEditTools = false
     @State private var showingSettings = false
     @State private var displayMode: DisplayMode = .grid
+    @State private var postToDelete: Post?
+    @State private var showDeleteConfirmation = false
+    @State private var isSaving = false
+    @State private var saveResultMessage: String?
+    @State private var showingSaveResult = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
     
     enum DisplayMode {
         case grid
@@ -147,10 +155,12 @@ struct ProfileView: View {
                     await viewModel.loadProfile()
                     await viewModel.loadUserPosts()
                 }
+                await likeManager.checkLikeStatus(for: viewModel.userPosts)
             }
             .refreshable {
                 await viewModel.loadProfile()
                 await viewModel.loadUserPosts()
+                await likeManager.checkLikeStatus(for: viewModel.userPosts)
             }
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
@@ -160,6 +170,20 @@ struct ProfileView: View {
                 if let errorMessage = viewModel.errorMessage {
                     Text(errorMessage)
                 }
+            }
+            // 投稿削除確認アラート
+            .alert("投稿を削除", isPresented: $showDeleteConfirmation) {
+                Button("削除", role: .destructive) {
+                    if let post = postToDelete {
+                        Task { await viewModel.deletePost(post) }
+                    }
+                    postToDelete = nil
+                }
+                Button("キャンセル", role: .cancel) {
+                    postToDelete = nil
+                }
+            } message: {
+                Text("この投稿を削除しますか？この操作は取り消せません。")
             }
             .sheet(isPresented: $showingEditProfile) {
                 if viewModel.isOwnProfile {
@@ -176,9 +200,58 @@ struct ProfileView: View {
             }
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
+                    .environmentObject(likeManager)
+            }
+            // 保存結果アラート
+            .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {
+                Button("OK") { saveResultMessage = nil }
+            }
+            // 保存中オーバーレイ
+            .overlay {
+                if isSaving {
+                    ZStack {
+                        Color.black.opacity(0.4)
+                            .ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.2)
+                            Text("保存中...")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                        }
+                        .padding(24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(UIColor.systemBackground).opacity(0.9))
+                        )
+                    }
+                }
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    // MARK: - Save Method
+
+    private func savePostImage(post: Post) async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            guard let urlString = post.images.first?.url else {
+                saveResultMessage = "保存する画像がありません"
+                showingSaveResult = true
+                return
+            }
+            let image = try await downloadService.downloadImage(from: urlString)
+            try await downloadService.saveToPhotoLibrary(image)
+            saveResultMessage = "画像を保存しました"
+            showingSaveResult = true
+        } catch {
+            saveResultMessage = error.userFriendlyMessage
+            showingSaveResult = true
+        }
     }
     
     // MARK: - Profile Content
@@ -380,18 +453,55 @@ struct ProfileView: View {
                             PostGridItem(post: post)
                         }
                         .buttonStyle(CardButtonStyle())
+                        .contextMenu {
+                            Button {
+                                Task { await savePostImage(post: post) }
+                            } label: {
+                                Label("写真に保存", systemImage: "square.and.arrow.down")
+                            }
+                            if viewModel.isOwnProfile {
+                                Divider()
+                                Button(role: .destructive) {
+                                    postToDelete = post
+                                    showDeleteConfirmation = true
+                                } label: {
+                                    Label("投稿を削除", systemImage: "trash")
+                                }
+                            }
+                        }
                     }
                 }
             } else {
                 // リスト表示
                 LazyVStack(spacing: 16) {
                     ForEach(viewModel.userPosts) { post in
-                        Button {
-                            selectedPost = post
-                        } label: {
-                            PostCard(post: post)
+                        PostCard(
+                            post: post,
+                            isLiked: likeManager.isLiked(post.id),
+                            likeCount: likeManager.likeCount(for: post),
+                            onLikeTapped: {
+                                Task { await likeManager.toggleLike(post: post) }
+                            },
+                            onCardTapped: {
+                                selectedPost = post
+                            }
+                        )
+                        .contextMenu {
+                            Button {
+                                Task { await savePostImage(post: post) }
+                            } label: {
+                                Label("写真に保存", systemImage: "square.and.arrow.down")
+                            }
+                            if viewModel.isOwnProfile {
+                                Divider()
+                                Button(role: .destructive) {
+                                    postToDelete = post
+                                    showDeleteConfirmation = true
+                                } label: {
+                                    Label("投稿を削除", systemImage: "trash")
+                                }
+                            }
                         }
-                        .buttonStyle(CardButtonStyle())
                     }
                 }
             }

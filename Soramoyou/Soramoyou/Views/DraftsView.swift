@@ -431,7 +431,7 @@ struct DraftDetailView: View {
                 } catch {
                     // 画像の読み込みに失敗した場合、エラーを記録
                     await MainActor.run {
-                        errorMessage = "画像の読み込みに失敗しました: \(error.localizedDescription)"
+                        errorMessage = "画像の読み込みに失敗しました: \(error.userFriendlyMessage)"
                     }
                 }
             }

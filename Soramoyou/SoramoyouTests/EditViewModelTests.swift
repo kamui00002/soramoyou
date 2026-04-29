@@ -178,6 +178,38 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.editSettings.brilliance, -0.3)
     }
 
+    /// H-3 対応: ノイズリダクションは片側スライダ（0...1）にクランプされる
+    func testSetToolValueNoiseReductionClampsNegative() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        // 負値を入力しても 0 にクランプされ、Firestore や Recipe に負値が入り込まない
+        viewModel.setToolValue(-0.7, for: .noiseReduction)
+        XCTAssertEqual(viewModel.editSettings.noiseReduction, 0,
+                       "ノイズリダクションの負値がクランプされていない（H-3 回帰）")
+
+        // 正値はそのまま通る
+        viewModel.setToolValue(0.6, for: .noiseReduction)
+        XCTAssertEqual(viewModel.editSettings.noiseReduction ?? 0, 0.6, accuracy: 0.001)
+    }
+
+    /// H-3 対応: EditTool.sliderRange は .noiseReduction のみ 0...1、他は -1...1
+    func testEditToolSliderRange() {
+        for tool in EditTool.allCases {
+            let range = tool.sliderRange
+            if tool == .noiseReduction {
+                XCTAssertEqual(range.lowerBound, 0,
+                               "ノイズリダクションは片側スライダである必要がある")
+                XCTAssertEqual(range.upperBound, 1)
+            } else {
+                XCTAssertEqual(range.lowerBound, -1,
+                               "\(tool.displayName) は両側スライダである必要がある")
+                XCTAssertEqual(range.upperBound, 1)
+            }
+        }
+    }
+
     /// 新規追加ツール（自然な彩度）の値設定テスト
     func testSetToolValueNaturalSaturation() async {
         let testImage = createTestImage()
@@ -224,6 +256,40 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isEditingRealtime)
     }
 
+    /// 🔧 H2 回帰テスト:
+    /// スライダー操作 (editSettings 経由の書き込み) をしても、EditSettings に存在しない
+    /// toneCurvePoints / targetDynamicRange / cropRectNorm が脱落しないことを検証する。
+    /// これらは EditRecipe → EditSettings 変換で失われるため、setter 側で明示的に保全する
+    /// 必要がある (コードレビュー H2)。
+    func testEditSettingsSetterPreservesRecipeOnlyFields() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        // 事前条件: recipe-only なフィールドを手動でセット
+        var curve = ToneCurvePoints()
+        curve.point0 = CurvePoint(x: 0.0, y: 0.05)
+        curve.point1 = CurvePoint(x: 0.25, y: 0.2)
+        curve.point2 = CurvePoint(x: 0.5, y: 0.5)
+        curve.point3 = CurvePoint(x: 0.75, y: 0.8)
+        curve.point4 = CurvePoint(x: 1.0, y: 0.95)
+        viewModel.editRecipe.toneCurvePoints = curve
+        viewModel.editRecipe.targetDynamicRange = .hdr
+        viewModel.editRecipe.cropRectNorm = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+
+        // スライダー操作をシミュレート (editSettings.setValue 経由 → 内部で setter 発火)
+        viewModel.setToolValue(0.3, for: .brightness)
+        viewModel.setToolValue(-0.2, for: .contrast)
+        viewModel.setToolValue(0.5, for: .exposure)
+
+        // recipe-only フィールドが保持されていること
+        XCTAssertNotNil(viewModel.editRecipe.toneCurvePoints, "toneCurvePoints が脱落している")
+        XCTAssertEqual(viewModel.editRecipe.toneCurvePoints?.point1.y ?? -1, 0.2, accuracy: 0.0001)
+        XCTAssertEqual(viewModel.editRecipe.targetDynamicRange, DynamicRange.hdr)
+        XCTAssertEqual(viewModel.editRecipe.cropRectNorm?.origin.x ?? -1, 0.1, accuracy: 0.0001)
+        XCTAssertEqual(viewModel.editRecipe.cropRectNorm?.width ?? -1, 0.8, accuracy: 0.0001)
+    }
+
     func testLoadEquippedToolsWithoutUser() async {
         // Given
         viewModel = EditViewModel(
@@ -257,43 +323,33 @@ final class EditViewModelTests: XCTestCase {
 
 class MockImageService: ImageServiceProtocol {
     var applyFilterCalled = false
-    var applyEditToolCalled = false
     var generatePreviewCalled = false
+    /// 旧 applyEditTool/applyEditSettings 呼び出し痕跡テスト用の互換フラグ。
+    /// 現行実装では applyEditRecipe が呼ばれたときに true になる。
     var applyEditSettingsCalled = false
-    
+
     func applyFilter(_ filter: FilterType, to image: UIImage) async throws -> UIImage {
         applyFilterCalled = true
         return image
     }
-    
-    func applyEditTool(_ tool: EditTool, value: Float, to image: UIImage) async throws -> UIImage {
-        applyEditToolCalled = true
-        return image
-    }
-    
-    func applyEditSettings(_ settings: EditSettings, to image: UIImage) async throws -> UIImage {
-        applyEditSettingsCalled = true
-        return image
-    }
-    
-    func generatePreview(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
+
+    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage {
         generatePreviewCalled = true
         return image
     }
 
-    func generatePreviewFast(_ image: UIImage, edits: EditSettings) async throws -> UIImage {
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage? {
         generatePreviewCalled = true
-        return image
-    }
-
-    func generatePreviewFromCIImage(_ ciImage: CIImage, edits: EditSettings) -> UIImage? {
-        generatePreviewCalled = true
-        // テスト用: CIImageから1x1のUIImageを返す
         let context = CIContext()
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
             return nil
         }
         return UIImage(cgImage: cgImage)
+    }
+
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage {
+        applyEditSettingsCalled = true
+        return image
     }
 
     func resizeCIImage(_ ciImage: CIImage, maxSize: CGSize) -> CIImage {
@@ -343,6 +399,15 @@ class MockFirestoreService: FirestoreServiceProtocol {
     func deleteDraft(draftId: String) async throws {}
     func updateUser(_ user: User) async throws -> User { return user }
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws {}
+    func syncPostsCount(userId: String, count: Int) async throws {}
+    func fetchPublicProfile(userId: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
+    func updatePublicProfile(_ profile: PublicProfile) async throws {}
+    func createPublicProfile(from user: User) async throws {}
+    func deleteUserData(userId: String) async throws {}
+    func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {}
+    func blockUser(userId: String, blockedUserId: String) async throws {}
+    func unblockUser(userId: String, blockedUserId: String) async throws {}
+    func fetchBlockedUserIds(userId: String) async throws -> [String] { return [] }
     func searchByHashtag(_ hashtag: String) async throws -> [Post] { return [] }
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post] { return [] }
     func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] { return [] }

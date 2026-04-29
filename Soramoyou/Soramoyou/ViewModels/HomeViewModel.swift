@@ -34,6 +34,19 @@ class HomeViewModel: PaginatedPostsViewModel {
     /// 通報・ブロック処理のエラー
     @Published var reportError: String?
 
+    /// 投稿者キャッシュ（userId -> PublicProfile）⭐️ Issue #2
+    /// PostCard で投稿者名/アバターを表示するため、フィードロード時に一括取得して
+    /// メモリにキャッシュする。N+1 リクエストを避けつつ、UI から個別問い合わせなく
+    /// 著者情報を引ける。
+    ///
+    /// 注意: `users` コレクションは Firestore Security Rules で `isOwner` 制限が
+    /// かかっているため、他ユーザーのドキュメントは読めない。代わりに公開可能な
+    /// `publicProfiles` コレクションを使用する。
+    @Published var authorsByUserId: [String: PublicProfile] = [:]
+
+    /// 自分自身の userId（フォローボタン表示制御用）
+    var currentUserId: String? { authService.currentUser()?.id }
+
     // MARK: - Initializer
 
     init(firestoreService: FirestoreServiceProtocol = FirestoreService(),
@@ -52,12 +65,37 @@ class HomeViewModel: PaginatedPostsViewModel {
         await super.fetchPosts()
         // ブロックユーザーの投稿を除外
         filterBlockedUsers()
+        // 投稿者情報を一括取得（PostCard 表示用）⭐️ Issue #2
+        await fetchAuthorsForCurrentPosts()
     }
 
     /// 次のページの投稿を取得（ブロックユーザーのフィルタリング付き）
     override func loadMorePosts() async {
         await super.loadMorePosts()
         filterBlockedUsers()
+        // 追加分の投稿者情報も取得
+        await fetchAuthorsForCurrentPosts()
+    }
+
+    /// 現在 posts に含まれる userId のうち、未取得の PublicProfile を並列で fetch する。⭐️ Issue #2
+    /// `users` コレクションは isOwner 制限があるため、`publicProfiles` を使う。
+    private func fetchAuthorsForCurrentPosts() async {
+        let missingUserIds = Set(posts.map(\.userId))
+            .subtracting(authorsByUserId.keys)
+        guard !missingUserIds.isEmpty else { return }
+
+        await withTaskGroup(of: PublicProfile?.self) { group in
+            for userId in missingUserIds {
+                group.addTask { [firestoreService] in
+                    try? await firestoreService.fetchPublicProfile(userId: userId)
+                }
+            }
+            for await profile in group {
+                if let profile = profile {
+                    authorsByUserId[profile.id] = profile
+                }
+            }
+        }
     }
 
     /// ブロックユーザーリストを読み込む

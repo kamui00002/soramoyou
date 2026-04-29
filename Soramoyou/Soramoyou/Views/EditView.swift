@@ -36,10 +36,17 @@ struct EditView: View {
 
     private let userId: String?
     private let originalImages: [UIImage]
+    /// 各画像の外部編集情報（写真Appバッジ表示用）⭐️ Issue #4
+    private let externalEditInfos: [ExternalEditInfo?]
 
-    init(images: [UIImage], userId: String?) {
+    init(
+        images: [UIImage],
+        userId: String?,
+        externalEditInfos: [ExternalEditInfo?] = []
+    ) {
         self.userId = userId
         self.originalImages = images
+        self.externalEditInfos = externalEditInfos
         _viewModel = StateObject(wrappedValue: EditViewModel(images: images, userId: userId))
     }
 
@@ -72,6 +79,26 @@ struct EditView: View {
 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
+                        // Undo ボタン
+                        Button(action: {
+                            viewModel.undo()
+                        }) {
+                            Image(systemName: "arrow.uturn.backward")
+                                .font(.body)
+                        }
+                        .disabled(!viewModel.canUndo)
+                        .foregroundColor(viewModel.canUndo ? .white : .gray)
+
+                        // Redo ボタン
+                        Button(action: {
+                            viewModel.redo()
+                        }) {
+                            Image(systemName: "arrow.uturn.forward")
+                                .font(.body)
+                        }
+                        .disabled(!viewModel.canRedo)
+                        .foregroundColor(viewModel.canRedo ? .white : .gray)
+
                         // 編集ツール設定ボタン
                         Button(action: {
                             showEditToolsSettings = true
@@ -122,7 +149,8 @@ struct EditView: View {
                         images: originalImages,
                         editedImages: finalEditedImages.isEmpty ? [] : finalEditedImages,
                         editSettings: viewModel.editSettings,
-                        userId: userId
+                        userId: userId,
+                        externalEditInfos: externalEditInfos
                     )
                 }
                 .navigationViewStyle(.stack)
@@ -144,23 +172,12 @@ struct EditView: View {
             // Apple Photos風の黒背景
             Color.black
 
-            if viewModel.isLoading && !viewModel.isEditingRealtime {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-            } else if let displayImage = viewModel.displayPreviewImage {
-                // リアルタイム編集中は高速プレビュー、それ以外は通常プレビュー
-                Image(uiImage: displayImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let currentImage = viewModel.currentImage {
-                Image(uiImage: currentImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // 切り取りタブでは「クロップ前」のオリジナル画像 + 矩形オーバーレイを表示
+            // それ以外は「編集後プレビュー」を表示
+            if selectedTab == .crop {
+                cropEditorPreview
             } else {
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                normalPreviewContent
             }
 
             // 複数画像の場合のナビゲーション
@@ -212,6 +229,97 @@ struct EditView: View {
         }
     }
 
+    // MARK: - Preview Content Helpers
+
+    @ViewBuilder
+    private var normalPreviewContent: some View {
+        if viewModel.isLoading && !viewModel.isEditingRealtime {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+        } else if let displayImage = viewModel.displayPreviewImage {
+            Image(uiImage: displayImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(HDRDynamicRangeModifier())
+        } else if let currentImage = viewModel.currentImage {
+            Image(uiImage: currentImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(HDRDynamicRangeModifier())
+        } else {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+        }
+    }
+
+    /// 切り取り編集モードのプレビュー（クロップ前の画像 + ドラッグ可能な矩形オーバーレイ）
+    ///
+    /// 🔧 2026-04-24 修正 (ultrareview bug_003):
+    /// currentImage ではなく currentImageForCrop（applyTransform 適用済み）を使う。
+    /// こうしないと回転・反転を行った後にトリミングすると、UI で選んだ領域と最終出力で
+    /// 切り出される領域がまったく違う場所になる。
+    @ViewBuilder
+    private var cropEditorPreview: some View {
+        if let image = viewModel.currentImageForCrop {
+            GeometryReader { geo in
+                cropEditorBody(image: image, geoSize: geo.size)
+            }
+        } else {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+        }
+    }
+
+    /// GeometryReader の中身を分離（複雑な let 宣言を含むため）
+    private func cropEditorBody(image: UIImage, geoSize: CGSize) -> some View {
+        let imageAspect = image.size.width / max(image.size.height, 1)
+        let viewAspect  = geoSize.width / max(geoSize.height, 1)
+        let drawWidth: CGFloat
+        let drawHeight: CGFloat
+        if imageAspect > viewAspect {
+            drawWidth  = geoSize.width
+            drawHeight = geoSize.width / imageAspect
+        } else {
+            drawHeight = geoSize.height
+            drawWidth  = geoSize.height * imageAspect
+        }
+        let imageRect = CGRect(
+            x: (geoSize.width  - drawWidth)  / 2,
+            y: (geoSize.height - drawHeight) / 2,
+            width: drawWidth,
+            height: drawHeight
+        )
+
+        return ZStack(alignment: .topLeading) {
+            Color.black
+
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: drawWidth, height: drawHeight)
+                .position(x: geoSize.width / 2, y: geoSize.height / 2)
+                .modifier(HDRDynamicRangeModifier())
+
+            CropOverlayView(
+                imageRect: imageRect,
+                cropRectNorm: Binding(
+                    get: { viewModel.editRecipe.cropRectNorm ?? CGRect(x: 0, y: 0, width: 1, height: 1) },
+                    set: { newValue in
+                        viewModel.updateCropRect(newValue, finalize: false)
+                    }
+                ),
+                aspectRatio: viewModel.cropAspectRatio.ratio,
+                onEditEnd: {
+                    if let rect = viewModel.editRecipe.cropRectNorm {
+                        viewModel.updateCropRect(rect, finalize: true)
+                    }
+                }
+            )
+        }
+    }
+
     // MARK: - Edit Controls View (3タブ構成)
 
     private var editControlsView: some View {
@@ -249,6 +357,13 @@ struct EditView: View {
                         selectedTab = tab
                         // タブ切り替え時にツール選択をリセット
                         selectedTool = nil
+                        // 切り取りタブ遷移時、クロップ矩形が未設定 or フル画面のままだと
+                        // オーバーレイ（白枠・ハンドル）が画像の端に重なって視認できないため、
+                        // 少し内側にインセットした既定矩形をセットして「トリミング UI がある」
+                        // ことをユーザーに伝える。
+                        if tab == .crop {
+                            viewModel.ensureVisibleCropRect()
+                        }
                     }
                 }) {
                     VStack(spacing: 4) {
@@ -307,9 +422,14 @@ struct EditView: View {
 
     private var adjustmentContentView: some View {
         VStack(spacing: 0) {
-            // ツール選択中はスライダーを表示
+            // ツール選択中の表示
             if let tool = selectedTool {
-                improvedSliderView(tool: tool)
+                if tool == .curves {
+                    // カーブ調整ツール: ToneCurveView を表示
+                    toneCurveEditorView
+                } else {
+                    improvedSliderView(tool: tool)
+                }
             }
 
             // ツール一覧
@@ -325,8 +445,10 @@ struct EditView: View {
                                     selectedTool = nil
                                 } else {
                                     selectedTool = tool
-                                    // 現在の値をスライダーに反映
-                                    sliderValue = viewModel.editSettings.value(for: tool) ?? 0
+                                    // 現在の値をスライダーに反映（有効範囲にクランプ）
+                                    let raw = viewModel.editSettings.value(for: tool) ?? 0
+                                    let range = tool.sliderRange
+                                    sliderValue = min(max(raw, range.lowerBound), range.upperBound)
                                 }
                             }
                         )
@@ -336,7 +458,45 @@ struct EditView: View {
                 .padding(.vertical, 12)
             }
         }
-        .frame(minHeight: selectedTool != nil ? 180 : 100)
+        .frame(minHeight: selectedTool == .curves ? 280 : (selectedTool != nil ? 180 : 100))
+    }
+
+    // MARK: - Tone Curve Editor View
+
+    /// カーブ調整ツール用のトーンカーブエディター
+    private var toneCurveEditorView: some View {
+        VStack(spacing: 8) {
+            // ヘッダー
+            HStack {
+                Text(EditTool.curves.displayName)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.top, 8)
+
+            // ToneCurveView（Binding でリアルタイム更新、ドラッグ終了時に Undo 履歴へ積む）
+            ToneCurveView(
+                points: Binding(
+                    get: { viewModel.editRecipe.toneCurvePoints ?? ToneCurvePoints() },
+                    set: { newPoints in
+                        // ドラッグ開始時のスナップショットをキャプチャ（Undo 用）
+                        viewModel.capturePreDragSnapshot()
+                        viewModel.editRecipe.toneCurvePoints = newPoints
+                        // スライダーと同じスロットリング付き高速プレビュー経路を走らせる
+                        // （毎フレーム generatePreview を叩くと 750px の同期レンダが詰まり
+                        //  画面が固まって見える不具合を回避）
+                        viewModel.triggerRealtimePreview()
+                    }
+                ),
+                onEditEnd: {
+                    viewModel.finalizeToolValue(for: .curves)
+                }
+            )
+            .frame(height: 220)
+            .padding(.horizontal)
+        }
     }
 
     // MARK: - Improved Slider View (目盛り付き)
@@ -372,8 +532,8 @@ struct EditView: View {
 
             // 目盛り付きスライダー
             ZStack(alignment: .center) {
-                // 目盛り
-                TickMarksView()
+                // 目盛り（片側スライダのツールでは 0 を左端に寄せた見た目に）
+                TickMarksView(isBidirectional: tool.sliderRange.lowerBound < 0)
 
                 // スライダー
                 Slider(
@@ -385,7 +545,7 @@ struct EditView: View {
                             viewModel.setToolValueRealtime(newValue, for: tool)
                         }
                     ),
-                    in: -1.0...1.0,
+                    in: tool.sliderRange,
                     onEditingChanged: { isEditing in
                         if !isEditing {
                             // スライダー操作完了時に高品質プレビュー生成
@@ -521,23 +681,47 @@ struct EditView: View {
         }
         .frame(minHeight: 180)
     }
+
+}
+
+// MARK: - HDR Dynamic Range Modifier
+
+/// Phase 1 #L: EDR（Extended Dynamic Range）対応の View 変換子。
+/// iOS 17+ で `.allowedDynamicRange(.high)` を適用し、HDR 写真を XDR ディスプレイで
+/// 「光るハイライト」として表示する。対応端末以外では自動的に SDR にフォールバックする。
+private struct HDRDynamicRangeModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 17.0, *) {
+            content.allowedDynamicRange(.high)
+        } else {
+            content
+        }
+    }
 }
 
 // MARK: - Tick Marks View (目盛り)
 
 struct TickMarksView: View {
-    /// 目盛りの数（21本: -100〜+100、10刻み）
+    /// 両側スライダ（-1.0...+1.0）かどうか
+    ///
+    /// false のとき 0...+1.0 の片側スライダとして扱い、
+    /// 強調ティック（長い白線）を中央ではなく左端に配置する。
+    var isBidirectional: Bool = true
+
+    /// 目盛りの数（21本: -100〜+100 または 0〜+100、5%刻み）
     private let tickCount = 21
 
     var body: some View {
-        GeometryReader { geometry in
+        GeometryReader { _ in
             HStack(spacing: 0) {
                 ForEach(0..<tickCount, id: \.self) { index in
-                    let isCenterTick = index == tickCount / 2
+                    let highlightIndex = isBidirectional ? tickCount / 2 : 0
+                    let isHighlightTick = index == highlightIndex
 
                     Rectangle()
-                        .fill(isCenterTick ? Color.white : Color.white.opacity(0.3))
-                        .frame(width: isCenterTick ? 2 : 1, height: isCenterTick ? 16 : 8)
+                        .fill(isHighlightTick ? Color.white : Color.white.opacity(0.3))
+                        .frame(width: isHighlightTick ? 2 : 1,
+                               height: isHighlightTick ? 16 : 8)
 
                     if index < tickCount - 1 {
                         Spacer()

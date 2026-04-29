@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>そらもよう App Store Screenshots</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #111;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 40px;
+    padding: 40px;
+    justify-content: center;
+  }
+
+  .screenshot {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .screenshot.iphone {
+    width: 1284px;
+    height: 2778px;
+  }
+
+  .screenshot.ipad {
+    width: 2048px;
+    height: 2732px;
+  }
+
+  /* 背景グラデーション */
+  .bg-gradient {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+  }
+
+  .bg-gradient.morning {
+    background: linear-gradient(180deg, #87CEEB 0%, #B0E0E6 30%, #E0F0FF 60%, #F5E6D3 100%);
+  }
+  .bg-gradient.afternoon {
+    background: linear-gradient(180deg, #4A90D9 0%, #6BB3E0 30%, #87CEEB 60%, #B0D4F1 100%);
+  }
+  .bg-gradient.sunset {
+    background: linear-gradient(180deg, #2C3E8C 0%, #8B5A9C 25%, #E0768C 50%, #F4A460 75%, #FFD700 100%);
+  }
+  .bg-gradient.sky-blue {
+    background: linear-gradient(180deg, #668FD9 0%, #7AB0E6 25%, #8ECAE6 50%, #A8D8EA 75%, #C8E6F0 100%);
+  }
+  .bg-gradient.dreamy {
+    background: linear-gradient(180deg, #667EEA 0%, #764BA2 30%, #F093FB 60%, #F5576C 100%);
+  }
+
+  /* キャッチコピー */
+  .catchcopy {
+    position: absolute;
+    top: 100px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    z-index: 10;
+  }
+
+  .catchcopy h1 {
+    font-size: 76px;
+    font-weight: 800;
+    color: #fff;
+    text-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    letter-spacing: 0.05em;
+    line-height: 1.3;
+  }
+
+  .catchcopy .subtitle {
+    font-size: 36px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.85);
+    margin-top: 16px;
+    text-shadow: 0 2px 10px rgba(0,0,0,0.2);
+  }
+
+  .catchcopy.ipad h1 {
+    font-size: 88px;
+  }
+  .catchcopy.ipad .subtitle {
+    font-size: 44px;
+  }
+
+  /* デバイスフレーム（ステータスバーなし） */
+  .device-frame {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.4), 0 0 0 4px rgba(255,255,255,0.1);
+    background: #000;
+  }
+
+  .device-frame.iphone-frame {
+    width: 900px;
+    height: 1950px;
+    top: 400px;
+    border: 8px solid #1a1a1a;
+    border-radius: 60px;
+  }
+
+  .device-frame.ipad-frame {
+    width: 1500px;
+    height: 2000px;
+    top: 380px;
+    border: 10px solid #1a1a1a;
+    border-radius: 40px;
+  }
+
+  /* モック画面共通 */
+  .mock-screen {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  /* ===== ホーム画面モック ===== */
+  .home-mock {
+    background: linear-gradient(180deg, #8ECAE6 0%, #6BB3E0 50%, #4A90D9 100%);
+    padding: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .mock-navbar {
+    text-align: center;
+    padding: 24px 0 16px;
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(20px);
+  }
+
+  .mock-navbar .app-name {
+    font-size: 36px;
+    font-weight: 700;
+    background: linear-gradient(90deg, #667EEA, #764BA2);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .mock-navbar .app-tagline {
+    font-size: 14px;
+    color: rgba(0,0,0,0.4);
+    margin-top: 2px;
+  }
+
+  .feed-card {
+    margin: 20px 24px;
+    background: rgba(255,255,255,0.85);
+    backdrop-filter: blur(20px);
+    border-radius: 24px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+  }
+
+  .feed-card-image {
+    width: 100%;
+    height: 320px;
+    object-fit: cover;
+  }
+
+  .feed-card-info {
+    padding: 20px;
+  }
+
+  .feed-card-info .caption {
+    font-size: 20px;
+    color: #333;
+    margin-bottom: 10px;
+  }
+
+  .feed-card-info .tags {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .feed-card-info .tag {
+    background: rgba(74, 144, 217, 0.1);
+    color: #4A90D9;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 16px;
+    font-weight: 500;
+  }
+
+  .feed-card-info .meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    color: #888;
+  }
+
+  .feed-card-actions {
+    display: flex;
+    gap: 24px;
+    padding: 12px 20px;
+    border-top: 1px solid rgba(0,0,0,0.05);
+    font-size: 18px;
+    color: #888;
+  }
+
+  .feed-card-actions .like { color: #E07080; }
+  .feed-card-actions .comment { color: #4A90D9; }
+
+  /* フローティングタブバー */
+  .mock-tabbar {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0;
+    background: rgba(255,255,255,0.85);
+    backdrop-filter: blur(20px);
+    border-radius: 40px;
+    padding: 12px 20px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+    z-index: 20;
+    width: 80%;
+  }
+
+  .tab-item {
+    flex: 1;
+    text-align: center;
+    font-size: 14px;
+    color: #999;
+  }
+
+  .tab-item.active {
+    color: #667EEA;
+  }
+
+  .tab-item .tab-icon {
+    font-size: 24px;
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  .tab-item.center {
+    position: relative;
+    top: -16px;
+  }
+
+  .tab-item.center .tab-icon {
+    width: 56px;
+    height: 56px;
+    line-height: 56px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667EEA, #764BA2);
+    color: #fff;
+    font-size: 28px;
+    margin: 0 auto;
+    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+  }
+
+  /* 空の写真プレースホルダー */
+  .sky-photo {
+    width: 100%;
+    display: block;
+  }
+  .sky-photo.blue { background: linear-gradient(180deg, #87CEEB, #4A90D9); }
+  .sky-photo.sunset { background: linear-gradient(180deg, #F4A460, #E0768C, #8B5A9C); }
+  .sky-photo.cloudy { background: linear-gradient(180deg, #C0C0C0, #808080, #555); }
+  .sky-photo.dramatic { background: linear-gradient(180deg, #2C3E8C, #E0768C, #FFD700); }
+
+  /* ===== ギャラリー画面モック ===== */
+  .gallery-mock {
+    background: linear-gradient(180deg, #AEDCF0 0%, #87CEEB 50%, #6BB3E0 100%);
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 3px;
+    padding: 3px;
+    flex: 1;
+  }
+
+  .gallery-item {
+    aspect-ratio: 1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .gallery-item .indicator {
+    position: absolute;
+    bottom: 6px;
+    right: 6px;
+    color: #fff;
+    font-size: 14px;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  }
+
+  /* ===== 編集画面モック ===== */
+  .edit-mock {
+    background: #000;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .edit-image-area {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+
+  .edit-sky-image {
+    width: 90%;
+    height: 70%;
+    border-radius: 8px;
+  }
+
+  .edit-toolbar {
+    background: #111;
+    padding: 20px 30px 40px;
+  }
+
+  .edit-tabs {
+    display: flex;
+    justify-content: space-around;
+    padding: 10px 0 20px;
+  }
+
+  .edit-tab {
+    font-size: 20px;
+    color: rgba(255,255,255,0.5);
+  }
+  .edit-tab.active { color: #fff; }
+
+  .filter-strip {
+    display: flex;
+    gap: 20px;
+    overflow: hidden;
+    padding: 16px 0;
+  }
+
+  .filter-item {
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .filter-thumb {
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+    margin-bottom: 8px;
+  }
+
+  .filter-thumb.selected {
+    border: 3px solid #7AB0E6;
+    box-shadow: 0 0 20px rgba(122, 176, 230, 0.4);
+  }
+
+  .filter-label {
+    font-size: 16px;
+    color: rgba(255,255,255,0.5);
+  }
+  .filter-label.selected { color: #fff; font-weight: 600; }
+
+  /* ===== 投稿情報モック ===== */
+  .postinfo-mock {
+    background: linear-gradient(180deg, #F5E6D3 0%, #E0C8B0 50%, #D4A58C 100%);
+    padding: 40px 36px;
+    height: 100%;
+  }
+
+  .postinfo-title {
+    font-size: 30px;
+    font-weight: 700;
+    color: #333;
+    text-align: center;
+    margin-bottom: 28px;
+  }
+
+  .info-card {
+    background: rgba(255,255,255,0.85);
+    backdrop-filter: blur(20px);
+    border-radius: 20px;
+    padding: 24px 28px;
+    margin-bottom: 18px;
+  }
+
+  .info-card h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #888;
+    margin-bottom: 10px;
+  }
+
+  .info-card .value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #333;
+  }
+
+  .color-dots {
+    display: flex;
+    gap: 10px;
+    margin-top: 6px;
+  }
+
+  .color-dot {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 2px solid rgba(0,0,0,0.1);
+  }
+
+  .tag-badge {
+    background: #E8F0FE;
+    color: #4A90D9;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 18px;
+    display: inline-block;
+    margin-right: 6px;
+    margin-bottom: 6px;
+  }
+
+  /* ===== 検索画面モック ===== */
+  .search-mock {
+    background: linear-gradient(180deg, #8ECAE6 0%, #6BB3E0 50%, #4A90D9 100%);
+    padding: 40px 36px;
+    height: 100%;
+  }
+
+  .search-title {
+    font-size: 30px;
+    font-weight: 700;
+    color: #fff;
+    text-align: center;
+    margin-bottom: 28px;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  }
+
+  .search-bar {
+    background: rgba(255,255,255,0.9);
+    border-radius: 20px;
+    padding: 20px 28px;
+    margin-bottom: 32px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 22px;
+    color: #999;
+  }
+
+  .section-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 14px;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+
+  .chip {
+    background: rgba(255,255,255,0.2);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 30px;
+    padding: 12px 24px;
+    font-size: 20px;
+    color: #fff;
+    font-weight: 500;
+  }
+
+  .chip.active {
+    background: rgba(255,255,255,0.9);
+    color: #4A90D9;
+    border-color: transparent;
+    font-weight: 600;
+  }
+
+  .color-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 14px;
+  }
+
+  .color-circle {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    border: 3px solid rgba(255,255,255,0.3);
+  }
+
+  /* ===== プロフィール画面モック ===== */
+  .profile-mock {
+    background: linear-gradient(180deg, #87CEEB 0%, #A8D8EA 30%, #C8E6F0 100%);
+    padding: 40px 36px;
+    height: 100%;
+  }
+
+  .profile-header { text-align: center; margin-bottom: 32px; }
+
+  .avatar {
+    width: 110px;
+    height: 110px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667EEA, #764BA2);
+    margin: 0 auto 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 44px;
+    color: #fff;
+    border: 4px solid rgba(255,255,255,0.5);
+  }
+
+  .profile-name {
+    font-size: 28px;
+    font-weight: 700;
+    color: #333;
+  }
+
+  .profile-bio {
+    font-size: 18px;
+    color: #666;
+    margin-top: 6px;
+  }
+
+  .profile-stats {
+    display: flex;
+    justify-content: center;
+    gap: 36px;
+    margin-top: 16px;
+  }
+
+  .stat { text-align: center; }
+  .stat-number { font-size: 24px; font-weight: 700; color: #333; }
+  .stat-label { font-size: 16px; color: #666; }
+
+  .profile-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    margin-top: 24px;
+    border-radius: 16px;
+    overflow: hidden;
+  }
+
+  .profile-grid-item {
+    aspect-ratio: 1;
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== iPhone 1: ホーム ===== -->
+<div class="screenshot iphone" id="iphone-01">
+  <div class="bg-gradient sky-blue"></div>
+  <div class="catchcopy">
+    <h1>今日の空、<br>みんなの空</h1>
+    <div class="subtitle">そらもよう</div>
+  </div>
+  <div class="device-frame iphone-frame">
+    <div class="home-mock">
+      <div class="mock-navbar">
+        <div class="app-name">そらもよう</div>
+        <div class="app-tagline">空を撮る、空を集める</div>
+      </div>
+      <div style="flex: 1; overflow: hidden; position: relative;">
+        <div class="feed-card">
+          <div class="sky-photo blue feed-card-image"></div>
+          <div class="feed-card-info">
+            <div class="caption">今日の空がとても綺麗でした</div>
+            <div class="tags"><span class="tag">#青空</span><span class="tag">#そらもよう</span></div>
+            <div class="meta"><span>東京都 渋谷区</span><span>☀️ 晴天 ・ 昼</span></div>
+          </div>
+          <div class="feed-card-actions"><span class="like">♡ 24</span><span class="comment">💬 3</span></div>
+        </div>
+        <div class="feed-card">
+          <div class="sky-photo sunset feed-card-image"></div>
+          <div class="feed-card-info">
+            <div class="caption">夕焼けのグラデーションが美しい</div>
+            <div class="tags"><span class="tag">#夕焼け</span><span class="tag">#空</span></div>
+            <div class="meta"><span>神奈川県 横浜市</span><span>🌅 夕焼け ・ 夕方</span></div>
+          </div>
+        </div>
+        <div class="mock-tabbar">
+          <div class="tab-item active"><span class="tab-icon">🏠</span>ホーム</div>
+          <div class="tab-item"><span class="tab-icon">🖼</span>ギャラリー</div>
+          <div class="tab-item center"><span class="tab-icon">＋</span></div>
+          <div class="tab-item"><span class="tab-icon">🔍</span>検索</div>
+          <div class="tab-item"><span class="tab-icon">👤</span>プロフィール</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== iPhone 2: ギャラリー ===== -->
+<div class="screenshot iphone" id="iphone-02">
+  <div class="bg-gradient afternoon"></div>
+  <div class="catchcopy">
+    <h1>あなただけの<br>空コレクション</h1>
+    <div class="subtitle">そらもよう</div>
+  </div>
+  <div class="device-frame iphone-frame">
+    <div class="gallery-mock">
+      <div class="mock-navbar"><div class="app-name">ギャラリー</div></div>
+      <div class="gallery-grid">
+        <div class="gallery-item"><div class="sky-photo blue" style="width:100%;height:100%;"></div></div>
+        <div class="gallery-item"><div class="sky-photo sunset" style="width:100%;height:100%;"></div><div class="indicator">⚙</div></div>
+        <div class="gallery-item"><div class="sky-photo cloudy" style="width:100%;height:100%;"></div></div>
+        <div class="gallery-item"><div class="sky-photo dramatic" style="width:100%;height:100%;"></div><div class="indicator">⚙</div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg, #B0E0E6, #87CEEB);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg, #FFD700, #F4A460, #E0768C);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg, #667EEA, #764BA2);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg, #E0768C, #F5576C);"></div><div class="indicator">⚙</div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg, #87CEEB, #4A90D9, #2C3E8C);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg, #D4A58C, #C8A882);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg, #F093FB, #F5576C);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg, #A8D8EA, #6BB3E0);"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== iPhone 3: 編集画面 ===== -->
+<div class="screenshot iphone" id="iphone-03">
+  <div class="bg-gradient dreamy"></div>
+  <div class="catchcopy">
+    <h1>27の編集ツールで<br>空を彩る</h1>
+    <div class="subtitle">そらもよう</div>
+  </div>
+  <div class="device-frame iphone-frame">
+    <div class="edit-mock">
+      <div class="edit-image-area">
+        <div class="edit-sky-image" style="background: linear-gradient(180deg, #4A90D9, #87CEEB, #F4A460, #E0768C); filter: saturate(1.3) contrast(1.1);"></div>
+      </div>
+      <div class="edit-toolbar">
+        <div class="edit-tabs">
+          <span class="edit-tab active">フィルター</span>
+          <span class="edit-tab">編集</span>
+          <span class="edit-tab">切り取り</span>
+        </div>
+        <div class="filter-strip">
+          <div class="filter-item"><div class="filter-thumb" style="background: #555;"></div><div class="filter-label">なし</div></div>
+          <div class="filter-item"><div class="filter-thumb" style="background: linear-gradient(135deg, #87CEEB, #4A90D9);"></div><div class="filter-label">ナチュラル</div></div>
+          <div class="filter-item"><div class="filter-thumb selected" style="background: linear-gradient(135deg, #6BA3D6, #4A7FB5);"></div><div class="filter-label selected">クリア</div></div>
+          <div class="filter-item"><div class="filter-thumb" style="background: linear-gradient(135deg, #444, #222);"></div><div class="filter-label">ドラマ</div></div>
+          <div class="filter-item"><div class="filter-thumb" style="background: linear-gradient(135deg, #D4A58C, #E0C8B0);"></div><div class="filter-label">ウォーム</div></div>
+          <div class="filter-item"><div class="filter-thumb" style="background: linear-gradient(135deg, #A8C8E0, #7AB0D4);"></div><div class="filter-label">クール</div></div>
+          <div class="filter-item"><div class="filter-thumb" style="background: linear-gradient(135deg, #C8A882, #9A8060);"></div><div class="filter-label">ビンテージ</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== iPhone 4: 投稿情報 ===== -->
+<div class="screenshot iphone" id="iphone-04">
+  <div class="bg-gradient sunset"></div>
+  <div class="catchcopy">
+    <h1>空の色・時間帯を<br>自動分析</h1>
+    <div class="subtitle">そらもよう</div>
+  </div>
+  <div class="device-frame iphone-frame">
+    <div class="postinfo-mock">
+      <div class="postinfo-title">投稿情報</div>
+      <div class="info-card"><h3>キャプション</h3><div class="value" style="font-size:20px;font-weight:400;color:#555;">今日の夕焼けが綺麗でした</div></div>
+      <div class="info-card"><h3>空の種類（自動判定）</h3><div class="value">🌅 夕焼け</div></div>
+      <div class="info-card"><h3>時間帯（自動判定）</h3><div class="value">🌇 夕方</div></div>
+      <div class="info-card"><h3>空の色（自動抽出）</h3><div class="color-dots">
+        <div class="color-dot" style="background:#2C3E8C;"></div>
+        <div class="color-dot" style="background:#8B5A9C;"></div>
+        <div class="color-dot" style="background:#E0768C;"></div>
+        <div class="color-dot" style="background:#F4A460;"></div>
+        <div class="color-dot" style="background:#FFD700;"></div>
+      </div></div>
+      <div class="info-card"><h3>ハッシュタグ</h3><span class="tag-badge">#夕焼け</span><span class="tag-badge">#空</span><span class="tag-badge">#そらもよう</span></div>
+      <div class="info-card"><h3>撮影場所</h3><div class="value" style="font-size:22px;">📍 東京都 渋谷区</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== iPhone 5: 検索 ===== -->
+<div class="screenshot iphone" id="iphone-05">
+  <div class="bg-gradient morning"></div>
+  <div class="catchcopy">
+    <h1>色や時間帯で<br>空を探す</h1>
+    <div class="subtitle">そらもよう</div>
+  </div>
+  <div class="device-frame iphone-frame">
+    <div class="search-mock">
+      <div class="search-title">検索</div>
+      <div class="search-bar">🔍 キーワード・ハッシュタグ</div>
+      <div class="section-title">時間帯で探す</div>
+      <div class="chips"><div class="chip active">朝</div><div class="chip">昼</div><div class="chip">夕方</div><div class="chip">夜</div></div>
+      <div class="section-title">空の種類</div>
+      <div class="chips"><div class="chip">晴天</div><div class="chip active">夕焼け</div><div class="chip">朝焼け</div><div class="chip">曇天</div><div class="chip">嵐</div></div>
+      <div class="section-title">色で探す</div>
+      <div class="color-grid">
+        <div class="color-circle" style="background:#87CEEB;"></div>
+        <div class="color-circle" style="background:#4A90D9;"></div>
+        <div class="color-circle" style="background:#FF8C69;"></div>
+        <div class="color-circle" style="background:#FFD700;"></div>
+        <div class="color-circle" style="background:#E0768C;"></div>
+        <div class="color-circle" style="background:#8B5A9C;"></div>
+        <div class="color-circle" style="background:#2C3E8C;"></div>
+        <div class="color-circle" style="background:#F5E6D3;"></div>
+        <div class="color-circle" style="background:#C0C0C0;"></div>
+        <div class="color-circle" style="background:#333;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== iPhone 6: プロフィール ===== -->
+<div class="screenshot iphone" id="iphone-06">
+  <div class="bg-gradient sky-blue"></div>
+  <div class="catchcopy">
+    <h1>あなたの<br>空ギャラリー</h1>
+    <div class="subtitle">そらもよう</div>
+  </div>
+  <div class="device-frame iphone-frame">
+    <div class="profile-mock">
+      <div class="profile-header">
+        <div class="avatar">☁</div>
+        <div class="profile-name">空好きユーザー</div>
+        <div class="profile-bio">空が好きです。毎日見上げています。</div>
+        <div class="profile-stats">
+          <div class="stat"><div class="stat-number">42</div><div class="stat-label">投稿</div></div>
+          <div class="stat"><div class="stat-number">128</div><div class="stat-label">フォロワー</div></div>
+          <div class="stat"><div class="stat-number">85</div><div class="stat-label">フォロー</div></div>
+        </div>
+      </div>
+      <div class="profile-grid">
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#87CEEB,#4A90D9);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#F4A460,#E0768C);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#333,#666);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#FFD700,#FF8C69);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#8B5A9C,#2C3E8C);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#A8D8EA,#87CEEB);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#E0768C,#F5576C);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#87CEEB,#B0E0E6);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#D4A58C,#C8A882);"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== iPad版（同じ6画面をiPadフレームで） ===== -->
+
+<div class="screenshot ipad" id="ipad-01">
+  <div class="bg-gradient sky-blue"></div>
+  <div class="catchcopy ipad"><h1>今日の空、<br>みんなの空</h1><div class="subtitle">そらもよう</div></div>
+  <div class="device-frame ipad-frame">
+    <div class="home-mock">
+      <div class="mock-navbar"><div class="app-name">そらもよう</div><div class="app-tagline">空を撮る、空を集める</div></div>
+      <div style="flex:1;overflow:hidden;position:relative;">
+        <div class="feed-card"><div class="sky-photo blue feed-card-image"></div><div class="feed-card-info"><div class="caption">今日の空がとても綺麗でした</div><div class="tags"><span class="tag">#青空</span><span class="tag">#そらもよう</span></div><div class="meta"><span>東京都 渋谷区</span><span>☀️ 晴天</span></div></div><div class="feed-card-actions"><span class="like">♡ 24</span><span class="comment">💬 3</span></div></div>
+        <div class="feed-card"><div class="sky-photo sunset feed-card-image"></div><div class="feed-card-info"><div class="caption">夕焼けのグラデーションが美しい</div><div class="tags"><span class="tag">#夕焼け</span></div></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="screenshot ipad" id="ipad-02">
+  <div class="bg-gradient afternoon"></div>
+  <div class="catchcopy ipad"><h1>あなただけの<br>空コレクション</h1><div class="subtitle">そらもよう</div></div>
+  <div class="device-frame ipad-frame">
+    <div class="gallery-mock">
+      <div class="mock-navbar"><div class="app-name">ギャラリー</div></div>
+      <div class="gallery-grid" style="grid-template-columns:repeat(4,1fr);">
+        <div class="gallery-item"><div class="sky-photo blue" style="width:100%;height:100%;"></div></div>
+        <div class="gallery-item"><div class="sky-photo sunset" style="width:100%;height:100%;"></div></div>
+        <div class="gallery-item"><div class="sky-photo cloudy" style="width:100%;height:100%;"></div></div>
+        <div class="gallery-item"><div class="sky-photo dramatic" style="width:100%;height:100%;"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg,#B0E0E6,#87CEEB);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg,#FFD700,#F4A460);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg,#667EEA,#764BA2);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg,#E0768C,#F5576C);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg,#87CEEB,#2C3E8C);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg,#D4A58C,#C8A882);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg,#F093FB,#F5576C);"></div></div>
+        <div class="gallery-item"><div style="width:100%;height:100%;background:linear-gradient(180deg,#A8D8EA,#6BB3E0);"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="screenshot ipad" id="ipad-03">
+  <div class="bg-gradient dreamy"></div>
+  <div class="catchcopy ipad"><h1>27の編集ツールで<br>空を彩る</h1><div class="subtitle">そらもよう</div></div>
+  <div class="device-frame ipad-frame">
+    <div class="edit-mock">
+      <div class="edit-image-area"><div class="edit-sky-image" style="background:linear-gradient(180deg,#4A90D9,#87CEEB,#F4A460,#E0768C);filter:saturate(1.3) contrast(1.1);"></div></div>
+      <div class="edit-toolbar">
+        <div class="edit-tabs"><span class="edit-tab active">フィルター</span><span class="edit-tab">編集</span><span class="edit-tab">切り取り</span></div>
+        <div class="filter-strip">
+          <div class="filter-item"><div class="filter-thumb" style="background:#555;"></div><div class="filter-label">なし</div></div>
+          <div class="filter-item"><div class="filter-thumb" style="background:linear-gradient(135deg,#87CEEB,#4A90D9);"></div><div class="filter-label">ナチュラル</div></div>
+          <div class="filter-item"><div class="filter-thumb selected" style="background:linear-gradient(135deg,#6BA3D6,#4A7FB5);"></div><div class="filter-label selected">クリア</div></div>
+          <div class="filter-item"><div class="filter-thumb" style="background:linear-gradient(135deg,#444,#222);"></div><div class="filter-label">ドラマ</div></div>
+          <div class="filter-item"><div class="filter-thumb" style="background:linear-gradient(135deg,#D4A58C,#E0C8B0);"></div><div class="filter-label">ウォーム</div></div>
+          <div class="filter-item"><div class="filter-thumb" style="background:linear-gradient(135deg,#A8C8E0,#7AB0D4);"></div><div class="filter-label">クール</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="screenshot ipad" id="ipad-04">
+  <div class="bg-gradient sunset"></div>
+  <div class="catchcopy ipad"><h1>空の色・時間帯を<br>自動分析</h1><div class="subtitle">そらもよう</div></div>
+  <div class="device-frame ipad-frame">
+    <div class="postinfo-mock">
+      <div class="postinfo-title">投稿情報</div>
+      <div class="info-card"><h3>キャプション</h3><div class="value" style="font-size:20px;font-weight:400;color:#555;">今日の夕焼けが綺麗でした</div></div>
+      <div class="info-card"><h3>空の種類（自動判定）</h3><div class="value">🌅 夕焼け</div></div>
+      <div class="info-card"><h3>時間帯（自動判定）</h3><div class="value">🌇 夕方</div></div>
+      <div class="info-card"><h3>空の色（自動抽出）</h3><div class="color-dots"><div class="color-dot" style="background:#2C3E8C;"></div><div class="color-dot" style="background:#8B5A9C;"></div><div class="color-dot" style="background:#E0768C;"></div><div class="color-dot" style="background:#F4A460;"></div><div class="color-dot" style="background:#FFD700;"></div></div></div>
+      <div class="info-card"><h3>ハッシュタグ</h3><span class="tag-badge">#夕焼け</span><span class="tag-badge">#空</span><span class="tag-badge">#そらもよう</span></div>
+      <div class="info-card"><h3>撮影場所</h3><div class="value" style="font-size:22px;">📍 東京都 渋谷区</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="screenshot ipad" id="ipad-05">
+  <div class="bg-gradient morning"></div>
+  <div class="catchcopy ipad"><h1>色や時間帯で<br>空を探す</h1><div class="subtitle">そらもよう</div></div>
+  <div class="device-frame ipad-frame">
+    <div class="search-mock">
+      <div class="search-title">検索</div>
+      <div class="search-bar">🔍 キーワード・ハッシュタグ</div>
+      <div class="section-title">時間帯で探す</div>
+      <div class="chips"><div class="chip active">朝</div><div class="chip">昼</div><div class="chip">夕方</div><div class="chip">夜</div></div>
+      <div class="section-title">空の種類</div>
+      <div class="chips"><div class="chip">晴天</div><div class="chip active">夕焼け</div><div class="chip">朝焼け</div><div class="chip">曇天</div><div class="chip">嵐</div></div>
+      <div class="section-title">色で探す</div>
+      <div class="color-grid"><div class="color-circle" style="background:#87CEEB;"></div><div class="color-circle" style="background:#4A90D9;"></div><div class="color-circle" style="background:#FF8C69;"></div><div class="color-circle" style="background:#FFD700;"></div><div class="color-circle" style="background:#E0768C;"></div><div class="color-circle" style="background:#8B5A9C;"></div><div class="color-circle" style="background:#2C3E8C;"></div><div class="color-circle" style="background:#F5E6D3;"></div><div class="color-circle" style="background:#C0C0C0;"></div><div class="color-circle" style="background:#333;"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="screenshot ipad" id="ipad-06">
+  <div class="bg-gradient sky-blue"></div>
+  <div class="catchcopy ipad"><h1>あなたの<br>空ギャラリー</h1><div class="subtitle">そらもよう</div></div>
+  <div class="device-frame ipad-frame">
+    <div class="profile-mock">
+      <div class="profile-header">
+        <div class="avatar">☁</div>
+        <div class="profile-name">空好きユーザー</div>
+        <div class="profile-bio">空が好きです。毎日見上げています。</div>
+        <div class="profile-stats">
+          <div class="stat"><div class="stat-number">42</div><div class="stat-label">投稿</div></div>
+          <div class="stat"><div class="stat-number">128</div><div class="stat-label">フォロワー</div></div>
+          <div class="stat"><div class="stat-number">85</div><div class="stat-label">フォロー</div></div>
+        </div>
+      </div>
+      <div class="profile-grid" style="grid-template-columns:repeat(4,1fr);">
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#87CEEB,#4A90D9);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#F4A460,#E0768C);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#333,#666);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#FFD700,#FF8C69);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#8B5A9C,#2C3E8C);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#A8D8EA,#87CEEB);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#E0768C,#F5576C);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#87CEEB,#B0E0E6);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#D4A58C,#C8A882);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#4A90D9,#667EEA);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#F5E6D3,#E0C8B0);"></div>
+        <div class="profile-grid-item" style="background:linear-gradient(135deg,#764BA2,#F093FB);"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

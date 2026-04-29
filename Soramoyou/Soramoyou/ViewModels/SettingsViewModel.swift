@@ -51,7 +51,7 @@ class SettingsViewModel: ObservableObject {
             return false
         } catch {
             ErrorHandler.logError(error, context: "SettingsViewModel.performAccountDeletion", userId: userId)
-            deleteAccountError = "アカウントの削除に失敗しました: \(error.localizedDescription)"
+            deleteAccountError = "アカウントの削除に失敗しました: \(error.userFriendlyMessage)"
             return false
         }
     }
@@ -79,7 +79,7 @@ class SettingsViewModel: ObservableObject {
             return true
         } catch {
             ErrorHandler.logError(error, context: "SettingsViewModel.performReauthAndDelete", userId: userId)
-            deleteAccountError = "アカウントの削除に失敗しました: \(error.localizedDescription)"
+            deleteAccountError = "アカウントの削除に失敗しました: \(error.userFriendlyMessage)"
             return false
         }
     }

@@ -151,6 +151,10 @@ class MockAuthService: AuthServiceProtocol {
         currentUserValue = user
         return user
     }
+
+    func deleteAccount() async throws {}
+
+    func reauthenticate(email: String, password: String) async throws {}
 }
 
 

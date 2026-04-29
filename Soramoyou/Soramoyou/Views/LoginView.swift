@@ -215,7 +215,7 @@ struct LoginView: View {
                 let errorFeedback = UINotificationFeedbackGenerator()
                 errorFeedback.notificationOccurred(.error)
                 withAnimation(DesignTokens.Animation.quickSpring) {
-                    errorMessage = error.localizedDescription
+                    errorMessage = error.userFriendlyMessage
                 }
             }
             isLoading = false

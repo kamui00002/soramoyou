@@ -166,7 +166,15 @@ struct EditSettings: Codable, Equatable {
         case .dehaze: self.dehaze = value
         case .grain: self.grain = value
         case .fade: self.fade = value
-        case .noiseReduction: self.noiseReduction = value
+        case .noiseReduction:
+            // H-3 対応: ノイズリダクションは 0...1 の片側スライダ。
+            // 旧データや外部入力で負値が入ってきた場合は 0 にクランプし、
+            // 「左に振っても何も起きない」というミスリードを根絶する。
+            if let value = value {
+                self.noiseReduction = max(0, value)
+            } else {
+                self.noiseReduction = nil
+            }
         case .curves: self.curves = value
         case .hsl: self.hsl = value
         case .lensCorrection: self.lensCorrection = value

@@ -18,9 +18,10 @@ final class ColorMatchingTests: XCTestCase {
         let result = ColorMatching.hexToRGB("#FF0000")
 
         XCTAssertNotNil(result)
-        XCTAssertEqual(result?.r, 1.0, accuracy: 0.001)
-        XCTAssertEqual(result?.g, 0.0, accuracy: 0.001)
-        XCTAssertEqual(result?.b, 0.0, accuracy: 0.001)
+        guard let rgb = result else { return }
+        XCTAssertEqual(rgb.r, 1.0, accuracy: 0.001)
+        XCTAssertEqual(rgb.g, 0.0, accuracy: 0.001)
+        XCTAssertEqual(rgb.b, 0.0, accuracy: 0.001)
     }
 
     /// "#"プレフィックスなしの16進数カラーコードを正しく変換できること
@@ -28,9 +29,10 @@ final class ColorMatchingTests: XCTestCase {
         let result = ColorMatching.hexToRGB("00FF00")
 
         XCTAssertNotNil(result)
-        XCTAssertEqual(result?.r, 0.0, accuracy: 0.001)
-        XCTAssertEqual(result?.g, 1.0, accuracy: 0.001)
-        XCTAssertEqual(result?.b, 0.0, accuracy: 0.001)
+        guard let rgb = result else { return }
+        XCTAssertEqual(rgb.r, 0.0, accuracy: 0.001)
+        XCTAssertEqual(rgb.g, 1.0, accuracy: 0.001)
+        XCTAssertEqual(rgb.b, 0.0, accuracy: 0.001)
     }
 
     /// 青色（#0000FF）を正しく変換できること
@@ -38,9 +40,10 @@ final class ColorMatchingTests: XCTestCase {
         let result = ColorMatching.hexToRGB("#0000FF")
 
         XCTAssertNotNil(result)
-        XCTAssertEqual(result?.r, 0.0, accuracy: 0.001)
-        XCTAssertEqual(result?.g, 0.0, accuracy: 0.001)
-        XCTAssertEqual(result?.b, 1.0, accuracy: 0.001)
+        guard let rgb = result else { return }
+        XCTAssertEqual(rgb.r, 0.0, accuracy: 0.001)
+        XCTAssertEqual(rgb.g, 0.0, accuracy: 0.001)
+        XCTAssertEqual(rgb.b, 1.0, accuracy: 0.001)
     }
 
     /// 無効なカラーコード（桁数不足）でnilを返すこと
@@ -66,7 +69,8 @@ final class ColorMatchingTests: XCTestCase {
         let result = ColorMatching.hexToRGB("  #FF0000  ")
 
         XCTAssertNotNil(result)
-        XCTAssertEqual(result?.r, 1.0, accuracy: 0.001)
+        guard let rgb = result else { return }
+        XCTAssertEqual(rgb.r, 1.0, accuracy: 0.001)
     }
 
     // MARK: - calculateRGBDistance テスト
