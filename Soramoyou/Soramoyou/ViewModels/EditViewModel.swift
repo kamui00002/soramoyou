@@ -316,6 +316,8 @@ class EditViewModel: ObservableObject {
         currentImageIndex += 1
         restoreImageState(at: currentImageIndex)
         invalidateLowResCache()
+        // ⭐️ 古いプレビューを即時クリア（async の generatePreview 完了まで前画像が残るのを防ぐ）
+        clearPreviewForImageSwitch()
         Task { [weak self] in
             await self?.generatePreview()
         }
@@ -328,9 +330,24 @@ class EditViewModel: ObservableObject {
         currentImageIndex -= 1
         restoreImageState(at: currentImageIndex)
         invalidateLowResCache()
+        // ⭐️ 古いプレビューを即時クリア
+        clearPreviewForImageSwitch()
         Task { [weak self] in
             await self?.generatePreview()
         }
+    }
+
+    /// 画像切替時に古いプレビューを即時クリアして、`currentImage`（元画像）が
+    /// 表示されるようにする。`generatePreview()` の async 完了まで前の画像の
+    /// フィルタ適用後プレビューが残り続けるのを防止する。
+    private func clearPreviewForImageSwitch() {
+        previewImage = nil
+        fastPreviewImage = nil
+        isEditingRealtime = false
+        // 進行中の preview Task はキャンセル（古い画像向けの結果が遅延適用されるのを防ぐ）
+        previewTask?.cancel()
+        fastPreviewTask?.cancel()
+        throttledPreviewTask?.cancel()
     }
     
     // MARK: - Filter Management
