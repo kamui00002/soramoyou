@@ -213,7 +213,8 @@ struct HomeView: View {
 struct PostCard: View {
     let post: Post
     /// 投稿者情報（HomeViewModel.authorsByUserId から渡される）⭐️ Issue #2
-    var author: User? = nil
+    /// `users` コレクションは isOwner 制限のため、公開可能な PublicProfile を渡す。
+    var author: PublicProfile? = nil
     var isLiked: Bool = false
     var likeCount: Int? = nil
     var onLikeTapped: (() -> Void)? = nil

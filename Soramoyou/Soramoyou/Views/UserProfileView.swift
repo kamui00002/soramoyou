@@ -35,7 +35,7 @@ struct UserProfileView: View {
             .padding(DesignTokens.Spacing.screenMargin)
         }
         .background(DesignTokens.Colors.detailBackground.ignoresSafeArea())
-        .navigationTitle(viewModel.user?.displayName ?? "プロフィール")
+        .navigationTitle(viewModel.publicProfile?.displayName ?? "プロフィール")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await viewModel.load()
@@ -55,10 +55,10 @@ struct UserProfileView: View {
     private var headerSection: some View {
         VStack(spacing: 12) {
             avatarView
-            Text(viewModel.user?.displayName ?? "ユーザー")
+            Text(viewModel.publicProfile?.displayName ?? "ユーザー")
                 .font(.title3.weight(.semibold))
                 .foregroundColor(.white)
-            if let bio = viewModel.user?.bio, !bio.isEmpty {
+            if let bio = viewModel.publicProfile?.bio, !bio.isEmpty {
                 Text(bio)
                     .font(.body)
                     .foregroundColor(.white.opacity(0.85))
@@ -70,7 +70,7 @@ struct UserProfileView: View {
 
     @ViewBuilder
     private var avatarView: some View {
-        if let urlString = viewModel.user?.photoURL, let url = URL(string: urlString) {
+        if let urlString = viewModel.publicProfile?.photoURL, let url = URL(string: urlString) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):
@@ -82,10 +82,10 @@ struct UserProfileView: View {
             .frame(width: 96, height: 96)
             .clipShape(Circle())
             .overlay(Circle().stroke(.white.opacity(0.4), lineWidth: 1))
-            .accessibilityLabel("\(viewModel.user?.displayName ?? "ユーザー") のプロフィール画像")
+            .accessibilityLabel("\(viewModel.publicProfile?.displayName ?? "ユーザー") のプロフィール画像")
         } else {
             placeholderAvatar
-                .accessibilityLabel("\(viewModel.user?.displayName ?? "ユーザー") のプロフィール画像")
+                .accessibilityLabel("\(viewModel.publicProfile?.displayName ?? "ユーザー") のプロフィール画像")
         }
     }
 
@@ -135,9 +135,9 @@ struct UserProfileView: View {
 
     private var statsRow: some View {
         HStack(spacing: DesignTokens.Spacing.lg) {
-            statItem(value: viewModel.user?.postsCount ?? 0, label: "投稿")
-            statItem(value: viewModel.user?.followersCount ?? 0, label: "フォロワー")
-            statItem(value: viewModel.user?.followingCount ?? 0, label: "フォロー中")
+            statItem(value: viewModel.publicProfile?.postsCount ?? 0, label: "投稿")
+            statItem(value: viewModel.publicProfile?.followersCount ?? 0, label: "フォロワー")
+            statItem(value: viewModel.publicProfile?.followingCount ?? 0, label: "フォロー中")
         }
         .padding(.vertical, DesignTokens.Spacing.md)
         .frame(maxWidth: .infinity)

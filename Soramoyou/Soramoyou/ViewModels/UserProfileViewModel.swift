@@ -18,7 +18,10 @@ class UserProfileViewModel: ObservableObject {
 
     // MARK: - Published State
 
-    @Published var user: User?
+    /// 他ユーザーから読める公開プロフィール（users コレクションは
+    /// `isOwner` 制限のため他人のドキュメントは取得不可。`publicProfiles`
+    /// コレクションを使う）⭐️
+    @Published var publicProfile: PublicProfile?
     @Published var posts: [Post] = []
     @Published var isFollowing: Bool = false
     @Published var isLoading: Bool = false
@@ -55,22 +58,26 @@ class UserProfileViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        async let userTask = fetchUserSafe()
+        async let profileTask = fetchPublicProfileSafe()
         async let postsTask = fetchPostsSafe()
         async let followingTask = fetchIsFollowingSafe()
 
-        let (user, posts, following) = await (userTask, postsTask, followingTask)
-        self.user = user
+        let (profile, posts, following) = await (profileTask, postsTask, followingTask)
+        self.publicProfile = profile
         // 公開投稿のみ表示（他ユーザーから見るのは原則 public のみ）
         self.posts = posts.filter { $0.visibility == .public }
         self.isFollowing = following
     }
 
-    private func fetchUserSafe() async -> User? {
+    /// 他ユーザーの公開プロフィールを取得する。
+    /// `users` コレクションは Firestore Security Rules で `isOwner` 制限が
+    /// かかっており、自分以外のドキュメントは読めないため
+    /// `publicProfiles/{userId}` 経由で取得する。
+    private func fetchPublicProfileSafe() async -> PublicProfile? {
         do {
-            return try await firestoreService.fetchUser(userId: targetUserId)
+            return try await firestoreService.fetchPublicProfile(userId: targetUserId)
         } catch {
-            logger.error("fetchUser 失敗: \(error.localizedDescription)")
+            logger.error("fetchPublicProfile 失敗: \(error.localizedDescription)")
             errorMessage = error.userFriendlyMessage
             return nil
         }
@@ -120,16 +127,16 @@ class UserProfileViewModel: ObservableObject {
             if isFollowing {
                 try await followRepository.unfollow(targetUserId, by: ownUserId)
                 isFollowing = false
-                if var u = user {
-                    u.followersCount = max(0, u.followersCount - 1)
-                    user = u
+                if var p = publicProfile {
+                    p.followersCount = max(0, p.followersCount - 1)
+                    publicProfile = p
                 }
             } else {
                 try await followRepository.follow(targetUserId, by: ownUserId)
                 isFollowing = true
-                if var u = user {
-                    u.followersCount += 1
-                    user = u
+                if var p = publicProfile {
+                    p.followersCount += 1
+                    publicProfile = p
                 }
             }
         } catch {

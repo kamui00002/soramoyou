@@ -34,11 +34,15 @@ class HomeViewModel: PaginatedPostsViewModel {
     /// 通報・ブロック処理のエラー
     @Published var reportError: String?
 
-    /// 投稿者キャッシュ（userId -> User）⭐️ Issue #2
+    /// 投稿者キャッシュ（userId -> PublicProfile）⭐️ Issue #2
     /// PostCard で投稿者名/アバターを表示するため、フィードロード時に一括取得して
     /// メモリにキャッシュする。N+1 リクエストを避けつつ、UI から個別問い合わせなく
     /// 著者情報を引ける。
-    @Published var authorsByUserId: [String: User] = [:]
+    ///
+    /// 注意: `users` コレクションは Firestore Security Rules で `isOwner` 制限が
+    /// かかっているため、他ユーザーのドキュメントは読めない。代わりに公開可能な
+    /// `publicProfiles` コレクションを使用する。
+    @Published var authorsByUserId: [String: PublicProfile] = [:]
 
     /// 自分自身の userId（フォローボタン表示制御用）
     var currentUserId: String? { authService.currentUser()?.id }
@@ -73,21 +77,22 @@ class HomeViewModel: PaginatedPostsViewModel {
         await fetchAuthorsForCurrentPosts()
     }
 
-    /// 現在 posts に含まれる userId のうち、未取得の User を並列で fetch する。⭐️ Issue #2
+    /// 現在 posts に含まれる userId のうち、未取得の PublicProfile を並列で fetch する。⭐️ Issue #2
+    /// `users` コレクションは isOwner 制限があるため、`publicProfiles` を使う。
     private func fetchAuthorsForCurrentPosts() async {
         let missingUserIds = Set(posts.map(\.userId))
             .subtracting(authorsByUserId.keys)
         guard !missingUserIds.isEmpty else { return }
 
-        await withTaskGroup(of: User?.self) { group in
+        await withTaskGroup(of: PublicProfile?.self) { group in
             for userId in missingUserIds {
                 group.addTask { [firestoreService] in
-                    try? await firestoreService.fetchUser(userId: userId)
+                    try? await firestoreService.fetchPublicProfile(userId: userId)
                 }
             }
-            for await user in group {
-                if let user = user {
-                    authorsByUserId[user.id] = user
+            for await profile in group {
+                if let profile = profile {
+                    authorsByUserId[profile.id] = profile
                 }
             }
         }
