@@ -345,16 +345,22 @@ final class FilterGraphBuilder {
     }
 
     // ── ブリリアンス（複合処理）──
+    /// シャドウ持ち上げ + ハイライト抑制 + コントラスト微増を合成した複合フィルタ。
+    ///
+    /// 旧係数 (shadow=+0.5/highlight=-0.3/contrast=+0.15) は他ツールと比較して効きが
+    /// 強すぎたため、Apple 純正「写真」アプリの Brilliance に近い穏やかな効きとなる
+    /// よう **全係数を半減** している。スライダーの値域 (-1.0...1.0) や刻みは変更
+    /// しないため UX 互換性は保たれる。
     private static func applyBrilliance(normalized v: Double, to image: CIImage) -> CIImage {
         let hs = CIFilter.highlightShadowAdjust()
         hs.inputImage      = image
-        hs.shadowAmount    = Float(1.0 + v * 0.5)
-        hs.highlightAmount = Float(1.0 - v * 0.3)
+        hs.shadowAmount    = Float(1.0 + v * 0.25)
+        hs.highlightAmount = Float(1.0 - v * 0.15)
         guard let step1 = hs.outputImage else { return image }
 
         let cc = CIFilter.colorControls()
         cc.inputImage = step1
-        cc.contrast   = Float(1.0 + v * 0.15)
+        cc.contrast   = Float(1.0 + v * 0.075)
         return cc.outputImage ?? step1
     }
 
