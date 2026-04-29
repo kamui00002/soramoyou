@@ -4,7 +4,7 @@
 //
 //  フォロー関係を表す Firestore コレクションのモデル ⭐️ Issue #2
 //
-//  ドキュメント ID は "{followerId}_{followingId}" の複合 ID とすることで、
+//  ドキュメント ID は "{followerId}_{followeeId}" の複合 ID とすることで、
 //  Firestore レベルで重複フォローを防ぐ。
 //
 
@@ -13,32 +13,34 @@ import FirebaseFirestore
 
 /// フォロー関係エンティティ
 ///
-/// `follows/{followerId}_{followingId}` のドキュメント単位で保持する。
+/// `follows/{followerId}_{followeeId}` のドキュメント単位で保持する。
 struct Follow: Identifiable, Codable, Equatable {
-    /// 複合 ID `"{followerId}_{followingId}"`
+    /// 複合 ID `"{followerId}_{followeeId}"`
     let id: String
     /// フォローしているユーザー ID
     let followerId: String
     /// フォローされているユーザー ID
-    let followingId: String
+    let followeeId: String
     /// 作成日時（サーバータイムスタンプ）
     let createdAt: Date
 
     init(
         id: String,
         followerId: String,
-        followingId: String,
+        followeeId: String,
         createdAt: Date = Date()
     ) {
         self.id = id
         self.followerId = followerId
-        self.followingId = followingId
+        self.followeeId = followeeId
         self.createdAt = createdAt
     }
 
-    /// follower / following から複合 ID を生成
-    static func makeId(followerId: String, followingId: String) -> String {
-        return "\(followerId)_\(followingId)"
+    /// follower / followee から複合 ID を生成
+    /// 命名注意：Firestore Security Rules 側は `followeeId` と命名されているため
+    /// それに合わせている。意味は「フォローされる側のユーザー ID」。
+    static func makeId(followerId: String, followeeId: String) -> String {
+        return "\(followerId)_\(followeeId)"
     }
 
     // MARK: - Firestore Mapping
@@ -47,7 +49,7 @@ struct Follow: Identifiable, Codable, Equatable {
     func toFirestoreData() -> [String: Any] {
         return [
             "followerId": followerId,
-            "followingId": followingId,
+            "followeeId": followeeId,
             "createdAt": Timestamp(date: createdAt)
         ]
     }
@@ -56,12 +58,12 @@ struct Follow: Identifiable, Codable, Equatable {
     init?(from document: DocumentSnapshot) {
         guard let data = document.data(),
               let followerId = data["followerId"] as? String,
-              let followingId = data["followingId"] as? String else {
+              let followeeId = data["followeeId"] as? String else {
             return nil
         }
         self.id = document.documentID
         self.followerId = followerId
-        self.followingId = followingId
+        self.followeeId = followeeId
         if let ts = data["createdAt"] as? Timestamp {
             self.createdAt = ts.dateValue()
         } else {

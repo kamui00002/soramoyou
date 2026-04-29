@@ -59,7 +59,7 @@ final class FollowRepository: FollowRepositoryProtocol {
             throw FollowRepositoryError.cannotFollowSelf
         }
 
-        let followId = Follow.makeId(followerId: ownUserId, followingId: targetUserId)
+        let followId = Follow.makeId(followerId: ownUserId, followeeId: targetUserId)
         let followRef = followsCollection.document(followId)
         let ownUserRef = usersCollection.document(ownUserId)
         let targetUserRef = usersCollection.document(targetUserId)
@@ -76,7 +76,7 @@ final class FollowRepository: FollowRepositoryProtocol {
                 let follow = Follow(
                     id: followId,
                     followerId: ownUserId,
-                    followingId: targetUserId
+                    followeeId: targetUserId
                 )
                 transaction.setData(follow.toFirestoreData(), forDocument: followRef)
 
@@ -102,7 +102,7 @@ final class FollowRepository: FollowRepositoryProtocol {
     // MARK: - unfollow
 
     func unfollow(_ targetUserId: String, by ownUserId: String) async throws {
-        let followId = Follow.makeId(followerId: ownUserId, followingId: targetUserId)
+        let followId = Follow.makeId(followerId: ownUserId, followeeId: targetUserId)
         let followRef = followsCollection.document(followId)
         let ownUserRef = usersCollection.document(ownUserId)
         let targetUserRef = usersCollection.document(targetUserId)
@@ -139,7 +139,7 @@ final class FollowRepository: FollowRepositoryProtocol {
     // MARK: - isFollowing
 
     func isFollowing(_ targetUserId: String, by ownUserId: String) async throws -> Bool {
-        let followId = Follow.makeId(followerId: ownUserId, followingId: targetUserId)
+        let followId = Follow.makeId(followerId: ownUserId, followeeId: targetUserId)
         let snapshot = try await followsCollection.document(followId).getDocument()
         return snapshot.exists
     }
