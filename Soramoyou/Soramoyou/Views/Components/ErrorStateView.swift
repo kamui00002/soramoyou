@@ -260,7 +260,7 @@ struct ErrorStateView_Previews: PreviewProvider {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                 },
                 secondaryAction: {
-                    print("Secondary action")
+                    // no-op: secondary action (preview placeholder)
                 },
                 secondaryActionTitle: "設定を開く"
             )

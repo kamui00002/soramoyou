@@ -7,6 +7,12 @@
 
 import SwiftUI
 import PhotosUI
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "com.soramoyou.photo-editor",
+    category: "ImagePickerService"
+)
 
 /// PHPickerViewControllerをSwiftUIで使用するためのUIViewControllerRepresentable
 struct ImagePicker: UIViewControllerRepresentable {
@@ -57,7 +63,7 @@ struct ImagePicker: UIViewControllerRepresentable {
                             let image = try await self.loadImage(from: result.itemProvider)
                             loadedImages.append(image)
                         } catch {
-                            print("画像の読み込みに失敗しました: \(error)")
+                            logger.error("画像の読み込みに失敗しました: \(error.localizedDescription)")
                         }
                     }
                 }

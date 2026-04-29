@@ -190,7 +190,7 @@ struct EmptyStateView_Previews: PreviewProvider {
             .ignoresSafeArea()
 
             EmptyStateView(type: .posts) {
-                print("Action tapped")
+                // no-op: action tapped (preview placeholder)
             }
         }
     }
