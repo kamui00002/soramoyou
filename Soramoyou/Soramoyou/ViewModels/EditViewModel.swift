@@ -560,6 +560,8 @@ class EditViewModel: ObservableObject {
         isFlippedVertical = false
         cropAspectRatio = .free
         invalidateLowResCache()
+        // ⭐️ Issue #1: 画像切替後にリセットが消えないよう imageStates も同期
+        saveCurrentImageState()
         Task { [weak self] in
             await self?.generatePreview()
         }
@@ -785,6 +787,8 @@ class EditViewModel: ObservableObject {
         notifyHistoryChange()
         editRecipe.cropRectNorm = nil
         cropAspectRatio = .free
+        // ⭐️ Issue #1: 画像切替後にリセットが消えないよう imageStates も同期
+        saveCurrentImageState()
         Task { [weak self] in
             await self?.generatePreview()
         }
@@ -800,6 +804,8 @@ class EditViewModel: ObservableObject {
         cropAspectRatio = .free
         editRecipe.cropRectNorm = nil
         invalidateLowResCache()
+        // ⭐️ Issue #1: 画像切替後にリセットが消えないよう imageStates も同期
+        saveCurrentImageState()
         Task { [weak self] in
             await self?.generatePreview()
         }

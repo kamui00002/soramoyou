@@ -148,25 +148,34 @@ struct ImagePicker: UIViewControllerRepresentable {
                 return nil
             }
 
-            // mediaSubtypes でフラグ判定（photoEdited が編集済みフラグ）
+            // 公開された PHAssetMediaSubtype のフラグのみで HDR/パノラマ/Live Photo を判定する。
+            // 「写真Appで編集済み」かどうかの厳密判定は PHContentEditingInput の取得が必要だが、
+            // それは非同期 API のためここでは扱わず、最低限「特殊撮影フラグの有無」だけ参照する。
+            //
+            // ⚠️ 重要：以前は `asset.value(forKey: "hasAdjustments")` という KVC で
+            // 非公開プロパティを参照していたが、App Store Review Guidelines 2.5.1
+            // (private API 利用禁止) のリスクがあったため削除した。
             let subtypes = asset.mediaSubtypes
-            let hasAdjustments = subtypes.contains(.photoHDR)
-                || subtypes.contains(.photoPanorama)
-                || asset.value(forKey: "hasAdjustments") as? Bool == true
-                || subtypes.rawValue & UInt(1 << 4) != 0  // photoEdited (mediaSubtypes raw bit)
+            let isHDR        = subtypes.contains(.photoHDR)
+            let isLivePhoto  = subtypes.contains(.photoLive)
+            let isPanorama   = subtypes.contains(.photoPanorama)
 
-            // formatIdentifier は PHAdjustmentData の取得が必要（非同期）。
-            // ここでは同期的に取れる範囲のみ使い、formatIdentifier は別途取得する。
-            // 同期取得を試みる：requestContentEditingInput は非同期だが、ここでは
-            // 簡略化のため formatIdentifier を nil にしておく（後続で改善余地あり）。
+            // hasAdjustments は「公開メタで編集の痕跡が確認できるか」の弱い判定として残す。
+            // 厳密には formatIdentifier が分かるまで「編集済み」ラベルは出さない方針
+            // （ExternalEditInfo.badgeLabel の仕様参照）。
+            let hasAdjustments = false  // 公開 API では確定できないため false で固定
+
+            // formatIdentifier は PHAdjustmentData が必要で、その取得には
+            // requestContentEditingInput(with:completionHandler:) という非同期 API が必須。
+            // 同期コンテキストのここでは取得できないため nil とする（バッジ表示は出さない方針）。
             let formatIdentifier: String? = nil
 
             return ExternalEditInfo(
                 hasAdjustments: hasAdjustments,
                 formatIdentifier: formatIdentifier,
-                isHDR: subtypes.contains(.photoHDR),
-                isLivePhoto: subtypes.contains(.photoLive),
-                isPanorama: subtypes.contains(.photoPanorama),
+                isHDR: isHDR,
+                isLivePhoto: isLivePhoto,
+                isPanorama: isPanorama,
                 creationDate: asset.creationDate,
                 modificationDate: asset.modificationDate
             )

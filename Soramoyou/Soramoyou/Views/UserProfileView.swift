@@ -82,8 +82,10 @@ struct UserProfileView: View {
             .frame(width: 96, height: 96)
             .clipShape(Circle())
             .overlay(Circle().stroke(.white.opacity(0.4), lineWidth: 1))
+            .accessibilityLabel("\(viewModel.user?.displayName ?? "ユーザー") のプロフィール画像")
         } else {
             placeholderAvatar
+                .accessibilityLabel("\(viewModel.user?.displayName ?? "ユーザー") のプロフィール画像")
         }
     }
 

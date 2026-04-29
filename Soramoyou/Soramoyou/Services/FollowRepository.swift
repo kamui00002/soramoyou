@@ -9,7 +9,10 @@
 //
 
 import Foundation
-import FirebaseFirestore
+// Firebase SDK は Swift 6 strict concurrency 下で `Firestore` を非 Sendable と扱うため、
+// `@preconcurrency` で互換モードを宣言する（rules/swift.md「サードパーティの非 Sendable
+// 型には @preconcurrency import で段階的に対応」に準拠）。
+@preconcurrency import FirebaseFirestore
 import os
 
 private let logger = Logger(
@@ -19,7 +22,9 @@ private let logger = Logger(
 
 // MARK: - Protocol
 
-protocol FollowRepositoryProtocol {
+/// Sendable に準拠することで `@MainActor` な ViewModel から越境して
+/// 安全に呼び出せる。Swift 6 strict concurrency 対応。
+protocol FollowRepositoryProtocol: Sendable {
     /// targetUserId をフォローする（自分は ownUserId）
     func follow(_ targetUserId: String, by ownUserId: String) async throws
 

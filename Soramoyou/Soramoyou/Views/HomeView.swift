@@ -423,6 +423,7 @@ struct PostCard: View {
             Image(systemName: "chevron.right")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(DesignTokens.Colors.textTertiary)
+                .accessibilityHidden(true)
         }
         .padding(.horizontal, DesignTokens.Spacing.cardPadding)
         .padding(.vertical, DesignTokens.Spacing.sm)
@@ -432,7 +433,9 @@ struct PostCard: View {
             impact.impactOccurred()
             onAuthorTapped?()
         }
+        .accessibilityElement(children: .combine)
         .accessibilityLabel("投稿者 \(author?.displayName ?? "ユーザー") のプロフィールを開く")
+        .accessibilityAddTraits(.isButton)
     }
 
     @ViewBuilder
