@@ -12,6 +12,8 @@ struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
     @EnvironmentObject private var likeManager: LikeManager
     @State private var selectedPost: Post?
+    /// 他ユーザープロフィール画面表示用 ⭐️ Issue #2
+    @State private var selectedAuthorUserId: String?
     @State private var animateCards = false  // フィードアニメーション用 ☀️
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -91,6 +93,24 @@ struct HomeView: View {
                 PostDetailView(post: post)
                     .environmentObject(likeManager)
             }
+            // 他ユーザープロフィール画面 ⭐️ Issue #2
+            .fullScreenCover(item: Binding<IdentifiableString?>(
+                get: { selectedAuthorUserId.map(IdentifiableString.init) },
+                set: { selectedAuthorUserId = $0?.id }
+            )) { wrapper in
+                NavigationView {
+                    UserProfileView(
+                        targetUserId: wrapper.id,
+                        ownUserId: viewModel.currentUserId
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("閉じる") { selectedAuthorUserId = nil }
+                        }
+                    }
+                }
+                .navigationViewStyle(.stack)
+            }
         }
         .navigationViewStyle(.stack)
     }
@@ -103,6 +123,7 @@ struct HomeView: View {
                 ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
                     PostCard(
                         post: post,
+                        author: viewModel.authorsByUserId[post.userId],
                         isLiked: likeManager.isLiked(post.id),
                         likeCount: likeManager.likeCount(for: post),
                         onLikeTapped: {
@@ -114,6 +135,16 @@ struct HomeView: View {
                             let impact = UIImpactFeedbackGenerator(style: .light)
                             impact.impactOccurred()
                             selectedPost = post
+                        },
+                        onAuthorTapped: {
+                            // 自分の投稿の場合はプロフィールタブへの遷移を促すか
+                            // 既存仕様に任せる。ここでは他ユーザーであれば UserProfileView を開く
+                            if let currentUserId = viewModel.currentUserId,
+                               currentUserId == post.userId {
+                                // 自分の投稿: プロフィールタブで見るほうが自然なので何もしない
+                                return
+                            }
+                            selectedAuthorUserId = post.userId
                         }
                     )
                     // スタガードアニメーション（改善）
@@ -181,13 +212,20 @@ struct HomeView: View {
 
 struct PostCard: View {
     let post: Post
+    /// 投稿者情報（HomeViewModel.authorsByUserId から渡される）⭐️ Issue #2
+    var author: User? = nil
     var isLiked: Bool = false
     var likeCount: Int? = nil
     var onLikeTapped: (() -> Void)? = nil
     var onCardTapped: (() -> Void)? = nil
+    /// 投稿者ヘッダーをタップしたときのハンドラ（他ユーザープロフィールへ遷移）
+    var onAuthorTapped: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // 投稿者ヘッダー（タップで UserProfileView へ遷移）⭐️ Issue #2
+            authorHeader
+
             // 画像表示（サムネイル優先、遅延読み込み）— タップでカード遷移
             ZStack(alignment: .bottomLeading) {
                 if let firstImage = post.images.first {
@@ -355,6 +393,72 @@ struct PostCard: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
         .shadow(DesignTokens.Shadow.card)
+    }
+
+    // MARK: - Author Header ⭐️ Issue #2
+
+    /// 投稿者表示ヘッダー（アバター + 表示名）。タップで UserProfileView へ遷移。
+    @ViewBuilder
+    private var authorHeader: some View {
+        HStack(spacing: 10) {
+            authorAvatar
+                .frame(width: 32, height: 32)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 1))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(author?.displayName ?? "ユーザー")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundColor(DesignTokens.Colors.textDark)
+                    .lineLimit(1)
+                if author == nil {
+                    // ロード中のスケルトン代わりに薄く表示
+                    Text(" ")
+                        .font(.system(size: 10))
+                }
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(DesignTokens.Colors.textTertiary)
+        }
+        .padding(.horizontal, DesignTokens.Spacing.cardPadding)
+        .padding(.vertical, DesignTokens.Spacing.sm)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            let impact = UIImpactFeedbackGenerator(style: .light)
+            impact.impactOccurred()
+            onAuthorTapped?()
+        }
+        .accessibilityLabel("投稿者 \(author?.displayName ?? "ユーザー") のプロフィールを開く")
+    }
+
+    @ViewBuilder
+    private var authorAvatar: some View {
+        if let urlString = author?.photoURL, let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                default:
+                    avatarPlaceholder
+                }
+            }
+        } else {
+            avatarPlaceholder
+        }
+    }
+
+    private var avatarPlaceholder: some View {
+        Circle()
+            .fill(.ultraThinMaterial)
+            .overlay(
+                Image(systemName: "person.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.7))
+            )
     }
 }
 
@@ -903,6 +1007,14 @@ struct HomeView_Previews: PreviewProvider {
     static var previews: some View {
         HomeView()
     }
+}
+
+// MARK: - IdentifiableString ⭐️ Issue #2
+
+/// `fullScreenCover(item:)` は `Identifiable` を要求するため、`String` 単体を
+/// 渡すための薄いラッパー。
+struct IdentifiableString: Identifiable {
+    let id: String
 }
 
 
