@@ -380,7 +380,7 @@ class ProfileViewModel: ObservableObject {
         }
 
         let currentAuthId = authService.currentUser()?.id
-        logger.debug("loadUserPosts: userId=\(userId, privacy: .private), authId=\(currentAuthId ?? "nil", privacy: .private), isOwnProfile=\(isOwnProfile)")
+        logger.debug("loadUserPosts: userId=\(userId, privacy: .private), authId=\(currentAuthId ?? "nil", privacy: .private), isOwnProfile=\(self.isOwnProfile)")
 
         isLoadingPosts = true
         // エラーメッセージはリセットしない（loadProfileで設定されている可能性があるため）
@@ -402,7 +402,7 @@ class ProfileViewModel: ObservableObject {
             // 他ユーザーのプロフィールの場合は公開投稿のみフィルタリング
             if !isOwnProfile {
                 userPosts = posts.filter { $0.visibility == .public }
-                logger.debug("loadUserPosts: filtered to \(userPosts.count) public posts (not own profile)")
+                logger.debug("loadUserPosts: filtered to \(self.userPosts.count) public posts (not own profile)")
             } else {
                 userPosts = posts
             }
@@ -412,7 +412,7 @@ class ProfileViewModel: ObservableObject {
             // いったん取り出して代入し直すことで ObservableObject の変更通知を確実に発行する。
             let actualCount = isOwnProfile ? posts.count : userPosts.count
             if user?.postsCount != actualCount {
-                logger.debug("loadUserPosts: postsCount mismatch (\(user?.postsCount ?? -1) → \(actualCount)), correcting")
+                logger.debug("loadUserPosts: postsCount mismatch (\(self.user?.postsCount ?? -1) → \(actualCount)), correcting")
                 if var updatedUser = user {
                     updatedUser.postsCount = actualCount
                     user = updatedUser  // @Published への再代入でUI更新を発火
