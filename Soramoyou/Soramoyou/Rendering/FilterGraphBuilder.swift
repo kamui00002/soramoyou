@@ -354,7 +354,10 @@ final class FilterGraphBuilder {
     private static func applyBrilliance(normalized v: Double, to image: CIImage) -> CIImage {
         let hs = CIFilter.highlightShadowAdjust()
         hs.inputImage      = image
-        hs.shadowAmount    = Float(1.0 + v * 0.25)
+        // CIHighlightShadowAdjust.shadowAmount のニュートラルは 0.0（範囲: -1.0...1.0）。
+        // 旧実装の「1.0 + v * 0.25」は常に ≥ 0.75 となり最大シャドウ明化が起きていた。
+        hs.shadowAmount    = Float(v * 0.25)
+        // CIHighlightShadowAdjust.highlightAmount のニュートラルは 1.0（範囲: 0.0...1.0）。
         hs.highlightAmount = Float(1.0 - v * 0.15)
         guard let step1 = hs.outputImage else { return image }
 
