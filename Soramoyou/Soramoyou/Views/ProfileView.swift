@@ -24,9 +24,17 @@ struct ProfileView: View {
     @State private var saveResultMessage: String?
     @State private var showingSaveResult = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
-    
+
+    /// デバイス向き・サイズに応じてグリッド列数を決定
+    private var gridColumnCount: Int {
+        if horizontalSizeClass == .regular { return 5 }   // iPad
+        if verticalSizeClass == .compact { return 4 }     // ランドスケープiPhone
+        return 3                                           // ポートレートiPhone
+    }
+
     enum DisplayMode {
         case grid
         case list
@@ -392,7 +400,8 @@ struct ProfileView: View {
                 Image(systemName: icon)
                     .font(.system(size: 10))
                 Text(label)
-                    .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium, design: .rounded))
+                    // Dynamic Type 対応: .caption2 はユーザーの文字サイズ設定に追従
+                    .font(.system(.caption2, design: .rounded, weight: .medium))
             }
             .foregroundColor(DesignTokens.Colors.textSecondary)
         }
@@ -445,7 +454,7 @@ struct ProfileView: View {
         Group {
             if displayMode == .grid {
                 // グリッド表示
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: horizontalSizeClass == .regular ? 5 : 3), spacing: 8) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: gridColumnCount), spacing: 8) {
                     ForEach(viewModel.userPosts) { post in
                         Button {
                             selectedPost = post
