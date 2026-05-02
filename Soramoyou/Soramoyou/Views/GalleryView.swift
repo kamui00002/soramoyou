@@ -17,12 +17,20 @@ struct GalleryView: View {
     @State private var saveResultMessage: String?
     @State private var showingSaveResult = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
-    /// iPad対応: 画面サイズに応じて列数を動的に変更
+    /// デバイス向き・サイズに応じて列数を動的に変更
     private var columns: [GridItem] {
-        let count = horizontalSizeClass == .regular ? 5 : 3
+        let count: Int
+        if horizontalSizeClass == .regular {
+            count = 5          // iPad
+        } else if verticalSizeClass == .compact {
+            count = 4          // ランドスケープiPhone
+        } else {
+            count = 3          // ポートレートiPhone
+        }
         return Array(repeating: GridItem(.flexible(), spacing: 2), count: count)
     }
 
