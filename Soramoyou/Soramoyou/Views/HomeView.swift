@@ -179,7 +179,8 @@ struct HomeView: View {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         Text("読み込み中...")
-                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                            // Dynamic Type 対応: .caption はユーザーの文字サイズ設定に追従
+                            .font(.system(.caption, design: .rounded, weight: .medium))
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                     .padding(.vertical, DesignTokens.Spacing.lg)
@@ -192,7 +193,8 @@ struct HomeView: View {
                             .font(.system(size: 24))
                             .foregroundColor(DesignTokens.Colors.success)
                         Text("すべての投稿を表示しました")
-                            .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                            // Dynamic Type 対応: .caption はユーザーの文字サイズ設定に追従
+                            .font(.system(.caption, design: .rounded, weight: .medium))
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                     .padding(.vertical, DesignTokens.Spacing.xl)
@@ -273,7 +275,8 @@ struct PostCard: View {
                 // キャプション — タップでカード遷移
                 if let caption = post.caption {
                     Text(caption)
-                        .font(.system(size: DesignTokens.Typography.bodySize, weight: .regular, design: .rounded))
+                        // Dynamic Type 対応: .body はユーザーの文字サイズ設定に追従
+                        .font(.system(.body, design: .rounded, weight: .regular))
                         .foregroundColor(DesignTokens.Colors.textDark)
                         .lineLimit(3)
                         .onTapGesture { onCardTapped?() }
@@ -285,7 +288,8 @@ struct PostCard: View {
                         HStack(spacing: DesignTokens.Spacing.sm) {
                             ForEach(hashtags, id: \.self) { hashtag in
                                 Text("#\(hashtag)")
-                                    .font(.system(size: DesignTokens.Typography.captionSize, weight: .medium, design: .rounded))
+                                    // Dynamic Type 対応: .caption はユーザーの文字サイズ設定に追従
+                                    .font(.system(.caption, design: .rounded, weight: .medium))
                                     .foregroundColor(DesignTokens.Colors.selectionAccent)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 4)
@@ -307,7 +311,8 @@ struct PostCard: View {
                                 .font(.system(size: 11))
                             if let city = location.city, let prefecture = location.prefecture {
                                 Text("\(prefecture) \(city)")
-                                    .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium))
+                                    // Dynamic Type 対応: .caption2 はユーザーの文字サイズ設定に追従
+                                    .font(.system(.caption2, design: .default, weight: .medium))
                             }
                         }
                         .foregroundColor(DesignTokens.Colors.skyBlue)
@@ -319,12 +324,14 @@ struct PostCard: View {
                     HStack(spacing: DesignTokens.Spacing.sm) {
                         if let skyType = post.skyType {
                             Label(skyType.displayName, systemImage: skyType.iconName)
-                                .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium))
+                                // Dynamic Type 対応: .caption2 はユーザーの文字サイズ設定に追従
+                                .font(.system(.caption2, design: .default, weight: .medium))
                                 .foregroundColor(DesignTokens.Colors.textTertiary)
                         }
                         if let timeOfDay = post.timeOfDay {
                             Label(timeOfDay.displayName, systemImage: timeOfDay.iconName)
-                                .font(.system(size: DesignTokens.Typography.smallCaptionSize, weight: .medium))
+                                // Dynamic Type 対応: .caption2 はユーザーの文字サイズ設定に追従
+                                .font(.system(.caption2, design: .default, weight: .medium))
                                 .foregroundColor(DesignTokens.Colors.textTertiary)
                         }
                     }
@@ -343,7 +350,8 @@ struct PostCard: View {
                                 .font(.system(size: 16, weight: .medium))
                                 .animation(.easeInOut(duration: 0.2), value: isLiked)
                             Text("\(likeCount ?? post.likesCount)")
-                                .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                                // Dynamic Type 対応: .caption はユーザーの文字サイズ設定に追従
+                                .font(.system(.caption, design: .rounded, weight: .semibold))
                         }
                         .foregroundColor(isLiked ? DesignTokens.Colors.softPink : DesignTokens.Colors.textTertiary)
                     }
@@ -357,7 +365,8 @@ struct PostCard: View {
                             Image(systemName: "bubble.right")
                                 .font(.system(size: 16, weight: .medium))
                             Text("\(post.commentsCount)")
-                                .font(.system(size: DesignTokens.Typography.captionSize, weight: .semibold, design: .rounded))
+                                // Dynamic Type 対応: .caption はユーザーの文字サイズ設定に追従
+                                .font(.system(.caption, design: .rounded, weight: .semibold))
                         }
                         .foregroundColor(DesignTokens.Colors.skyBlue)
                     }
@@ -409,7 +418,8 @@ struct PostCard: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(author?.displayName ?? "ユーザー")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    // Dynamic Type 対応: .footnote はユーザーの文字サイズ設定に追従
+                    .font(.system(.footnote, design: .rounded, weight: .semibold))
                     .foregroundColor(DesignTokens.Colors.textDark)
                     .lineLimit(1)
                 if author == nil {
