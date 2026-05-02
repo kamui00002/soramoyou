@@ -487,10 +487,19 @@ struct RoundedCornerShape: Shape {
 struct PostImageView: View {
     let imageInfo: ImageInfo
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    
-    /// iPad対応: 画面サイズに応じて画像高さを調整
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    /// デバイス向き・サイズに応じて画像高さを決定
+    /// - ランドスケープiPhone: verticalSizeClass == .compact
+    /// - iPad: horizontalSizeClass == .regular
     private var imageHeight: CGFloat {
-        horizontalSizeClass == .regular ? 450 : 300
+        if verticalSizeClass == .compact {
+            return 160  // ランドスケープiPhone: 画面高さが制限されるため短く
+        } else if horizontalSizeClass == .regular {
+            return 360  // iPad縦向き
+        } else {
+            return 240  // ポートレートiPhone
+        }
     }
 
     var body: some View {
@@ -502,7 +511,7 @@ struct PostImageView: View {
                 }
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(height: imageHeight)
+                .frame(maxWidth: .infinity, minHeight: imageHeight, maxHeight: imageHeight)
                 .clipped()
         } else if let imageURL = URL(string: imageInfo.url) {
             // サムネイルがない場合はフルサイズ画像を表示
@@ -512,13 +521,13 @@ struct PostImageView: View {
                 }
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(height: imageHeight)
+                .frame(maxWidth: .infinity, minHeight: imageHeight, maxHeight: imageHeight)
                 .clipped()
         } else {
             // URLが無効な場合
             Rectangle()
                 .fill(Color.gray.opacity(0.3))
-                .frame(height: imageHeight)
+                .frame(maxWidth: .infinity, minHeight: imageHeight, maxHeight: imageHeight)
                 .overlay(
                     Image(systemName: "photo")
                         .foregroundColor(.gray)
