@@ -240,7 +240,11 @@ class StorageService: StorageServiceProtocol {
     /// ここでは CIContext.writeJPEGRepresentation を使い、両経路の色空間を揃える。
     /// CIImage 変換に失敗するケース (モデル画像等) のみフォールバックで jpegData を使う。
     private func encodeJPEG(image: UIImage, quality: CGFloat) throws -> Data {
-        if let ciImage = CIImage(image: image) ?? image.cgImage.map({ CIImage(cgImage: $0) }) {
+        // CIContext.jpegRepresentation は EXIF orientation を出力 JPEG に含めないため、
+        // 事前に orientation を .up に正規化してピクセルに回転を焼き込む。
+        // これをしないと横向きで撮影した写真が Firebase Storage に横向きのまま保存される。
+        let normalizedImage = image.withNormalizedOrientation()
+        if let ciImage = CIImage(image: normalizedImage) ?? normalizedImage.cgImage.map({ CIImage(cgImage: $0) }) {
             let pool = CIContextPool.shared
             let colorSpace = pool.outputColorSpace
             let options: [CIImageRepresentationOption: Any] = [
