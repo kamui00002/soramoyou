@@ -294,7 +294,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"${CONFIGURATION}\" != \"Release\" ]; then\n  echo \"[Crashlytics] Debug build: skipping dSYM upload\"\n  exit 0\nfi\nDSYM_PATH=\"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}\"\nif [ ! -d \"$DSYM_PATH\" ]; then\n  echo \"[Crashlytics] Warning: dSYM not found at $DSYM_PATH\"\n  exit 0\nfi\n\"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/upload-symbols\" -gsp \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/GoogleService-Info.plist\" -p ios \"$DSYM_PATH\" || echo \"[Crashlytics] Warning: dSYM upload failed (non-fatal)\"\nexit 0\n";
+			shellScript = "if [ \"${CONFIGURATION}\" != \"Release\" ]; then\n  echo \"[Crashlytics] Debug build: skipping dSYM upload\"\n  exit 0\nfi\nDSYM_PATH=\"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}\"\nif [ ! -d \"$DSYM_PATH\" ]; then\n  echo \"[Crashlytics] Warning: dSYM not found at $DSYM_PATH\"\n  exit 0\nfi\n\"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/upload-symbols\" -gsp \"${SRCROOT}/${TARGET_NAME}/GoogleService-Info.plist\" -p ios \"$DSYM_PATH\" || echo \"[Crashlytics] Warning: dSYM upload failed (non-fatal)\"\nexit 0\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
