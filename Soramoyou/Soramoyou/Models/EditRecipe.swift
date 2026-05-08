@@ -170,20 +170,78 @@ struct EditRecipe: Codable, Equatable {
 
     // MARK: - EditSettings からの変換（後方互換）
 
+    /// 非対称パワー曲線でのフォワードマッピング
+    ///
+    /// 結果 = sign(n) × |n|^p × scale (正/負で異なる p, scale を使用可能)
+    ///
+    /// パワー指数 p:
+    /// - p > 1.0: 0 付近の傾きを抑え、緩やかな立ち上がり（中間域でやさしい効き）
+    /// - p < 1.0: 0 付近の傾きを強め、立ち上がりを punchy に（小スライダー操作でも効く）
+    /// - p = 1.0: 線形（スケールのみ適用）
+    ///
+    /// 用途:
+    /// - コントラスト負側: pNeg = 2.0 で「白化が急激」現象を緩和
+    /// - 明るさ負側: pNeg = 1.5 で暗化の急変を抑制
+    /// - 彩度正側: pPos = 0.7 で「+ の効きが緩やか」現象を解消
+    private static func asymmetricForward(
+        _ n: Double,
+        pNeg: Double, scaleNeg: Double,
+        pPos: Double, scalePos: Double
+    ) -> Double {
+        if n > 0 {
+            return scalePos * pow(n, pPos)
+        } else if n < 0 {
+            return -scaleNeg * pow(-n, pNeg)
+        } else {
+            return 0
+        }
+    }
+
+    /// `asymmetricForward` の逆関数（物理スケール → 正規化スライダー値）
+    private static func asymmetricInverse(
+        _ d: Double,
+        pNeg: Double, scaleNeg: Double,
+        pPos: Double, scalePos: Double
+    ) -> Double {
+        if d > 0 {
+            return pow(d / scalePos, 1.0 / pPos)
+        } else if d < 0 {
+            return -pow(-d / scaleNeg, 1.0 / pNeg)
+        } else {
+            return 0
+        }
+    }
+
     /// 既存の EditSettings（Firestore 旧データ）から EditRecipe を生成
     ///
     /// 値スケール変換:
     /// - EditSettings: 正規化値 -1.0...1.0
     /// - EditRecipe: Core Image フィルターの物理スケール
+    ///
+    /// 体感調整 (2026-05 ユーザーフィードバック):
+    /// - コントラスト負側を power 2.0 で緩やかに（白化が急激な体感を解消）
+    /// - 明るさ負側を power 1.5 で緩やかに（暗化の急変を抑制）
+    /// - 彩度正側を power 0.7 + scale 1.5 で punchy に（+ の効きが緩やか問題を解消）
+    /// - **既存保存データの見た目は変わらない** (round-trip 保証):
+    ///   physical 値 → 新マッピングの逆変換 → スライダー位置 → 新マッピングのフォワード = 同じ physical 値
     init(from legacySettings: EditSettings) {
         // 露出: EV = normalized * 2.0
         self.exposureEV = Double(legacySettings.exposure ?? 0) * 2.0
 
-        // 明るさ: CI range = normalized * 0.5
-        self.brightnessCI = Double(legacySettings.brightness ?? 0) * 0.5
+        // 明るさ: 負側のみ power 1.5 で緩やかに（最大値は ±0.5 据え置き）
+        self.brightnessCI = Self.asymmetricForward(
+            Double(legacySettings.brightness ?? 0),
+            pNeg: 1.5, scaleNeg: 0.5,
+            pPos: 1.0, scalePos: 0.5
+        )
 
-        // コントラスト: CI range = 1.0 + normalized * 0.5
-        self.contrastCI = 1.0 + Double(legacySettings.contrast ?? 0) * 0.5
+        // コントラスト: 負側のみ power 2.0 で大きく緩やかに（白化が急激な対策）
+        // 最大効き 0.5..1.5 は据え置き、0 付近の傾きだけを抑える
+        self.contrastCI = 1.0 + Self.asymmetricForward(
+            Double(legacySettings.contrast ?? 0),
+            pNeg: 2.0, scaleNeg: 0.5,
+            pPos: 1.0, scalePos: 0.5
+        )
 
         // ガンマ: power = 1.0 - normalized * 0.5 (正値→明るく, 負値→暗く)
         self.gamma = 1.0 - Double(legacySettings.tone ?? 0) * 0.5
@@ -197,8 +255,13 @@ struct EditRecipe: Codable, Equatable {
         // ブラックポイント: normalized * 0.15
         self.blackPointBias = Double(legacySettings.blackPoint ?? 0) * 0.15
 
-        // 彩度: 1.0 + normalized
-        self.saturationCI = 1.0 + Double(legacySettings.saturation ?? 0)
+        // 彩度: 正側を power 0.7 + scale 1.5 で punchy に（最大値 2.5 まで拡張）
+        // 負側は線形 (scale 1.0) で従来通り
+        self.saturationCI = 1.0 + Self.asymmetricForward(
+            Double(legacySettings.saturation ?? 0),
+            pNeg: 1.0, scaleNeg: 1.0,
+            pPos: 0.7, scalePos: 1.5
+        )
 
         // 複合ツール（正規化スケールのまま保持）
         if let v = legacySettings.brilliance   { self.brillianceNorm       = Double(v) }
@@ -233,14 +296,27 @@ struct EditRecipe: Codable, Equatable {
     /// View 側のコードを変更せずに EditRecipe へ移行できる。
     func toEditSettings() -> EditSettings {
         // 物理スケール → 正規化スケールへ逆変換
+        // 明るさ・コントラスト・彩度は init(from:) と同じ非対称パワー曲線の逆関数を使う
         let exposureNorm   = Float(exposureEV / 2.0)
-        let brightnessNorm = Float(brightnessCI / 0.5)
-        let contrastNorm   = Float((contrastCI - 1.0) / 0.5)
+        let brightnessNorm = Float(Self.asymmetricInverse(
+            brightnessCI,
+            pNeg: 1.5, scaleNeg: 0.5,
+            pPos: 1.0, scalePos: 0.5
+        ))
+        let contrastNorm   = Float(Self.asymmetricInverse(
+            contrastCI - 1.0,
+            pNeg: 2.0, scaleNeg: 0.5,
+            pPos: 1.0, scalePos: 0.5
+        ))
         let toneNorm       = Float((1.0 - gamma) / 0.5)
         let highlightNorm  = Float(highlights - 1.0)
         let shadowNorm     = Float(shadowAmount - 1.0)
         let blackPointNorm = Float(blackPointBias / 0.15)
-        let saturationNorm = Float(saturationCI - 1.0)
+        let saturationNorm = Float(Self.asymmetricInverse(
+            saturationCI - 1.0,
+            pNeg: 1.0, scaleNeg: 1.0,
+            pPos: 0.7, scalePos: 1.5
+        ))
 
         return EditSettings(
             exposure:          exposureNorm   != 0 ? exposureNorm   : nil,
