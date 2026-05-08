@@ -10,10 +10,12 @@ import SwiftUI
 /// 編集画面のタブ種別
 /// - フィルター: 写真フィルターの選択
 /// - 編集ツール: 露出・コントラスト等の調整
+/// - スタイル: 2D パッドでトーン・カラーを同時調整（iPhone 写真スタイル風）
 /// - 切り取り: 回転・反転・トリミング
 enum EditTab: String, CaseIterable, Identifiable {
     case filter = "フィルター"
     case adjustment = "編集ツール"
+    case style = "スタイル"
     case crop = "切り取り"
 
     var id: String { rawValue }
@@ -25,6 +27,8 @@ enum EditTab: String, CaseIterable, Identifiable {
             return "camera.filters"
         case .adjustment:
             return "slider.horizontal.3"
+        case .style:
+            return "circle.dotted.circle"
         case .crop:
             return "crop.rotate"
         }

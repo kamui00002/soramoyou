@@ -342,6 +342,8 @@ struct EditView: View {
             filterContentView
         case .adjustment:
             adjustmentContentView
+        case .style:
+            styleContentView
         case .crop:
             cropContentView
         }
@@ -570,6 +572,18 @@ struct EditView: View {
         } else {
             return "\(intValue)"
         }
+    }
+
+    // MARK: - Style Content View (2D スタイルパッド) ⭐️
+
+    /// 「スタイル」タブのコンテンツ: 2D パッドで「トーン × カラー」を同時調整
+    ///
+    /// - 単独で `Style2DPadView` を表示するシンプル構成
+    /// - 既存の adjustmentContentView と違ってツール装備（5〜8 個選択）の影響を受けない
+    ///   常時利用可能な機能
+    private var styleContentView: some View {
+        Style2DPadView(viewModel: viewModel)
+            .padding(.horizontal)
     }
 
     // MARK: - Crop Content View (切り取り)

@@ -827,7 +827,73 @@ class EditViewModel: ObservableObject {
             await self?.generatePreview()
         }
     }
-    
+
+    // MARK: - 2D スタイルパッド操作 ⭐️
+
+    /// 2D スタイルパッドのドラッグ中: editRecipe を直接更新 + リアルタイムプレビュー
+    ///
+    /// パッドの座標 (toneNorm: Y, colorNorm: X) を [-1.0, 1.0] にクランプして
+    /// EditRecipe に書き込み、30 fps スロットルでプレビューを更新する。
+    /// ドラッグ開始時のスナップショットは初回のみキャプチャされ、Undo 履歴に積む準備をする。
+    ///
+    /// - Parameters:
+    ///   - toneNorm: トーン軸（Y）の正規化値、正値=コントラスト強化、負値=フラット化
+    ///   - colorNorm: カラー軸（X）の正規化値、正値=暖色寄り、負値=寒色寄り
+    func updateStyle2DRealtime(toneNorm: Float, colorNorm: Float) {
+        // ドラッグ開始時点の状態をキャプチャ（Undo 用）
+        if preDragSnapshot == nil {
+            preDragSnapshot = currentSnapshot
+        }
+
+        // [-1, 1] の範囲にクランプして EditRecipe に書き込む
+        let clampedTone  = Double(min(1.0, max(-1.0, toneNorm)))
+        let clampedColor = Double(min(1.0, max(-1.0, colorNorm)))
+        editRecipe.style2DToneNorm  = clampedTone
+        editRecipe.style2DColorNorm = clampedColor
+
+        // 既存の triggerRealtimePreview() に乗せる
+        // （30 fps スロットル + 低解像度キャッシュ再利用 + isEditingRealtime セット）
+        triggerRealtimePreview()
+    }
+
+    /// 2D スタイルパッドのドラッグ完了: Undo 履歴に積み + フル解像度プレビュー再生成
+    func finalizeStyle2D() {
+        isEditingRealtime = false
+
+        // ドラッグ開始時の状態を履歴に積む
+        if let preDrag = preDragSnapshot {
+            historyManager.push(preDrag)
+            notifyHistoryChange()
+            preDragSnapshot = nil
+        }
+
+        // 高速プレビューを通常プレビューに昇格（同解像度なので品質ジャンプなし）
+        if let fastPreview = fastPreviewImage {
+            previewImage = fastPreview
+        }
+        fastPreviewImage = nil
+
+        // バックグラウンドでフル解像度プレビューを再生成
+        Task { [weak self] in
+            await self?.generatePreview()
+        }
+    }
+
+    /// 2D スタイルパッドの値を (0, 0) にリセット
+    ///
+    /// ヘッダーのリセットボタン (↺) から呼ぶ。Undo に積んでから即座に反映する。
+    /// nil をセットすることで FilterGraphBuilder のスキップ判定が走り、
+    /// パッド適用処理自体をパイプラインから外せる。
+    func resetStyle2D() {
+        historyManager.push(currentSnapshot)
+        notifyHistoryChange()
+        editRecipe.style2DToneNorm  = nil
+        editRecipe.style2DColorNorm = nil
+        Task { [weak self] in
+            await self?.generatePreview()
+        }
+    }
+
     // MARK: - Preview Generation
 
     /// プレビューを生成（デバウンス処理付き）

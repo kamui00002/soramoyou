@@ -128,6 +128,22 @@ struct EditRecipe: Codable, Equatable {
     /// 二重露光風合成（正規化）
     var doubleExposureNorm: Double?
 
+    // MARK: - 2D スタイルパッド（iPhone 写真スタイル風 複合ツール）
+
+    /// 2D スタイルパッド Y 軸: トーン（正規化 -1.0...1.0）
+    ///
+    /// 正値: コントラスト強化 + シャドウ持ち上げ + ハイライト微抑制（iPhone「リッチコントラスト」風）
+    /// 負値: コントラスト緩和 + フラット化（フェード風）
+    /// nil または 0.0 のとき FilterGraphBuilder はスキップする。
+    var style2DToneNorm: Double?
+
+    /// 2D スタイルパッド X 軸: カラー（正規化 -1.0...1.0）
+    ///
+    /// 正値: 暖色寄り（色温度↑ + 色合いをマゼンタ寄りへ微調整）
+    /// 負値: 寒色寄り
+    /// nil または 0.0 のとき FilterGraphBuilder はスキップする。
+    var style2DColorNorm: Double?
+
     // MARK: - トーンカーブ
 
     /// トーンカーブ制御点（5点ベジェ）
@@ -309,6 +325,8 @@ struct EditRecipe: Codable, Equatable {
         if let v = hslNorm               { data["hslNorm"]               = v }
         if let v = lensCorrectionNorm    { data["lensCorrectionNorm"]    = v }
         if let v = doubleExposureNorm    { data["doubleExposureNorm"]    = v }
+        if let v = style2DToneNorm       { data["style2DToneNorm"]       = v }
+        if let v = style2DColorNorm      { data["style2DColorNorm"]      = v }
         if let f = appliedFilter         { data["appliedFilter"]         = f.rawValue }
         if let tp = toneCurvePoints      { data["toneCurvePoints"]       = tp.toFirestoreData() }
         if let dr = targetDynamicRange   { data["targetDynamicRange"]    = dr.rawValue }
@@ -356,6 +374,8 @@ struct EditRecipe: Codable, Equatable {
         self.hslNorm               = firestoreData["hslNorm"]               as? Double
         self.lensCorrectionNorm    = firestoreData["lensCorrectionNorm"]    as? Double
         self.doubleExposureNorm    = firestoreData["doubleExposureNorm"]    as? Double
+        self.style2DToneNorm       = firestoreData["style2DToneNorm"]       as? Double
+        self.style2DColorNorm      = firestoreData["style2DColorNorm"]      as? Double
 
         if let filterString = firestoreData["appliedFilter"] as? String {
             self.appliedFilter = FilterType(rawValue: filterString)
