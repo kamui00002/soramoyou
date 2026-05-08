@@ -185,6 +185,17 @@ final class FilterGraphBuilder {
             img = applyDoubleExposure(normalized: v, original: source, blended: img)
         }
 
+        // 23.5. 2D スタイルパッド（iPhone 写真スタイル風の複合ツール）
+        //
+        // 既存 27 ツール適用後のパイプライン末尾に配置し、独立したスタイル微調整として
+        // 後乗せで効かせる。これにより既存ツールで作った画と独立にプレビューでき、
+        // ユーザーは「全体を覆う最後のフィルム」のような感覚で操作できる。
+        let s2dTone  = recipe.style2DToneNorm  ?? 0
+        let s2dColor = recipe.style2DColorNorm ?? 0
+        if abs(s2dTone) > 0.001 || abs(s2dColor) > 0.001 {
+            img = applyStyle2D(toneNorm: s2dTone, colorNorm: s2dColor, to: img)
+        }
+
         // 24. iOS 18+ HDR トーンマッピング（Display P3 出力時に HDR 輝度を抑制）
         //
         // 🔧 2026-04-24 修正 (コードレビュー M6):
@@ -365,6 +376,69 @@ final class FilterGraphBuilder {
         cc.inputImage = step1
         cc.contrast   = Float(1.0 + v * 0.075)
         return cc.outputImage ?? step1
+    }
+
+    // ── 2D スタイルパッド（iPhone「写真スタイル」風の複合ツール）──
+    /// 1 つの 2D 入力 (toneNorm, colorNorm) で「トーン」と「カラー」を同時に変化させる複合フィルタ。
+    ///
+    /// パラメータ写像（iPhone 風）:
+    /// - **トーン軸 (toneNorm, Y)**:
+    ///   - `> 0`: コントラスト強化 + シャドウ持ち上げ + ハイライト微抑制（リッチコントラスト）
+    ///   - `< 0`: コントラスト緩和（フラット化／フェード感）
+    /// - **カラー軸 (colorNorm, X)**:
+    ///   - `> 0`: 暖色寄り（色温度を低 K 側にシフト + ティントを微マゼンタ寄り）
+    ///   - `< 0`: 寒色寄り（色温度を高 K 側にシフト + ティントを微グリーン寄り）
+    ///
+    /// 設計方針:
+    /// - 27 ツールとは独立した「最後のフィルム」として動作させるため、効きの量は控えめに調整
+    /// - 既存 `applyBrilliance` `applyTemperatureAndTint` と同じ CIFilter 群を使い回し、
+    ///   未経験の Core Image 関数を増やさない（保守性・パフォーマンス予測性の確保）
+    /// - 暖かみツール (`applyTemperatureAndTint`) と同様、warmth 正値 → 低ケルビン → 暖かい
+    private static func applyStyle2D(
+        toneNorm: Double,
+        colorNorm: Double,
+        to image: CIImage
+    ) -> CIImage {
+        var img = image
+
+        // トーン軸: 正値=コントラスト強化+暗部持ち上げ、負値=コントラスト緩和
+        if abs(toneNorm) > 0.001 {
+            if toneNorm > 0 {
+                // 正値ブランチ: HighlightShadow + ColorControls の 2 段
+                let hs = CIFilter.highlightShadowAdjust()
+                hs.inputImage      = img
+                hs.shadowAmount    = Float(toneNorm * 0.5)         // 暗部持ち上げ
+                hs.highlightAmount = Float(1.0 - toneNorm * 0.15)  // ハイライト微抑制
+                if let step1 = hs.outputImage {
+                    let cc = CIFilter.colorControls()
+                    cc.inputImage = step1
+                    cc.contrast   = Float(1.0 + toneNorm * 0.30)   // コントラスト強化
+                    img = cc.outputImage ?? step1
+                }
+            } else {
+                // 負値ブランチ: コントラスト緩和のみ（シャドウ・ハイライトは触らない）
+                let cc = CIFilter.colorControls()
+                cc.inputImage = img
+                cc.contrast   = Float(1.0 + toneNorm * 0.20)
+                img = cc.outputImage ?? img
+            }
+        }
+
+        // カラー軸: 色温度 + 色合いを連動させて iPhone 風の「暖↔寒」を作る
+        if abs(colorNorm) > 0.001 {
+            let tt = CIFilter.temperatureAndTint()
+            tt.inputImage    = img
+            tt.neutral       = CIVector(x: 6500, y: 0)
+            // warmth ツールと同じ符号則（正値 → 低ケルビン → 暖色）
+            // tint は補助的に同方向へ振り、暖色側はマゼンタ寄り、寒色側はグリーン寄りに
+            tt.targetNeutral = CIVector(
+                x: 6500 - colorNorm * 1500,
+                y: colorNorm * 80
+            )
+            img = tt.outputImage ?? img
+        }
+
+        return img
     }
 
     // ── ハイライト・シャドウ ──
