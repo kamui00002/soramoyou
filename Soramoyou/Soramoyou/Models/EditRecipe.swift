@@ -204,28 +204,48 @@ struct EditRecipe: Codable, Equatable {
         pNeg: Double, scaleNeg: Double,
         pPos: Double, scalePos: Double
     ) -> Double {
+        // NaN / Inf を検出したら安全な 0 を返す（後段の CIFilter / Slider にゴミを伝播させない）
+        guard n.isFinite else { return 0 }
+
+        let result: Double
         if n > 0 {
-            return scalePos * pow(n, pPos)
+            result = scalePos * pow(n, pPos)
         } else if n < 0 {
-            return -scaleNeg * pow(-n, pNeg)
+            result = -scaleNeg * pow(-n, pNeg)
         } else {
-            return 0
+            result = 0
         }
+
+        // pow が NaN/Inf を返すケース（極端な指数や入力値）に対するセーフティ
+        return result.isFinite ? result : 0
     }
 
     /// `asymmetricForward` の逆関数（物理スケール → 正規化スライダー値）
+    ///
+    /// 防衛策:
+    /// - 入力が NaN/Inf の場合は 0 を返す
+    /// - 出力が NaN/Inf の場合は 0 を返す
+    /// - 出力をスライダーの定義域 [-1, 1] にクランプ（Firestore に範囲外の物理値が
+    ///   保存されていた場合でも UI Slider が範囲外を指す事故を防ぐ）
     private static func asymmetricInverse(
         _ d: Double,
         pNeg: Double, scaleNeg: Double,
         pPos: Double, scalePos: Double
     ) -> Double {
+        guard d.isFinite else { return 0 }
+
+        let result: Double
         if d > 0 {
-            return pow(d / scalePos, 1.0 / pPos)
+            result = pow(d / scalePos, 1.0 / pPos)
         } else if d < 0 {
-            return -pow(-d / scaleNeg, 1.0 / pNeg)
+            result = -pow(-d / scaleNeg, 1.0 / pNeg)
         } else {
-            return 0
+            result = 0
         }
+
+        guard result.isFinite else { return 0 }
+        // スライダーの定義域にクランプ
+        return min(1.0, max(-1.0, result))
     }
 
     /// 既存の EditSettings（Firestore 旧データ）から EditRecipe を生成
@@ -418,40 +438,74 @@ struct EditRecipe: Codable, Equatable {
         return data
     }
 
+    // MARK: - Firestore バリデーションヘルパー
+
+    /// 物理スケール値のサニタイズ:
+    /// - NaN / Inf → デフォルト値
+    /// - 範囲外 → クランプ
+    ///
+    /// Firestore に直接書き込まれた壊れた値（旧バグ・攻撃者・マイグレーション失敗）を
+    /// CIFilter / SwiftUI Slider に伝播させないための入口防衛。
+    private static func sanitizeFinite(
+        _ value: Double?,
+        default defaultValue: Double,
+        min lowerBound: Double,
+        max upperBound: Double
+    ) -> Double {
+        guard let v = value, v.isFinite else { return defaultValue }
+        return Swift.min(upperBound, Swift.max(lowerBound, v))
+    }
+
+    /// 正規化 (-1.0...1.0) Optional 値のサニタイズ:
+    /// - 値が NaN / Inf → nil（未設定扱い）
+    /// - 範囲外 → クランプ
+    private static func sanitizeNorm(_ value: Double?) -> Double? {
+        guard let v = value, v.isFinite else { return nil }
+        return Swift.min(1.0, Swift.max(-1.0, v))
+    }
+
     /// Firestore の `editRecipeV1` フィールドから復元
+    ///
+    /// 防衛的読み込み: 全 numeric フィールドを `sanitizeFinite` / `sanitizeNorm` で
+    /// 検証する。NaN/Inf や範囲外の値はデフォルトに置換され、後段の CIFilter や
+    /// UI Slider に伝播しない。
     init?(from firestoreData: [String: Any]) {
         guard let sv = firestoreData["schemaVersion"] as? Int else { return nil }
         self.schemaVersion  = sv
         self.recipeVersion  = firestoreData["recipeVersion"]  as? String ?? "2026.03"
-        self.exposureEV     = firestoreData["exposureEV"]     as? Double ?? 0.0
-        self.brightnessCI   = firestoreData["brightnessCI"]   as? Double ?? 0.0
-        self.contrastCI     = firestoreData["contrastCI"]     as? Double ?? 1.0
-        self.gamma          = firestoreData["gamma"]          as? Double ?? 1.0
-        self.highlights     = firestoreData["highlights"]     as? Double ?? 1.0
-        self.shadowAmount   = firestoreData["shadowAmount"]   as? Double ?? 1.0
-        self.blackPointBias = firestoreData["blackPointBias"] as? Double ?? 0.0
-        self.saturationCI   = firestoreData["saturationCI"]   as? Double ?? 1.0
 
-        self.brillianceNorm        = firestoreData["brillianceNorm"]        as? Double
-        self.naturalSaturationNorm = firestoreData["naturalSaturationNorm"] as? Double
-        self.warmthNorm            = firestoreData["warmthNorm"]            as? Double
-        self.tintNorm              = firestoreData["tintNorm"]              as? Double
-        self.sharpnessNorm         = firestoreData["sharpnessNorm"]         as? Double
-        self.vignetteNorm          = firestoreData["vignetteNorm"]          as? Double
-        self.colorTemperatureNorm  = firestoreData["colorTemperatureNorm"]  as? Double
-        self.whiteBalanceNorm      = firestoreData["whiteBalanceNorm"]      as? Double
-        self.textureNorm           = firestoreData["textureNorm"]           as? Double
-        self.clarityNorm           = firestoreData["clarityNorm"]           as? Double
-        self.dehazeNorm            = firestoreData["dehazeNorm"]            as? Double
-        self.grainNorm             = firestoreData["grainNorm"]             as? Double
-        self.fadeNorm              = firestoreData["fadeNorm"]              as? Double
-        self.noiseReductionNorm    = firestoreData["noiseReductionNorm"]    as? Double
-        self.curvesNorm            = firestoreData["curvesNorm"]            as? Double
-        self.hslNorm               = firestoreData["hslNorm"]               as? Double
-        self.lensCorrectionNorm    = firestoreData["lensCorrectionNorm"]    as? Double
-        self.doubleExposureNorm    = firestoreData["doubleExposureNorm"]    as? Double
-        self.style2DToneNorm       = firestoreData["style2DToneNorm"]       as? Double
-        self.style2DColorNorm      = firestoreData["style2DColorNorm"]      as? Double
+        // 物理スケール（範囲は EditRecipe プロパティのコメントに準拠）
+        self.exposureEV     = Self.sanitizeFinite(firestoreData["exposureEV"]     as? Double, default: 0.0, min: -3.0, max: 3.0)
+        self.brightnessCI   = Self.sanitizeFinite(firestoreData["brightnessCI"]   as? Double, default: 0.0, min: -0.5, max: 0.5)
+        self.contrastCI     = Self.sanitizeFinite(firestoreData["contrastCI"]     as? Double, default: 1.0, min: 0.5, max: 1.5)
+        self.gamma          = Self.sanitizeFinite(firestoreData["gamma"]          as? Double, default: 1.0, min: 0.5, max: 1.5)
+        self.highlights     = Self.sanitizeFinite(firestoreData["highlights"]     as? Double, default: 1.0, min: 0.0, max: 2.0)
+        self.shadowAmount   = Self.sanitizeFinite(firestoreData["shadowAmount"]   as? Double, default: 1.0, min: 0.0, max: 2.0)
+        self.blackPointBias = Self.sanitizeFinite(firestoreData["blackPointBias"] as? Double, default: 0.0, min: -0.15, max: 0.15)
+        // 彩度は #20 で正側を 2.5 まで拡張済み
+        self.saturationCI   = Self.sanitizeFinite(firestoreData["saturationCI"]   as? Double, default: 1.0, min: 0.0, max: 2.5)
+
+        // 正規化スケール (-1...1) は共通のサニタイザを使う
+        self.brillianceNorm        = Self.sanitizeNorm(firestoreData["brillianceNorm"]        as? Double)
+        self.naturalSaturationNorm = Self.sanitizeNorm(firestoreData["naturalSaturationNorm"] as? Double)
+        self.warmthNorm            = Self.sanitizeNorm(firestoreData["warmthNorm"]            as? Double)
+        self.tintNorm              = Self.sanitizeNorm(firestoreData["tintNorm"]              as? Double)
+        self.sharpnessNorm         = Self.sanitizeNorm(firestoreData["sharpnessNorm"]         as? Double)
+        self.vignetteNorm          = Self.sanitizeNorm(firestoreData["vignetteNorm"]          as? Double)
+        self.colorTemperatureNorm  = Self.sanitizeNorm(firestoreData["colorTemperatureNorm"]  as? Double)
+        self.whiteBalanceNorm      = Self.sanitizeNorm(firestoreData["whiteBalanceNorm"]      as? Double)
+        self.textureNorm           = Self.sanitizeNorm(firestoreData["textureNorm"]           as? Double)
+        self.clarityNorm           = Self.sanitizeNorm(firestoreData["clarityNorm"]           as? Double)
+        self.dehazeNorm            = Self.sanitizeNorm(firestoreData["dehazeNorm"]            as? Double)
+        self.grainNorm             = Self.sanitizeNorm(firestoreData["grainNorm"]             as? Double)
+        self.fadeNorm              = Self.sanitizeNorm(firestoreData["fadeNorm"]              as? Double)
+        self.noiseReductionNorm    = Self.sanitizeNorm(firestoreData["noiseReductionNorm"]    as? Double)
+        self.curvesNorm            = Self.sanitizeNorm(firestoreData["curvesNorm"]            as? Double)
+        self.hslNorm               = Self.sanitizeNorm(firestoreData["hslNorm"]               as? Double)
+        self.lensCorrectionNorm    = Self.sanitizeNorm(firestoreData["lensCorrectionNorm"]    as? Double)
+        self.doubleExposureNorm    = Self.sanitizeNorm(firestoreData["doubleExposureNorm"]    as? Double)
+        self.style2DToneNorm       = Self.sanitizeNorm(firestoreData["style2DToneNorm"]       as? Double)
+        self.style2DColorNorm      = Self.sanitizeNorm(firestoreData["style2DColorNorm"]      as? Double)
 
         if let filterString = firestoreData["appliedFilter"] as? String {
             self.appliedFilter = FilterType(rawValue: filterString)
