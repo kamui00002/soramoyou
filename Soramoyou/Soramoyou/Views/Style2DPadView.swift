@@ -103,6 +103,14 @@ struct Style2DPadView: View {
     @State private var presetThumbnails: [String: UIImage] = [:]
     /// サムネイル生成中フラグ (UI 表示用)
     @State private var isGeneratingThumbnails: Bool = false
+    /// サムネイル生成の世代トークン（race condition 回避）
+    ///
+    /// `.task(id:)` のキャンセル機構だけでは ImageService.resizeImage が
+    /// detached continuation を使うため完全にキャンセルできない。
+    /// 古いタスクが完了した後に新しい世代の状態を上書きしないよう、
+    /// 各タスク開始時にトークンをキャプチャし、結果反映前に最新世代と一致するか
+    /// 確認する世代制（generation token）パターンで防御する。
+    @State private var thumbnailGeneration: Int = 0
 
     // MARK: - Body
 
@@ -481,22 +489,44 @@ struct Style2DPadView: View {
     /// 3. applyEditRecipe で各サムネイルを生成
     /// 4. キャッシュに保存して View に反映
     ///
-    /// `.task(id: currentImageIndex)` から呼ばれるため、画像切替時は古いタスクが
-    /// 自動キャンセルされる。
+    /// 世代制 (generation token) で race condition を防御:
+    /// - タスク開始時に `thumbnailGeneration` をインクリメントして自分の世代番号を覚える
+    /// - 状態を書き換える前に「自分の世代がまだ最新か」を毎回チェック
+    /// - 古い世代のタスクが完走しても新しい世代の状態を上書きしない
+    ///
+    /// `.task(id: currentImageIndex)` のキャンセル機構と組み合わせて二重防御。
+    /// `ImageService.resizeImage` が detached continuation でキャンセル不能なため、
+    /// 世代トークンが「最後の防衛線」として効く。
     @MainActor
     private func regeneratePresetThumbnails() async {
-        // 既存キャッシュをクリア（画像が変わった可能性があるため）
+        // 1. 自分の世代番号を払い出す（インクリメント）
+        thumbnailGeneration &+= 1
+        let myGeneration = thumbnailGeneration
+
+        // 2. 既存キャッシュをクリアし生成中フラグを立てる
         presetThumbnails = [:]
         isGeneratingThumbnails = true
-        defer { isGeneratingThumbnails = false }
 
-        // 元画像を取得
+        /// 自分が最新世代でなければ何もしない（古いタスクの状態書き換え防止）
+        func isStillCurrent() -> Bool {
+            myGeneration == thumbnailGeneration
+        }
+
+        // 完了時のクリーンアップ: 自分が最新世代の時だけフラグを下ろす
+        // （古い世代が完走して isGeneratingThumbnails を勝手に false にする事故を防ぐ）
+        defer {
+            if isStillCurrent() {
+                isGeneratingThumbnails = false
+            }
+        }
+
+        // 3. 元画像を取得（現在のインデックス基準）
         guard viewModel.originalImages.indices.contains(viewModel.currentImageIndex) else {
             return
         }
         let baseImage = viewModel.originalImages[viewModel.currentImageIndex]
 
-        // 共通の低解像度リサイズ画像を 1 度だけ生成（後続のフィルタ適用を高速化）
+        // 4. 共通の低解像度リサイズ画像を 1 度だけ生成
         let smallImage: UIImage
         do {
             smallImage = try await imageService.resizeImage(
@@ -508,10 +538,14 @@ struct Style2DPadView: View {
             smallImage = baseImage
         }
 
-        // 各プリセットを順次適用
+        // 5. リサイズ完了直後に世代チェック（resizeImage はキャンセル不能なので
+        //    ここまで完走しているが、その間に画像が切り替わっていれば離脱）
+        guard isStillCurrent(), !Task.isCancelled else { return }
+
+        // 6. 各プリセットを順次適用
         for preset in StylePreset.allCases {
-            // タスクキャンセル確認（画像切替で別タスクが走っていたら中断）
-            if Task.isCancelled { return }
+            // 各プリセット適用前に世代+キャンセルチェック
+            guard isStillCurrent(), !Task.isCancelled else { return }
 
             var recipe = EditRecipe()
             recipe.style2DToneNorm  = Double(preset.toneNorm)
@@ -519,7 +553,8 @@ struct Style2DPadView: View {
 
             do {
                 let thumb = try await imageService.applyEditRecipe(recipe, to: smallImage)
-                if Task.isCancelled { return }
+                // 結果反映前にも世代チェック
+                guard isStillCurrent(), !Task.isCancelled else { return }
                 presetThumbnails[preset.id] = thumb
             } catch {
                 // 個別プリセットの失敗は無視（プレースホルダ表示で継続）
