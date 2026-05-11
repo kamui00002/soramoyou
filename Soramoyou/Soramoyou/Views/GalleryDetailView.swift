@@ -319,8 +319,8 @@ struct GalleryDetailView: View {
 
     private var imageSection: some View {
         Group {
-            if showingOriginalImage, let originalImages = post.originalImages, let firstOriginal = originalImages.first {
-                // オリジナル画像を表示
+            if showingOriginalImage, let originalImages = post.originalImages, !originalImages.isEmpty {
+                // オリジナル画像を表示（複数枚はスワイプで切り替え）
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Image(systemName: "photo")
@@ -331,10 +331,10 @@ struct GalleryDetailView: View {
                             .foregroundColor(.orange)
                     }
 
-                    GalleryDetailImageView(imageInfo: firstOriginal)
+                    multiImageCarousel(images: originalImages)
                 }
-            } else if let firstImage = post.images.first {
-                // 編集後の画像を表示
+            } else if !post.images.isEmpty {
+                // 編集後の画像を表示（複数枚はスワイプで切り替え）
                 VStack(alignment: .leading, spacing: 8) {
                     if hasOriginalImages {
                         HStack {
@@ -347,10 +347,39 @@ struct GalleryDetailView: View {
                         }
                     }
 
-                    GalleryDetailImageView(imageInfo: firstImage)
+                    multiImageCarousel(images: post.images)
                 }
             }
         }
+    }
+
+    // MARK: - Multi Image Carousel ⭐️
+    // 複数画像投稿を横スワイプで閲覧可能にするカルーセル。
+    // 縦長・横長が混在しても画像が切れないよう、配列内で最も縦長な
+    // アスペクト比に TabView 全体の高さを合わせる。
+    @ViewBuilder
+    private func multiImageCarousel(images: [ImageInfo]) -> some View {
+        let aspect = carouselAspectRatio(for: images)
+        TabView {
+            ForEach(Array(images.enumerated()), id: \.offset) { _, info in
+                GalleryDetailImageView(imageInfo: info)
+            }
+        }
+        // 1枚のときはドット非表示、複数のときだけインジケーターを出す
+        .tabViewStyle(.page(indexDisplayMode: images.count > 1 ? .always : .never))
+        .indexViewStyle(.page(backgroundDisplayMode: .always))
+        .aspectRatio(aspect, contentMode: .fit)
+    }
+
+    /// 画像配列の中で最も縦長なアスペクト比（width / height）を返す。
+    /// SwiftUI の `.aspectRatio(_:contentMode:)` は width:height の比率を取るため、
+    /// 最も小さい width/height（=最も縦長）を採用すれば、どの画像も切れずに収まる。
+    private func carouselAspectRatio(for images: [ImageInfo]) -> CGFloat {
+        let ratios = images.compactMap { info -> CGFloat? in
+            guard info.width > 0, info.height > 0 else { return nil }
+            return CGFloat(info.width) / CGFloat(info.height)
+        }
+        return ratios.min() ?? 1.0
     }
 
     // MARK: - Toggle Button

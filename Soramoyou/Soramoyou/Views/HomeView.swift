@@ -717,12 +717,41 @@ struct PostDetailView: View {
                     }
                     .padding()
                 }
-                if let firstImage = post.images.first {
-                    PostDetailImageView(imageInfo: firstImage)
+                // 複数画像投稿はスワイプで切り替え可能なカルーセルで表示 ⭐️
+                if !post.images.isEmpty {
+                    multiImageCarousel(images: post.images)
                 }
                 postInfoSection
             }
         }
+    }
+
+    // MARK: - Multi Image Carousel ⭐️
+    // 複数画像投稿で 2 枚目以降が見えなくなっていたバグ対応。
+    // TabView + .page スタイルで横スワイプ閲覧を可能にし、
+    // 配列内で最も縦長なアスペクト比に TabView 全体の高さを合わせる。
+    @ViewBuilder
+    private func multiImageCarousel(images: [ImageInfo]) -> some View {
+        let aspect = carouselAspectRatio(for: images)
+        TabView {
+            ForEach(Array(images.enumerated()), id: \.offset) { _, info in
+                PostDetailImageView(imageInfo: info)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: images.count > 1 ? .always : .never))
+        .indexViewStyle(.page(backgroundDisplayMode: .always))
+        .aspectRatio(aspect, contentMode: .fit)
+    }
+
+    /// 画像配列の中で最も縦長なアスペクト比（width / height）を返す。
+    /// `.aspectRatio` は width:height の比率を取るため、最も小さい比率を採用すると
+    /// 縦長/横長混在の投稿でもすべての画像が切れずに収まる。
+    private func carouselAspectRatio(for images: [ImageInfo]) -> CGFloat {
+        let ratios = images.compactMap { info -> CGFloat? in
+            guard info.width > 0, info.height > 0 else { return nil }
+            return CGFloat(info.width) / CGFloat(info.height)
+        }
+        return ratios.min() ?? 1.0
     }
 
     private var postInfoSection: some View {
