@@ -40,11 +40,15 @@ struct PostInfoView: View {
             postViewModel.setEditedImages(editedImages, editSettings: editSettings)
         } else {
             // 編集済み画像がない場合は、編集設定を適用して生成
-            Task {
+            // SR-H4: try? による silent fail を解消。失敗時は errorMessage + Crashlytics 通知
+            Task { @MainActor in
                 let editViewModel = EditViewModel(images: images, userId: userId)
-                let generatedImages = try? await editViewModel.generateFinalImages()
-                if let generatedImages = generatedImages {
+                do {
+                    let generatedImages = try await editViewModel.generateFinalImages()
                     postViewModel.setEditedImages(generatedImages, editSettings: editSettings)
+                } catch {
+                    ErrorHandler.logError(error, context: "PostInfoView.generateFinalImages")
+                    postViewModel.errorMessage = "画像生成に失敗しました: \(error.localizedDescription)"
                 }
             }
         }
