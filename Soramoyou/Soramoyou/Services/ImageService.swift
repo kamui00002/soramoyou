@@ -334,8 +334,9 @@ final class ImageService: ImageServiceProtocol {
                 }
 
                 // CIContextベースのリサイズ（バックグラウンドスレッドセーフ）
+                // SR-H2: 元画像をそのまま返す silent fail を解消 → throw
                 guard let cgImage = image.cgImage else {
-                    continuation.resume(returning: image)
+                    continuation.resume(throwing: ImageServiceError.processingFailed)
                     return
                 }
                 let ciImage = CIImage(cgImage: cgImage)
@@ -346,7 +347,8 @@ final class ImageService: ImageServiceProtocol {
                 let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
                 // 【修正】CIContext を毎回生成せず CIContextPool.shared.ciContext を再利用
                 guard let outputCGImage = CIContextPool.shared.ciContext.createCGImage(scaled, from: scaled.extent) else {
-                    continuation.resume(returning: image)
+                    // SR-H2: フル解像度画像をそのまま返す silent fail を解消 → throw
+                    continuation.resume(throwing: ImageServiceError.processingFailed)
                     return
                 }
 
