@@ -153,15 +153,20 @@ class SkyTypeClassifier: SkyTypeClassifierProtocol {
         }
 
         // CIContextベースのリサイズ（バックグラウンドスレッドセーフ）
-        guard let cgImage = image.cgImage else { return image }
+        // SR-H3: 元画像を返す silent fail を解消 → throw + CIContextPool 共有
+        guard let cgImage = image.cgImage else {
+            throw SkyTypeClassifierError.processingFailed
+        }
         let ciImage = CIImage(cgImage: cgImage)
         let scaleX = newSize.width / ciImage.extent.width
         let scaleY = newSize.height / ciImage.extent.height
         let scale = min(scaleX, scaleY)
 
         let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let context = CIContext(options: [.useSoftwareRenderer: false])
-        guard let outputCGImage = context.createCGImage(scaled, from: scaled.extent) else { return image }
+        // CIContext の毎回新規生成を CIContextPool 共有に変更 (パフォーマンス改善 + 一貫性)
+        guard let outputCGImage = CIContextPool.shared.ciContext.createCGImage(scaled, from: scaled.extent) else {
+            throw SkyTypeClassifierError.processingFailed
+        }
 
         return UIImage(cgImage: outputCGImage, scale: image.scale, orientation: image.imageOrientation)
     }
