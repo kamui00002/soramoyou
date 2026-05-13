@@ -91,7 +91,10 @@ class UserProfileViewModel: ObservableObject {
                 lastDocument: nil
             )
         } catch {
+            // SR-H7: ErrorHandler 経由で Crashlytics に送る + errorMessage 設定
             logger.error("fetchUserPosts 失敗: \(error.localizedDescription)")
+            ErrorHandler.logError(error, context: "UserProfileViewModel.fetchUserPosts")
+            errorMessage = "投稿の取得に失敗しました"
             return []
         }
     }
@@ -101,7 +104,11 @@ class UserProfileViewModel: ObservableObject {
         do {
             return try await followRepository.isFollowing(targetUserId, by: ownUserId)
         } catch {
+            // SR-H7: ErrorHandler 経由で Crashlytics に送る + errorMessage 設定
+            // (false 返却でフォローボタンが押せる状態 → 重複 write リスクの軽減)
             logger.error("isFollowing 失敗: \(error.localizedDescription)")
+            ErrorHandler.logError(error, context: "UserProfileViewModel.isFollowing")
+            errorMessage = "フォロー状態の確認に失敗しました"
             return false
         }
     }
