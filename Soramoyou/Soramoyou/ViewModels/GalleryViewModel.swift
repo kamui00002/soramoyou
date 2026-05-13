@@ -27,6 +27,10 @@ class GalleryViewModel: PaginatedPostsViewModel {
     
     /// ブロックしているユーザーIDのリスト
     private var blockedUserIds: [String] = []
+
+    /// SR-H6: フォールバック用キャッシュ
+
+    private var lastSuccessfulBlockedUserIds: [String]?
     
     /// 投稿を取得（ブロックユーザーのフィルタリング付き）
     override func fetchPosts() async {
@@ -47,9 +51,13 @@ class GalleryViewModel: PaginatedPostsViewModel {
         guard let currentUserId = authService.currentUser()?.id else { return }
         
         do {
-            blockedUserIds = try await firestoreService.fetchBlockedUserIds(userId: currentUserId)
+            let fetched = try await firestoreService.fetchBlockedUserIds(userId: currentUserId)
+            blockedUserIds = fetched
+            lastSuccessfulBlockedUserIds = fetched
         } catch {
-            blockedUserIds = []
+            // SR-H6: 握りつぶしを解消。Crashlytics 送信 + キャッシュフォールバック
+            ErrorHandler.logError(error, context: "GalleryViewModel.fetchBlockedUserIds")
+            blockedUserIds = lastSuccessfulBlockedUserIds ?? []
         }
     }
     

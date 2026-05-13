@@ -27,6 +27,8 @@ class HomeViewModel: PaginatedPostsViewModel {
 
     /// ブロックしているユーザーIDのリスト
     private var blockedUserIds: [String] = []
+    /// SR-H6: ブロックリスト取得失敗時のフォールバック用キャッシュ
+    private var lastSuccessfulBlockedUserIds: [String]?
 
     /// 認証サービス
     private let authService: AuthServiceProtocol
@@ -103,10 +105,15 @@ class HomeViewModel: PaginatedPostsViewModel {
         guard let currentUserId = authService.currentUser()?.id else { return }
 
         do {
-            blockedUserIds = try await firestoreService.fetchBlockedUserIds(userId: currentUserId)
+            let fetched = try await firestoreService.fetchBlockedUserIds(userId: currentUserId)
+            blockedUserIds = fetched
+            // SR-H6: 成功時はキャッシュ保持 (失敗時のフォールバック用)
+            lastSuccessfulBlockedUserIds = fetched
         } catch {
-            // ブロックリスト取得に失敗しても投稿表示は継続
-            blockedUserIds = []
+            // SR-H6: 完全握りつぶしを解消。Crashlytics に送信 + 前回成功時のキャッシュにフォールバック
+            // (空配列にするとブロック対象の投稿が突然表示される信頼失墜問題)
+            ErrorHandler.logError(error, context: "HomeViewModel.fetchBlockedUserIds")
+            blockedUserIds = lastSuccessfulBlockedUserIds ?? []
         }
     }
 
