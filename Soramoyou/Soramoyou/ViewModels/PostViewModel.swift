@@ -252,6 +252,11 @@ class PostViewModel: ObservableObject {
 
             isPostSaved = true
             uploadProgress = 1.0
+
+            LoggingService.shared.logEvent(.postCompleted, parameters: [
+                AnalyticsParam.skyType: effectiveSkyType?.rawValue ?? "unknown",
+                AnalyticsParam.hasLocation: location != nil
+            ])
         } catch {
             // エラーをログに記録
             ErrorHandler.logError(error, context: "PostViewModel.savePost", userId: userId)

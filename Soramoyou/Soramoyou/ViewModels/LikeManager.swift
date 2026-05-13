@@ -67,6 +67,14 @@ class LikeManager: ObservableObject {
             // これを残すと次回 pull-to-refresh で Post.likesCount（サーバー最新値）+ adjustment となり
             // 二重カウントされる（ultrareview bug_001）。
             likeCountAdjustments.removeValue(forKey: postId)
+
+            // Firestore auto-generated ID は PII ではないので直接送信。
+            // Int.hashValue はプロセス起動ごとに randomized されるため集計に使えない。
+            if !wasLiked {
+                LoggingService.shared.logEvent(.likeTapped, parameters: [
+                    AnalyticsParam.postId: postId
+                ])
+            }
         } catch {
             // エラー時にリバート
             if wasLiked {

@@ -91,6 +91,10 @@ struct GalleryView: View {
                 await viewModel.refresh()
             }
             .onAppear {
+                // Analytics: ギャラリー画面表示
+                LoggingService.shared.logEvent(.screenView, parameters: [
+                    AnalyticsParam.screenName: AnalyticsScreen.gallery.rawValue
+                ])
                 Task {
                     await viewModel.fetchPosts()
                 }

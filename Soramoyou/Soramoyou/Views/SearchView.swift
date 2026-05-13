@@ -51,6 +51,12 @@ struct SearchView: View {
                 }
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+            .onAppear {
+                // Analytics: 検索画面表示
+                LoggingService.shared.logEvent(.screenView, parameters: [
+                    AnalyticsParam.screenName: AnalyticsScreen.search.rawValue
+                ])
+            }
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil

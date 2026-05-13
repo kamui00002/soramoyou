@@ -70,6 +70,22 @@ class SearchViewModel: ObservableObject {
             }
             if activeSearchToken == token {
                 searchResults = results
+
+                let resolvedType: AnalyticsSearchType = {
+                    if hasHashtag { return .hashtag }
+                    if selectedColor != nil { return .color }
+                    if selectedTimeOfDay != nil { return .timeOfDay }
+                    if selectedSkyType != nil { return .skyType }
+                    return .text
+                }()
+                var params: [String: Any] = [
+                    AnalyticsParam.searchType: resolvedType.rawValue
+                ]
+                // search_term_length は hashtag 検索時のみ意味があるため、その時だけ送る
+                if hasHashtag {
+                    params[AnalyticsParam.searchTermLength] = trimmedHashtag.count
+                }
+                LoggingService.shared.logEvent(.searchExecuted, parameters: params)
             }
         } catch {
             // エラーをログに記録

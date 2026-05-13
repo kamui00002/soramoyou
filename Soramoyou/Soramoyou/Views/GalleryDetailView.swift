@@ -144,6 +144,10 @@ struct GalleryDetailView: View {
                 }
             }
             .onAppear {
+                // Analytics: ギャラリー詳細画面表示
+                LoggingService.shared.logEvent(.screenView, parameters: [
+                    AnalyticsParam.screenName: AnalyticsScreen.galleryDetail.rawValue
+                ])
                 Task {
                     await viewModel.loadAuthor(userId: post.userId)
                     await commentViewModel.fetchComments(postId: post.id)

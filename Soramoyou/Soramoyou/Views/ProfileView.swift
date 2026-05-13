@@ -155,6 +155,10 @@ struct ProfileView: View {
                 }
             }
             .task {
+                // Analytics: プロフィール画面表示
+                LoggingService.shared.logEvent(.screenView, parameters: [
+                    AnalyticsParam.screenName: AnalyticsScreen.profile.rawValue
+                ])
                 // .taskを使用してビューのライフサイクルに紐づけた非同期処理 ☁️
                 // Auth状態が復元されていない場合にuserIdを再取得
                 // refreshUserIdIfNeeded が true を返した場合は内部でロード済みのため二重実行しない

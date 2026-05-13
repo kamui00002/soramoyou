@@ -71,6 +71,10 @@ struct HomeView: View {
                 await likeManager.checkLikeStatus(for: viewModel.posts)
             }
             .onAppear {
+                // Analytics: ホーム画面表示
+                LoggingService.shared.logEvent(.screenView, parameters: [
+                    AnalyticsParam.screenName: AnalyticsScreen.home.rawValue
+                ])
                 Task {
                     await viewModel.fetchPosts()
                     await likeManager.checkLikeStatus(for: viewModel.posts)

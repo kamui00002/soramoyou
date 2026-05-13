@@ -110,6 +110,11 @@ class CommentViewModel: ObservableObject {
             // 新しいコメントを先頭に追加（降順表示のため）
             comments.insert(comment, at: 0)
             isSending = false
+
+            // Analytics: コメント投稿イベント (内容は PII の可能性があるため length のみ)
+            LoggingService.shared.logEvent(.commentPosted, parameters: [
+                AnalyticsParam.commentLength: content.count
+            ])
             return true
         } catch {
             ErrorHandler.logError(error, context: "CommentViewModel.addComment", userId: userId)
