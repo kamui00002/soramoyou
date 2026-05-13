@@ -191,7 +191,16 @@ final class PhotoKitAdapter {
                 return
             }
 
-            output.adjustmentData = try? adjustmentData(from: recipe)
+            // SR-H5: try? による silent fail を解消。符号化失敗時は写真 App から
+            // 「続きを編集」できなくなる致命的問題のため、明示的に errorBox に記録。
+            do {
+                output.adjustmentData = try adjustmentData(from: recipe)
+            } catch {
+                logger.error("adjustmentData 符号化失敗: \(error.localizedDescription, privacy: .public)")
+                LoggingService.shared.recordNonFatalError(error, context: "PhotoKitAdapter.adjustmentData")
+                errorBox.value = error
+                return
+            }
 
             let changeRequest = PHAssetChangeRequest(for: asset)
             changeRequest.contentEditingOutput = output
