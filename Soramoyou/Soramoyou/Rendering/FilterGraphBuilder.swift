@@ -381,19 +381,19 @@ final class FilterGraphBuilder {
     // ── 2D スタイルパッド（iPhone「写真スタイル」風の複合ツール）──
     /// 1 つの 2D 入力 (toneNorm, colorNorm) で「トーン」と「カラー」を同時に変化させる複合フィルタ。
     ///
-    /// パラメータ写像（iPhone 風）:
-    /// - **トーン軸 (toneNorm, Y)**:
-    ///   - `> 0`: コントラスト強化 + シャドウ持ち上げ + ハイライト微抑制（リッチコントラスト）
-    ///   - `< 0`: コントラスト緩和（フラット化／フェード感）
-    /// - **カラー軸 (colorNorm, X)**:
-    ///   - `> 0`: 暖色寄り（色温度を低 K 側にシフト + ティントを微マゼンタ寄り）
-    ///   - `< 0`: 寒色寄り（色温度を高 K 側にシフト + ティントを微グリーン寄り）
+    /// パラメータ写像（Apple 公式定義に揃えた純正互換版）:
+    /// - **トーン軸 (toneNorm, Y)** — 明度・コントラスト系
+    ///   - `> 0`: 明るく + コントラスト緩和（シャドウ持ち上げ + ハイライト軽抑制）
+    ///   - `< 0`: 暗く + コントラスト強化（シャドウ darken + ハイライトは保護）
+    /// - **カラー軸 (colorNorm, X)** — 彩度系
+    ///   - `> 0`: 彩度ブースト（`CIVibrance` でハイライト・既高彩度領域を保護）
+    ///   - `< 0`: 彩度ダウン（`-1.0` で完全モノクロ）
     ///
     /// 設計方針:
     /// - 27 ツールとは独立した「最後のフィルム」として動作させるため、効きの量は控えめに調整
-    /// - 既存 `applyBrilliance` `applyTemperatureAndTint` と同じ CIFilter 群を使い回し、
-    ///   未経験の Core Image 関数を増やさない（保守性・パフォーマンス予測性の確保）
-    /// - 暖かみツール (`applyTemperatureAndTint`) と同様、warmth 正値 → 低ケルビン → 暖かい
+    /// - カラー軸の増彩度側は `CIVibrance` を使い、太陽周辺などの白飛び領域を守る
+    ///   （`CIColorControls.saturation` の一律ブーストでは太陽周辺まで染まってしまうため）
+    /// - `CIHighlightShadowAdjust.highlightAmount` は 0.0〜1.0 が定義域。範囲外を入れない
     private static func applyStyle2D(
         toneNorm: Double,
         colorNorm: Double,
@@ -401,41 +401,44 @@ final class FilterGraphBuilder {
     ) -> CIImage {
         var img = image
 
-        // トーン軸: 正値=コントラスト強化+暗部持ち上げ、負値=コントラスト緩和
+        // ===== トーン軸: + で明るくフラット、- で暗く強コントラスト =====
         if abs(toneNorm) > 0.001 {
+            let hs = CIFilter.highlightShadowAdjust()
+            hs.inputImage = img
             if toneNorm > 0 {
-                // 正値ブランチ: HighlightShadow + ColorControls の 2 段
-                let hs = CIFilter.highlightShadowAdjust()
-                hs.inputImage      = img
-                hs.shadowAmount    = Float(toneNorm * 0.5)         // 暗部持ち上げ
-                hs.highlightAmount = Float(1.0 - toneNorm * 0.15)  // ハイライト微抑制
-                if let step1 = hs.outputImage {
-                    let cc = CIFilter.colorControls()
-                    cc.inputImage = step1
-                    cc.contrast   = Float(1.0 + toneNorm * 0.30)   // コントラスト強化
-                    img = cc.outputImage ?? step1
-                }
+                // 正値: 明るく見せる（シャドウ持ち上げ + ハイライト軽抑制）
+                hs.shadowAmount    = Float(toneNorm * 0.6)
+                hs.highlightAmount = Float(1.0 - toneNorm * 0.25)
             } else {
-                // 負値ブランチ: コントラスト緩和のみ（シャドウ・ハイライトは触らない）
+                // 負値: 暗く見せる（シャドウを下げる）。ハイライトは保護のため触らない
+                hs.shadowAmount    = Float(toneNorm * 0.5)
+                hs.highlightAmount = 1.0
+            }
+            if let step1 = hs.outputImage {
                 let cc = CIFilter.colorControls()
-                cc.inputImage = img
-                cc.contrast   = Float(1.0 + toneNorm * 0.20)
-                img = cc.outputImage ?? img
+                cc.inputImage = step1
+                // tone+ → コントラスト緩和（フラット化）、tone- → コントラスト強化
+                cc.contrast = Float(1.0 - toneNorm * 0.10)
+                img = cc.outputImage ?? step1
             }
         }
 
-        // カラー軸: 色温度 + 色合いを連動させて iPhone 風の「暖↔寒」を作る
+        // ===== カラー軸: 純正の「カラー」= 彩度 =====
         if abs(colorNorm) > 0.001 {
-            let tt = CIFilter.temperatureAndTint()
-            tt.inputImage    = img
-            tt.neutral       = CIVector(x: 6500, y: 0)
-            // warmth ツールと同じ符号則（正値 → 低ケルビン → 暖色）
-            // tint は補助的に同方向へ振り、暖色側はマゼンタ寄り、寒色側はグリーン寄りに
-            tt.targetNeutral = CIVector(
-                x: 6500 - colorNorm * 1500,
-                y: colorNorm * 80
-            )
-            img = tt.outputImage ?? img
+            if colorNorm < 0 {
+                // 減彩度側: 完全モノクロまで行けるよう ColorControls.saturation を使う
+                let cc = CIFilter.colorControls()
+                cc.inputImage = img
+                cc.saturation = Float(1.0 + colorNorm)   // -1 → 0 (モノクロ)
+                img = cc.outputImage ?? img
+            } else {
+                // 増彩度側: 太陽周辺の白飛び保護のため Vibrance を使う
+                // （ColorControls.saturation だとハイライトまで色が乗ってしまうため）
+                let vib = CIFilter.vibrance()
+                vib.inputImage = img
+                vib.amount = Float(colorNorm * 0.7)
+                img = vib.outputImage ?? img
+            }
         }
 
         return img
