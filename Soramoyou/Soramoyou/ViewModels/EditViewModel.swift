@@ -138,6 +138,12 @@ class EditViewModel: ObservableObject {
     private var currentPreviewRequestId: UUID = UUID()
     /// 現在の高速プレビューリクエストID
     private var currentFastPreviewRequestId: UUID = UUID()
+    /// 現在の finalize Task（ドラッグ終了後のフル解像度生成）の ID
+    ///
+    /// finalize 系（`finalizeToolValue` 等）が起動した generatePreview Task が、
+    /// 完了時に `isEditingRealtime` / `fastPreviewImage` をリセットしてよいか判定する。
+    /// 次のドラッグが始まると上書きされ、古い Task のクリーンアップはスキップされる。
+    private var finalizePendingId: UUID?
     
     init(
         images: [UIImage] = [],
@@ -536,24 +542,41 @@ class EditViewModel: ObservableObject {
 
     /// スライダー操作完了時に呼び出し、高品質プレビューを生成
     func finalizeToolValue(for tool: EditTool) {
-        isEditingRealtime = false
-
         // ドラッグ開始時の状態を履歴に積む
         if let preDrag = preDragSnapshot {
             historyManager.push(preDrag)
             notifyHistoryChange()
             preDragSnapshot = nil
         }
+        scheduleFullResPreviewAfterDrag()
+    }
 
-        // 高速プレビューを通常プレビューに昇格（同解像度なので品質ジャンプなし）
-        if let fastPreview = fastPreviewImage {
-            previewImage = fastPreview
-        }
-        fastPreviewImage = nil
-
-        // バックグラウンドでフル解像度プレビューを再生成
+    /// ドラッグ終了後のフル解像度プレビュー生成を予約する共通ヘルパー
+    ///
+    /// 旧実装は `previewImage = fastPreviewImage` の "昇格" を行っていたが、
+    /// `fastPreviewImage` は 750×750 の低解像度キャッシュ由来のため、
+    /// `generatePreview()` が次のドラッグで破棄／requestId ミスマッチで早期 return
+    /// すると `previewImage` が 750px のまま固定され「編集すると画像が粗くなる」
+    /// 現象を起こしていた（2026-05-17 4並列調査で発覚）。
+    ///
+    /// 本ヘルパーは：
+    /// - `previewImage` への 750px 昇格を行わない（粗さの根源を断つ）
+    /// - `isEditingRealtime` / `fastPreviewImage` を即座にリセットせず、
+    ///   自分が起動した `generatePreview()` 完了まで維持し、`displayPreviewImage`
+    ///   が引き続き `fastPreviewImage` を返すようにする
+    /// - 完了時に `finalizePendingId` をチェックし、自分がまだ最新の finalize
+    ///   Task か（次のドラッグが始まっていないか）確認してからリセットする
+    private func scheduleFullResPreviewAfterDrag() {
+        let myId = UUID()
+        finalizePendingId = myId
         Task { [weak self] in
-            await self?.generatePreview()
+            guard let self = self else { return }
+            await self.generatePreview()
+            // 自分が最新の finalize Task でなければ何もしない（新しい Task に委ねる）
+            guard self.finalizePendingId == myId else { return }
+            self.finalizePendingId = nil
+            self.isEditingRealtime = false
+            self.fastPreviewImage = nil
         }
     }
 
@@ -626,24 +649,13 @@ class EditViewModel: ObservableObject {
 
     /// 回転操作完了
     func finalizeRotation() {
-        isEditingRealtime = false
-
         // ドラッグ開始時の状態を履歴に積む
         if let preDrag = preDragSnapshot {
             historyManager.push(preDrag)
             notifyHistoryChange()
             preDragSnapshot = nil
         }
-
-        // 高速プレビューを通常プレビューに昇格
-        if let fastPreview = fastPreviewImage {
-            previewImage = fastPreview
-        }
-        fastPreviewImage = nil
-
-        Task { [weak self] in
-            await self?.generatePreview()
-        }
+        scheduleFullResPreviewAfterDrag()
     }
 
     /// 左右反転を切り替え
@@ -858,25 +870,13 @@ class EditViewModel: ObservableObject {
 
     /// 2D スタイルパッドのドラッグ完了: Undo 履歴に積み + フル解像度プレビュー再生成
     func finalizeStyle2D() {
-        isEditingRealtime = false
-
         // ドラッグ開始時の状態を履歴に積む
         if let preDrag = preDragSnapshot {
             historyManager.push(preDrag)
             notifyHistoryChange()
             preDragSnapshot = nil
         }
-
-        // 高速プレビューを通常プレビューに昇格（同解像度なので品質ジャンプなし）
-        if let fastPreview = fastPreviewImage {
-            previewImage = fastPreview
-        }
-        fastPreviewImage = nil
-
-        // バックグラウンドでフル解像度プレビューを再生成
-        Task { [weak self] in
-            await self?.generatePreview()
-        }
+        scheduleFullResPreviewAfterDrag()
     }
 
     /// 2D スタイルパッドの値を (0, 0) にリセット
@@ -1117,16 +1117,30 @@ class EditViewModel: ObservableObject {
         }
 
         let size = image.size
+
+        // 回転後の外接矩形サイズを算出。
+        // 旧実装はキャンバスを常に元画像と同じ size で描画していたため、90°/270° の
+        // 縦横入れ替わりが必要な場合に画像の長辺がはみ出し、中央が正方形にクロップ
+        // されていた（例: 3024×4032 → 90°回転 → 3024×3024 にクロップ）。
+        // 任意角度にも対応するため絶対 sin/cos で外接矩形を求める。
+        let radians = rotation * .pi / 180.0
+        let absSin = abs(sin(radians))
+        let absCos = abs(cos(radians))
+        let canvasSize = CGSize(
+            width:  size.width * absCos + size.height * absSin,
+            height: size.width * absSin + size.height * absCos
+        )
+
         let format = UIGraphicsImageRendererFormat()
         format.scale = image.scale
         format.opaque = false
-        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        let renderer = UIGraphicsImageRenderer(size: canvasSize, format: format)
 
         return renderer.image { rendererContext in
             let context = rendererContext.cgContext
 
-            // コンテキストの中心に移動
-            context.translateBy(x: size.width / 2, y: size.height / 2)
+            // キャンバスの中心（回転後の外接矩形の中央）に移動
+            context.translateBy(x: canvasSize.width / 2, y: canvasSize.height / 2)
 
             // 反転を適用
             var scaleX: CGFloat = 1.0
@@ -1140,10 +1154,9 @@ class EditViewModel: ObservableObject {
             context.scaleBy(x: scaleX, y: scaleY)
 
             // 回転を適用
-            let radians = rotation * .pi / 180.0
             context.rotate(by: CGFloat(radians))
 
-            // 画像を描画
+            // 元画像サイズで中心から描画（キャンバスが外接矩形なので 90°/270° でも切れない）
             image.draw(in: CGRect(
                 x: -size.width / 2,
                 y: -size.height / 2,
