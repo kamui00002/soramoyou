@@ -228,12 +228,14 @@ final class FilterGraphBuilder {
             height: max(0.01, min(1, normalizedRect.size.height))
         )
 
+        // 非整数ピクセルでの crop/translate はリサンプリングボケを引き起こすため
+        // 各値を整数ピクセルに丸めてからCIImage座標系へ変換する
         let pixelRect = CGRect(
-            x: extent.origin.x + clamped.origin.x * extent.width,
+            x: (extent.origin.x + clamped.origin.x * extent.width).rounded(),
             // 左上原点 → 左下原点に変換（y 軸反転）
-            y: extent.origin.y + (1.0 - clamped.origin.y - clamped.size.height) * extent.height,
-            width:  clamped.size.width  * extent.width,
-            height: clamped.size.height * extent.height
+            y: (extent.origin.y + (1.0 - clamped.origin.y - clamped.size.height) * extent.height).rounded(),
+            width:  (clamped.size.width  * extent.width).rounded(),
+            height: (clamped.size.height * extent.height).rounded()
         )
 
         let cropped = image.cropped(to: pixelRect)
@@ -579,8 +581,8 @@ final class FilterGraphBuilder {
             let f = CIFilter.gaussianBlur()
             f.inputImage = image
             f.radius     = Float(-v * 3.0)
-            // gaussianBlur は境界で画像が広がるので元の extent に cropped する
-            return f.outputImage?.cropped(to: image.extent) ?? image
+            // gaussianBlur は境界を超えて広がるため clampedToExtent() で端を埋めてから crop する
+            return f.outputImage?.clampedToExtent().cropped(to: image.extent) ?? image
         }
     }
 
@@ -595,17 +597,20 @@ final class FilterGraphBuilder {
     /// v=+0.5 で 3.0 px、v=+1.0 で 5.0 px に拡大する（750px プレビューでも残る帯域）。
     private static func applyTexture(normalized v: Double, to image: CIImage) -> CIImage {
         guard abs(v) > 0.01 else { return image }
+        // 半径を画像幅にスケール: 750px 基準でチューニングした値を原寸でも同じ視覚強度にする
+        let imageScale = Float(image.extent.width) / 750.0
         if v > 0 {
             let f = CIFilter.unsharpMask()
             f.inputImage  = image
-            f.radius      = Float(v * 4.0 + 1.0)
+            f.radius      = Float(v * 4.0 + 1.0) * imageScale
             f.intensity   = Float(v)
             return f.outputImage ?? image
         } else {
             let f = CIFilter.gaussianBlur()
             f.inputImage = image
-            f.radius     = Float(-v * 1.5)
-            return f.outputImage?.cropped(to: image.extent) ?? image
+            f.radius     = Float(-v * 1.5) * imageScale
+            // gaussianBlur は境界を超えて広がるため clampedToExtent() で端を埋めてから crop する
+            return f.outputImage?.clampedToExtent().cropped(to: image.extent) ?? image
         }
     }
 
@@ -621,10 +626,12 @@ final class FilterGraphBuilder {
     /// 負方向のコントラスト低下も +0.2 → +0.35 で体感できる幅にする。
     private static func applyClarity(normalized v: Double, to image: CIImage) -> CIImage {
         guard abs(v) > 0.01 else { return image }
+        // 半径を画像幅にスケール: 750px 基準でチューニングした値を原寸でも同じ視覚強度にする
+        let imageScale = Float(image.extent.width) / 750.0
         if v > 0 {
             let f = CIFilter.unsharpMask()
             f.inputImage  = image
-            f.radius      = Float(v * 2.5 + 1.0)
+            f.radius      = Float(v * 2.5 + 1.0) * imageScale
             f.intensity   = Float(v * 0.75)
             return f.outputImage ?? image
         } else {
@@ -818,7 +825,8 @@ final class FilterGraphBuilder {
         let blur = CIFilter.gaussianBlur()
         blur.inputImage = original
         blur.radius     = 15.0
-        guard let blurredImage = blur.outputImage?.cropped(to: original.extent) else {
+        // gaussianBlur は境界を超えて広がるため clampedToExtent() で端を埋めてから crop する
+        guard let blurredImage = blur.outputImage?.clampedToExtent().cropped(to: original.extent) else {
             return blended
         }
 

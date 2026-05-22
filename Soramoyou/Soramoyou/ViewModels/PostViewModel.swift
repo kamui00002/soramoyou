@@ -67,6 +67,38 @@ class PostViewModel: ObservableObject {
         selectedImages = images
         editedImages = []
         extractImageInfo()
+        // 解像度・ファイルサイズを非同期でバリデーション（必要に応じてリサイズ・圧縮）
+        Task { @MainActor in
+            await validateAndNormalizeSelectedImages()
+        }
+    }
+
+    /// 選択画像の解像度・ファイルサイズを検証し、必要に応じてリサイズ・圧縮する
+    private func validateAndNormalizeSelectedImages() async {
+        let maxDimension: CGFloat = 2048
+        let maxBytes = 5 * 1024 * 1024
+        for index in selectedImages.indices {
+            let image = selectedImages[index]
+            do {
+                var normalized = image
+                if image.size.width > maxDimension || image.size.height > maxDimension {
+                    normalized = try await imageService.resizeImage(
+                        normalized,
+                        maxSize: CGSize(width: maxDimension, height: maxDimension)
+                    )
+                }
+                if let data = normalized.jpegData(compressionQuality: 1.0),
+                   data.count > maxBytes {
+                    let compressed = try await imageService.compressImage(normalized, quality: 0.85)
+                    if let compressedImage = UIImage(data: compressed) {
+                        normalized = compressedImage
+                    }
+                }
+                selectedImages[index] = normalized
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
     
     /// 編集済み画像を設定
@@ -314,12 +346,12 @@ class PostViewModel: ObservableObject {
             let thumbnailURL = try await storageService.uploadThumbnail(resizedImage, path: thumbnailBasePath)
             uploadedThumbnailURLs.append(thumbnailFullPath)
 
-            // サイズ情報もスナップショット時点で収集
+            // サイズはリサイズ後の実サイズを記録する（アップロードされる画像と一致させる）
             uploaded.append(UploadedImage(
                 url: imageURL.absoluteString,
                 thumbnail: thumbnailURL.absoluteString,
-                width: Int(image.size.width),
-                height: Int(image.size.height),
+                width: Int(resizedImage.size.width),
+                height: Int(resizedImage.size.height),
                 storagePath: imagePath,
                 thumbnailStoragePath: thumbnailFullPath
             ))
@@ -368,11 +400,11 @@ class PostViewModel: ObservableObject {
             let imageURL = try await storageService.uploadImage(resizedImage, path: imagePath)
             uploadedOriginalImageURLs.append(imagePath)
 
-            // サイズ情報もスナップショット時点で収集
+            // サイズはリサイズ後の実サイズを記録する（アップロードされる画像と一致させる）
             uploaded.append(UploadedOriginalImage(
                 url: imageURL.absoluteString,
-                width: Int(image.size.width),
-                height: Int(image.size.height),
+                width: Int(resizedImage.size.width),
+                height: Int(resizedImage.size.height),
                 storagePath: imagePath
             ))
 

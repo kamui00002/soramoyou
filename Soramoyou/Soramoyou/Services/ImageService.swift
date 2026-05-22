@@ -227,7 +227,13 @@ final class ImageService: ImageServiceProtocol {
     /// 低解像度 CIImage + EditRecipe から同期的にプレビュー生成（リアルタイム用）
     func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage? {
         let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage)
-        guard let cgImage = context.createCGImage(result, from: result.extent) else {
+        // colorSpace を明示して Display P3 タグを確実に付与する（省略すると iOS 差異で色がくすむ恐れ）
+        guard let cgImage = context.createCGImage(
+            result,
+            from: result.extent,
+            format: CIFormat.BGRA8,
+            colorSpace: CIContextPool.shared.outputColorSpace
+        ) else {
             return nil
         }
         return UIImage(cgImage: cgImage)
@@ -250,7 +256,13 @@ final class ImageService: ImageServiceProtocol {
             try Task.checkCancellation()
             let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage)
             try Task.checkCancellation()
-            guard let cgImage = self.context.createCGImage(result, from: result.extent) else {
+            // colorSpace を明示して Display P3 タグを確実に付与する（省略すると iOS 差異で色がくすむ恐れ）
+            guard let cgImage = self.context.createCGImage(
+                result,
+                from: result.extent,
+                format: CIFormat.BGRA8,
+                colorSpace: CIContextPool.shared.outputColorSpace
+            ) else {
                 throw ImageServiceError.processingFailed
             }
             return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
