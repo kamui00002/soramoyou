@@ -29,11 +29,11 @@ const IMAGE_PATHS = [
   "/mockup.png",
   "/app-icon.png",
   "/screenshots/home.png",
-  "/screenshots/gallery.png",
   "/screenshots/edit.png",
+  "/screenshots/edittools.png",
   "/screenshots/postinfo.png",
   "/screenshots/search.png",
-  "/screenshots/profile.png",
+  "/screenshots/style.png",
 ];
 
 const imageCache: Record<string, string> = {};
@@ -217,7 +217,7 @@ function SunGlow({ style }: { style: React.CSSProperties }) {
 
 // ─── Slide Components ────────────────────────────────────
 
-// Slide 1: Hero — App icon + tagline + blue sky gradient
+// Slide 1: Hero — 電話なし、アイコン＋キャッチコピー (C案採用)
 function Slide1() {
   return (
     <div
@@ -227,35 +227,48 @@ function Slide1() {
         position: "relative",
         overflow: "hidden",
         background:
-          "linear-gradient(180deg, #4A90D9 0%, #87CEEB 35%, #B8E4F0 60%, #F0E6D6 100%)",
+          "linear-gradient(180deg, #1a4a8a 0%, #2d7dd2 25%, #5ba8e8 50%, #a8d8f0 72%, #e8f4fd 100%)",
       }}
     >
-      <CloudBlob style={{ top: "5%", left: "-10%", width: 500, height: 300 }} />
-      <CloudBlob
-        style={{ top: "2%", right: "-5%", width: 400, height: 250 }}
-      />
+      {/* 雲装飾 */}
+      <CloudBlob style={{ top: "8%", left: "-12%", width: 600, height: 350 }} />
+      <CloudBlob style={{ top: "5%", right: "-8%", width: 500, height: 300 }} />
+      <CloudBlob style={{ top: "38%", left: "-5%", width: 400, height: 250 }} />
+      <CloudBlob style={{ top: "42%", right: "-10%", width: 450, height: 280 }} />
       <SunGlow
         style={{
-          top: "-5%",
+          top: "10%",
           left: "50%",
           transform: "translateX(-50%)",
-          width: 600,
-          height: 600,
+          width: 800,
+          height: 800,
         }}
       />
 
-      {/* App Icon */}
+      {/* ヘッドライン — 上部（他スライドと統一） */}
+      <div
+        style={{ position: "absolute", top: IPHONE_H * 0.06, width: "100%" }}
+      >
+        <Caption
+          canvasW={IPHONE_W}
+          headline={"今日の空、\nみんなの空"}
+          label="そらもよう"
+          color="#fff"
+        />
+      </div>
+
+      {/* App Icon — 大きく中央 */}
       <div
         style={{
           position: "absolute",
-          top: IPHONE_H * 0.06,
+          top: IPHONE_H * 0.32,
           left: "50%",
           transform: "translateX(-50%)",
-          width: IPHONE_W * 0.18,
-          height: IPHONE_W * 0.18,
-          borderRadius: IPHONE_W * 0.04,
+          width: IPHONE_W * 0.52,
+          height: IPHONE_W * 0.52,
+          borderRadius: IPHONE_W * 0.115,
           overflow: "hidden",
-          boxShadow: "0 10px 40px rgba(0,0,0,0.2)",
+          boxShadow: "0 24px 100px rgba(0,0,0,0.3), 0 0 0 8px rgba(255,255,255,0.25)",
         }}
       >
         <img
@@ -265,78 +278,35 @@ function Slide1() {
         />
       </div>
 
+      {/* サブテキスト */}
       <div
-        style={{ position: "absolute", top: IPHONE_H * 0.15, width: "100%" }}
-      >
-        <Caption
-          canvasW={IPHONE_W}
-          headline={"今日の空、\nみんなの空"}
-          label="そらもよう"
-        />
-      </div>
-
-      <Phone
-        src={img("/screenshots/home.png")}
-        alt="Home"
         style={{
           position: "absolute",
-          bottom: 0,
-          left: "50%",
-          transform: "translateX(-50%) translateY(12%)",
-          width: "84%",
+          top: IPHONE_H * 0.76,
+          width: "100%",
+          textAlign: "center",
+          padding: `0 ${IPHONE_W * 0.1}px`,
         }}
-      />
+      >
+        <div
+          style={{
+            fontSize: IPHONE_W * 0.058,
+            color: "rgba(255,255,255,0.8)",
+            lineHeight: 1.6,
+            fontWeight: 400,
+          }}
+        >
+          空の写真を撮って、編集して、
+          <br />
+          みんなとシェアしよう
+        </div>
+      </div>
     </div>
   );
 }
 
-// Slide 2: Gallery — Deep blue gradient, phone offset right
+// Slide 2: Filter — フィルタープリセット紹介
 function Slide2() {
-  return (
-    <div
-      style={{
-        width: IPHONE_W,
-        height: IPHONE_H,
-        position: "relative",
-        overflow: "hidden",
-        background:
-          "linear-gradient(160deg, #1a3a5c 0%, #2d6a9f 40%, #5b9fd4 70%, #a8d4e6 100%)",
-      }}
-    >
-      <CloudBlob
-        style={{ bottom: "20%", right: "-15%", width: 600, height: 400 }}
-      />
-      <CloudBlob
-        style={{ top: "10%", left: "-8%", width: 350, height: 250 }}
-      />
-
-      <div
-        style={{ position: "absolute", top: IPHONE_H * 0.06, width: "100%" }}
-      >
-        <Caption
-          canvasW={IPHONE_W}
-          headline={"空のコレクションを\n作ろう"}
-          label="ギャラリー"
-        />
-      </div>
-
-      <Phone
-        src={img("/screenshots/gallery.png")}
-        alt="Gallery"
-        style={{
-          position: "absolute",
-          bottom: 0,
-          right: "-4%",
-          transform: "translateY(10%)",
-          width: "82%",
-        }}
-      />
-    </div>
-  );
-}
-
-// Slide 3: Edit — Contrast slide with sunset gradient
-function Slide3() {
   return (
     <div
       style={{
@@ -372,15 +342,73 @@ function Slide3() {
       >
         <Caption
           canvasW={IPHONE_W}
-          headline={"27のツールで\n空を彩る"}
-          label="フィルター & 編集"
+          headline={"フィルターで\n空を演出する"}
+          label="フィルター"
           color="#fff"
         />
       </div>
 
       <Phone
         src={img("/screenshots/edit.png")}
-        alt="Edit"
+        alt="Filter"
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: "50%",
+          transform: "translateX(-50%) translateY(14%)",
+          width: "86%",
+        }}
+      />
+    </div>
+  );
+}
+
+// Slide 3: Edit Tools — 編集ツール（スライダー群）紹介
+function Slide3() {
+  return (
+    <div
+      style={{
+        width: IPHONE_W,
+        height: IPHONE_H,
+        position: "relative",
+        overflow: "hidden",
+        background:
+          "linear-gradient(180deg, #0a0a18 0%, #1a1040 30%, #2a1a60 55%, #6a3a30 80%, #c06030 100%)",
+      }}
+    >
+      <SunGlow
+        style={{
+          bottom: "25%",
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: 700,
+          height: 700,
+        }}
+      />
+      <CloudBlob
+        style={{
+          top: "3%",
+          left: "-8%",
+          width: 450,
+          height: 300,
+          background: "rgba(180,80,50,0.12)",
+        }}
+      />
+
+      <div
+        style={{ position: "absolute", top: IPHONE_H * 0.06, width: "100%" }}
+      >
+        <Caption
+          canvasW={IPHONE_W}
+          headline={"27のツールで\n空を彩る"}
+          label="編集ツール"
+          color="#fff"
+        />
+      </div>
+
+      <Phone
+        src={img("/screenshots/edittools.png")}
+        alt="Edit Tools"
         style={{
           position: "absolute",
           bottom: 0,
@@ -482,8 +510,8 @@ function Slide5() {
       </div>
 
       <Phone
-        src={img("/screenshots/home.png")}
-        alt="Home (back)"
+        src={img("/screenshots/postinfo.png")}
+        alt="PostInfo (back)"
         style={{
           position: "absolute",
           bottom: 0,
@@ -508,7 +536,7 @@ function Slide5() {
   );
 }
 
-// Slide 6: Profile — Night-to-day gradient closing slide
+// Slide 6: Style — Deep indigo gradient, 2D style pad showcase
 function Slide6() {
   return (
     <div
@@ -518,20 +546,39 @@ function Slide6() {
         position: "relative",
         overflow: "hidden",
         background:
-          "linear-gradient(180deg, #0c1a3a 0%, #1a3a6e 30%, #3a6ea8 55%, #7ab8e0 80%, #c8e8f8 100%)",
+          "linear-gradient(180deg, #0e0820 0%, #1e1050 30%, #3a2890 60%, #6050c0 85%, #9078e8 100%)",
       }}
     >
       <CloudBlob
         style={{
-          top: "3%",
-          left: "20%",
+          top: "5%",
+          right: "-10%",
           width: 500,
-          height: 300,
-          background: "rgba(120,180,255,0.1)",
+          height: 350,
+          background: "rgba(140,100,255,0.15)",
         }}
       />
-      <SunGlow
-        style={{ bottom: "40%", right: "-5%", width: 400, height: 400 }}
+      <CloudBlob
+        style={{
+          bottom: "35%",
+          left: "-8%",
+          width: 400,
+          height: 300,
+          background: "rgba(180,140,255,0.1)",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          borderRadius: "50%",
+          background:
+            "radial-gradient(circle, rgba(160,100,255,0.25) 0%, rgba(100,60,200,0.1) 50%, transparent 70%)",
+          top: "-10%",
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: 700,
+          height: 700,
+        }}
       />
 
       <div
@@ -539,59 +586,21 @@ function Slide6() {
       >
         <Caption
           canvasW={IPHONE_W}
-          headline={"あなただけの\n空ギャラリー"}
-          label="プロフィール"
+          headline={"2Dパッドで\n空を表現する"}
+          label="スタイル"
+          color="#fff"
         />
       </div>
 
-      {/* App icon + tagline at bottom */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: IPHONE_H * 0.04,
-          left: "50%",
-          transform: "translateX(-50%)",
-          textAlign: "center",
-          zIndex: 20,
-        }}
-      >
-        <div
-          style={{
-            width: IPHONE_W * 0.1,
-            height: IPHONE_W * 0.1,
-            borderRadius: IPHONE_W * 0.022,
-            overflow: "hidden",
-            margin: "0 auto",
-            marginBottom: 16,
-            boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
-          }}
-        >
-          <img
-            src={img("/app-icon.png")}
-            alt=""
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-          />
-        </div>
-        <div
-          style={{
-            fontSize: IPHONE_W * 0.035,
-            fontWeight: 500,
-            color: "rgba(255,255,255,0.8)",
-          }}
-        >
-          そらもよう — 空の写真SNS
-        </div>
-      </div>
-
       <Phone
-        src={img("/screenshots/profile.png")}
-        alt="Profile"
+        src={img("/screenshots/style.png")}
+        alt="Style"
         style={{
           position: "absolute",
-          bottom: IPHONE_H * 0.1,
+          bottom: 0,
           left: "50%",
           transform: "translateX(-50%) translateY(12%)",
-          width: "82%",
+          width: "86%",
         }}
       />
     </div>
@@ -601,12 +610,12 @@ function Slide6() {
 // ─── Slide Registry ──────────────────────────────────────
 
 const SLIDES = [
-  { id: "hero", label: "ヒーロー", component: Slide1 },
-  { id: "gallery", label: "ギャラリー", component: Slide2 },
-  { id: "edit", label: "編集", component: Slide3 },
-  { id: "postinfo", label: "投稿分析", component: Slide4 },
-  { id: "search", label: "検索", component: Slide5 },
-  { id: "profile", label: "プロフィール", component: Slide6 },
+  { id: "hero", label: "① ヒーロー", component: Slide1 },
+  { id: "filter", label: "② フィルター", component: Slide2 },
+  { id: "edittools", label: "③ 編集ツール", component: Slide3 },
+  { id: "style", label: "④ スタイル", component: Slide6 },
+  { id: "postinfo", label: "⑤ 投稿分析", component: Slide4 },
+  { id: "search", label: "⑥ 検索", component: Slide5 },
 ];
 
 // ─── Preview + Export ────────────────────────────────────
