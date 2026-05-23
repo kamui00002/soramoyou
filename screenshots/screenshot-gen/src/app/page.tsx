@@ -217,7 +217,7 @@ function SunGlow({ style }: { style: React.CSSProperties }) {
 
 // ─── Slide Components ────────────────────────────────────
 
-// Slide 1: Hero — App icon + tagline + blue sky gradient
+// Slide 1: Hero — 電話なし、アイコン＋キャッチコピー (C案採用、個人情報露出回避)
 function Slide1() {
   return (
     <div
@@ -227,35 +227,49 @@ function Slide1() {
         position: "relative",
         overflow: "hidden",
         background:
-          "linear-gradient(180deg, #4A90D9 0%, #87CEEB 35%, #B8E4F0 60%, #F0E6D6 100%)",
+          "linear-gradient(180deg, #1a4a8a 0%, #2d7dd2 25%, #5ba8e8 50%, #a8d8f0 72%, #e8f4fd 100%)",
       }}
     >
-      <CloudBlob style={{ top: "5%", left: "-10%", width: 500, height: 300 }} />
-      <CloudBlob
-        style={{ top: "2%", right: "-5%", width: 400, height: 250 }}
-      />
+      {/* 雲装飾 */}
+      <CloudBlob style={{ top: "8%", left: "-12%", width: 600, height: 350 }} />
+      <CloudBlob style={{ top: "5%", right: "-8%", width: 500, height: 300 }} />
+      <CloudBlob style={{ top: "38%", left: "-5%", width: 400, height: 250 }} />
+      <CloudBlob style={{ top: "42%", right: "-10%", width: 450, height: 280 }} />
       <SunGlow
         style={{
-          top: "-5%",
+          top: "10%",
           left: "50%",
           transform: "translateX(-50%)",
-          width: 600,
-          height: 600,
+          width: 800,
+          height: 800,
         }}
       />
 
-      {/* App Icon */}
+      {/* ヘッドライン — 上部 */}
+      <div
+        style={{ position: "absolute", top: IPHONE_H * 0.06, width: "100%" }}
+      >
+        <Caption
+          canvasW={IPHONE_W}
+          headline={"今日の空、\nみんなの空"}
+          label="そらもよう"
+          color="#fff"
+        />
+      </div>
+
+      {/* App Icon — 大きく中央 */}
       <div
         style={{
           position: "absolute",
-          top: IPHONE_H * 0.06,
+          top: IPHONE_H * 0.32,
           left: "50%",
           transform: "translateX(-50%)",
-          width: IPHONE_W * 0.18,
-          height: IPHONE_W * 0.18,
-          borderRadius: IPHONE_W * 0.04,
+          width: IPHONE_W * 0.52,
+          height: IPHONE_W * 0.52,
+          borderRadius: IPHONE_W * 0.115,
           overflow: "hidden",
-          boxShadow: "0 10px 40px rgba(0,0,0,0.2)",
+          boxShadow:
+            "0 24px 100px rgba(0,0,0,0.3), 0 0 0 8px rgba(255,255,255,0.25)",
         }}
       >
         <img
@@ -265,27 +279,29 @@ function Slide1() {
         />
       </div>
 
+      {/* サブテキスト */}
       <div
-        style={{ position: "absolute", top: IPHONE_H * 0.15, width: "100%" }}
-      >
-        <Caption
-          canvasW={IPHONE_W}
-          headline={"今日の空、\nみんなの空"}
-          label="そらもよう"
-        />
-      </div>
-
-      <Phone
-        src={img("/screenshots/home.png")}
-        alt="Home"
         style={{
           position: "absolute",
-          bottom: 0,
-          left: "50%",
-          transform: "translateX(-50%) translateY(12%)",
-          width: "84%",
+          top: IPHONE_H * 0.76,
+          width: "100%",
+          textAlign: "center",
+          padding: `0 ${IPHONE_W * 0.1}px`,
         }}
-      />
+      >
+        <div
+          style={{
+            fontSize: IPHONE_W * 0.058,
+            color: "rgba(255,255,255,0.8)",
+            lineHeight: 1.6,
+            fontWeight: 400,
+          }}
+        >
+          空の写真を撮って、編集して、
+          <br />
+          みんなとシェアしよう
+        </div>
+      </div>
     </div>
   );
 }
