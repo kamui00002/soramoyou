@@ -487,7 +487,7 @@ struct EditView: View {
                         viewModel.capturePreDragSnapshot()
                         viewModel.editRecipe.toneCurvePoints = newPoints
                         // スライダーと同じスロットリング付き高速プレビュー経路を走らせる
-                        // （毎フレーム generatePreview を叩くと 750px の同期レンダが詰まり
+                        // （毎フレーム generatePreview を叩くとフル解像度の同期レンダが詰まり
                         //  画面が固まって見える不具合を回避）
                         viewModel.triggerRealtimePreview()
                     }

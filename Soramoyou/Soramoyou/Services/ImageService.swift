@@ -219,9 +219,23 @@ final class ImageService: ImageServiceProtocol {
     /// `EditSettings` への往復では `toneCurvePoints` / `targetDynamicRange` が脱落するため、
     /// トーンカーブ編集時は必ずこちらを呼ぶ。
     func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage {
-        let thumbnailSize = CGSize(width: 750, height: 750)
-        let resizedImage = try await resizeImage(image, maxSize: thumbnailSize)
-        return try await applyEditRecipe(recipe, to: resizedImage)
+        // 🔧 2026-05-25 修正: 旧実装は 750×750 へ固定縮小していたため、編集画面に入った
+        //   瞬間からプレビューがアップスケールでぼやけていた。高解像度パス（2400px）の
+        //   PreviewRenderer.renderPreview が用意済みなのに未配線だったため、ここで配線する。
+        //   applyEditRecipe と同じくキャンセル伝搬付きの detached 実行にして、ドラッグ中に
+        //   古い計算が GPU/CPU を占有し続けないようにする。
+        try Task.checkCancellation()
+
+        let workTask = Task.detached(priority: .userInitiated) { () throws -> UIImage in
+            try Task.checkCancellation()
+            return try PreviewRenderer.renderPreview(from: image, recipe: recipe)
+        }
+
+        return try await withTaskCancellationHandler {
+            try await workTask.value
+        } onCancel: {
+            workTask.cancel()
+        }
     }
 
     /// 低解像度 CIImage + EditRecipe から同期的にプレビュー生成（リアルタイム用）
