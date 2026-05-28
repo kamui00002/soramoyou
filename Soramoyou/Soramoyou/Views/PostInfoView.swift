@@ -20,6 +20,9 @@ struct PostInfoView: View {
     @State private var showLocationPicker = false
     @State private var showMapView = false
     @State private var selectedLandmark: MKMapItem?
+    /// onAppear フォールバック生成を一度だけ実行するためのフラグ。
+    /// onAppear は SwiftUI の仕様で複数回発火しうるため、二重生成を防ぐ。
+    @State private var hasGeneratedFallback = false
     
     private let locationService: LocationServiceProtocol
     private let userId: String?
@@ -37,17 +40,12 @@ struct PostInfoView: View {
         // 各画像の外部編集情報を保持（ギャラリーで写真Appバッジ表示用）⭐️ Issue #4
         postViewModel.setExternalEditInfos(externalEditInfos)
         if !editedImages.isEmpty {
+            // 通常経路: EditView から生成済みの編集後画像を受け取る（全編集を保持）
             postViewModel.setEditedImages(editedImages, editSettings: editSettings)
-        } else {
-            // 編集済み画像がない場合は、編集設定を適用して生成
-            Task {
-                let editViewModel = EditViewModel(images: images, userId: userId)
-                let generatedImages = try? await editViewModel.generateFinalImages()
-                if let generatedImages = generatedImages {
-                    postViewModel.setEditedImages(generatedImages, editSettings: editSettings)
-                }
-            }
         }
+        // 編集済み画像が無い場合（下書き編集など）は onAppear で editSettings を適用して再生成する。
+        // ⚠️ ここで再生成 Task を起こさないこと。@StateObject の throwaway インスタンス上で
+        //    副作用を起こすと、editSettings 未適用の素通し画像が確定する不具合があった。
         _viewModel = StateObject(wrappedValue: postViewModel)
         self.locationService = locationService
         self.userId = userId
@@ -158,19 +156,23 @@ struct PostInfoView: View {
                 Text("投稿が完了しました")
             }
             .onAppear {
-                // 編集済み画像がない場合は生成
-                if viewModel.editedImages.isEmpty && !viewModel.selectedImages.isEmpty {
-                    Task {
-                        let editViewModel = EditViewModel(images: viewModel.selectedImages, userId: userId)
-                        if let editSettings = viewModel.editSettings {
-                            editViewModel.editSettings = editSettings
-                        }
-                        do {
-                            let generatedImages = try await editViewModel.generateFinalImages()
-                            viewModel.setEditedImages(generatedImages, editSettings: viewModel.editSettings ?? EditSettings())
-                        } catch {
-                            viewModel.errorMessage = "画像の生成に失敗しました"
-                        }
+                // 編集済み画像がない場合（下書き経路など）は editSettings から再生成する。
+                // onAppear は複数回発火しうるため hasGeneratedFallback で一度だけに限定する
+                // （フラグは await 前に同期で立て、二重発火時の競合を防ぐ）。
+                guard viewModel.editedImages.isEmpty,
+                      !viewModel.selectedImages.isEmpty,
+                      !hasGeneratedFallback else { return }
+                hasGeneratedFallback = true
+                Task {
+                    let editViewModel = EditViewModel(images: viewModel.selectedImages, userId: userId)
+                    if let editSettings = viewModel.editSettings {
+                        editViewModel.editSettings = editSettings
+                    }
+                    do {
+                        let generatedImages = try await editViewModel.generateFinalImages()
+                        viewModel.setEditedImages(generatedImages, editSettings: viewModel.editSettings ?? EditSettings())
+                    } catch {
+                        viewModel.errorMessage = "画像の生成に失敗しました"
                     }
                 }
             }

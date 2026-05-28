@@ -241,6 +241,67 @@ final class EditViewModelTests: XCTestCase {
         }
     }
 
+    /// ⭐️ 回帰テスト (2026-05-28): 明るさ編集が編集後画像のピクセルに「焼き込まれる」ことを検証する。
+    /// 既存テストは editSettings (recipe 値) のみ検証しており、generateFinalImages が
+    /// 実際にピクセルを変えるかは未検証だった。投稿された編集後画像が編集前と同一になる
+    /// バグ (editSettings は保存されるが画像が素通し) を捕捉する。実 ImageService を使う。
+    /// 検証は平均輝度で行うため、ここでは輝度に効く「明るさ」を適用する
+    /// （彩度など色相方向の編集は平均輝度をほぼ変えないため、別途検証する想定）。
+    func test_generateFinalImages_bakesEditsIntoPixels() async throws {
+        let baseImage = Self.makeSolidImage(
+            color: UIColor(red: 0.4, green: 0.5, blue: 0.6, alpha: 1)
+        )
+        let realVM = EditViewModel(
+            images: [baseImage],
+            userId: nil,
+            imageService: ImageService(),
+            firestoreService: mockFirestoreService
+        )
+
+        // 明るさを上げる編集を適用（輝度で反映を検証できる）
+        realVM.setToolValue(1.0, for: .brightness)
+
+        let outputs = try await realVM.generateFinalImages()
+        XCTAssertEqual(outputs.count, 1)
+
+        let inLum = Self.meanLuminance(baseImage)
+        let outLum = Self.meanLuminance(outputs[0])
+        XCTAssertGreaterThan(
+            outLum - inLum, 5.0,
+            "編集後画像に明るさ編集が反映されていない (in=\(inLum) out=\(outLum))"
+        )
+    }
+
+    /// 単色テスト画像を生成
+    static func makeSolidImage(color: UIColor) -> UIImage {
+        let size = CGSize(width: 100, height: 100)
+        return UIGraphicsImageRenderer(size: size).image { ctx in
+            color.setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+        }
+    }
+
+    /// UIImage の平均輝度 (0...255) を 16x16 にダウンサンプルして算出
+    static func meanLuminance(_ image: UIImage) -> Double {
+        guard let cg = image.cgImage else { return -1 }
+        let w = 16, h = 16
+        var data = [UInt8](repeating: 0, count: w * h * 4)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: &data, width: w, height: h, bitsPerComponent: 8,
+            bytesPerRow: w * 4, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return -1 }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var sum = 0.0
+        var i = 0
+        while i < data.count {
+            sum += 0.299 * Double(data[i]) + 0.587 * Double(data[i + 1]) + 0.114 * Double(data[i + 2])
+            i += 4
+        }
+        return sum / Double(w * h)
+    }
+
     /// リアルタイム編集フラグのテスト
     func testRealtimeEditingFlag() async {
         let testImage = createTestImage()

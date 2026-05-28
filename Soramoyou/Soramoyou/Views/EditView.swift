@@ -25,10 +25,13 @@ struct EditView: View {
     @State private var selectedTool: EditTool?
     /// スライダーの現在値（リアルタイム用）
     @State private var sliderValue: Float = 0
-    /// 投稿情報入力画面の表示フラグ
-    @State private var showPostInfoView = false
-    /// 最終編集済み画像
-    @State private var finalEditedImages: [UIImage] = []
+    /// 投稿情報入力画面へ渡すペイロード。
+    /// `fullScreenCover(item:)` で提示することで、編集済み画像が確実に生成された後にのみ
+    /// 画面が構築されるようにする（`isPresented` 方式だと SwiftUI が画像未生成のタイミングで
+    /// PostInfoView を構築し、編集が反映されない素通し画像になる不具合があった）。
+    @State private var postInfoPayload: PostInfoPayload?
+    /// 最終画像の生成中フラグ（「次へ」連打による多重生成を防ぐ）
+    @State private var isGeneratingFinal = false
     /// 編集ツール設定画面の表示フラグ
     @State private var showEditToolsSettings = false
     /// 回転スライダーの値（リアルタイム用）
@@ -110,19 +113,27 @@ struct EditView: View {
 
                         // 次へボタン
                         Button("次へ") {
-                            Task {
+                            // 生成中の連打を防ぐ。generateFinalImages は isLoading を立てないため、
+                            // 専用フラグでガードしないと重い画像生成が多重起動し、postInfoPayload が
+                            // 複数回差し替わって PostInfoView が再構築される恐れがある。
+                            guard !isGeneratingFinal else { return }
+                            isGeneratingFinal = true
+                            Task { @MainActor in
+                                defer { isGeneratingFinal = false }
                                 do {
                                     let finalImages = try await viewModel.generateFinalImages()
-                                    await MainActor.run {
-                                        finalEditedImages = finalImages
-                                        showPostInfoView = true
-                                    }
+                                    // 画像生成完了後にペイロードをセット。これが nil でなくなった
+                                    // ときだけ fullScreenCover が PostInfoView を構築する。
+                                    postInfoPayload = PostInfoPayload(
+                                        editedImages: finalImages,
+                                        editSettings: viewModel.editSettings
+                                    )
                                 } catch {
                                     viewModel.errorMessage = error.userFriendlyMessage
                                 }
                             }
                         }
-                        .disabled(viewModel.isLoading)
+                        .disabled(viewModel.isLoading || isGeneratingFinal)
                         .foregroundColor(.white)
                     }
                 }
@@ -143,12 +154,12 @@ struct EditView: View {
                     Text(errorMessage)
                 }
             }
-            .fullScreenCover(isPresented: $showPostInfoView) {
+            .fullScreenCover(item: $postInfoPayload) { payload in
                 NavigationView {
                     PostInfoView(
                         images: originalImages,
-                        editedImages: finalEditedImages.isEmpty ? [] : finalEditedImages,
-                        editSettings: viewModel.editSettings,
+                        editedImages: payload.editedImages,
+                        editSettings: payload.editSettings,
                         userId: userId,
                         externalEditInfos: externalEditInfos
                     )
@@ -951,6 +962,19 @@ struct AspectRatioButton: View {
                 .cornerRadius(8)
         }
     }
+}
+
+// MARK: - PostInfoPayload
+
+/// EditView から PostInfoView へ渡す編集結果のペイロード。
+///
+/// `fullScreenCover(item:)` で使うため `Identifiable` に準拠する。
+/// 編集済み画像が生成されてから初めて生成されるため、PostInfoView は
+/// 常に空でない `editedImages` を受け取れる（素通し画像になる不具合の根本対策）。
+struct PostInfoPayload: Identifiable {
+    let id = UUID()
+    let editedImages: [UIImage]
+    let editSettings: EditSettings
 }
 
 // MARK: - Preview
