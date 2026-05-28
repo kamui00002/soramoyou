@@ -241,10 +241,12 @@ final class EditViewModelTests: XCTestCase {
         }
     }
 
-    /// ⭐️ 回帰テスト (2026-05-28): 編集後画像にスライダー編集が「焼き込まれる」ことを検証する。
+    /// ⭐️ 回帰テスト (2026-05-28): 明るさ編集が編集後画像のピクセルに「焼き込まれる」ことを検証する。
     /// 既存テストは editSettings (recipe 値) のみ検証しており、generateFinalImages が
     /// 実際にピクセルを変えるかは未検証だった。投稿された編集後画像が編集前と同一になる
     /// バグ (editSettings は保存されるが画像が素通し) を捕捉する。実 ImageService を使う。
+    /// 検証は平均輝度で行うため、ここでは輝度に効く「明るさ」を適用する
+    /// （彩度など色相方向の編集は平均輝度をほぼ変えないため、別途検証する想定）。
     func test_generateFinalImages_bakesEditsIntoPixels() async throws {
         let baseImage = Self.makeSolidImage(
             color: UIColor(red: 0.4, green: 0.5, blue: 0.6, alpha: 1)
@@ -256,17 +258,14 @@ final class EditViewModelTests: XCTestCase {
             firestoreService: mockFirestoreService
         )
 
-        // 強い明るさ + 彩度を適用（実際の編集操作を再現）
+        // 明るさを上げる編集を適用（輝度で反映を検証できる）
         realVM.setToolValue(1.0, for: .brightness)
-        realVM.setToolValue(1.0, for: .saturation)
 
         let outputs = try await realVM.generateFinalImages()
         XCTAssertEqual(outputs.count, 1)
 
         let inLum = Self.meanLuminance(baseImage)
         let outLum = Self.meanLuminance(outputs[0])
-        print("⭐️ generateFinalImages in=\(inLum) out=\(outLum) " +
-              "brightnessCI=\(realVM.editRecipe.brightnessCI) saturationCI=\(realVM.editRecipe.saturationCI)")
         XCTAssertGreaterThan(
             outLum - inLum, 5.0,
             "編集後画像に明るさ編集が反映されていない (in=\(inLum) out=\(outLum))"

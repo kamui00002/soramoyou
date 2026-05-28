@@ -30,6 +30,8 @@ struct EditView: View {
     /// 画面が構築されるようにする（`isPresented` 方式だと SwiftUI が画像未生成のタイミングで
     /// PostInfoView を構築し、編集が反映されない素通し画像になる不具合があった）。
     @State private var postInfoPayload: PostInfoPayload?
+    /// 最終画像の生成中フラグ（「次へ」連打による多重生成を防ぐ）
+    @State private var isGeneratingFinal = false
     /// 編集ツール設定画面の表示フラグ
     @State private var showEditToolsSettings = false
     /// 回転スライダーの値（リアルタイム用）
@@ -111,23 +113,27 @@ struct EditView: View {
 
                         // 次へボタン
                         Button("次へ") {
-                            Task {
+                            // 生成中の連打を防ぐ。generateFinalImages は isLoading を立てないため、
+                            // 専用フラグでガードしないと重い画像生成が多重起動し、postInfoPayload が
+                            // 複数回差し替わって PostInfoView が再構築される恐れがある。
+                            guard !isGeneratingFinal else { return }
+                            isGeneratingFinal = true
+                            Task { @MainActor in
+                                defer { isGeneratingFinal = false }
                                 do {
                                     let finalImages = try await viewModel.generateFinalImages()
-                                    await MainActor.run {
-                                        // 画像生成完了後にペイロードをセット。これが nil でなくなった
-                                        // ときだけ fullScreenCover が PostInfoView を構築する。
-                                        postInfoPayload = PostInfoPayload(
-                                            editedImages: finalImages,
-                                            editSettings: viewModel.editSettings
-                                        )
-                                    }
+                                    // 画像生成完了後にペイロードをセット。これが nil でなくなった
+                                    // ときだけ fullScreenCover が PostInfoView を構築する。
+                                    postInfoPayload = PostInfoPayload(
+                                        editedImages: finalImages,
+                                        editSettings: viewModel.editSettings
+                                    )
                                 } catch {
                                     viewModel.errorMessage = error.userFriendlyMessage
                                 }
                             }
                         }
-                        .disabled(viewModel.isLoading)
+                        .disabled(viewModel.isLoading || isGeneratingFinal)
                         .foregroundColor(.white)
                     }
                 }

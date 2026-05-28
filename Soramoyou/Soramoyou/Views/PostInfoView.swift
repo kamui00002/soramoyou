@@ -20,6 +20,9 @@ struct PostInfoView: View {
     @State private var showLocationPicker = false
     @State private var showMapView = false
     @State private var selectedLandmark: MKMapItem?
+    /// onAppear フォールバック生成を一度だけ実行するためのフラグ。
+    /// onAppear は SwiftUI の仕様で複数回発火しうるため、二重生成を防ぐ。
+    @State private var hasGeneratedFallback = false
     
     private let locationService: LocationServiceProtocol
     private let userId: String?
@@ -153,19 +156,23 @@ struct PostInfoView: View {
                 Text("投稿が完了しました")
             }
             .onAppear {
-                // 編集済み画像がない場合は生成
-                if viewModel.editedImages.isEmpty && !viewModel.selectedImages.isEmpty {
-                    Task {
-                        let editViewModel = EditViewModel(images: viewModel.selectedImages, userId: userId)
-                        if let editSettings = viewModel.editSettings {
-                            editViewModel.editSettings = editSettings
-                        }
-                        do {
-                            let generatedImages = try await editViewModel.generateFinalImages()
-                            viewModel.setEditedImages(generatedImages, editSettings: viewModel.editSettings ?? EditSettings())
-                        } catch {
-                            viewModel.errorMessage = "画像の生成に失敗しました"
-                        }
+                // 編集済み画像がない場合（下書き経路など）は editSettings から再生成する。
+                // onAppear は複数回発火しうるため hasGeneratedFallback で一度だけに限定する
+                // （フラグは await 前に同期で立て、二重発火時の競合を防ぐ）。
+                guard viewModel.editedImages.isEmpty,
+                      !viewModel.selectedImages.isEmpty,
+                      !hasGeneratedFallback else { return }
+                hasGeneratedFallback = true
+                Task {
+                    let editViewModel = EditViewModel(images: viewModel.selectedImages, userId: userId)
+                    if let editSettings = viewModel.editSettings {
+                        editViewModel.editSettings = editSettings
+                    }
+                    do {
+                        let generatedImages = try await editViewModel.generateFinalImages()
+                        viewModel.setEditedImages(generatedImages, editSettings: viewModel.editSettings ?? EditSettings())
+                    } catch {
+                        viewModel.errorMessage = "画像の生成に失敗しました"
                     }
                 }
             }
