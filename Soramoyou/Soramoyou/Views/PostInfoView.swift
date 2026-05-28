@@ -37,17 +37,12 @@ struct PostInfoView: View {
         // 各画像の外部編集情報を保持（ギャラリーで写真Appバッジ表示用）⭐️ Issue #4
         postViewModel.setExternalEditInfos(externalEditInfos)
         if !editedImages.isEmpty {
+            // 通常経路: EditView から生成済みの編集後画像を受け取る（全編集を保持）
             postViewModel.setEditedImages(editedImages, editSettings: editSettings)
-        } else {
-            // 編集済み画像がない場合は、編集設定を適用して生成
-            Task {
-                let editViewModel = EditViewModel(images: images, userId: userId)
-                let generatedImages = try? await editViewModel.generateFinalImages()
-                if let generatedImages = generatedImages {
-                    postViewModel.setEditedImages(generatedImages, editSettings: editSettings)
-                }
-            }
         }
+        // 編集済み画像が無い場合（下書き編集など）は onAppear で editSettings を適用して再生成する。
+        // ⚠️ ここで再生成 Task を起こさないこと。@StateObject の throwaway インスタンス上で
+        //    副作用を起こすと、editSettings 未適用の素通し画像が確定する不具合があった。
         _viewModel = StateObject(wrappedValue: postViewModel)
         self.locationService = locationService
         self.userId = userId
