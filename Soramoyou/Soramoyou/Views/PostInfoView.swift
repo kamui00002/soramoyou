@@ -31,6 +31,7 @@ struct PostInfoView: View {
         images: [UIImage],
         editedImages: [UIImage],
         editSettings: EditSettings,
+        editRecipe: EditRecipe? = nil,
         userId: String?,
         externalEditInfos: [ExternalEditInfo?] = [],
         locationService: LocationServiceProtocol = LocationService()
@@ -41,7 +42,7 @@ struct PostInfoView: View {
         postViewModel.setExternalEditInfos(externalEditInfos)
         if !editedImages.isEmpty {
             // 通常経路: EditView から生成済みの編集後画像を受け取る（全編集を保持）
-            postViewModel.setEditedImages(editedImages, editSettings: editSettings)
+            postViewModel.setEditedImages(editedImages, editSettings: editSettings, editRecipe: editRecipe)
         }
         // 編集済み画像が無い場合（下書き編集など）は onAppear で editSettings を適用して再生成する。
         // ⚠️ ここで再生成 Task を起こさないこと。@StateObject の throwaway インスタンス上で
@@ -170,7 +171,7 @@ struct PostInfoView: View {
                     }
                     do {
                         let generatedImages = try await editViewModel.generateFinalImages()
-                        viewModel.setEditedImages(generatedImages, editSettings: viewModel.editSettings ?? EditSettings())
+                        viewModel.setEditedImages(generatedImages, editSettings: viewModel.editSettings ?? EditSettings(), editRecipe: editViewModel.editRecipe)
                     } catch {
                         viewModel.errorMessage = "画像の生成に失敗しました"
                     }

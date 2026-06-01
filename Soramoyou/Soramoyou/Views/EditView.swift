@@ -126,7 +126,8 @@ struct EditView: View {
                                     // ときだけ fullScreenCover が PostInfoView を構築する。
                                     postInfoPayload = PostInfoPayload(
                                         editedImages: finalImages,
-                                        editSettings: viewModel.editSettings
+                                        editSettings: viewModel.editSettings,
+                                        editRecipe: viewModel.editRecipe
                                     )
                                 } catch {
                                     viewModel.errorMessage = error.userFriendlyMessage
@@ -160,6 +161,7 @@ struct EditView: View {
                         images: originalImages,
                         editedImages: payload.editedImages,
                         editSettings: payload.editSettings,
+                        editRecipe: payload.editRecipe,
                         userId: userId,
                         externalEditInfos: externalEditInfos
                     )
@@ -975,6 +977,7 @@ struct PostInfoPayload: Identifiable {
     let id = UUID()
     let editedImages: [UIImage]
     let editSettings: EditSettings
+    let editRecipe: EditRecipe
 }
 
 // MARK: - Preview
