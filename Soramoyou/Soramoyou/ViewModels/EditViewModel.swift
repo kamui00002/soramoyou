@@ -27,6 +27,10 @@ class EditViewModel: ObservableObject {
     /// Undo/Redo・状態管理が値コピーで安全に行える。
     @Published var editRecipe: EditRecipe = EditRecipe()
 
+    /// 「あなたの定番」（柱1 v1）を適用できるか。コーパスに十分な学習データがある時だけ true。
+    /// エディタ起動時（loadEquippedTools）に算出し、true のときだけボタンを表示する。
+    @Published private(set) var hasPersonalDefault = false
+
     /// 後方互換 computed property
     ///
     /// View 側のコード（`viewModel.editSettings`）を変更せずに EditRecipe へ移行できる。
@@ -111,6 +115,8 @@ class EditViewModel: ObservableObject {
     private let imageService: ImageServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
     private let userId: String?
+    /// パーソナルAI編集（柱1 v1）の学習コーパス（端末内）。
+    private let recipeCorpusStore = RecipeCorpusStore()
     private var previewTask: Task<Void, Never>?
     private var fastPreviewTask: Task<Void, Never>?
 
@@ -377,6 +383,41 @@ class EditViewModel: ObservableObject {
             await self?.generatePreview()
         }
     }
+
+    // MARK: - パーソナルAI編集（柱1 v1）「あなたの定番」
+
+    /// コーパスに十分な学習データがあるかを判定し `hasPersonalDefault` を更新する。
+    /// （エディタ起動時に呼ぶ。未ログイン or データ不足なら false。）
+    func refreshPersonalDefaultAvailability() {
+        guard let userId = userId else {
+            hasPersonalDefault = false
+            return
+        }
+        let entries = recipeCorpusStore.entries(userId: userId)
+        hasPersonalDefault = PersonalRecipeProfile.representative(for: nil, from: entries) != nil
+    }
+
+    /// 「あなたの定番」を現在の画像に適用する。
+    /// - 過去の自分の編集（コーパス）から代表レシピを作り、トーン・カラー・フィルターを転写する。
+    /// - クロップ・トーンカーブ（写真固有）は現在の値を保持する。
+    /// - Undo 可能（適用前のスナップショットを履歴に push する）。
+    func applyPersonalDefault() {
+        guard let userId = userId else { return }
+        let entries = recipeCorpusStore.entries(userId: userId)
+        guard var representative = PersonalRecipeProfile.representative(for: nil, from: entries) else {
+            return
+        }
+        // 写真固有の編集（クロップ・トーンカーブ）は現在値を保持し、定番では上書きしない
+        representative.cropRectNorm = editRecipe.cropRectNorm
+        representative.toneCurvePoints = editRecipe.toneCurvePoints
+
+        historyManager.push(currentSnapshot)
+        notifyHistoryChange()
+        editRecipe = representative
+        Task { [weak self] in
+            await self?.generatePreview()
+        }
+    }
     
     // MARK: - Edit Tool Management
     
@@ -388,6 +429,9 @@ class EditViewModel: ObservableObject {
             equippedToolsOrder = equippedTools.map { $0.rawValue }
             return
         }
+
+        // 「あなたの定番」ボタンの可用性を更新（コーパスに十分な学習データがあるか）
+        refreshPersonalDefaultAvailability()
 
         do {
             // リトライ可能な操作として実行

@@ -102,6 +102,19 @@ struct EditView: View {
                         .disabled(!viewModel.canRedo)
                         .foregroundColor(viewModel.canRedo ? .white : .gray)
 
+                        // 「あなたの定番」ボタン（柱1 v1）: 過去の自分の編集の代表値を適用。
+                        // コーパスに十分な学習データがあるときだけ表示する。
+                        if viewModel.hasPersonalDefault {
+                            Button(action: {
+                                viewModel.applyPersonalDefault()
+                            }) {
+                                Image(systemName: "wand.and.stars")
+                                    .font(.body)
+                            }
+                            .foregroundColor(.white)
+                            .accessibilityLabel("あなたの定番を適用")
+                        }
+
                         // 編集ツール設定ボタン
                         Button(action: {
                             showEditToolsSettings = true
