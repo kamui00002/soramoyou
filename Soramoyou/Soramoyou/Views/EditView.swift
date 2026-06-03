@@ -104,14 +104,18 @@ struct EditView: View {
 
                         // 「あなたの定番」ボタン（柱1 v1）: 過去の自分の編集の代表値を適用。
                         // コーパスに十分な学習データがあるときだけ表示する。
+                        // アイコン＋ラベル＋アクセントカラー（黄）で、何のボタンか一目で分かるようにする。
                         if viewModel.hasPersonalDefault {
                             Button(action: {
                                 viewModel.applyPersonalDefault()
                             }) {
-                                Image(systemName: "wand.and.stars")
-                                    .font(.body)
+                                HStack(spacing: 4) {
+                                    Image(systemName: "wand.and.stars")
+                                    Text("定番")
+                                }
+                                .font(.subheadline.weight(.semibold))
                             }
-                            .foregroundColor(.white)
+                            .foregroundColor(.yellow)
                             .accessibilityLabel("あなたの定番を適用")
                         }
 
