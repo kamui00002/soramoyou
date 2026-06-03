@@ -171,6 +171,8 @@ struct PostInfoView: View {
                     }
                     do {
                         let generatedImages = try await editViewModel.generateFinalImages()
+                        // ⚠️ 下書き経路: editViewModel.editRecipe は editSettings(lossy)から再構築されるため
+                        //    toneCurve/crop/ダイナミックレンジを含まない。この経路のコーパス記録は lossy になる（既知）。
                         viewModel.setEditedImages(generatedImages, editSettings: viewModel.editSettings ?? EditSettings(), editRecipe: editViewModel.editRecipe)
                     } catch {
                         viewModel.errorMessage = "画像の生成に失敗しました"

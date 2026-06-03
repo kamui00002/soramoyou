@@ -67,6 +67,26 @@ final class PersonalAIFoundationTests: XCTestCase {
         XCTAssertEqual(restored.id, "p3")
     }
 
+    // MARK: - EditRecipe.isNeutral（未編集ゲート / G1修正）
+
+    func testIsNeutralForDefaultRecipe() {
+        XCTAssertTrue(EditRecipe().isNeutral, "デフォルト（未編集）は中立")
+    }
+
+    func testIsNeutralFalseWhenEdited() {
+        var r = EditRecipe()
+        r.exposureEV = 0.5
+        XCTAssertFalse(r.isNeutral, "編集があれば非中立")
+    }
+
+    func testIsNeutralIgnoresMetadata() {
+        var r = EditRecipe()
+        r.createdAt = Date()
+        r.lastModifiedAt = Date()
+        r.schemaVersion = 99
+        XCTAssertTrue(r.isNeutral, "タイムスタンプ/バージョンの差は中立判定に影響しない")
+    }
+
     // MARK: - RecipeCorpusStore
 
     /// テスト専用の一時ディレクトリに紐づくストアを作る

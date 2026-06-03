@@ -184,6 +184,21 @@ struct EditRecipe: Codable, Equatable {
 
     init() {}
 
+    // MARK: - 中立判定
+
+    /// 実質的な編集が無い（中立）かどうか。
+    /// schemaVersion / recipeVersion / createdAt / lastModifiedAt は編集内容ではないため
+    /// 無視して比較する（編集操作でタイムスタンプが刻まれても中立判定が壊れないように）。
+    /// 未編集の投稿をパーソナルAI編集の学習コーパスに記録しないためのゲートに使う。
+    var isNeutral: Bool {
+        var baseline = EditRecipe()
+        baseline.schemaVersion   = schemaVersion
+        baseline.recipeVersion   = recipeVersion
+        baseline.createdAt       = createdAt
+        baseline.lastModifiedAt  = lastModifiedAt
+        return self == baseline
+    }
+
     // MARK: - EditSettings からの変換（後方互換）
 
     /// 非対称パワー曲線でのフォワードマッピング

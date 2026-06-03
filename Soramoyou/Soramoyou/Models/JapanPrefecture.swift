@@ -30,9 +30,6 @@ struct JapanPrefecture: Hashable, Codable {
         "沖縄県"
     ]
 
-    /// 全47都道府県
-    static let all: [JapanPrefecture] = allNames.map { JapanPrefecture(name: $0) }
-
     /// `Location.prefecture` の文字列から該当する都道府県を返す。
     /// - 公式名と完全一致した場合のみ採用（海外・不明・部分不一致は nil）。
     static func from(name: String?) -> JapanPrefecture? {

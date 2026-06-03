@@ -16,6 +16,7 @@ class PostViewModel: ObservableObject {
     @Published var editSettings: EditSettings?
     /// 投稿に添付する完全な編集レシピ。
     /// パーソナルAI編集のコーパス記録・Post.attachedRecipe への添付に使う（旧 editSettings は残す）。
+    /// ※ v1 は「代表1枚」: 複数画像投稿でも現在の編集レシピ1件のみを扱う（画像ごとのレシピ配列は将来対応）。
     private var editRecipe: EditRecipe?
     /// 各画像の外部編集情報（写真Appバッジ表示用）⭐️ Issue #4
     /// 配列の index は selectedImages と対応する。Photos ライブラリ権限なしや
@@ -285,7 +286,8 @@ class PostViewModel: ObservableObject {
 
             // パーソナルAI編集の学習コーパスへ記録（端末内・投稿成功時のみ・ベストエフォート）。
             // 記録に失敗しても投稿成功は妨げない。skyType は AI判定 or ユーザー選択を使う。
-            if let recipe = editRecipe {
+            // ⚠️ 未編集（中立）レシピは学習データを薄めるため記録しない（isNeutral でゲート）。
+            if let recipe = editRecipe, !recipe.isNeutral {
                 RecipeCorpusStore().append(
                     RecipeCorpusEntry(
                         recipe: recipe,

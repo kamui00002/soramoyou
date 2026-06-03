@@ -38,6 +38,12 @@ final class SkyCollectionViewModel: ObservableObject {
             )
             state = SkyCollectionAggregator.aggregate(posts: posts)
 
+            // 図鑑表示の計装（柱2 主要画面）
+            LoggingService.shared.logEvent("sky_zukan_viewed", parameters: [
+                "total_posts": state.totalPosts,
+                "unlocked_badges": unlockedBadges.count
+            ])
+
             #if DEBUG
             if posts.count >= fetchLimit {
                 print("⚠️ SkyCollection: 取得が上限(\(fetchLimit))に達しました。完遂バッジが不正確になる可能性があります。")

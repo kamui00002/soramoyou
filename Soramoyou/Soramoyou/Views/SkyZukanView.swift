@@ -35,6 +35,11 @@ struct SkyZukanView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
+            Button("OK") {}
+        } message: {
+            Text(viewModel.errorMessage ?? "")
+        }
         .task { await viewModel.load(userId: userId) }
     }
 
@@ -63,9 +68,13 @@ struct SkyZukanView: View {
             ScrollView {
                 VStack(spacing: DesignTokens.Spacing.lg) {
                     introSection
-                    summarySection
-                    matrixSection
-                    badgesSection
+                    if viewModel.state.totalPosts == 0 {
+                        emptySection
+                    } else {
+                        summarySection
+                        matrixSection
+                        badgesSection
+                    }
                 }
                 .padding(DesignTokens.Spacing.screenMargin)
             }
@@ -103,6 +112,26 @@ struct SkyZukanView: View {
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+        }
+    }
+
+    // MARK: - 空状態
+
+    @ViewBuilder
+    private var emptySection: some View {
+        glassCard {
+            VStack(spacing: DesignTokens.Spacing.sm) {
+                Image(systemName: "cloud.sun")
+                    .font(.largeTitle)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                Text("まだ空を集めていません")
+                    .font(.headline)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                Text("空を投稿すると、種類・時間帯・季節・地域ごとにここへ集まります。")
+                    .font(.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                    .multilineTextAlignment(.center)
             }
         }
     }

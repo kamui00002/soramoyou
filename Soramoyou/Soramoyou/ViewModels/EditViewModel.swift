@@ -407,13 +407,19 @@ class EditViewModel: ObservableObject {
         guard var representative = PersonalRecipeProfile.representative(for: nil, from: entries) else {
             return
         }
-        // 写真固有の編集（クロップ・トーンカーブ）は現在値を保持し、定番では上書きしない
-        representative.cropRectNorm = editRecipe.cropRectNorm
-        representative.toneCurvePoints = editRecipe.toneCurvePoints
+        // 写真固有の編集（クロップ・トーンカーブ・ダイナミックレンジ）は現在値を保持し、
+        // 定番では上書きしない（HDR指定が SDR に戻る不具合の防止を含む）。
+        representative.cropRectNorm      = editRecipe.cropRectNorm
+        representative.toneCurvePoints   = editRecipe.toneCurvePoints
+        representative.targetDynamicRange = editRecipe.targetDynamicRange
 
         historyManager.push(currentSnapshot)
         notifyHistoryChange()
         editRecipe = representative
+
+        // パーソナルAI編集の利用計装（柱1 主要操作）
+        LoggingService.shared.logEvent("personal_default_applied", parameters: ["sample_count": entries.count])
+
         Task { [weak self] in
             await self?.generatePreview()
         }

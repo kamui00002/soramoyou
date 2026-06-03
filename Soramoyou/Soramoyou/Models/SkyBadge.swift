@@ -15,12 +15,6 @@ struct BadgeProgress: Equatable {
 
     /// 達成済みか
     var isComplete: Bool { current >= total }
-
-    /// 0.0〜1.0 の達成率
-    var fraction: Double {
-        guard total > 0 else { return 0 }
-        return min(1.0, Double(current) / Double(total))
-    }
 }
 
 /// 図鑑の達成バッジ。
