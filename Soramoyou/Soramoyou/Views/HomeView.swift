@@ -120,6 +120,9 @@ struct HomeView: View {
     private var feedView: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: DesignTokens.Spacing.lg) {
+                // On This Day（1年前の空）— 同月日の過去投稿がある時だけ表示する ⭐️
+                OnThisDayCardView(userId: viewModel.currentUserId)
+
                 ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
                     PostCard(
                         post: post,
