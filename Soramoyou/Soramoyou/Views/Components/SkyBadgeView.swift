@@ -21,12 +21,12 @@ struct SkyBadgeView: View {
                 Circle()
                     .fill(unlocked
                           ? DesignTokens.Colors.sunsetOrange
-                          : Color.white.opacity(0.10))
+                          : Color.white.opacity(0.18))
                     .frame(width: 60, height: 60)
 
                 Image(systemName: badge.iconName)
                     .font(.title2)
-                    .foregroundColor(unlocked ? .white : Color.white.opacity(0.30))
+                    .foregroundColor(unlocked ? .white : Color.white.opacity(0.55))
             }
 
             Text(badge.title)

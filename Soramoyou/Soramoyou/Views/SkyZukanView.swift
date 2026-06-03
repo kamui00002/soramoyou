@@ -3,9 +3,12 @@
 //  Soramoyou
 //
 //  空コレクション図鑑（柱2）。「空を集める」を可視化する。
+//  - 使い方ガイド
 //  - サマリー（集めた枚数・各軸の達成数）
-//  - 空タイプ × 時間帯 のマトリクス（未取得セルはシルエット）
+//  - 空タイプ × 時間帯 のマトリクス（未取得セルはうすい枠）
 //  - 達成バッジ
+//
+//  配色はアプリ本体（ProfileView）と同じ空グラデーション＋ガラスカードに揃える。
 //
 
 import SwiftUI
@@ -19,7 +22,8 @@ struct SkyZukanView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                backgroundGradient.ignoresSafeArea()
+                // アプリ本体（ProfileView）と同じ空のグラデーション背景
+                skyGradient.ignoresSafeArea()
                 content
             }
             .navigationTitle("空図鑑")
@@ -27,13 +31,25 @@ struct SkyZukanView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("閉じる") { dismiss() }
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
                 }
             }
         }
         .navigationViewStyle(.stack)
-        .preferredColorScheme(.dark)
         .task { await viewModel.load(userId: userId) }
+    }
+
+    // MARK: - 背景
+
+    private var skyGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.68, green: 0.85, blue: 0.90),
+                Color(red: 0.53, green: 0.81, blue: 0.98),
+                Color(red: 0.39, green: 0.58, blue: 0.93)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 
     // MARK: - Content
@@ -46,6 +62,7 @@ struct SkyZukanView: View {
         } else {
             ScrollView {
                 VStack(spacing: DesignTokens.Spacing.lg) {
+                    introSection
                     summarySection
                     matrixSection
                     badgesSection
@@ -55,41 +72,59 @@ struct SkyZukanView: View {
         }
     }
 
-    private var backgroundGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(red: 0.10, green: 0.16, blue: 0.30),
-                Color(red: 0.05, green: 0.07, blue: 0.14)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+    /// ガラスカードの共通スタイル（アプリ本体と同じ .ultraThinMaterial）
+    @ViewBuilder
+    private func glassCard<V: View>(@ViewBuilder _ content: () -> V) -> some View {
+        content()
+            .padding(DesignTokens.Spacing.md)
+            .frame(maxWidth: .infinity)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
+            .overlay(
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                    .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: 1)
+            )
     }
 
-    private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
-            .fill(Color.white.opacity(0.06))
+    // MARK: - 使い方ガイド
+
+    @ViewBuilder
+    private var introSection: some View {
+        glassCard {
+            HStack(alignment: .top, spacing: DesignTokens.Spacing.sm) {
+                Image(systemName: "sparkles")
+                    .font(.title3)
+                    .foregroundColor(DesignTokens.Colors.sunsetOrange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("空を集めよう")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                    Text("投稿した空が、種類・時間帯・季節・地域ごとに自動で集まります。いろいろな空を撮って図鑑を完成させ、バッジを獲得しましょう。")
+                        .font(.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 
-    // MARK: - Summary
+    // MARK: - サマリー
 
     @ViewBuilder
     private var summarySection: some View {
-        VStack(spacing: DesignTokens.Spacing.sm) {
-            Text("集めた空 \(viewModel.state.totalPosts) 枚")
-                .font(.title3.weight(.bold))
-                .foregroundColor(DesignTokens.Colors.textPrimary)
+        glassCard {
+            VStack(spacing: DesignTokens.Spacing.sm) {
+                Text("集めた空 \(viewModel.state.totalPosts) 枚")
+                    .font(.title3.weight(.bold))
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            HStack(spacing: DesignTokens.Spacing.sm) {
-                summaryStat(title: "空タイプ", current: viewModel.state.skyTypes.count, total: SkyType.allCases.count)
-                summaryStat(title: "時間帯", current: viewModel.state.timeOfDays.count, total: TimeOfDay.allCases.count)
-                summaryStat(title: "季節", current: viewModel.state.seasons.count, total: Season.allCases.count)
-                summaryStat(title: "都道府県", current: viewModel.state.prefectures.count, total: JapanPrefecture.allNames.count)
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    summaryStat(title: "空タイプ", current: viewModel.state.skyTypes.count, total: SkyType.allCases.count)
+                    summaryStat(title: "時間帯", current: viewModel.state.timeOfDays.count, total: TimeOfDay.allCases.count)
+                    summaryStat(title: "季節", current: viewModel.state.seasons.count, total: Season.allCases.count)
+                    summaryStat(title: "都道府県", current: viewModel.state.prefectures.count, total: JapanPrefecture.allNames.count)
+                }
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(DesignTokens.Spacing.md)
-        .background(cardBackground)
     }
 
     private func summaryStat(title: String, current: Int, total: Int) -> some View {
@@ -99,7 +134,7 @@ struct SkyZukanView: View {
                 .foregroundColor(DesignTokens.Colors.textPrimary)
             Text(title)
                 .font(.caption2)
-                .foregroundColor(DesignTokens.Colors.textTertiary)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
         }
         .frame(maxWidth: .infinity)
     }
@@ -108,54 +143,57 @@ struct SkyZukanView: View {
 
     @ViewBuilder
     private var matrixSection: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-            Text("空 × 時間帯")
-                .font(.headline)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-
-            // ヘッダー行（時間帯）
-            HStack(spacing: 6) {
-                Color.clear.frame(width: 56, height: 1)
-                ForEach(TimeOfDay.allCases, id: \.self) { time in
-                    VStack(spacing: 2) {
-                        Image(systemName: time.iconName).font(.caption)
-                        Text(time.displayName).font(.caption2)
-                    }
+        glassCard {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                Text("空 × 時間帯")
+                    .font(.headline)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                Text("色付き＝収集済み ／ うすい枠＝これから集める")
+                    .font(.caption2)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
-                    .frame(maxWidth: .infinity)
-                }
-            }
 
-            // 各空タイプの行
-            ForEach(SkyType.allCases, id: \.self) { sky in
+                // ヘッダー行（時間帯）
                 HStack(spacing: 6) {
-                    HStack(spacing: 4) {
-                        Image(systemName: sky.iconName).font(.caption)
-                        Text(sky.displayName).font(.caption2)
-                    }
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                    .frame(width: 56, alignment: .leading)
-
+                    Color.clear.frame(width: 56, height: 1)
                     ForEach(TimeOfDay.allCases, id: \.self) { time in
-                        matrixCell(sky: sky, time: time)
+                        VStack(spacing: 2) {
+                            Image(systemName: time.iconName).font(.caption)
+                            Text(time.displayName).font(.caption2)
+                        }
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+
+                // 各空タイプの行
+                ForEach(SkyType.allCases, id: \.self) { sky in
+                    HStack(spacing: 6) {
+                        HStack(spacing: 4) {
+                            Image(systemName: sky.iconName).font(.caption)
+                            Text(sky.displayName).font(.caption2)
+                        }
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                        .frame(width: 56, alignment: .leading)
+
+                        ForEach(TimeOfDay.allCases, id: \.self) { time in
+                            matrixCell(sky: sky, time: time)
+                        }
                     }
                 }
             }
         }
-        .padding(DesignTokens.Spacing.md)
-        .background(cardBackground)
     }
 
     private func matrixCell(sky: SkyType, time: TimeOfDay) -> some View {
         let collected = viewModel.state.isCollected(skyType: sky, timeOfDay: time)
         return RoundedRectangle(cornerRadius: DesignTokens.Radius.sm)
-            .fill(collected ? DesignTokens.Colors.skyBlue : Color.white.opacity(0.06))
+            .fill(collected ? Color.white.opacity(0.92) : Color.white.opacity(0.12))
             .frame(height: 40)
             .frame(maxWidth: .infinity)
             .overlay(
                 Image(systemName: sky.iconName)
                     .font(.caption)
-                    .foregroundColor(collected ? .white : Color.white.opacity(0.18))
+                    .foregroundColor(collected ? DesignTokens.Colors.skyBlue : Color.white.opacity(0.45))
             )
             .accessibilityLabel("\(sky.displayName)・\(time.displayName) \(collected ? "収集済み" : "未収集")")
     }
@@ -164,21 +202,24 @@ struct SkyZukanView: View {
 
     @ViewBuilder
     private var badgesSection: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-            Text("バッジ")
-                .font(.headline)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
+        glassCard {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                Text("バッジ")
+                    .font(.headline)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                Text("条件を満たすと解放されます")
+                    .font(.caption2)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 88), spacing: DesignTokens.Spacing.sm)],
-                spacing: DesignTokens.Spacing.md
-            ) {
-                ForEach(SkyBadge.all) { badge in
-                    SkyBadgeView(badge: badge, state: viewModel.state)
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 88), spacing: DesignTokens.Spacing.sm)],
+                    spacing: DesignTokens.Spacing.md
+                ) {
+                    ForEach(SkyBadge.all) { badge in
+                        SkyBadgeView(badge: badge, state: viewModel.state)
+                    }
                 }
             }
         }
-        .padding(DesignTokens.Spacing.md)
-        .background(cardBackground)
     }
 }
