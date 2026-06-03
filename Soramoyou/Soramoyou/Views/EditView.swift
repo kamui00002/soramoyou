@@ -64,6 +64,11 @@ struct EditView: View {
                     // 画像プレビュー
                     imagePreviewView
 
+                    // 「あなたの定番」適用ボタン（柱1 v1）— 見つけやすいよう編集コントロール直上に配置
+                    if viewModel.hasPersonalDefault {
+                        personalDefaultBar
+                    }
+
                     // 編集コントロール（3タブ構成）
                     editControlsView
                 }
@@ -101,23 +106,6 @@ struct EditView: View {
                         }
                         .disabled(!viewModel.canRedo)
                         .foregroundColor(viewModel.canRedo ? .white : .gray)
-
-                        // 「あなたの定番」ボタン（柱1 v1）: 過去の自分の編集の代表値を適用。
-                        // コーパスに十分な学習データがあるときだけ表示する。
-                        // アイコン＋ラベル＋アクセントカラー（黄）で、何のボタンか一目で分かるようにする。
-                        if viewModel.hasPersonalDefault {
-                            Button(action: {
-                                viewModel.applyPersonalDefault()
-                            }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "wand.and.stars")
-                                    Text("定番")
-                                }
-                                .font(.subheadline.weight(.semibold))
-                            }
-                            .foregroundColor(.yellow)
-                            .accessibilityLabel("あなたの定番を適用")
-                        }
 
                         // 編集ツール設定ボタン
                         Button(action: {
@@ -193,6 +181,38 @@ struct EditView: View {
                 await viewModel.loadEquippedTools()
             }
         }
+    }
+
+    // MARK: - あなたの定番バー（柱1 v1）
+
+    /// 「あなたの定番」を適用する目立つボタン。
+    /// ツールバーのアイコンでは見つけにくかったため、編集コントロール直上に大きく配置する。
+    /// コーパスに十分な学習データがあるときだけ表示する。
+    private var personalDefaultBar: some View {
+        Button {
+            viewModel.applyPersonalDefault()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "wand.and.stars")
+                Text("あなたの定番を適用")
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(.white)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(
+                Capsule().fill(
+                    LinearGradient(
+                        colors: DesignTokens.Colors.accentGradient,
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+            )
+        }
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.top, DesignTokens.Spacing.sm)
+        .accessibilityLabel("あなたの定番を適用")
     }
 
     // MARK: - Image Preview View
