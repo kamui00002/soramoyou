@@ -17,6 +17,7 @@ struct ProfileView: View {
     @State private var showingEditProfile = false
     @State private var showingEditTools = false
     @State private var showingSettings = false
+    @State private var showingZukan = false
     @State private var displayMode: DisplayMode = .grid
     @State private var postToDelete: Post?
     @State private var showDeleteConfirmation = false
@@ -206,6 +207,11 @@ struct ProfileView: View {
             .sheet(isPresented: $showingSettings) {
                 SettingsView()
             }
+            .sheet(isPresented: $showingZukan) {
+                if let uid = viewModel.user?.id {
+                    SkyZukanView(userId: uid)
+                }
+            }
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
                     .environmentObject(likeManager)
@@ -312,6 +318,26 @@ struct ProfileView: View {
 
             // 統計情報
             statsSection(user: user)
+
+            // 空コレクション図鑑への導線（柱2）⭐️
+            Button {
+                showingZukan = true
+            } label: {
+                HStack {
+                    Image(systemName: "books.vertical.fill")
+                    Text("空図鑑を見る")
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption)
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+                .padding(DesignTokens.Spacing.md)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                        .fill(.ultraThinMaterial)
+                )
+            }
         }
     }
 
