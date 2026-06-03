@@ -98,6 +98,23 @@ final class SkyCollectionTests: XCTestCase {
         XCTAssertEqual(meta.season, .winter)
     }
 
+    func testMetaTimeOfDayFallsBackToDate() {
+        // timeOfDay 未設定 → 撮影日時（無ければ投稿日時）の時刻から導出。
+        // これにより EXIF時刻が無い投稿でも「空×時間帯」マトリクスが埋まる。
+        let morning = Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 8))!
+        let post = Post(id: "p4", userId: "u1", images: [], capturedAt: morning)
+        let meta = PostCollectionMeta(from: post)
+        XCTAssertEqual(meta.timeOfDay, .morning, "8時 → 朝")
+    }
+
+    func testMetaTimeOfDayPrefersStoredValue() {
+        // 保存済み timeOfDay があればそれを優先（フォールバックしない）。
+        let morning = Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 8))!
+        let post = Post(id: "p5", userId: "u1", images: [], capturedAt: morning, timeOfDay: .night)
+        let meta = PostCollectionMeta(from: post)
+        XCTAssertEqual(meta.timeOfDay, .night, "保存済みの値が優先される")
+    }
+
     // MARK: - Badges
 
     func testAllSkyTypesBadgeUnlocksWhenAllFive() throws {

@@ -41,7 +41,9 @@ struct PostCollectionMeta: Equatable {
     /// - 都道府県は `location.prefecture` を 47都道府県と照合（非該当は nil）。
     init(from post: Post) {
         self.skyType = post.skyType
-        self.timeOfDay = post.timeOfDay
+        // 時間帯は保存済みの値を優先し、無ければ撮影日時(EXIF)→投稿日時から導出する。
+        // 季節と同じフォールバック方針に揃え、EXIF時刻が無い投稿でも図鑑（空×時間帯）が埋まるようにする。
+        self.timeOfDay = post.timeOfDay ?? TimeOfDay.from(date: post.capturedAt ?? post.createdAt)
         self.season = Season.from(date: post.capturedAt ?? post.createdAt)
         self.prefecture = JapanPrefecture.from(name: post.location?.prefecture)
     }
