@@ -14,6 +14,10 @@ class PostViewModel: ObservableObject {
     @Published var selectedImages: [UIImage] = []
     @Published var editedImages: [UIImage] = []
     @Published var editSettings: EditSettings?
+    /// 投稿に添付する完全な編集レシピ。
+    /// パーソナルAI編集のコーパス記録・Post.attachedRecipe への添付に使う（旧 editSettings は残す）。
+    /// ※ v1 は「代表1枚」: 複数画像投稿でも現在の編集レシピ1件のみを扱う（画像ごとのレシピ配列は将来対応）。
+    private var editRecipe: EditRecipe?
     /// 各画像の外部編集情報（写真Appバッジ表示用）⭐️ Issue #4
     /// 配列の index は selectedImages と対応する。Photos ライブラリ権限なしや
     /// 解決失敗時は対応する要素が nil。
@@ -102,9 +106,10 @@ class PostViewModel: ObservableObject {
     }
     
     /// 編集済み画像を設定
-    func setEditedImages(_ images: [UIImage], editSettings: EditSettings) {
+    func setEditedImages(_ images: [UIImage], editSettings: EditSettings, editRecipe: EditRecipe? = nil) {
         editedImages = images
         self.editSettings = editSettings
+        self.editRecipe = editRecipe
     }
 
     /// 各画像の外部編集情報を設定（PHAsset 由来のメタ情報）⭐️ Issue #4
@@ -277,6 +282,20 @@ class PostViewModel: ObservableObject {
                 operationName: "PostViewModel.createPost"
             ) { [self] in
                 try await self.firestoreService.createPost(post)
+            }
+
+            // パーソナルAI編集の学習コーパスへ記録（端末内・投稿成功時のみ・ベストエフォート）。
+            // 記録に失敗しても投稿成功は妨げない。skyType は AI判定 or ユーザー選択を使う。
+            // ⚠️ 未編集（中立）レシピは学習データを薄めるため記録しない（isNeutral でゲート）。
+            if let recipe = editRecipe, !recipe.isNeutral {
+                RecipeCorpusStore().append(
+                    RecipeCorpusEntry(
+                        recipe: recipe,
+                        skyType: effectiveSkyType,
+                        capturedAt: extractedInfo?.capturedAt
+                    ),
+                    userId: userId
+                )
             }
 
             // 4. 投稿作成を通知（プロフィール画面の自動更新用）☁️
@@ -465,6 +484,7 @@ class PostViewModel: ObservableObject {
             images: imageInfos,
             originalImages: originalImageInfos,
             editSettings: editSettings,
+            attachedRecipe: editRecipe,
             caption: caption.isEmpty ? nil : caption,
             hashtags: hashtags.isEmpty ? nil : hashtags,
             location: location,

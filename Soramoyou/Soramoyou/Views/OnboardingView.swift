@@ -14,6 +14,9 @@ struct OnboardingView: View {
     @Binding var hasCompletedOnboarding: Bool
     @State private var currentPage = 0
 
+    /// What's New 既読バージョン（新規ユーザーは完了時に既読化して二重紹介を防ぐ）
+    @AppStorage(WhatsNewContent.lastSeenKey) private var lastSeenWhatsNewVersion = ""
+
     /// オンボーディングページの内容
     private let pages: [OnboardingPage] = [
         OnboardingPage(
@@ -53,6 +56,16 @@ struct OnboardingView: View {
             ]
         )
     ]
+
+    /// オンボーディング完了処理。
+    /// 新規ユーザーは新機能をオンボで知るため、What's New を既読扱いにして
+    /// 二重紹介を防ぐ（lastSeen を先に書いてから完了フラグを立て、順序依存を排除）。
+    private func completeOnboarding() {
+        lastSeenWhatsNewVersion = WhatsNewContent.currentID
+        withAnimation {
+            hasCompletedOnboarding = true
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -163,9 +176,7 @@ struct OnboardingView: View {
                 Button(action: {
                     let impact = UIImpactFeedbackGenerator(style: .medium)
                     impact.impactOccurred()
-                    withAnimation {
-                        hasCompletedOnboarding = true
-                    }
+                    completeOnboarding()
                 }) {
                     HStack(spacing: DesignTokens.Spacing.sm) {
                         Text("始める")
@@ -190,9 +201,7 @@ struct OnboardingView: View {
                     Button(action: {
                         let impact = UIImpactFeedbackGenerator(style: .light)
                         impact.impactOccurred()
-                        withAnimation {
-                            hasCompletedOnboarding = true
-                        }
+                        completeOnboarding()
                     }) {
                         Text("スキップ")
                             .font(.system(size: 16, weight: .medium, design: .rounded))

@@ -41,6 +41,9 @@ class SettingsViewModel: ObservableObject {
             // 1. Firestoreのユーザーデータを削除
             try await firestoreService.deleteUserData(userId: userId)
 
+            // 1.5 端末内のパーソナルAI編集コーパスを削除（プライバシー: 退会後に学習データを残さない）
+            RecipeCorpusStore().clear(userId: userId)
+
             // 2. Firebase Authのアカウントを削除
             try await authService.deleteAccount()
 
@@ -72,6 +75,9 @@ class SettingsViewModel: ObservableObject {
 
             // 2. Firestoreのユーザーデータを削除
             try await firestoreService.deleteUserData(userId: userId)
+
+            // 2.5 端末内のパーソナルAI編集コーパスを削除（プライバシー: 退会後に学習データを残さない）
+            RecipeCorpusStore().clear(userId: userId)
 
             // 3. Firebase Authのアカウントを削除
             try await authService.deleteAccount()

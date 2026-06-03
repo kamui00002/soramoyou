@@ -12,6 +12,11 @@ struct MainTabView: View {
     @State private var selectedTab: Tab = .home
     @Namespace private var tabAnimation
 
+    // What's New（新機能紹介）の表示制御
+    @AppStorage(WhatsNewContent.onboardingCompletedKey) private var hasCompletedOnboarding = false
+    @AppStorage(WhatsNewContent.lastSeenKey) private var lastSeenWhatsNewVersion = ""
+    @State private var showWhatsNew = false
+
     enum Tab: Int, CaseIterable {
         case home = 0
         case gallery = 1
@@ -73,6 +78,48 @@ struct MainTabView: View {
             floatingTabBar
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        .task {
+            await maybeShowWhatsNew()
+        }
+        // iPad では .sheet が中央フォームカードになり全画面グラデが崩れるため、
+        // 全プラットフォームで全画面になる .fullScreenCover を使う（オンボ用途にも適切）。
+        .fullScreenCover(isPresented: $showWhatsNew, onDismiss: handleWhatsNewDismiss) {
+            WhatsNewView(onClose: { showWhatsNew = false })
+        }
+    }
+
+    // MARK: - What's New（新機能紹介）
+
+    /// アップデートした既存ユーザーにのみ、新機能紹介を1回だけ表示する。
+    /// ATT/AdMob 等のシステムダイアログと衝突しないよう少し待ってから出す。
+    private func maybeShowWhatsNew() async {
+        guard WhatsNewGate.shouldPresent(
+            currentID: WhatsNewContent.currentID,
+            lastSeenID: lastSeenWhatsNewVersion,
+            hasCompletedOnboarding: hasCompletedOnboarding
+        ) else { return }
+
+        // 起動直後は ATT/AdMob ダイアログが先に出るため、その猶予を与える
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+        // 猶予中に既読化された場合は出さない
+        guard lastSeenWhatsNewVersion != WhatsNewContent.currentID else { return }
+
+        showWhatsNew = true
+        LoggingService.shared.logEvent(
+            "whats_new_shown",
+            parameters: ["version": WhatsNewContent.currentID]
+        )
+    }
+
+    /// シートが閉じられたら（×・スワイプ・「さっそく使う」いずれでも）既読化する。
+    /// 既読化を1箇所に集約し、どの閉じ方でも「1回だけ」を保証する。
+    private func handleWhatsNewDismiss() {
+        lastSeenWhatsNewVersion = WhatsNewContent.currentID
+        LoggingService.shared.logEvent(
+            "whats_new_dismissed",
+            parameters: ["version": WhatsNewContent.currentID]
+        )
     }
 
     // MARK: - Floating Tab Bar ☀️

@@ -15,6 +15,10 @@ struct Post: Identifiable, Codable {
     let images: [ImageInfo]
     let originalImages: [ImageInfo]?  // オリジナル画像（編集前）
     let editSettings: EditSettings?    // 編集設定
+    /// 投稿に添付された編集レシピ（Firestore `editRecipeV1`）
+    /// - パーソナルAI編集のコーパス・レシピ共有のための「完全な編集情報」。
+    /// - 旧投稿との後方互換のため Optional。`editSettings`（旧・lossy）は置換せず残す。
+    let attachedRecipe: EditRecipe?
     let caption: String?
     let hashtags: [String]?
     let location: Location?
@@ -35,6 +39,7 @@ struct Post: Identifiable, Codable {
         images: [ImageInfo],
         originalImages: [ImageInfo]? = nil,
         editSettings: EditSettings? = nil,
+        attachedRecipe: EditRecipe? = nil,
         caption: String? = nil,
         hashtags: [String]? = nil,
         location: Location? = nil,
@@ -54,6 +59,7 @@ struct Post: Identifiable, Codable {
         self.images = images
         self.originalImages = originalImages
         self.editSettings = editSettings
+        self.attachedRecipe = attachedRecipe
         self.caption = caption
         self.hashtags = hashtags
         self.location = location
@@ -131,6 +137,11 @@ struct Post: Identifiable, Codable {
             data["editSettings"] = editSettings.toFirestoreData()
         }
 
+        // 添付編集レシピ（完全版）。後方互換のための追加フィールドで editSettings は残す。
+        if let attachedRecipe = attachedRecipe {
+            data["editRecipeV1"] = attachedRecipe.toFirestoreData()
+        }
+
         return data
     }
     
@@ -163,6 +174,14 @@ struct Post: Identifiable, Codable {
             self.editSettings = EditSettings(from: editSettingsData)
         } else {
             self.editSettings = nil
+        }
+
+        // 添付編集レシピの変換（オプショナル - 後方互換性）
+        // schemaVersion 欠落や壊れた値は EditRecipe.init?(from:) が弾く（nil を返す）。
+        if let recipeData = documentData["editRecipeV1"] as? [String: Any] {
+            self.attachedRecipe = EditRecipe(from: recipeData)
+        } else {
+            self.attachedRecipe = nil
         }
 
         self.caption = documentData["caption"] as? String
