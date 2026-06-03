@@ -371,6 +371,65 @@ final class EditViewModelTests: XCTestCase {
     
     // MARK: - Helper Methods
     
+    // MARK: - パーソナルAI編集「AIで自動編集」（柱1 v1 / G5）
+
+    func testApplyPersonalDefaultAppliesRepresentativeAndPreservesPhotoSpecific() async {
+        // Arrange: 一時コーパスに3件の編集（exposureEV=1.0, saturationCI=1.4）を仕込む
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = RecipeCorpusStore(baseDirectory: tmp)
+        for _ in 0..<3 {
+            var r = EditRecipe()
+            r.exposureEV = 1.0
+            r.saturationCI = 1.4
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
+        }
+
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: "u1",
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            recipeCorpusStore: store
+        )
+        // 写真固有の編集（クロップ・HDR）を現在値として設定
+        vm.editRecipe.cropRectNorm = CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5)
+        vm.editRecipe.targetDynamicRange = .hdr
+
+        // Act
+        vm.refreshPersonalDefaultAvailability()
+        XCTAssertTrue(vm.hasPersonalDefault, "3件以上で『あなたの定番』が利用可能")
+        vm.applyPersonalDefault()
+
+        // Assert: 代表値が適用され、写真固有編集は保持される
+        XCTAssertEqual(vm.editRecipe.exposureEV, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(vm.editRecipe.saturationCI, 1.4, accuracy: 0.0001)
+        XCTAssertEqual(vm.editRecipe.cropRectNorm, CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5), "クロップは保持")
+        XCTAssertEqual(vm.editRecipe.targetDynamicRange, .hdr, "HDR指定は保持（C1修正の検証）")
+    }
+
+    func testRefreshPersonalDefaultUnavailableBelowMinimum() async {
+        // 2件のみ → 定番は利用不可（ボタン非表示）
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = RecipeCorpusStore(baseDirectory: tmp)
+        for _ in 0..<2 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
+        }
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: "u1",
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            recipeCorpusStore: store
+        )
+        vm.refreshPersonalDefaultAvailability()
+        XCTAssertFalse(vm.hasPersonalDefault, "データ不足ではボタンを出さない")
+    }
+
     private func createTestImage(size: CGSize = CGSize(width: 512, height: 512)) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { context in

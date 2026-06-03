@@ -24,6 +24,8 @@ final class PersonalAIFoundationTests: XCTestCase {
         r.contrastCI = 1.2
         r.warmthNorm = 0.4
         r.clarityNorm = -0.2
+        r.appliedFilter = .vivid
+        r.cropRectNorm = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
         return r
     }
 
@@ -111,7 +113,14 @@ final class PersonalAIFoundationTests: XCTestCase {
         let read = store.entries(userId: "u1")
         XCTAssertEqual(read.count, 1)
         XCTAssertEqual(read.first?.skyType, .sunset)
-        XCTAssertEqual(read.first?.recipe.exposureEV ?? 0, 1.5, accuracy: 0.0001)
+
+        // Codable(JSON, iso8601)往復で各種フィールドが保たれることを検証（物理/正規化/enum/CGRect）
+        let recipe = read.first?.recipe
+        XCTAssertEqual(recipe?.exposureEV ?? 0, 1.5, accuracy: 0.0001)
+        XCTAssertEqual(recipe?.warmthNorm ?? 0, 0.4, accuracy: 0.0001)
+        XCTAssertEqual(recipe?.clarityNorm ?? 0, -0.2, accuracy: 0.0001)
+        XCTAssertEqual(recipe?.appliedFilter, .vivid, "フィルター(enum)が往復で保たれる")
+        XCTAssertEqual(recipe?.cropRectNorm, CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8), "cropRectNorm(CGRect)が往復で保たれる")
     }
 
     func testCorpusEmptyWhenMissing() {

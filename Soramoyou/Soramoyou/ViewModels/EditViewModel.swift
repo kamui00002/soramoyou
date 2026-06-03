@@ -115,8 +115,8 @@ class EditViewModel: ObservableObject {
     private let imageService: ImageServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
     private let userId: String?
-    /// パーソナルAI編集（柱1 v1）の学習コーパス（端末内）。
-    private let recipeCorpusStore = RecipeCorpusStore()
+    /// パーソナルAI編集（柱1 v1）の学習コーパス（端末内）。テスト時に差し替え可能。
+    private let recipeCorpusStore: RecipeCorpusStore
     private var previewTask: Task<Void, Never>?
     private var fastPreviewTask: Task<Void, Never>?
 
@@ -155,12 +155,14 @@ class EditViewModel: ObservableObject {
         images: [UIImage] = [],
         userId: String? = nil,
         imageService: ImageServiceProtocol = ImageService(),
-        firestoreService: FirestoreServiceProtocol = FirestoreService()
+        firestoreService: FirestoreServiceProtocol = FirestoreService(),
+        recipeCorpusStore: RecipeCorpusStore = RecipeCorpusStore()
     ) {
         self.originalImages = images
         self.userId = userId
         self.imageService = imageService
         self.firestoreService = firestoreService
+        self.recipeCorpusStore = recipeCorpusStore
 
         // 画像ごとの編集状態スロットと履歴を初期化（画像枚数と1:1で対応）
         let defaultSnapshot = EditorSnapshot(

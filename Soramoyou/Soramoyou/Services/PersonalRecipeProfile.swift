@@ -25,6 +25,10 @@ enum PersonalRecipeProfile {
 
     /// 指定 skyType の「あなたの定番」レシピを返す。
     ///
+    /// 注: 現状の本番呼び出し(EditViewModel)は `for: nil`（全体の代表値）を渡すため、
+    /// skyType 一致ブランチは将来(v2)の空タイプ別先回りに備えた拡張点であり、
+    /// 現状はテストからのみ実行される（意図的な設計）。
+    ///
     /// - Parameters:
     ///   - skyType: 対象の空タイプ。一致サンプルが `minimumSamples` 未満なら全体へフォールバック。
     ///   - entries: ユーザーのコーパス（古い順でも新しい順でも可）。
