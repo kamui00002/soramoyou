@@ -194,7 +194,7 @@ struct EditView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "wand.and.stars")
-                Text("あなたの定番を適用")
+                Text("AIで自動編集")
             }
             .font(.subheadline.weight(.semibold))
             .foregroundColor(.white)
@@ -212,7 +212,7 @@ struct EditView: View {
         }
         .padding(.horizontal, DesignTokens.Spacing.md)
         .padding(.top, DesignTokens.Spacing.sm)
-        .accessibilityLabel("あなたの定番を適用")
+        .accessibilityLabel("AIで自動編集")
     }
 
     // MARK: - Image Preview View
