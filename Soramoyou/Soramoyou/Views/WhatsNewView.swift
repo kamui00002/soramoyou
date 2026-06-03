@@ -19,6 +19,9 @@ struct WhatsNewView: View {
 
     private let pages = WhatsNewContent.pages
 
+    /// iPad などの広い画面でコンテンツが間延びしないよう最大幅を制限する
+    private let maxContentWidth: CGFloat = 500
+
     var body: some View {
         ZStack {
             // 背景グラデーション（現在ページの配色）
@@ -140,6 +143,8 @@ struct WhatsNewView: View {
             Spacer()
         }
         .padding(.horizontal, DesignTokens.Spacing.xl)
+        .frame(maxWidth: maxContentWidth)
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Bottom Controls ☀️
@@ -179,6 +184,8 @@ struct WhatsNewView: View {
             }
             .padding(.horizontal, DesignTokens.Spacing.xl)
         }
+        .frame(maxWidth: maxContentWidth)
+        .frame(maxWidth: .infinity)
         .padding(.bottom, DesignTokens.Spacing.xxl)
     }
 
