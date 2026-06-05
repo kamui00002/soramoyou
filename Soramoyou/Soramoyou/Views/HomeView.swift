@@ -724,6 +724,15 @@ struct PostDetailView: View {
                 if !post.images.isEmpty {
                     multiImageCarousel(images: post.images)
                 }
+
+                // このレシピで編集（レシピ共有）⭐️
+                // attachedRecipe 付き投稿（v1.7.0 以降）でのみ表示。
+                // 中立レシピ・未ログイン時の非表示ゲートはコンポーネント内部で行う。
+                if let recipe = post.attachedRecipe {
+                    UseRecipeButton(recipe: recipe, postId: post.id)
+                        .padding(.horizontal)
+                }
+
                 postInfoSection
             }
         }
