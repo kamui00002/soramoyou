@@ -26,6 +26,9 @@ class SettingsViewModel: ObservableObject {
     private let authService: AuthServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
 
+    /// ゴールデンアワー通知の切替処理（直近の Task）。連打時の直列化に使う。
+    private var goldenHourToggleTask: Task<Void, Never>?
+
     init(authService: AuthServiceProtocol = AuthService(),
          firestoreService: FirestoreServiceProtocol = FirestoreService()) {
         self.authService = authService
@@ -34,10 +37,26 @@ class SettingsViewModel: ObservableObject {
 
     // MARK: - ゴールデンアワー通知
 
-    /// ゴールデンアワー通知のトグル切り替え。
+    /// ゴールデンアワー通知のトグル切り替え（FIFO 直列化）。
+    ///
+    /// トグルの Binding は切替ごとに独立した Task を起動する。enable() は権限確認 +
+    /// 位置取得で長く suspend するため、未管理のまま並行させると「ON 直後に OFF →
+    /// 遅れて ON 側が復帰して通知を再登録」という操作と逆の最終状態になり得る。
+    /// 直前の切替の完了を待ってから実行することで、最後の操作が必ず最終状態になる。
+    func setGoldenHourNotification(enabled: Bool) async {
+        let previous = goldenHourToggleTask
+        let task = Task { [weak self] in
+            await previous?.value
+            await self?.performGoldenHourToggle(enabled: enabled)
+        }
+        goldenHourToggleTask = task
+        await task.value
+    }
+
+    /// トグル切り替えの本体。
     /// ON: 通知権限 → 位置権限+現在地取得 → スケジュール（いずれか失敗時はトグルを戻して誘導メッセージ）
     /// OFF: 登録済み通知をすべて削除
-    func setGoldenHourNotification(enabled: Bool) async {
+    private func performGoldenHourToggle(enabled: Bool) async {
         guard enabled else {
             await GoldenHourNotificationManager.shared.disable()
             isGoldenHourNotificationEnabled = false

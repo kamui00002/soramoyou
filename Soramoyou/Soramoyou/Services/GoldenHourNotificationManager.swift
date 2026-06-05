@@ -160,6 +160,13 @@ final class GoldenHourNotificationManager: NSObject {
         calendar.timeZone = .current
 
         for fireDate in fireDates {
+            // 登録の途中で OFF に切り替えられたら中断する（disable() との競合で
+            // 「OFF なのに通知が残る」状態を防ぐ。await を跨ぐ処理のため毎回確認する）
+            guard isEnabled else {
+                await removePendingGoldenHourNotifications()
+                return 0
+            }
+
             let sunset = fireDate.addingTimeInterval(Double(notifyBeforeSunsetMinutes) * 60.0)
 
             let content = UNMutableNotificationContent()
@@ -178,6 +185,13 @@ final class GoldenHourNotificationManager: NSObject {
                 trigger: trigger
             )
             try? await notificationCenter.add(request)
+        }
+
+        // 登録完了後にも OFF への切替が無かったか最終確認する（disable() の削除と
+        // 入れ違いで add が着地した分を回収する）
+        guard isEnabled else {
+            await removePendingGoldenHourNotifications()
+            return 0
         }
         return fireDates.count
     }
