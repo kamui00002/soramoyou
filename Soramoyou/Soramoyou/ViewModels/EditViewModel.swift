@@ -156,7 +156,8 @@ class EditViewModel: ObservableObject {
         userId: String? = nil,
         imageService: ImageServiceProtocol = ImageService(),
         firestoreService: FirestoreServiceProtocol = FirestoreService(),
-        recipeCorpusStore: RecipeCorpusStore = RecipeCorpusStore()
+        recipeCorpusStore: RecipeCorpusStore = RecipeCorpusStore(),
+        initialRecipe: EditRecipe? = nil
     ) {
         self.originalImages = images
         self.userId = userId
@@ -165,8 +166,11 @@ class EditViewModel: ObservableObject {
         self.recipeCorpusStore = recipeCorpusStore
 
         // 画像ごとの編集状態スロットと履歴を初期化（画像枚数と1:1で対応）
+        // レシピ共有から起動された場合は seed（initialRecipe）を全画像の初期レシピにする。
+        // imageStates は画像切替時に save→restore されるため、editRecipe だけでなく
+        // 全スロットに入れないと切替で seed が消えてしまう。
         let defaultSnapshot = EditorSnapshot(
-            recipe:              EditRecipe(),
+            recipe:              initialRecipe ?? EditRecipe(),
             rotationDegrees:     0,
             isFlippedHorizontal: false,
             isFlippedVertical:   false,
@@ -174,6 +178,14 @@ class EditViewModel: ObservableObject {
         )
         self.imageStates = Array(repeating: defaultSnapshot, count: images.count)
         self.historyManagers = images.map { _ in EditHistoryManager() }
+
+        // seed を現在の編集レシピにも反映（最初の generatePreview() から効かせる）。
+        // history には積まない: seed 自体がこの編集セッションのベースラインのため。
+        if let initialRecipe = initialRecipe {
+            self.editRecipe = initialRecipe
+            // レシピ共有の計測（共有レシピ付きでエディタが起動した回数）
+            LoggingService.shared.logEvent("recipe_share_applied", parameters: nil)
+        }
 
         // 初期プレビューを生成（メモリリーク防止のため weak self を使用）
         if !images.isEmpty {

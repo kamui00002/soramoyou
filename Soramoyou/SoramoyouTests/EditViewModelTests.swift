@@ -430,6 +430,50 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertFalse(vm.hasPersonalDefault, "データ不足ではボタンを出さない")
     }
 
+    // MARK: - レシピ共有シード（initialRecipe）
+
+    func testInitialRecipeSeedsEditorAndSurvivesImageSwitch() async {
+        // Given: 共有レシピを seed としてエディタを起動（複数画像）
+        var seed = EditRecipe()
+        seed.exposureEV = 1.0
+        seed.warmthNorm = 0.4
+        seed.appliedFilter = .warm
+        let testImages = [createTestImage(), createTestImage()]
+
+        // When
+        let seededViewModel = EditViewModel(
+            images: testImages,
+            userId: nil,
+            imageService: mockImageService,
+            firestoreService: mockFirestoreService,
+            initialRecipe: seed
+        )
+        await Task.yield()
+
+        // Then: 現在のレシピが seed と一致する
+        XCTAssertEqual(seededViewModel.editRecipe, seed)
+
+        // 画像を切り替えても seed が保持される（全 imageStates に seed が入っている）
+        seededViewModel.nextImage()
+        await Task.yield()
+        XCTAssertEqual(seededViewModel.editRecipe, seed, "2枚目に切り替えても seed が効いている")
+
+        seededViewModel.previousImage()
+        await Task.yield()
+        XCTAssertEqual(seededViewModel.editRecipe, seed, "1枚目に戻っても seed が保持されている")
+    }
+
+    func testInitWithoutInitialRecipeStaysNeutral() async {
+        // initialRecipe を渡さない既存経路では中立レシピのまま（既存挙動の回帰確認）
+        let plainViewModel = EditViewModel(
+            images: [createTestImage()],
+            userId: nil,
+            imageService: mockImageService,
+            firestoreService: mockFirestoreService
+        )
+        XCTAssertTrue(plainViewModel.editRecipe.isNeutral)
+    }
+
     private func createTestImage(size: CGSize = CGSize(width: 512, height: 512)) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { context in
