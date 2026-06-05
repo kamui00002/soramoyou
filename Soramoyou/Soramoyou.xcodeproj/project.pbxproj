@@ -471,8 +471,8 @@
 				INFOPLIST_FILE = Soramoyou/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "そらもよう";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "投稿に位置情報を追加するために、位置情報へのアクセスが必要です。";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "投稿に位置情報を追加するために、位置情報へのアクセスが必要です。";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "投稿への位置情報の追加と、ゴールデンアワー通知の時刻計算のために位置情報を使用します。";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "投稿への位置情報の追加と、ゴールデンアワー通知の時刻計算のために位置情報を使用します。";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "編集した写真を保存するために、カメラロールへの書き込みアクセスが必要です。";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "空の写真を選択して投稿するために、カメラロールへのアクセスが必要です。";
 				INFOPLIST_KEY_NSUserTrackingUsageDescription = "このアプリでは、より関連性の高い広告を表示するために、トラッキングの許可をお願いしています。許可しない場合でも、アプリの機能は制限されません。";
@@ -509,8 +509,8 @@
 				INFOPLIST_FILE = Soramoyou/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "そらもよう";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "投稿に位置情報を追加するために、位置情報へのアクセスが必要です。";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "投稿に位置情報を追加するために、位置情報へのアクセスが必要です。";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "投稿への位置情報の追加と、ゴールデンアワー通知の時刻計算のために位置情報を使用します。";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "投稿への位置情報の追加と、ゴールデンアワー通知の時刻計算のために位置情報を使用します。";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "編集した写真を保存するために、カメラロールへの書き込みアクセスが必要です。";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "空の写真を選択して投稿するために、カメラロールへのアクセスが必要です。";
 				INFOPLIST_KEY_NSUserTrackingUsageDescription = "このアプリでは、より関連性の高い広告を表示するために、トラッキングの許可をお願いしています。許可しない場合でも、アプリの機能は制限されません。";
