@@ -45,12 +45,18 @@ struct EditView: View {
     init(
         images: [UIImage],
         userId: String?,
-        externalEditInfos: [ExternalEditInfo?] = []
+        externalEditInfos: [ExternalEditInfo?] = [],
+        initialRecipe: EditRecipe? = nil
     ) {
         self.userId = userId
         self.originalImages = images
         self.externalEditInfos = externalEditInfos
-        _viewModel = StateObject(wrappedValue: EditViewModel(images: images, userId: userId))
+        // initialRecipe: レシピ共有（他の投稿のレシピで編集）から起動された場合の初期レシピ
+        _viewModel = StateObject(wrappedValue: EditViewModel(
+            images: images,
+            userId: userId,
+            initialRecipe: initialRecipe
+        ))
     }
 
     var body: some View {

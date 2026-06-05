@@ -45,6 +45,9 @@ struct SettingsView: View {
                         // アプリ情報セクション
                         appInfoSection
 
+                        // 通知セクション
+                        notificationSection
+
                         // 法的情報セクション
                         legalSection
 
@@ -123,6 +126,25 @@ struct SettingsView: View {
                 }
             } message: {
                 Text("セキュリティのため、アカウント削除にはパスワードの再入力が必要です。")
+            }
+            // ゴールデンアワー通知: 権限拒否・位置取得失敗時の誘導アラート
+            .alert("通知を有効にできません", isPresented: Binding(
+                get: { viewModel.goldenHourPermissionMessage != nil },
+                set: { if !$0 { viewModel.goldenHourPermissionMessage = nil } }
+            )) {
+                Button("設定を開く") {
+                    viewModel.goldenHourPermissionMessage = nil
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("キャンセル", role: .cancel) {
+                    viewModel.goldenHourPermissionMessage = nil
+                }
+            } message: {
+                if let message = viewModel.goldenHourPermissionMessage {
+                    Text(message)
+                }
             }
             // アカウント削除エラー
             .alert("エラー", isPresented: Binding(
@@ -211,6 +233,57 @@ struct SettingsView: View {
             }
             .padding(.vertical, DesignTokens.Spacing.lg)
         }
+    }
+
+    // MARK: - Notification Section ☀️
+
+    /// 通知セクション（ゴールデンアワー通知のトグル）
+    private var notificationSection: some View {
+        VStack(spacing: 0) {
+            sectionHeader(title: "通知", icon: "bell")
+
+            settingsCard {
+                HStack(spacing: DesignTokens.Spacing.md) {
+                    // アイコン
+                    Image(systemName: "sun.haze.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.orange)
+                        .frame(width: 28, height: 28)
+
+                    // タイトルと説明
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("ゴールデンアワー通知")
+                            .font(.system(size: 16, weight: .medium, design: .rounded))
+                            .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                        Text("日没前の空が美しい時間帯をお知らせします")
+                            .font(.system(size: 12, weight: .regular, design: .rounded))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+
+                    Spacer()
+
+                    // トグル（切り替え時に権限要求 → スケジュールを実行）
+                    Toggle("ゴールデンアワー通知", isOn: goldenHourToggleBinding)
+                        .labelsHidden()
+                }
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.vertical, DesignTokens.Spacing.md)
+            }
+        }
+    }
+
+    /// ゴールデンアワー通知トグルの Binding。
+    /// ON 時は権限要求を伴うため、結果が確定するまで実際の状態は ViewModel が管理する。
+    private var goldenHourToggleBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.isGoldenHourNotificationEnabled },
+            set: { newValue in
+                Task {
+                    await viewModel.setGoldenHourNotification(enabled: newValue)
+                }
+            }
+        )
     }
 
     // MARK: - Legal Section ☀️

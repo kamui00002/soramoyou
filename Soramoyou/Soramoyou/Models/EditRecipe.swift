@@ -199,6 +199,24 @@ struct EditRecipe: Codable, Equatable {
         return self == baseline
     }
 
+    // MARK: - レシピ共有のシード化
+
+    /// 他の投稿に添付されたレシピを「自分の写真の初期レシピ」として使える形に整える（純関数）。
+    ///
+    /// 写真固有のフィールドだけを除去し、作風はすべて保持する:
+    /// - `cropRectNorm` → nil（クロップは元写真の構図に依存する幾何情報。nil は「クロップ無し」の有効状態）
+    /// - `targetDynamicRange` → nil（元写真が HDR でも適用先が SDR とは限らない。適用先写真のデフォルトを優先）
+    /// - `toneCurvePoints` → **保持**（トーンカーブはコンテンツ非依存の伝達関数で作風の一部。
+    ///   `applyPersonalDefault` が除外するのは「複数レシピの平均」に意味が無いためで、
+    ///   単一の具象レシピを再現する共有とは意図的に扱いを分けている）
+    /// - フィルター・各種 norm 値・物理値 → すべて保持
+    func preparedAsSharedSeed() -> EditRecipe {
+        var seed = self
+        seed.cropRectNorm = nil
+        seed.targetDynamicRange = nil
+        return seed
+    }
+
     // MARK: - EditSettings からの変換（後方互換）
 
     /// 非対称パワー曲線でのフォワードマッピング
