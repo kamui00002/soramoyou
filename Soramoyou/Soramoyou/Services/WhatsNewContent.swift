@@ -17,9 +17,9 @@ import SwiftUI
 enum WhatsNewContent {
 
     /// 今回の新機能セットの識別子。
-    /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase1"）。
+    /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    static let currentID = "2026-06-phase0"
+    static let currentID = "2026-06-phase1"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -32,36 +32,26 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（Phase 0）で増えた3機能の紹介ページ。
+    /// 今回（Phase 1）で増えた2機能の紹介ページ。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "wand.and.stars",
+            icon: "sun.haze.fill",
             badge: "新機能",
-            title: "AIで自動編集",
-            description: "あなたの過去の編集をAIが覚えて\n新しい空にワンタップで先回り仕上げ",
+            title: "ゴールデンアワー通知",
+            description: "日没前、空がいちばん美しい時間を\nお知らせ。設定からONにできます",
             gradientColors: [
                 Color(red: 0.98, green: 0.76, blue: 0.53),
                 Color(red: 0.93, green: 0.52, blue: 0.39)
             ]
         ),
         WhatsNewPage(
-            icon: "square.grid.3x3.fill",
+            icon: "wand.and.rays",
             badge: "新機能",
-            title: "空を集める図鑑",
-            description: "撮った空が時間帯・季節・空模様ごとに\n図鑑に集まる。バッジも解放しよう",
+            title: "このレシピで編集",
+            description: "気に入った投稿の編集レシピを\nワンタップで自分の写真に試せる",
             gradientColors: [
                 Color(red: 0.53, green: 0.81, blue: 0.98),
                 Color(red: 0.39, green: 0.58, blue: 0.93)
-            ]
-        ),
-        WhatsNewPage(
-            icon: "clock.arrow.circlepath",
-            badge: "新機能",
-            title: "1年前の今日の空",
-            description: "ホームの一番上に\n去年の同じ日に撮った空がよみがえる",
-            gradientColors: [
-                Color(red: 0.76, green: 0.53, blue: 0.98),
-                Color(red: 0.58, green: 0.39, blue: 0.93)
             ]
         )
     ]
