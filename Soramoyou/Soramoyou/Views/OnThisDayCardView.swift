@@ -10,9 +10,12 @@ import SwiftUI
 import Kingfisher
 
 struct OnThisDayCardView: View {
-    let userId: String?
-
-    @StateObject private var viewModel = OnThisDayViewModel()
+    /// ホーム（HomeView）が所有する VM を共有する。
+    /// 同じ投稿取得からストリークチップも導出するため、この View 内で生成せず外から注入する
+    /// （同一クエリの二重フェッチ防止）。load は HomeView 側の task が担う
+    /// （メモリー無し時にこの View はサイズゼロになるため、LazyVStack 内では
+    /// 自身の task の発火が保証されない）。
+    @ObservedObject var viewModel: OnThisDayViewModel
     @State private var selectedMemory: OnThisDayMemory?
 
     var body: some View {
@@ -20,10 +23,6 @@ struct OnThisDayCardView: View {
             if let memory = viewModel.memories.first {
                 cardButton(memory)
             }
-        }
-        .task(id: userId) {
-            guard let userId else { return }
-            await viewModel.load(userId: userId)
         }
         .sheet(item: $selectedMemory) { memory in
             OnThisDayMemoryDetailView(memory: memory)

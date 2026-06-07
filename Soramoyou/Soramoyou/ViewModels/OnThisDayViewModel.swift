@@ -11,6 +11,9 @@ import Foundation
 final class OnThisDayViewModel: ObservableObject {
 
     @Published private(set) var memories: [OnThisDayMemory] = []
+    /// ストリーク（連続投稿日数）。ホームのチップ表示用。
+    /// メモリーと同じ投稿取得を使い回して算出する（同一クエリの二重フェッチを避ける）。
+    @Published private(set) var streak: SkyStreakState = .empty
     @Published private(set) var isLoading = false
 
     private let firestoreService: FirestoreServiceProtocol
@@ -21,7 +24,7 @@ final class OnThisDayViewModel: ObservableObject {
         self.firestoreService = firestoreService
     }
 
-    /// 自分の投稿を取得し、今日と同じ月日の過去投稿（メモリー）を算出する。
+    /// 自分の投稿を取得し、今日と同じ月日の過去投稿（メモリー）とストリークを算出する。
     func load(userId: String, today: Date = Date()) async {
         isLoading = true
         defer { isLoading = false }
@@ -32,9 +35,11 @@ final class OnThisDayViewModel: ObservableObject {
                 lastDocument: nil
             )
             memories = OnThisDayService.memories(from: posts, today: today)
+            streak = SkyStreakCalculator.calculate(posts: posts, today: today)
         } catch {
             // メモリー表示はベストエフォート（失敗してもホーム表示を妨げない）
             memories = []
+            streak = .empty
         }
     }
 }
