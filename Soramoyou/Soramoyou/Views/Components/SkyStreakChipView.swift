@@ -38,11 +38,14 @@ struct SkyStreakChipView: View {
                     }
                     .padding(.horizontal, DesignTokens.Spacing.md)
                     .padding(.vertical, 8)
+                    // 見た目は小さいチップのまま、タップ可能領域は最低 44pt を確保（HIG）
+                    .frame(minHeight: 44)
                     .background(.ultraThinMaterial, in: Capsule())
                     .overlay(
                         Capsule()
                             .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: 1)
                     )
+                    .contentShape(Capsule())
                 }
                 .accessibilityLabel("\(streak.currentStreak)日連続で投稿中。タップで空図鑑を開く")
 

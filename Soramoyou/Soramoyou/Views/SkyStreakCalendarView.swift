@@ -16,8 +16,16 @@ struct SkyStreakCalendarView: View {
     /// 表示中の月（その月に含まれる任意の日付）
     @State private var displayedMonth = Date()
 
-    private let calendar = Calendar.current
-    /// 曜日ヘッダー（firstWeekday=日曜の日本ロケール想定の並び）
+    /// カレンダー計算用。曜日ヘッダーを「日〜土」固定で描くため、firstWeekday も
+    /// 日曜（=1）に固定する。端末ロケールが月曜始まり等の場合に Calendar.current の
+    /// firstWeekday をそのまま使うと、ヘッダー（日曜始まり固定）と先頭空白セルの
+    /// 計算（firstWeekday 依存）がずれて日付が誤った曜日列に並ぶため。
+    private let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 1 // 日曜始まり（weekdaySymbols と一致させる）
+        return calendar
+    }()
+    /// 曜日ヘッダー（日曜始まり固定。上の calendar.firstWeekday=1 と対応）
     private let weekdaySymbols = ["日", "月", "火", "水", "木", "金", "土"]
 
     var body: some View {
@@ -119,7 +127,8 @@ struct SkyStreakCalendarView: View {
                 )
         }
         .frame(height: 30)
-        .accessibilityLabel("\(day)日\(posted ? "、投稿あり" : "")")
+        // 「今日」は視覚的に輪郭リングで示すため、VoiceOver にも明示する（色/形だけに頼らない）
+        .accessibilityLabel("\(day)日\(today ? "、今日" : "")\(posted ? "、投稿あり" : "")")
     }
 
     // MARK: - カレンダー計算

@@ -26,6 +26,10 @@ final class OnThisDayViewModel: ObservableObject {
 
     /// 自分の投稿を取得し、今日と同じ月日の過去投稿（メモリー）とストリークを算出する。
     func load(userId: String, today: Date = Date()) async {
+        // 再入ガード: HomeView.onAppear はタブ復帰のたび発火するため、高速切替で
+        // load が多重起動すると 1000 件フェッチが重なり streak/memories の代入が競合する
+        // （ホームのページネーション loadMorePosts と同じ再入防止の慣習に合わせる）。
+        guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
         do {
