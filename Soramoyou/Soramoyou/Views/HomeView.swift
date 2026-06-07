@@ -10,10 +10,14 @@ import Kingfisher
 
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
+    /// On This Day とストリークチップの共有 VM（1回の投稿取得から両方を導出）⭐️
+    @StateObject private var onThisDayViewModel = OnThisDayViewModel()
     @EnvironmentObject private var likeManager: LikeManager
     @State private var selectedPost: Post?
     /// 他ユーザープロフィール画面表示用 ⭐️ Issue #2
     @State private var selectedAuthorUserId: String?
+    /// ストリークチップから開く空図鑑の表示フラグ
+    @State private var showingStreakZukan = false
     @State private var animateCards = false  // フィードアニメーション用 ☀️
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -79,6 +83,14 @@ struct HomeView: View {
                         animateCards = true
                     }
                 }
+                // On This Day とストリークチップの元データを取得 ⭐️
+                // （カード側はメモリー無し時にサイズゼロになり LazyVStack 内で
+                //   task の発火が保証されないため、ホーム自身が load を担う）
+                Task {
+                    if let uid = viewModel.currentUserId {
+                        await onThisDayViewModel.load(userId: uid)
+                    }
+                }
             }
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
@@ -92,6 +104,12 @@ struct HomeView: View {
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
                     .environmentObject(likeManager)
+            }
+            // ストリークチップ → 空図鑑（カレンダー詳細）⭐️
+            .sheet(isPresented: $showingStreakZukan) {
+                if let uid = viewModel.currentUserId {
+                    SkyZukanView(userId: uid)
+                }
             }
             // 他ユーザープロフィール画面 ⭐️ Issue #2
             .fullScreenCover(item: Binding<IdentifiableString?>(
@@ -120,8 +138,17 @@ struct HomeView: View {
     private var feedView: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: DesignTokens.Spacing.lg) {
+                // ストリークチップ（🔥◯日連続）— 継続中のみ表示、タップで図鑑へ ⭐️
+                SkyStreakChipView(streak: onThisDayViewModel.streak) {
+                    LoggingService.shared.logEvent("streak_chip_tapped", parameters: [
+                        "current_streak": onThisDayViewModel.streak.currentStreak
+                    ])
+                    showingStreakZukan = true
+                }
+
                 // On This Day（1年前の空）— 同月日の過去投稿がある時だけ表示する ⭐️
-                OnThisDayCardView(userId: viewModel.currentUserId)
+                // VM はチップと共有（1回の投稿取得から両方を導出、load は HomeView の task）
+                OnThisDayCardView(viewModel: onThisDayViewModel)
 
                 ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
                     PostCard(
