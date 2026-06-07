@@ -61,6 +61,10 @@ struct CollectionState: Codable, Equatable {
     var skyTimeCells: Set<SkyTimeCell> = []
     /// 集計対象の総投稿数
     var totalPosts: Int = 0
+    /// 過去最長の連続投稿日数（連続バッジの判定用）。
+    /// 集計器でなく ViewModel が SkyStreakCalculator の結果から設定する
+    /// （集計器の入力 PostCollectionMeta は日付を持たないため）。
+    var longestStreak: Int = 0
 
     /// 指定セルが収集済みか（マトリクス表示用）。
     func isCollected(skyType: SkyType, timeOfDay: TimeOfDay) -> Bool {
