@@ -20,6 +20,10 @@ struct Post: Identifiable, Codable {
     /// - 旧投稿との後方互換のため Optional。`editSettings`（旧・lossy）は置換せず残す。
     let attachedRecipe: EditRecipe?
     let caption: String?
+    /// 機能1: 投稿にまとう気分（mood）。未選択投稿・旧投稿は nil。
+    let mood: Mood?
+    /// 機能1: 適用した気分フレームの ID。フレーム未適用・旧投稿は nil。
+    let frameId: String?
     let hashtags: [String]?
     let location: Location?
     let skyColors: [String]? // 最大5色、16進数カラーコード
@@ -41,6 +45,8 @@ struct Post: Identifiable, Codable {
         editSettings: EditSettings? = nil,
         attachedRecipe: EditRecipe? = nil,
         caption: String? = nil,
+        mood: Mood? = nil,
+        frameId: String? = nil,
         hashtags: [String]? = nil,
         location: Location? = nil,
         skyColors: [String]? = nil,
@@ -61,6 +67,8 @@ struct Post: Identifiable, Codable {
         self.editSettings = editSettings
         self.attachedRecipe = attachedRecipe
         self.caption = caption
+        self.mood = mood
+        self.frameId = frameId
         self.hashtags = hashtags
         self.location = location
         // skyColorsは最大5色まで
@@ -98,7 +106,15 @@ struct Post: Identifiable, Codable {
         if let caption = caption {
             data["caption"] = caption
         }
-        
+
+        if let mood = mood {
+            data["mood"] = mood.rawValue
+        }
+
+        if let frameId = frameId {
+            data["frameId"] = frameId
+        }
+
         if let hashtags = hashtags {
             data["hashtags"] = hashtags
         }
@@ -185,6 +201,15 @@ struct Post: Identifiable, Codable {
         }
 
         self.caption = documentData["caption"] as? String
+
+        // 機能1: mood / frameId（後方互換のため Optional）
+        if let moodString = documentData["mood"] as? String {
+            self.mood = Mood(rawValue: moodString)
+        } else {
+            self.mood = nil
+        }
+        self.frameId = documentData["frameId"] as? String
+
         self.hashtags = documentData["hashtags"] as? [String]
         
         // locationの変換
