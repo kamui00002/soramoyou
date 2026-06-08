@@ -7,7 +7,6 @@
 
 import Foundation
 import UIKit
-import CoreImage
 import Combine
 
 @MainActor
@@ -521,34 +520,15 @@ class PostViewModel: ObservableObject {
         // 焼き込む要素が無ければそのまま返す
         guard mood != nil || captionText != nil else { return images }
 
-        let pool = CIContextPool.shared
         var result: [UIImage] = []
         result.reserveCapacity(images.count)
-
         for image in images {
+            // フル解像度合成のメモリスパイクを避けるため 1 枚ずつ autoreleasepool で囲む。
+            // 合成本体（向き正規化・P3 維持）は ImageCompositor.composeToUIImage に集約。
             autoreleasepool {
-                guard let cgImage = image.cgImage else {
-                    result.append(image)
-                    return
-                }
-                // CIImage は UIImage.imageOrientation を無視するため、向きを明示適用してから合成する。
-                let base = CIImage(cgImage: cgImage)
-                    .oriented(CGImagePropertyOrientation(image.imageOrientation))
-                let frameOverlay = mood.flatMap { ImageCompositor.renderFrame(mood: $0, in: base.extent) }
-                let composed = ImageCompositor.compose(
-                    .init(base: base, frameOverlay: frameOverlay, caption: captionText, mood: mood)
+                result.append(
+                    ImageCompositor.composeToUIImage(base: image, mood: mood, caption: captionText)
                 )
-                guard let outputCGImage = pool.ciContext.createCGImage(
-                    composed,
-                    from: composed.extent,
-                    format: .RGBAh,
-                    colorSpace: pool.outputColorSpace
-                ) else {
-                    result.append(image)
-                    return
-                }
-                // orientation は適用済みなので .up（既存 uploadImages→encodeJPEG の正規化と整合）。
-                result.append(UIImage(cgImage: outputCGImage))
             }
         }
         return result

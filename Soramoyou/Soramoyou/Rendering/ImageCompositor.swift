@@ -22,6 +22,7 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import UIKit
 import SwiftUI
+import ImageIO
 
 /// 写真へ気分フレーム／キャプションを焼き込む合成器
 ///
@@ -76,6 +77,35 @@ enum ImageCompositor {
         }
 
         return result.cropped(to: canvas)
+    }
+
+    /// 1 枚の写真へ mood フレーム＋キャプションを焼き込み、向きを正規化した UIImage を返す。
+    ///
+    /// 投稿前焼き込みから 1 枚ずつ呼ぶ testable seam。一連の流れ:
+    /// cgImage → `.oriented`(向き適用) → renderFrame → compose → `createCGImage`(Display P3) → UIImage(.up)。
+    /// - cgImage は `UIImage.imageOrientation` を持たないため、合成前に CIImage 空間で向きを適用する。
+    /// - 色空間は `CIContextPool.outputColorSpace`(Display P3) を明示し広色域/HDR を維持
+    ///   （`UIImage(ciImage:)` / UIGraphicsImageRenderer 経由は広色域を落とすため使わない）。
+    /// - 失敗時（cgImage 取得不可 / レンダ失敗）は入力画像をそのまま返す。
+    static func composeToUIImage(base image: UIImage, mood: Mood?, caption: String?) -> UIImage {
+        guard let cgImage = image.cgImage else { return image }
+        let pool = CIContextPool.shared
+        let oriented = CIImage(cgImage: cgImage)
+            .oriented(CGImagePropertyOrientation(image.imageOrientation))
+        let frameOverlay = mood.flatMap { renderFrame(mood: $0, in: oriented.extent) }
+        let composed = compose(
+            Input(base: oriented, frameOverlay: frameOverlay, caption: caption, mood: mood)
+        )
+        guard let outputCGImage = pool.ciContext.createCGImage(
+            composed,
+            from: composed.extent,
+            format: .RGBAh,
+            colorSpace: pool.outputColorSpace
+        ) else {
+            return image
+        }
+        // orientation 適用済みなので .up（既存 uploadImages→encodeJPEG の正規化と整合）。
+        return UIImage(cgImage: outputCGImage)
     }
 
     // MARK: - キャプションのラスタライズ

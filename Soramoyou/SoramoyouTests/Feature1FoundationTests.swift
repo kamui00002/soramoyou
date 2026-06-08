@@ -231,4 +231,62 @@ final class Feature1FoundationTests: XCTestCase {
         XCTAssertLessThan(centerAlpha, 0.1, "中心は透過しているべき(写真が主役)。塗りつぶし=くり抜き忘れ")
         XCTAssertGreaterThan(edgeAlpha, 0.5, "縁(枠)には色が乗っているべき")
     }
+
+    // MARK: - 焼き込み seam（composeToUIImage / orientation 往復）
+
+    /// 単色 UIImage を指定 orientation 付きで生成（raw ピクセルは width×height）
+    private func makeSolidUIImage(gray: UInt8, width: Int, height: Int, orientation: UIImage.Orientation) -> UIImage? {
+        let ci = makeSolidBase(gray: gray, width: width, height: height)
+        let ctx = CIContext()
+        guard let cg = ctx.createCGImage(ci, from: ci.extent) else { return nil }
+        return UIImage(cgImage: cg, scale: 1, orientation: orientation)
+    }
+
+    /// 指定座標の RGB 平均輝度(0...255)
+    private func brightness(_ image: CIImage, x: Int, y: Int) -> Double {
+        let ctx = CIContext()
+        let w = Int(image.extent.width), h = Int(image.extent.height)
+        guard w > 0, h > 0, let cg = ctx.createCGImage(image, from: image.extent) else { return 0 }
+        var bytes = [UInt8](repeating: 0, count: w * h * 4)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        let c = CGContext(
+            data: &bytes, width: w, height: h, bitsPerComponent: 8,
+            bytesPerRow: w * 4, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )
+        c?.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let cx = min(max(x, 0), w - 1), cy = min(max(y, 0), h - 1)
+        let i = (cy * w + cx) * 4
+        return (Double(bytes[i]) + Double(bytes[i + 1]) + Double(bytes[i + 2])) / 3.0
+    }
+
+    func testComposeToUIImageNormalizesOrientationAndBurnsIn() throws {
+        // raw 240×360 を .right(横向き保存)として作る。表示時は回転して 360×240 になる。
+        // 投稿フローで実際に来る「向きタグ付き画像」を模す（CIImage は向きを無視する罠の回帰）。
+        let base = try XCTUnwrap(makeSolidUIImage(gray: 30, width: 240, height: 360, orientation: .right))
+        XCTAssertEqual(base.imageOrientation, .right)
+
+        let out = ImageCompositor.composeToUIImage(base: base, mood: .calm, caption: "ひとことを添えて")
+
+        // 1) 向きが .up に正規化される（uploadImages→encodeJPEG の正規化と整合）
+        XCTAssertEqual(out.imageOrientation, .up)
+        // 2) .right 適用で幅高さが入れ替わる（240×360 → 360×240）
+        XCTAssertEqual(out.size.width, 360, accuracy: 1)
+        XCTAssertEqual(out.size.height, 240, accuracy: 1)
+
+        let outCI = try XCTUnwrap(out.cgImage.map { CIImage(cgImage: $0) })
+        // 3) キャプションの白画素が焼き込まれている
+        XCTAssertGreaterThan(whiteStats(outCI).count, 0, "キャプションが焼き込まれているべき")
+        // 4) 端にフレーム枠の色が乗っている（base gray30 より明るい）
+        let edgeBrightness = brightness(outCI, x: Int(out.size.width) / 2, y: 4)
+        XCTAssertGreaterThan(edgeBrightness, 50, "端にフレーム枠が乗っているべき(base 30 より明るい)")
+    }
+
+    func testComposeToUIImagePassthroughWhenNoMoodNoCaption() throws {
+        // mood も caption も無ければ合成なし（向き正規化のみ）。白画素ゼロ。
+        let base = try XCTUnwrap(makeSolidUIImage(gray: 30, width: 200, height: 300, orientation: .up))
+        let out = ImageCompositor.composeToUIImage(base: base, mood: nil, caption: nil)
+        let outCI = try XCTUnwrap(out.cgImage.map { CIImage(cgImage: $0) })
+        XCTAssertEqual(whiteStats(outCI).count, 0, "mood/caption 無しなら白画素は出ない")
+    }
 }
