@@ -7,6 +7,7 @@
 
 import Foundation
 import UIKit
+import CoreImage
 import Combine
 
 @MainActor
@@ -23,6 +24,8 @@ class PostViewModel: ObservableObject {
     /// 解決失敗時は対応する要素が nil。
     @Published var externalEditInfos: [ExternalEditInfo?] = []
     @Published var caption: String = ""
+    /// 機能1: 投稿にまとう気分（mood）。nil=未選択。フレーム＋キャプションの世界観を決める。
+    @Published var selectedMood: Mood?
     @Published var hashtags: [String] = []
     @Published var location: Location?
     @Published var visibility: Visibility = .public
@@ -257,11 +260,16 @@ class PostViewModel: ObservableObject {
         }
 
         do {
-            // 1. 編集済み画像をアップロード（リトライ可能）
+            // 1. mood フレーム＋キャプションを編集済み画像へ焼き込む（非破壊・フル解像度・1回だけ）。
+            //    editedImages は破壊的に書き換えず合成済み配列をアップロードへ渡す
+            //    （リトライ・再投稿での二重焼きを防ぐ）。mood/caption が無ければ素通し。
+            let imagesToUpload = composeMoodFrameIfNeeded(editedImages)
+
+            // 2. 編集済み画像をアップロード（リトライ可能）
             let imageURLs = try await RetryableOperation.executeIfRetryable(
                 operationName: "PostViewModel.uploadImages"
             ) { [self] in
-                try await self.uploadImages()
+                try await self.uploadImages(imagesToUpload)
             }
 
             // 2. オリジナル画像をアップロード（ユーザーが選択した場合のみ）
@@ -321,13 +329,10 @@ class PostViewModel: ObservableObject {
     /// 🔧 2026-04-24 修正 (ultrareview bug_002):
     /// アップロード時の Storage パスを返すようにし、Post.images[].storagePath として
     /// Firestore に永続化する。投稿削除時に URL から不正なパスを組み立てる問題を解消。
-    private func uploadImages() async throws -> [UploadedImage] {
+    private func uploadImages(_ imagesToUpload: [UIImage]) async throws -> [UploadedImage] {
         guard let userId = userId else {
             throw PostViewModelError.userNotAuthenticated
         }
-
-        // 配列のスナップショットを取得（async待機中の変更を防ぐ）
-        let imagesToUpload = editedImages
 
         var uploaded: [UploadedImage] = []
         let totalImages = Double(imagesToUpload.count)
@@ -486,6 +491,8 @@ class PostViewModel: ObservableObject {
             editSettings: editSettings,
             attachedRecipe: editRecipe,
             caption: caption.isEmpty ? nil : caption,
+            mood: selectedMood,
+            frameId: selectedMood?.rawValue,  // v1 はフレーム=mood 由来。複数フレーム対応は将来
             hashtags: hashtags.isEmpty ? nil : hashtags,
             location: location,
             skyColors: extractedInfo?.skyColors,
@@ -498,7 +505,55 @@ class PostViewModel: ObservableObject {
 
         return post
     }
-    
+
+    /// mood / キャプションがあれば編集済み画像へフレーム＋キャプションを焼き込む（非破壊）。
+    ///
+    /// - mood も caption も無ければ入力をそのまま返す（passthrough）。
+    /// - Display P3 / HDR を保つため、CIImage 空間で orientation を適用し、合成結果は
+    ///   `CIContextPool` の outputColorSpace(Display P3) で UIImage 化する
+    ///   （`UIImage(ciImage:)` / UIGraphicsImageRenderer 経由は広色域を落とすため使わない）。
+    /// - フル解像度合成のメモリスパイクを避けるため 1 枚ずつ `autoreleasepool` で囲む。
+    private func composeMoodFrameIfNeeded(_ images: [UIImage]) -> [UIImage] {
+        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        let captionText = trimmedCaption.isEmpty ? nil : caption
+        let mood = selectedMood
+
+        // 焼き込む要素が無ければそのまま返す
+        guard mood != nil || captionText != nil else { return images }
+
+        let pool = CIContextPool.shared
+        var result: [UIImage] = []
+        result.reserveCapacity(images.count)
+
+        for image in images {
+            autoreleasepool {
+                guard let cgImage = image.cgImage else {
+                    result.append(image)
+                    return
+                }
+                // CIImage は UIImage.imageOrientation を無視するため、向きを明示適用してから合成する。
+                let base = CIImage(cgImage: cgImage)
+                    .oriented(CGImagePropertyOrientation(image.imageOrientation))
+                let frameOverlay = mood.flatMap { ImageCompositor.renderFrame(mood: $0, in: base.extent) }
+                let composed = ImageCompositor.compose(
+                    .init(base: base, frameOverlay: frameOverlay, caption: captionText, mood: mood)
+                )
+                guard let outputCGImage = pool.ciContext.createCGImage(
+                    composed,
+                    from: composed.extent,
+                    format: .RGBAh,
+                    colorSpace: pool.outputColorSpace
+                ) else {
+                    result.append(image)
+                    return
+                }
+                // orientation は適用済みなので .up（既存 uploadImages→encodeJPEG の正規化と整合）。
+                result.append(UIImage(cgImage: outputCGImage))
+            }
+        }
+        return result
+    }
+
     /// アップロード済み画像をロールバック
     private func rollbackUploadedImages() async {
         // アップロード済み画像を削除
@@ -579,6 +634,7 @@ class PostViewModel: ObservableObject {
         editSettings = nil
         externalEditInfos = []  // ⭐️ Issue #4
         caption = ""
+        selectedMood = nil
         hashtags = []
         location = nil
         visibility = .public

@@ -156,6 +156,85 @@ enum ImageCompositor {
             .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
     }
 
+    // MARK: - フレームのコード生成
+
+    /// mood の世界観でフレーム（透過PNG相当）を CIImage として生成する。
+    ///
+    /// 素材ファイルを使わず Core Graphics で「縁だけ色帯＋角に装飾」を描く。中心は完全透過で
+    /// 写真を主役のまま見せる。透過レイヤは sRGB でラスタライズし（MoodStyle.palette は
+    /// `Color(red:green:blue:)`=sRGBガモット内なのでロスレス）、`CISourceOverCompositing` で
+    /// base に重ねても base の Display P3 ガモットを一切クランプしない。
+    ///
+    /// extent.size ちょうどで生成することで、compose 内の `scaleToFill` が恒等変換になり歪まない。
+    /// - Returns: extent と同じ大きさ・原点のフレームレイヤ CIImage。失敗時 nil。
+    static func renderFrame(mood: Mood, in extent: CGRect) -> CIImage? {
+        guard extent.width > 0, extent.height > 0 else { return nil }
+
+        let style = mood.style
+        let width = extent.width
+        let height = extent.height
+
+        // palette を sRGB CGColor へ（先頭=主色）
+        let cgColors = style.palette.map { UIColor($0).cgColor }
+        let primary = cgColors.first ?? UIColor.white.cgColor
+
+        // 枠太さ・角丸は画像幅比（v1 たたき台。感性チューニングは後で MoodStyle へ逃がす）
+        let border = max(8, width * 0.045)
+        let corner = width * 0.03
+
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format)
+
+        let layer = renderer.image { context in
+            let cg = context.cgContext
+            let full = CGRect(x: 0, y: 0, width: width, height: height)
+
+            // (A) 縁グラデーション: 外周角丸をクリップ→内側角丸をくり抜いて「枠リング」だけ塗る。
+            //     中心は完全透過のまま＝写真が見える（くり抜き忘れが最大の失敗モード）。
+            let outer = UIBezierPath(roundedRect: full, cornerRadius: corner)
+            let inner = UIBezierPath(
+                roundedRect: full.insetBy(dx: border, dy: border),
+                cornerRadius: max(0, corner - border * 0.5)
+            )
+            cg.saveGState()
+            outer.append(inner)
+            cg.addPath(outer.cgPath)
+            cg.clip(using: .evenOdd)
+            if let space = CGColorSpace(name: CGColorSpace.sRGB),
+               let gradient = CGGradient(colorsSpace: space, colors: cgColors as CFArray, locations: nil) {
+                cg.drawLinearGradient(
+                    gradient,
+                    start: CGPoint(x: 0, y: 0),
+                    end: CGPoint(x: 0, y: height),
+                    options: []
+                )
+            } else {
+                cg.setFillColor(primary)
+                cg.fill(full)
+            }
+            cg.restoreGState()
+
+            // (B) 角の装飾: mood の SF Symbol を主色で薄く左上に1つだけ（過剰装飾を避ける）。
+            let glyphSize = width * 0.09
+            let config = UIImage.SymbolConfiguration(pointSize: glyphSize, weight: .light)
+            if let symbol = UIImage(systemName: mood.iconName, withConfiguration: config)?
+                .withTintColor(UIColor(cgColor: primary), renderingMode: .alwaysOriginal) {
+                let pad = border * 0.7
+                symbol.draw(
+                    in: CGRect(x: pad, y: pad, width: glyphSize, height: glyphSize),
+                    blendMode: .normal,
+                    alpha: 0.55
+                )
+            }
+        }
+
+        guard let cgLayer = layer.cgImage else { return nil }
+        return CIImage(cgImage: cgLayer)
+            .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+    }
+
     // MARK: - 内部ヘルパ
 
     /// 上レイヤを下レイヤに source-over で重ねる

@@ -12,6 +12,7 @@
 //   → アップロード前にこのメソッドで orientation を焼き込む。
 
 import UIKit
+import ImageIO
 
 extension UIImage {
     /// imageOrientation を .up に正規化した UIImage を返す。
@@ -64,5 +65,26 @@ extension UIImage {
         guard result.cgImage != nil else { return self }
 
         return result
+    }
+}
+
+extension CGImagePropertyOrientation {
+    /// `UIImage.Orientation` から対応する `CGImagePropertyOrientation` を生成する。
+    ///
+    /// CIImage 空間で orientation を適用する用途（`CIImage.oriented(_:)`）に使う。
+    /// `withNormalizedOrientation()` は UIGraphicsImageRenderer 経由で sRGB 化されうるため、
+    /// Display P3 を保ったまま向きだけ整えたい合成経路ではこちらを使う。
+    init(_ uiOrientation: UIImage.Orientation) {
+        switch uiOrientation {
+        case .up: self = .up
+        case .upMirrored: self = .upMirrored
+        case .down: self = .down
+        case .downMirrored: self = .downMirrored
+        case .left: self = .left
+        case .leftMirrored: self = .leftMirrored
+        case .right: self = .right
+        case .rightMirrored: self = .rightMirrored
+        @unknown default: self = .up
+        }
     }
 }

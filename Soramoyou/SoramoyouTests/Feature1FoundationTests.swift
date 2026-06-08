@@ -185,4 +185,50 @@ final class Feature1FoundationTests: XCTestCase {
             "top 配置(\(topStats.centroidY)) が bottom 配置(\(bottomStats.centroidY)) より上に来ていない"
         )
     }
+
+    // MARK: - フレーム生成（renderFrame）
+
+    /// 指定座標のアルファ(0...1)を返す
+    private func alpha(_ image: CIImage, x: Int, y: Int) -> Double {
+        let ctx = CIContext()
+        let w = Int(image.extent.width), h = Int(image.extent.height)
+        guard w > 0, h > 0, let cg = ctx.createCGImage(image, from: image.extent) else { return 0 }
+        var bytes = [UInt8](repeating: 0, count: w * h * 4)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        let c = CGContext(
+            data: &bytes, width: w, height: h, bitsPerComponent: 8,
+            bytesPerRow: w * 4, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )
+        c?.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let cx = min(max(x, 0), w - 1), cy = min(max(y, 0), h - 1)
+        return Double(bytes[(cy * w + cx) * 4 + 3]) / 255.0
+    }
+
+    func testRenderFrameKeepsExtent() {
+        let extent = CGRect(x: 0, y: 0, width: 240, height: 360)
+        guard let frame = ImageCompositor.renderFrame(mood: .wistful, in: extent) else {
+            XCTFail("renderFrame が nil")
+            return
+        }
+        XCTAssertEqual(frame.extent.width, 240, accuracy: 1)
+        XCTAssertEqual(frame.extent.height, 360, accuracy: 1)
+    }
+
+    func testRenderFrameHasTransparentCenterAndColoredEdge() {
+        // 最大の失敗モード=「中心くり抜き忘れ」を検出する。
+        // 中心は透過(写真が見える)・縁は不透明(枠の色)であること。
+        let w = 240, h = 360
+        let extent = CGRect(x: 0, y: 0, width: w, height: h)
+        guard let frame = ImageCompositor.renderFrame(mood: .calm, in: extent) else {
+            XCTFail("renderFrame が nil")
+            return
+        }
+        let centerAlpha = alpha(frame, x: w / 2, y: h / 2)
+        // 上辺中央の枠内(border≈w*0.045≈11px なので y=4 は枠の中)
+        let edgeAlpha = alpha(frame, x: w / 2, y: 4)
+
+        XCTAssertLessThan(centerAlpha, 0.1, "中心は透過しているべき(写真が主役)。塗りつぶし=くり抜き忘れ")
+        XCTAssertGreaterThan(edgeAlpha, 0.5, "縁(枠)には色が乗っているべき")
+    }
 }

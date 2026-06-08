@@ -85,7 +85,10 @@ struct PostInfoView: View {
                         
                         // キャプション入力
                         captionSection
-                        
+
+                        // 気分（mood）選択 — 機能1
+                        moodSection
+
                         // ハッシュタグ表示
                         hashtagSection
                         
@@ -238,8 +241,53 @@ struct PostInfoView: View {
         }
     }
     
+    // MARK: - Mood Section（機能1）
+
+    /// 気分（mood）選択セクション。選んだ mood の世界観でフレーム＋キャプションが投稿画像に焼き込まれる。
+    /// 未選択でも投稿可能（任意機能）。キャプションは既存の captionSection を流用する。
+    private var moodSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("気分")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            Text("選ぶと、その気分のフレームと一言が写真に重なります（任意）")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.8))
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                ForEach(Mood.allCases) { mood in
+                    MoodButton(
+                        mood: mood,
+                        isSelected: viewModel.selectedMood == mood,
+                        action: {
+                            // 同じ mood を再タップで選択解除（未選択に戻す）
+                            viewModel.selectedMood = (viewModel.selectedMood == mood) ? nil : mood
+                        }
+                    )
+                }
+            }
+
+            if let mood = viewModel.selectedMood {
+                Text(mood.tagline)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.85))
+                    .padding(.top, 2)
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.white.opacity(0.15))
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(.white.opacity(0.3), lineWidth: 1)
+                )
+        )
+    }
+
     // MARK: - Hashtag Section
-    
+
     private var hashtagSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("ハッシュタグ")
@@ -1069,6 +1117,50 @@ struct SkyTypeButton: View {
         .buttonStyle(.plain)
         .scaleEffect(isSelected ? 1.02 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+    }
+}
+
+// MARK: - Mood Button（機能1）
+
+struct MoodButton: View {
+    let mood: Mood
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: {
+            let impact = UIImpactFeedbackGenerator(style: .light)
+            impact.impactOccurred()
+            action()
+        }) {
+            VStack(spacing: 6) {
+                Image(systemName: mood.iconName)
+                    .font(.system(size: 20))
+                    .foregroundColor(isSelected ? .white : .white.opacity(0.7))
+
+                Text(mood.displayName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(isSelected ? .white : .white.opacity(0.7))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isSelected ? Color(red: 0.39, green: 0.58, blue: 0.93) : .white.opacity(0.1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(
+                                isSelected ? Color.white.opacity(0.4) : Color.white.opacity(0.2),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isSelected ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+        .accessibilityLabel("\(mood.displayName)の気分")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
