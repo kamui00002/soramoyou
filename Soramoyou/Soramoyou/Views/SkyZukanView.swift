@@ -72,6 +72,7 @@ struct SkyZukanView: View {
                         emptySection
                     } else {
                         summarySection
+                        streakSection
                         matrixSection
                         badgesSection
                     }
@@ -166,6 +167,67 @@ struct SkyZukanView: View {
                 .foregroundColor(DesignTokens.Colors.textSecondary)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - ストリーク（連続投稿日数）
+
+    @ViewBuilder
+    private var streakSection: some View {
+        glassCard {
+            VStack(spacing: DesignTokens.Spacing.sm) {
+                // 見出し: 🔥◯日連続（継続中の有無で文言を出し分け）
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    Image(systemName: "flame.fill")
+                        .font(.title2)
+                        .foregroundColor(DesignTokens.Colors.sunsetOrange)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(streakTitle)
+                            .font(.title3.weight(.bold))
+                            .foregroundColor(DesignTokens.Colors.textPrimary)
+                        Text(streakSubtitle)
+                            .font(.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+
+                    Spacer()
+
+                    if viewModel.streak.longestStreak > 0 {
+                        VStack(spacing: 2) {
+                            Text("\(viewModel.streak.longestStreak)日")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundColor(DesignTokens.Colors.textPrimary)
+                            Text("最長")
+                                .font(.caption2)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+                    }
+                }
+
+                Divider()
+                    .overlay(DesignTokens.Colors.glassBorderSecondary)
+
+                SkyStreakCalendarView(streak: viewModel.streak)
+            }
+        }
+    }
+
+    /// ストリーク見出しの文言
+    private var streakTitle: String {
+        if viewModel.streak.currentStreak > 0 {
+            return "\(viewModel.streak.currentStreak)日連続"
+        }
+        return "空の記録をはじめよう"
+    }
+
+    /// ストリーク見出しの補助文言
+    private var streakSubtitle: String {
+        if viewModel.streak.currentStreak == 0 {
+            return "投稿した日がカレンダーに刻まれます"
+        }
+        return viewModel.streak.didPostToday
+            ? "今日も投稿済み。いい空を集めています"
+            : "今日投稿するとストリークが伸びます"
     }
 
     // MARK: - Matrix（空タイプ × 時間帯）
