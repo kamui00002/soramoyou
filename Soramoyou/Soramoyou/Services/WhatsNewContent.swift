@@ -19,7 +19,7 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    static let currentID = "2026-06-frame"
+    static let currentID = "2026-06-collage"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -32,8 +32,18 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（気分フレーム）で増えた3機能の紹介ページ。
+    /// 今回（気分フレーム＋配置写真）の新機能紹介ページ。
     static let pages: [WhatsNewPage] = [
+        WhatsNewPage(
+            icon: "square.grid.2x2",
+            badge: "新機能",
+            title: "配置写真",
+            description: "朝・昼・夜・雨など空を4枚並べて\n1枚にできます（投稿モードで選択）",
+            gradientColors: [
+                Color(red: 0.55, green: 0.80, blue: 0.95),
+                Color(red: 0.39, green: 0.58, blue: 0.93)
+            ]
+        ),
         WhatsNewPage(
             icon: "photo.artframe",
             badge: "新機能",
