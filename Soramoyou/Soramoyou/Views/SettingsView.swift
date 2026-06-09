@@ -21,6 +21,10 @@ struct SettingsView: View {
     @State private var showingDeleteAccountConfirmation = false
     @State private var reauthEmail = ""
     @State private var reauthPassword = ""
+    /// 購入の復元（広角合成 v2）の結果メッセージとアラート表示。
+    @State private var restoreMessage: String?
+    @State private var showingRestoreResult = false
+    @State private var isRestoring = false
 
     /// アプリのバージョン情報を取得
     private var appVersion: String {
@@ -346,8 +350,40 @@ struct SettingsView: View {
                 ) {
                     requestReview()
                 }
+
+                Divider()
+                    .padding(.leading, 44)
+
+                // 購入を復元（広角合成などの非消耗型 IAP。App Store 審査ガイドライン 3.1.1 で必須）
+                SettingsRow(
+                    title: isRestoring ? "復元中…" : "購入を復元",
+                    icon: "arrow.clockwise.circle.fill",
+                    iconColor: .blue
+                ) {
+                    Task { await restorePurchases() }
+                }
             }
         }
+        .alert("購入の復元", isPresented: $showingRestoreResult) {
+            Button("OK") { restoreMessage = nil }
+        } message: {
+            Text(restoreMessage ?? "")
+        }
+    }
+
+    /// 購入を復元する（StoreKit AppStore.sync）。完了/失敗をアラートで知らせる。
+    @MainActor
+    private func restorePurchases() async {
+        guard !isRestoring else { return }
+        isRestoring = true
+        defer { isRestoring = false }
+        do {
+            try await PaymentService.shared.restore()
+            restoreMessage = "購入情報を復元しました"
+        } catch {
+            restoreMessage = "復元に失敗しました。時間をおいて再度お試しください"
+        }
+        showingRestoreResult = true
     }
 
     // MARK: - Account Section ☀️

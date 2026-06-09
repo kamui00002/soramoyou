@@ -11,8 +11,11 @@ struct PostView: View {
     @StateObject private var viewModel: PhotoSelectionViewModel
     @EnvironmentObject var authViewModel: AuthViewModel
     @State private var showEditView = false
-    /// 投稿モード（通常/配置写真）。配置写真は4枚固定・ログイン必須。
-    /// 広角合成(.panorama)は OpenCV 必須のため本ブランチでは未提供（別ブランチで追加）。
+    /// 広角合成(.panorama)のプレビュー＋課金画面の表示フラグ。
+    @State private var showStitch = false
+    /// 合成＋購入が完了した広角画像（stitch 画面を閉じた後に EditView へ渡す）。
+    @State private var pendingStitched: UIImage?
+    /// 投稿モード（通常/配置写真/広角合成）。配置写真・広角合成は4枚固定・ログイン必須。
     @State private var postKind: PostKind = .single
 
     init() {
@@ -88,6 +91,20 @@ struct PostView: View {
                     postKind: postKind
                 )
             }
+            // 広角合成(v2): 合成＋課金プレビュー。閉じた後、購入済みなら合成1枚で EditView を開く。
+            .fullScreenCover(isPresented: $showStitch, onDismiss: {
+                if let stitched = pendingStitched {
+                    pendingStitched = nil
+                    viewModel.selectedImages = [stitched]   // 合成済み1枚を投稿パイプラインへ
+                    showEditView = true
+                }
+            }) {
+                SkyStitchView(images: viewModel.selectedImages) { stitched in
+                    // 購入完了 → 合成画像を保持して stitch 画面を閉じる（onDismiss で EditView へ）
+                    pendingStitched = stitched
+                    showStitch = false
+                }
+            }
         }
         .navigationViewStyle(.stack)
         .onAppear {
@@ -102,9 +119,14 @@ struct PostView: View {
         }
     }
     
-    /// 選択可能枚数。配置写真は「ちょうど4枚」が要件なので 4 固定（ピッカー生成前に確定が必須）。
+    /// 配置写真・広角合成は「ちょうど4枚」が要件。
+    private var requiresFourPhotos: Bool {
+        postKind == .collage || postKind == .panorama
+    }
+
+    /// 選択可能枚数。4枚モードは 4 固定（ピッカー生成前に確定が必須）。
     private var maxSelectionCount: Int {
-        if postKind == .collage { return 4 }
+        if requiresFourPhotos { return 4 }
         return authViewModel.isAuthenticated ? 10 : 3
     }
 
@@ -112,14 +134,40 @@ struct PostView: View {
         viewModel.updateMaxSelectionCount(maxSelectionCount)
     }
 
-    /// 選べる投稿モード（配置写真はログイン必須＝未ログインでは通常のみ）。
+    /// 選べる投稿モード（配置写真・広角合成はログイン必須＝未ログインでは通常のみ）。
     private var availableKinds: [PostKind] {
-        authViewModel.isAuthenticated ? [.single, .collage] : [.single]
+        authViewModel.isAuthenticated ? [.single, .collage, .panorama] : [.single]
     }
 
-    /// 配置写真モードで「ちょうど4枚」を満たしているか。
-    private var isCollageReady: Bool {
-        postKind != .collage || viewModel.selectedImages.count == 4
+    /// 4枚モードで「ちょうど4枚」を満たしているか。
+    private var isPhotoCountReady: Bool {
+        !requiresFourPhotos || viewModel.selectedImages.count == 4
+    }
+
+    // MARK: - モード別の表示文言
+
+    private var modeIconName: String {
+        switch postKind {
+        case .collage:  return "square.grid.2x2"
+        case .panorama: return "pano"
+        case .single:   return "photo.on.rectangle"
+        }
+    }
+
+    private var modeTitle: String {
+        switch postKind {
+        case .collage:  return "配置写真をつくる"
+        case .panorama: return "広角合成をつくる"
+        case .single:   return "写真を選択"
+        }
+    }
+
+    private var modeDescription: String {
+        switch postKind {
+        case .collage:  return "朝・昼・夜・雨など、空を4枚選んで1枚に並べます"
+        case .panorama: return "重ねて撮った空を4枚選ぶと、1枚の広い空に合成します（課金）"
+        case .single:   return "空の写真を選択して投稿しましょう"
+        }
     }
     
     // MARK: - Photo Selection View
@@ -142,18 +190,16 @@ struct PostView: View {
                 }
             }
 
-            Image(systemName: postKind == .collage ? "square.grid.2x2" : "photo.on.rectangle")
+            Image(systemName: modeIconName)
                 .font(.system(size: 60))
                 .foregroundColor(.white.opacity(0.8))
 
-            Text(postKind == .collage ? "配置写真をつくる" : "写真を選択")
+            Text(modeTitle)
                 .font(.title2)
                 .fontWeight(.semibold)
                 .foregroundColor(.white)
 
-            Text(postKind == .collage
-                 ? "朝・昼・夜・雨など、空を4枚選んで1枚に並べます"
-                 : "空の写真を選択して投稿しましょう")
+            Text(modeDescription)
                 .font(.body)
                 .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
@@ -187,14 +233,14 @@ struct PostView: View {
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.8))
                 
-                Text(postKind == .collage
+                Text(requiresFourPhotos
                      ? "ちょうど4枚を選んでください"
                      : (authViewModel.isAuthenticated ? "最大10枚" : "最大3枚（ログインで10枚まで）"))
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.8))
 
                 if postKind == .single && !authViewModel.isAuthenticated {
-                    Text("配置写真はログインで使えます")
+                    Text("配置写真・広角合成はログインで使えます")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.7))
                 }
@@ -226,9 +272,9 @@ struct PostView: View {
                 }
                 .padding()
                 
-                // 配置写真モードで枚数不足のときのガイド
-                if postKind == .collage && !isCollageReady {
-                    Text("配置写真はちょうど4枚です（今 \(viewModel.selectedImages.count) 枚）")
+                // 4枚モードで枚数不足のときのガイド
+                if requiresFourPhotos && !isPhotoCountReady {
+                    Text("ちょうど4枚を選んでください（今 \(viewModel.selectedImages.count) 枚）")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.9))
                         .padding(.horizontal)
@@ -237,7 +283,12 @@ struct PostView: View {
                 // アクションボタン
                 VStack(spacing: 12) {
                     Button(action: {
-                        showEditView = true
+                        // 広角合成は合成＋課金プレビューへ。それ以外は編集画面へ。
+                        if postKind == .panorama {
+                            showStitch = true
+                        } else {
+                            showEditView = true
+                        }
                     }) {
                         HStack {
                             Image(systemName: "checkmark.circle.fill")
@@ -257,7 +308,7 @@ struct PostView: View {
                         )
                         .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
                     }
-                    .disabled(viewModel.isLoading || viewModel.selectedImages.isEmpty || !isCollageReady)
+                    .disabled(viewModel.isLoading || viewModel.selectedImages.isEmpty || !isPhotoCountReady)
                     
                     Button(action: {
                         viewModel.clearSelection()
