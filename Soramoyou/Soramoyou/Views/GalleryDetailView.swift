@@ -9,13 +9,6 @@
 import SwiftUI
 import Kingfisher
 
-/// 再編集エディタ起動ペイロード（fullScreenCover(item:) 用。画像が確実に揃ってから提示する）。
-private struct EditLaunchPayload: Identifiable {
-    let id = UUID()
-    let images: [UIImage]
-    let context: PostEditingContext
-}
-
 struct GalleryDetailView: View {
     let post: Post
     /// 投稿削除時に呼ばれるコールバック（一覧からの除去などに使用）
@@ -38,7 +31,7 @@ struct GalleryDetailView: View {
     @State private var showingSaveResult = false
     @State private var shareImages: [UIImage] = []
     /// 再編集（投稿済み画像の上書き）起動ペイロード。non-nil で EditView を全画面提示。
-    @State private var editLaunch: EditLaunchPayload?
+    @State private var editLaunch: ReEditLaunchPayload?
     /// 元画像ダウンロード中フラグ（編集準備中の二重起動防止＋表示用）。
     @State private var isPreparingEdit = false
 
@@ -182,9 +175,9 @@ struct GalleryDetailView: View {
             .fullScreenCover(item: $editLaunch) { launch in
                 EditView(
                     images: launch.images,
-                    userId: post.userId,                 // 自分の投稿のみ編集可なので post.userId = 自分
-                    initialRecipe: post.attachedRecipe,
-                    editingContext: launch.context
+                    userId: launch.post.userId,          // 自分の投稿のみ編集可なので post.userId = 自分
+                    initialRecipe: launch.post.attachedRecipe,
+                    editingContext: launch.editingContext
                 )
             }
             // 投稿削除確認アラート
@@ -350,7 +343,7 @@ struct GalleryDetailView: View {
                 showingSaveResult = true
                 return
             }
-            editLaunch = EditLaunchPayload(images: images, context: PostEditingContext(post: post))
+            editLaunch = ReEditLaunchPayload(post: post, images: images)
         } catch {
             saveResultMessage = "元画像の読み込みに失敗しました"
             showingSaveResult = true
