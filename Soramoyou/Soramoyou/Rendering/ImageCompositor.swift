@@ -42,12 +42,15 @@ enum ImageCompositor {
         var caption: String?
         /// 文字スタイル決定用の気分（nil の場合は穏やかフォールバック）
         var mood: Mood?
+        /// 枠の形（色は mood、形は style）。キャプションの色/配置にも影響する。
+        var style: FrameStyle
 
-        init(base: CIImage, frameOverlay: CIImage? = nil, caption: String? = nil, mood: Mood? = nil) {
+        init(base: CIImage, frameOverlay: CIImage? = nil, caption: String? = nil, mood: Mood? = nil, style: FrameStyle = .classic) {
             self.base = base
             self.frameOverlay = frameOverlay
             self.caption = caption
             self.mood = mood
+            self.style = style
         }
     }
 
@@ -71,7 +74,7 @@ enum ImageCompositor {
         if let caption = input.caption,
            !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let mood = input.mood ?? .calm
-            if let textLayer = renderCaption(caption, mood: mood, in: canvas) {
+            if let textLayer = renderCaption(caption, mood: mood, style: input.style, in: canvas) {
                 result = composite(textLayer, over: result)
             }
         }
@@ -87,14 +90,14 @@ enum ImageCompositor {
     /// - 色空間は `CIContextPool.outputColorSpace`(Display P3) を明示し広色域/HDR を維持
     ///   （`UIImage(ciImage:)` / UIGraphicsImageRenderer 経由は広色域を落とすため使わない）。
     /// - 失敗時（cgImage 取得不可 / レンダ失敗）は入力画像をそのまま返す。
-    static func composeToUIImage(base image: UIImage, mood: Mood?, caption: String?) -> UIImage {
+    static func composeToUIImage(base image: UIImage, mood: Mood?, caption: String?, style: FrameStyle = .classic) -> UIImage {
         guard let cgImage = image.cgImage else { return image }
         let pool = CIContextPool.shared
         let oriented = CIImage(cgImage: cgImage)
             .oriented(CGImagePropertyOrientation(image.imageOrientation))
-        let frameOverlay = mood.flatMap { renderFrame(mood: $0, in: oriented.extent) }
+        let frameOverlay = mood.flatMap { renderFrame(mood: $0, style: style, in: oriented.extent) }
         let composed = compose(
-            Input(base: oriented, frameOverlay: frameOverlay, caption: caption, mood: mood)
+            Input(base: oriented, frameOverlay: frameOverlay, caption: caption, mood: mood, style: style)
         )
         guard let outputCGImage = pool.ciContext.createCGImage(
             composed,
@@ -117,17 +120,18 @@ enum ImageCompositor {
     ///   - mood: 文字色・フォントデザイン・配置を決める気分
     ///   - extent: 合成先キャンバス（base の extent）
     /// - Returns: extent と同じ大きさ・原点のテキストレイヤ CIImage。失敗時 nil。
-    static func renderCaption(_ text: String, mood: Mood, in extent: CGRect) -> CIImage? {
+    static func renderCaption(_ text: String, mood: Mood, style: FrameStyle = .classic, in extent: CGRect) -> CIImage? {
         guard extent.width > 0, extent.height > 0 else { return nil }
 
-        let style = mood.style
+        let moodStyle = mood.style
         let width = extent.width
         let height = extent.height
 
         // フォントサイズは画像幅に比例（小さすぎを下限で防止）
         let fontSize = max(18, width * 0.045)
-        let font = systemFont(ofSize: fontSize, design: style.fontDesign)
-        let textColor = UIColor(style.captionColor)
+        let font = systemFont(ofSize: fontSize, design: moodStyle.fontDesign)
+        // バンドは下の暗い帯に乗るため白文字。それ以外は mood の文字色。
+        let textColor = (style == .bottomBand) ? UIColor.white : UIColor(moodStyle.captionColor)
 
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
@@ -157,10 +161,11 @@ enum ImageCompositor {
         )
         let textHeight = ceil(bounding.height)
 
-        // 縦位置（UIKit 座標系: 上が 0）
+        // 縦位置（UIKit 座標系: 上が 0）。バンドは必ず下帯へ、それ以外は mood の配置。
+        let placement: TextPlacement = (style == .bottomBand) ? .bottom : moodStyle.captionPlacement
         let verticalInset = height * 0.06
         let originY: CGFloat
-        switch style.captionPlacement {
+        switch placement {
         case .top:    originY = verticalInset
         case .center: originY = (height - textHeight) / 2
         case .bottom: originY = height - textHeight - verticalInset
@@ -188,44 +193,36 @@ enum ImageCompositor {
 
     // MARK: - フレームのコード生成
 
-    /// mood の世界観でフレーム（透過PNG相当）を CIImage として生成する。
+    /// mood の色 × style の形でフレーム（透過PNG相当）を CIImage として生成する。
     ///
-    /// 素材ファイルを使わず Core Graphics で「縁だけ色帯＋角に装飾」を描く。中心は完全透過で
-    /// 写真を主役のまま見せる。透過レイヤは sRGB でラスタライズし（MoodStyle.palette は
-    /// `Color(red:green:blue:)`=sRGBガモット内なのでロスレス）、`CISourceOverCompositing` で
-    /// base に重ねても base の Display P3 ガモットを一切クランプしない。
-    ///
-    /// extent.size ちょうどで生成することで、compose 内の `scaleToFill` が恒等変換になり歪まない。
+    /// 素材ファイルを使わず Core Graphics で描く。中心は透過で写真を主役のまま見せる。
+    /// 透過レイヤは sRGB でラスタライズし（MoodStyle.palette は sRGB ガモット内）、
+    /// `CISourceOverCompositing` で base に重ねても base の Display P3 ガモットをクランプしない。
+    /// extent.size ちょうどで生成し、compose 内の `scaleToFill` が恒等変換になるようにする。
     /// - Returns: extent と同じ大きさ・原点のフレームレイヤ CIImage。失敗時 nil。
-    static func renderFrame(mood: Mood, in extent: CGRect) -> CIImage? {
+    static func renderFrame(mood: Mood, style: FrameStyle = .classic, in extent: CGRect) -> CIImage? {
         guard extent.width > 0, extent.height > 0 else { return nil }
+        switch style {
+        case .classic:    return renderClassicFrame(mood: mood, in: extent)
+        case .matte:      return renderMatteFrame(mood: mood, in: extent)
+        case .bottomBand: return renderBottomBandFrame(mood: mood, in: extent)
+        }
+    }
 
-        let style = mood.style
+    /// クラシック：mood 配色のグラデ枠＋白い額装線＋角アイコン（一目で分かる太さ）。
+    private static func renderClassicFrame(mood: Mood, in extent: CGRect) -> CIImage? {
         let width = extent.width
         let height = extent.height
-
-        // palette を sRGB CGColor へ（先頭=主色）。枠をはっきり見せるため不透明化する。
-        let cgColors = style.palette.map { UIColor($0).withAlphaComponent(1).cgColor }
+        let cgColors = mood.style.palette.map { UIColor($0).withAlphaComponent(1).cgColor }
         let primary = cgColors.first ?? UIColor.white.cgColor
-
-        // 枠太さ・角丸は画像幅比。Step1 で「変化が一目で分かる」太さへ強化
-        //（感性チューニングは後で MoodStyle / フレームバリアントへ逃がす）。
         let border = max(24, width * 0.075)
         let corner = width * 0.035
 
-        let format = UIGraphicsImageRendererFormat.preferred()
-        format.opaque = false
-        format.scale = 1
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format)
-
-        let layer = renderer.image { context in
-            let cg = context.cgContext
-            let full = CGRect(x: 0, y: 0, width: width, height: height)
+        return rasterizeOverlay(extent: extent) { cg, full in
             let innerRect = full.insetBy(dx: border, dy: border)
             let innerCorner = max(0, corner - border * 0.5)
 
-            // (A) 縁グラデーション: 外周角丸をクリップ→内側角丸をくり抜いて「枠リング」だけ塗る。
-            //     中心は完全透過のまま＝写真が見える（くり抜き忘れが最大の失敗モード）。
+            // 縁グラデーション（外周をクリップ→内側をくり抜いて枠リングだけ塗る。中心は透過）
             let outer = UIBezierPath(roundedRect: full, cornerRadius: corner)
             let inner = UIBezierPath(roundedRect: innerRect, cornerRadius: innerCorner)
             cg.saveGState()
@@ -234,44 +231,116 @@ enum ImageCompositor {
             cg.clip(using: .evenOdd)
             if let space = CGColorSpace(name: CGColorSpace.sRGB),
                let gradient = CGGradient(colorsSpace: space, colors: cgColors as CFArray, locations: nil) {
-                cg.drawLinearGradient(
-                    gradient,
-                    start: CGPoint(x: 0, y: 0),
-                    end: CGPoint(x: 0, y: height),
-                    options: []
-                )
+                cg.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: height), options: [])
             } else {
                 cg.setFillColor(primary)
                 cg.fill(full)
             }
             cg.restoreGState()
 
-            // (A') 写真と枠の境目に白のクッキリ線を1本入れる。境界が締まり「額装」感が出て
-            //      空写真に枠が馴染んで消える問題を防ぐ（視認性アップ）。
+            // 写真と枠の境目に白の額装線（空に馴染んで消えるのを防ぐ）
             let hairline = max(3, width * 0.005)
-            let hairlinePath = UIBezierPath(roundedRect: innerRect, cornerRadius: innerCorner)
             cg.setStrokeColor(UIColor.white.withAlphaComponent(0.9).cgColor)
             cg.setLineWidth(hairline)
-            cg.addPath(hairlinePath.cgPath)
+            cg.addPath(UIBezierPath(roundedRect: innerRect, cornerRadius: innerCorner).cgPath)
             cg.strokePath()
 
-            // (B) 角の装飾: mood の SF Symbol を主色で左上に1つ（控えめだが視認できる濃さに）。
+            // 角アイコン（mood の SF Symbol を主色で左上に1つ）
             let glyphSize = width * 0.10
             let config = UIImage.SymbolConfiguration(pointSize: glyphSize, weight: .semibold)
             if let symbol = UIImage(systemName: mood.iconName, withConfiguration: config)?
                 .withTintColor(UIColor(cgColor: primary), renderingMode: .alwaysOriginal) {
                 let pad = border * 0.6
-                symbol.draw(
-                    in: CGRect(x: pad, y: pad, width: glyphSize, height: glyphSize),
-                    blendMode: .normal,
-                    alpha: 0.85
-                )
+                symbol.draw(in: CGRect(x: pad, y: pad, width: glyphSize, height: glyphSize), blendMode: .normal, alpha: 0.85)
             }
         }
+    }
 
+    /// マット：ギャラリー風の白い厚マット＋写真の縁に mood 色の細いアクセント線。
+    private static func renderMatteFrame(mood: Mood, in extent: CGRect) -> CIImage? {
+        let width = extent.width
+        let primary = UIColor(mood.style.palette.first ?? .white)
+        let border = max(28, width * 0.085)
+        let corner = width * 0.015
+
+        return rasterizeOverlay(extent: extent) { cg, full in
+            let innerRect = full.insetBy(dx: border, dy: border)
+            // 不透明な白マットをリング状に（中心は透過）
+            let outer = UIBezierPath(roundedRect: full, cornerRadius: corner)
+            let inner = UIBezierPath(roundedRect: innerRect, cornerRadius: max(0, corner))
+            cg.saveGState()
+            outer.append(inner)
+            cg.addPath(outer.cgPath)
+            cg.clip(using: .evenOdd)
+            cg.setFillColor(UIColor(white: 0.98, alpha: 1).cgColor)
+            cg.fill(full)
+            cg.restoreGState()
+
+            // 写真の縁に mood 色の細いアクセント線
+            let accent = max(3, width * 0.006)
+            cg.setStrokeColor(primary.withAlphaComponent(0.95).cgColor)
+            cg.setLineWidth(accent)
+            cg.addPath(UIBezierPath(roundedRect: innerRect, cornerRadius: max(0, corner)).cgPath)
+            cg.strokePath()
+        }
+    }
+
+    /// バンド：写真は広く見せ、下に mood 色を暗く落とした帯（キャプション主役のミニマル）。
+    private static func renderBottomBandFrame(mood: Mood, in extent: CGRect) -> CIImage? {
+        let width = extent.width
+        let height = extent.height
+        let primary = UIColor(mood.style.palette.first ?? .white).cgColor
+        let bandHeight = height * 0.22
+
+        return rasterizeOverlay(extent: extent) { cg, _ in
+            // 下帯：透明 → mood 主色を暗く落とした濃色（文字の土台）
+            let bandTopY = height - bandHeight
+            cg.saveGState()
+            cg.clip(to: CGRect(x: 0, y: bandTopY, width: width, height: bandHeight))
+            let top = UIColor(cgColor: primary).withAlphaComponent(0).cgColor
+            let bottom = blend(primary, with: .black, t: 0.55, alpha: 0.88)
+            if let space = CGColorSpace(name: CGColorSpace.sRGB),
+               let gradient = CGGradient(colorsSpace: space, colors: [top, bottom] as CFArray, locations: [0, 1]) {
+                cg.drawLinearGradient(gradient, start: CGPoint(x: 0, y: bandTopY), end: CGPoint(x: 0, y: height), options: [])
+            }
+            cg.restoreGState()
+
+            // 上辺に mood 色の細いライン（ミニマルでも mood が分かるアクセント）
+            let line = max(4, width * 0.008)
+            cg.setFillColor(primary)
+            cg.fill(CGRect(x: 0, y: 0, width: width, height: line))
+        }
+    }
+
+    /// 透過オーバーレイをラスタライズして CIImage 化する（extent 原点に合わせる）。
+    private static func rasterizeOverlay(extent: CGRect, draw: (CGContext, CGRect) -> Void) -> CIImage? {
+        let width = extent.width
+        let height = extent.height
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format)
+        let layer = renderer.image { context in
+            draw(context.cgContext, CGRect(x: 0, y: 0, width: width, height: height))
+        }
         guard let cgLayer = layer.cgImage else { return nil }
         return CIImage(cgImage: cgLayer)
             .transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+    }
+
+    /// 2 色を t(0...1) で線形補間し、指定アルファの CGColor を返す（帯の濃色作りに使用）。
+    private static func blend(_ color: CGColor, with other: UIColor, t: CGFloat, alpha: CGFloat) -> CGColor {
+        let c = UIColor(cgColor: color)
+        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+        c.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
+        other.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+        return UIColor(
+            red: r1 + (r2 - r1) * t,
+            green: g1 + (g2 - g1) * t,
+            blue: b1 + (b2 - b1) * t,
+            alpha: alpha
+        ).cgColor
     }
 
     // MARK: - 内部ヘルパ

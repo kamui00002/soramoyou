@@ -289,4 +289,58 @@ final class Feature1FoundationTests: XCTestCase {
         let outCI = try XCTUnwrap(out.cgImage.map { CIImage(cgImage: $0) })
         XCTAssertEqual(whiteStats(outCI).count, 0, "mood/caption 無しなら白画素は出ない")
     }
+
+    // MARK: - FrameStyle（枠スタイル選択）
+
+    func testFrameStyleCasesAndRawValuesAreStable() {
+        // raw value は frameId("mood_style") の保存値。変更で過去データと不整合になるため固定。
+        XCTAssertEqual(FrameStyle.allCases.count, 3)
+        XCTAssertEqual(FrameStyle.classic.rawValue, "classic")
+        XCTAssertEqual(FrameStyle.matte.rawValue, "matte")
+        XCTAssertEqual(FrameStyle.bottomBand.rawValue, "bottomBand")
+        for style in FrameStyle.allCases {
+            XCTAssertFalse(style.displayName.isEmpty)
+            XCTAssertFalse(style.iconName.isEmpty)
+        }
+    }
+
+    func testFrameStylesHaveDistinctStructure() {
+        // 3スタイルは構造が異なる：classic/matte=全周に枠、bottomBand=側枠なし＋下帯。
+        let w = 240, h = 360
+        let extent = CGRect(x: 0, y: 0, width: w, height: h)
+        guard
+            let classic = ImageCompositor.renderFrame(mood: .calm, style: .classic, in: extent),
+            let matte = ImageCompositor.renderFrame(mood: .calm, style: .matte, in: extent),
+            let band = ImageCompositor.renderFrame(mood: .calm, style: .bottomBand, in: extent)
+        else {
+            XCTFail("renderFrame が nil")
+            return
+        }
+
+        // 左辺中央：classic / matte は側枠があり不透明、bottomBand は側枠なしで透過。
+        XCTAssertGreaterThan(alpha(classic, x: 4, y: h / 2), 0.5, "classic は側枠が乗るべき")
+        XCTAssertGreaterThan(alpha(matte, x: 4, y: h / 2), 0.5, "matte は側枠が乗るべき")
+        XCTAssertLessThan(alpha(band, x: 4, y: h / 2), 0.1, "bottomBand は側枠なし(透過)であるべき")
+
+        // 下辺中央：bottomBand は下帯が乗る。
+        XCTAssertGreaterThan(alpha(band, x: w / 2, y: h - 6), 0.3, "bottomBand は下帯が乗るべき")
+
+        // 中心：全スタイルとも写真が見えるよう透過。
+        XCTAssertLessThan(alpha(classic, x: w / 2, y: h / 2), 0.1)
+        XCTAssertLessThan(alpha(matte, x: w / 2, y: h / 2), 0.1)
+        XCTAssertLessThan(alpha(band, x: w / 2, y: h / 2), 0.1)
+    }
+
+    func testComposeToUIImageAppliesFrameStyle() throws {
+        // matte / bottomBand でも焼き込みが成立し、白画素(白マット or 白キャプション)が現れる。
+        let base = try XCTUnwrap(makeSolidUIImage(gray: 30, width: 240, height: 360, orientation: .up))
+
+        let matte = ImageCompositor.composeToUIImage(base: base, mood: .calm, caption: "白いマット", style: .matte)
+        let matteCI = try XCTUnwrap(matte.cgImage.map { CIImage(cgImage: $0) })
+        XCTAssertGreaterThan(whiteStats(matteCI).count, 0, "matte は白マット/白文字の白画素が出るべき")
+
+        let band = ImageCompositor.composeToUIImage(base: base, mood: .calm, caption: "下帯のことば", style: .bottomBand)
+        let bandCI = try XCTUnwrap(band.cgImage.map { CIImage(cgImage: $0) })
+        XCTAssertGreaterThan(whiteStats(bandCI).count, 0, "bottomBand は白文字キャプションの白画素が出るべき")
+    }
 }

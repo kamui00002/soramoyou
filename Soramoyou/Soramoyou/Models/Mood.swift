@@ -70,6 +70,39 @@ enum Mood: String, Codable, CaseIterable, Identifiable {
     var style: MoodStyle { MoodStyle.style(for: self) }
 }
 
+// MARK: - FrameStyle
+
+/// 写真にまとう「枠の形」（mood の色で展開される）。
+///
+/// `Mood` が色・世界観を決め、`FrameStyle` が枠の形を決める **直交軸**。
+/// これにより mood ごとに複数の見た目（候補）から選べる（spec「フレーム候補から選ぶ」）。
+/// 保存は `frameId = "\(mood.rawValue)_\(frameStyle.rawValue)"`。raw value は保存値なので固定文字列。
+enum FrameStyle: String, Codable, CaseIterable, Identifiable {
+    case classic     // 色帯＋白い内枠線（額装）
+    case matte       // 白いマット（ギャラリー風の余白）
+    case bottomBand  // 下に色帯、写真は広く見せる（ミニマル・キャプション主役）
+
+    var id: String { rawValue }
+
+    /// 表示名（枠スタイル選択 UI 用）
+    var displayName: String {
+        switch self {
+        case .classic: return "クラシック"
+        case .matte: return "マット"
+        case .bottomBand: return "バンド"
+        }
+    }
+
+    /// SF Symbols アイコン名（選択チップ用）
+    var iconName: String {
+        switch self {
+        case .classic: return "photo.artframe"
+        case .matte: return "rectangle.inset.filled"
+        case .bottomBand: return "text.below.photo"
+        }
+    }
+}
+
 // MARK: - TextPlacement
 
 /// キャプションの配置位置（フレーム内の縦方向）

@@ -25,6 +25,8 @@ class PostViewModel: ObservableObject {
     @Published var caption: String = ""
     /// 機能1: 投稿にまとう気分（mood）。nil=未選択。フレーム＋キャプションの世界観を決める。
     @Published var selectedMood: Mood?
+    /// 選択中の枠スタイル（mood の色 × この形で焼き込む。mood 未選択時は無視）
+    @Published var selectedFrameStyle: FrameStyle = .classic
     @Published var hashtags: [String] = []
     @Published var location: Location?
     @Published var visibility: Visibility = .public
@@ -309,6 +311,7 @@ class PostViewModel: ObservableObject {
             if let mood = selectedMood {
                 LoggingService.shared.logEvent("post_with_mood", parameters: [
                     "mood": mood.rawValue,
+                    "frame_style": selectedFrameStyle.rawValue,
                     "has_caption": !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ])
             }
@@ -503,7 +506,8 @@ class PostViewModel: ObservableObject {
             attachedRecipe: editRecipe,
             caption: trimmedCaption.isEmpty ? nil : trimmedCaption,
             mood: selectedMood,
-            frameId: selectedMood?.rawValue,  // v1 はフレーム=mood 由来。複数フレーム対応は将来
+            // frameId = "mood_style"（色=mood × 形=style）。mood 未選択なら nil。
+            frameId: selectedMood.map { "\($0.rawValue)_\(selectedFrameStyle.rawValue)" },
             hashtags: hashtags.isEmpty ? nil : hashtags,
             location: location,
             skyColors: extractedInfo?.skyColors,
@@ -539,7 +543,7 @@ class PostViewModel: ObservableObject {
             // 合成本体（向き正規化・P3 維持）は ImageCompositor.composeToUIImage に集約。
             autoreleasepool {
                 result.append(
-                    ImageCompositor.composeToUIImage(base: image, mood: mood, caption: captionText)
+                    ImageCompositor.composeToUIImage(base: image, mood: mood, caption: captionText, style: selectedFrameStyle)
                 )
             }
         }
@@ -627,6 +631,7 @@ class PostViewModel: ObservableObject {
         externalEditInfos = []  // ⭐️ Issue #4
         caption = ""
         selectedMood = nil
+        selectedFrameStyle = .classic
         hashtags = []
         location = nil
         visibility = .public

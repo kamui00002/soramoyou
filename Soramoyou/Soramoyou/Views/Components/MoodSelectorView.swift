@@ -17,6 +17,8 @@ import SwiftUI
 struct MoodSelectorView: View {
     /// 選択中の気分（親 ViewModel と双方向バインド）
     @Binding var selectedMood: Mood?
+    /// 選択中の枠スタイル（親 ViewModel と双方向バインド）
+    @Binding var selectedFrameStyle: FrameStyle
     /// プレビューに重ねるキャプション（表示のみ）
     let caption: String
     /// プレビュー用の編集後画像（先頭1枚）。無ければプレビューは出さない。
@@ -39,6 +41,8 @@ struct MoodSelectorView: View {
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.85))
                     .padding(.top, 2)
+
+                frameStylePicker
 
                 if let image = previewImage {
                     moodFramePreview(image: image, mood: mood)
@@ -80,42 +84,101 @@ struct MoodSelectorView: View {
         }
     }
 
+    // MARK: - Frame style picker
+
+    /// 枠スタイル（クラシック / マット / バンド）の選択チップ列。mood 選択後に表示。
+    private var frameStylePicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("枠のスタイル")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.8))
+            HStack(spacing: 8) {
+                ForEach(FrameStyle.allCases) { style in
+                    FrameStyleChip(
+                        style: style,
+                        isSelected: selectedFrameStyle == style,
+                        action: { selectFrameStyle(style) }
+                    )
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// 枠スタイルを選択（変化時のみ計装）。
+    private func selectFrameStyle(_ style: FrameStyle) {
+        guard selectedFrameStyle != style else { return }
+        selectedFrameStyle = style
+        LoggingService.shared.logEvent("frame_style_selected", parameters: ["frame_style": style.rawValue])
+    }
+
     // MARK: - Preview
 
     @ViewBuilder
     private func moodFramePreview(image: UIImage, mood: Mood) -> some View {
-        let style = mood.style
+        let moodStyle = mood.style
         let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isBand = (selectedFrameStyle == .bottomBand)
+        // バンドは下帯に白文字、それ以外は mood の文字色・配置（実焼き込みと整合）。
+        let captionColor: Color = isBand ? .white : moodStyle.captionColor
+        let alignment: Alignment = isBand ? .bottom : captionAlignment(moodStyle.captionPlacement)
+
         Image(uiImage: image)
             .resizable()
             .scaledToFit()
             .frame(maxWidth: .infinity)
             .frame(maxHeight: 240)
-            .overlay(alignment: captionAlignment(style.captionPlacement)) {
+            .overlay(alignment: alignment) {
                 if !trimmedCaption.isEmpty {
                     Text(caption)
-                        .font(.system(size: 15, design: style.fontDesign))
+                        .font(.system(size: 15, design: moodStyle.fontDesign))
                         .fontWeight(.semibold)
-                        .foregroundColor(style.captionColor)
+                        .foregroundColor(captionColor)
                         .multilineTextAlignment(.center)
-                        .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
-                        .padding(20)
+                        .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
+                        .padding(isBand ? 14 : 20)
                 }
             }
-            // 実際の焼き込み(ImageCompositor)の見え方に近づける：太い色帯＋白い内枠線。
-            .overlay(
+            // 実際の焼き込み(ImageCompositor)の見え方に近づけた近似。正は書き出し側。
+            .overlay { framePreviewOverlay(mood: mood) }
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// 枠スタイルごとのプレビュー近似（クラシック=色枠 / マット=白枠 / バンド=下帯）。
+    @ViewBuilder
+    private func framePreviewOverlay(mood: Mood) -> some View {
+        let palette = mood.style.palette
+        switch selectedFrameStyle {
+        case .classic:
+            ZStack {
                 RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(
-                        LinearGradient(colors: style.palette, startPoint: .top, endPoint: .bottom),
+                        LinearGradient(colors: palette, startPoint: .top, endPoint: .bottom),
                         lineWidth: 16
                     )
-            )
-            .overlay(
                 RoundedRectangle(cornerRadius: 4)
                     .strokeBorder(Color.white.opacity(0.9), lineWidth: 2)
                     .padding(15)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+        case .matte:
+            ZStack {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color(white: 0.98), lineWidth: 18)
+                RoundedRectangle(cornerRadius: 3)
+                    .strokeBorder((palette.first ?? .white).opacity(0.95), lineWidth: 2)
+                    .padding(17)
+            }
+        case .bottomBand:
+            VStack(spacing: 0) {
+                Rectangle()
+                    .fill(palette.first ?? .white)
+                    .frame(height: 4)
+                Spacer(minLength: 0)
+                LinearGradient(colors: [.clear, .black.opacity(0.78)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 70)
+            }
+            .allowsHitTesting(false)
+        }
     }
 
     /// TextPlacement を SwiftUI の Alignment へ変換
@@ -168,6 +231,46 @@ struct MoodButton: View {
         .scaleEffect(isSelected ? 1.02 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
         .accessibilityLabel("\(mood.displayName)の気分")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+// MARK: - Frame Style Chip
+
+/// 枠スタイルの選択チップ（mood 選択後の「枠のスタイル」列）
+struct FrameStyleChip: View {
+    let style: FrameStyle
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        }) {
+            HStack(spacing: 5) {
+                Image(systemName: style.iconName)
+                    .font(.system(size: 13))
+                Text(style.displayName)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundColor(isSelected ? .white : .white.opacity(0.7))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(isSelected ? Color(red: 0.39, green: 0.58, blue: 0.93) : .white.opacity(0.1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9)
+                            .stroke(isSelected ? Color.white.opacity(0.4) : Color.white.opacity(0.2), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isSelected ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+        .accessibilityLabel("\(style.displayName)の枠")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
