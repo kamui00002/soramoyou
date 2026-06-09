@@ -18,8 +18,21 @@ struct SkyStitchView: View {
     /// 合成＋購入が完了したときに、合成済み1枚を呼び出し側へ渡す。
     let onStitched: (UIImage) -> Void
 
-    @StateObject private var viewModel = SkyStitchViewModel()
+    @StateObject private var viewModel: SkyStitchViewModel
     @Environment(\.dismiss) private var dismiss
+
+    /// 注入用 init（#Preview / テストで stub の viewModel を渡す）。
+    init(images: [UIImage], onStitched: @escaping (UIImage) -> Void, viewModel: SkyStitchViewModel) {
+        self.images = images
+        self.onStitched = onStitched
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
+
+    /// 通常 init（本番）。@MainActor 文脈で SkyStitchViewModel()（PaymentService.shared 既定）を生成する。
+    @MainActor
+    init(images: [UIImage], onStitched: @escaping (UIImage) -> Void) {
+        self.init(images: images, onStitched: onStitched, viewModel: SkyStitchViewModel())
+    }
 
     var body: some View {
         NavigationView {
@@ -160,10 +173,8 @@ struct SkyStitchView: View {
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)
             Button(action: {
-                Task {
-                    viewModel.retry()
-                    await viewModel.runStitch(images)
-                }
+                // runStitch 冒頭で .stitching に遷移するので、明示リセットは不要。
+                Task { await viewModel.runStitch(images) }
             }) {
                 Text("もう一度ためす")
                     .font(.headline)
@@ -176,4 +187,30 @@ struct SkyStitchView: View {
                 .foregroundColor(.white.opacity(0.9))
         }
     }
+}
+
+// MARK: - Preview
+
+#Preview("プレビュー成功") {
+    let placeholder = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 300)).image { ctx in
+        UIColor.systemTeal.setFill()
+        ctx.fill(CGRect(x: 0, y: 0, width: 600, height: 300))
+    }
+    return SkyStitchView(
+        images: [placeholder, placeholder],
+        onStitched: { _ in },
+        viewModel: SkyStitchViewModel(
+            payment: SkyStitchPreviewPayment(),
+            stitch: { _ in SkyStitchResult(status: .ok, image: placeholder) }
+        )
+    )
+}
+
+/// #Preview 専用のダミー課金（実 StoreKit に触れない）。
+private final class SkyStitchPreviewPayment: PaymentServiceProtocol {
+    func displayPrice(for productID: String) -> String? { "¥300" }
+    func loadProducts() async {}
+    func purchase(productID: String) async throws -> PurchaseOutcome { .success }
+    func isEntitled(to productID: String) async -> Bool { false }
+    func restore() async throws {}
 }

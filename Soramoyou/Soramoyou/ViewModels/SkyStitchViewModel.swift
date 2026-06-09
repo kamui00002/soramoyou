@@ -77,6 +77,26 @@ final class SkyStitchViewModel: ObservableObject {
         case .failed:
             state = .failed("合成に失敗しました。写真を選び直してお試しください")
         }
+
+        // 合成の成功/失敗ファネルを計装（IAP 本番化前から動くので今取らないと backfill 不可・PII なし）。
+        let succeeded: Bool = { if case .previewReady = state { return true } else { return false } }()
+        LoggingService.shared.logEvent("stitch_completed", parameters: [
+            "succeeded": succeeded,
+            "status": Self.statusLabel(result.status),
+            "input_count": images.count
+        ])
+    }
+
+    /// 計装用の status ラベル（PII なし・列挙のみ）。
+    private static func statusLabel(_ status: SkyStitchStatus) -> String {
+        switch status {
+        case .ok:                       return "ok"
+        case .needMoreImages:           return "need_more_images"
+        case .homographyEstFailed:      return "homography_failed"
+        case .cameraParamsAdjustFailed: return "camera_params_failed"
+        case .unavailable:              return "unavailable"
+        case .failed:                   return "failed"
+        }
     }
 
     // MARK: - 課金（成功時のみ）
@@ -86,6 +106,8 @@ final class SkyStitchViewModel: ObservableObject {
     /// - キャンセル/失敗時はプレビューへ戻す（料金は発生しない）。
     func purchaseAndProceed() async {
         guard case .previewReady(let image) = state else { return }
+        // 連打ガード: await を挟む前に即 .purchasing へ遷移し、2回目以降の guard を弾く。
+        state = .purchasing
 
         // 非消耗型: 既に購入済みなら課金せず機能解放（二重課金防止）
         if await payment.isEntitled(to: SkyStitchProduct.panorama) {
@@ -93,7 +115,6 @@ final class SkyStitchViewModel: ObservableObject {
             return
         }
 
-        state = .purchasing
         do {
             let outcome = try await payment.purchase(productID: SkyStitchProduct.panorama)
             switch outcome {
@@ -110,13 +131,4 @@ final class SkyStitchViewModel: ObservableObject {
         }
     }
 
-    /// 失敗状態などから最初へ戻す。
-    func reset() {
-        state = .idle
-    }
-
-    /// 失敗状態からプレビュー再合成のため idle へ戻す（撮り直し用）。
-    func retry() {
-        state = .idle
-    }
 }
