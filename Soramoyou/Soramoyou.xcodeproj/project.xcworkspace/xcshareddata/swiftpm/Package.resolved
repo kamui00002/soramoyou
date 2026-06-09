@@ -1,5 +1,5 @@
 {
-  "originHash" : "5f6dc739387d945049f6df06707b7cd0a8c895e100694673eddadf2fc4314667",
+  "originHash" : "036276ec99e5e5fba02b1aa1f933ec698d91adbb33956f35c770565ab0e7ec0b",
   "pins" : [
     {
       "identity" : "abseil-cpp-binary",
@@ -116,6 +116,15 @@
       "state" : {
         "revision" : "b7e1104502eca3a213b46303391ca4d3bc8ddec1",
         "version" : "2.30910.0"
+      }
+    },
+    {
+      "identity" : "opencv-spm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/yeatse/opencv-spm",
+      "state" : {
+        "revision" : "106fd4aab9a0a83d46d3700b2dc3e2d6e6c93364",
+        "version" : "5.0.0"
       }
     },
     {
