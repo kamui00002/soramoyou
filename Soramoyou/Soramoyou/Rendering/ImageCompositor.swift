@@ -133,9 +133,12 @@ enum ImageCompositor {
         // バンドは下の暗い帯に乗るため白文字。それ以外は mood の文字色。
         let textColor = (style == .bottomBand) ? UIColor.white : UIColor(moodStyle.captionColor)
 
+        let isBand = (style == .bottomBand)
+
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
-        paragraph.lineBreakMode = .byWordWrapping
+        // バンドは下帯内に収めるため末尾省略（長文・横長画像でのはみ出し防止）。それ以外は折り返し。
+        paragraph.lineBreakMode = isBand ? .byTruncatingTail : .byWordWrapping
 
         // 可読性確保のためのソフトシャドウ（空背景でも文字が沈まないように）
         let shadow = NSShadow()
@@ -151,24 +154,30 @@ enum ImageCompositor {
         ]
         let attributed = NSAttributedString(string: text, attributes: attributes)
 
-        // テキスト描画領域（左右に余白）
+        // テキスト描画領域（左右に余白）。バンドは下帯(height*0.22)内に高さを制限してはみ出しを防ぐ。
         let horizontalInset = width * 0.08
         let textWidth = width - horizontalInset * 2
+        let bandHeight = height * 0.22
+        let maxTextHeight = isBand ? bandHeight * 0.72 : CGFloat.greatestFiniteMagnitude
         let bounding = attributed.boundingRect(
-            with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
+            with: CGSize(width: textWidth, height: maxTextHeight),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             context: nil
         )
-        let textHeight = ceil(bounding.height)
+        let textHeight = min(ceil(bounding.height), maxTextHeight)
 
-        // 縦位置（UIKit 座標系: 上が 0）。バンドは必ず下帯へ、それ以外は mood の配置。
-        let placement: TextPlacement = (style == .bottomBand) ? .bottom : moodStyle.captionPlacement
+        // 縦位置（UIKit 座標系: 上が 0）。バンドは下帯の中央へ、それ以外は mood の配置。
         let verticalInset = height * 0.06
         let originY: CGFloat
-        switch placement {
-        case .top:    originY = verticalInset
-        case .center: originY = (height - textHeight) / 2
-        case .bottom: originY = height - textHeight - verticalInset
+        if isBand {
+            // 下帯（上端 = height - bandHeight）の中で縦中央に収める
+            originY = (height - bandHeight) + (bandHeight - textHeight) / 2
+        } else {
+            switch moodStyle.captionPlacement {
+            case .top:    originY = verticalInset
+            case .center: originY = (height - textHeight) / 2
+            case .bottom: originY = height - textHeight - verticalInset
+            }
         }
         let drawRect = CGRect(x: horizontalInset, y: originY, width: textWidth, height: textHeight)
 

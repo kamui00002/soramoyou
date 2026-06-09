@@ -128,6 +128,10 @@ struct MoodSelectorView: View {
             .scaledToFit()
             .frame(maxWidth: .infinity)
             .frame(maxHeight: 240)
+            // 実際の焼き込み(ImageCompositor)の見え方に近づけた近似。正は書き出し側。
+            // レイヤ順は実焼き込み（写真→枠→キャプション）に合わせ、枠を下・キャプションを上に重ねる
+            //（bottomBand で暗帯が白文字を被さないように）。
+            .overlay { framePreviewOverlay(mood: mood) }
             .overlay(alignment: alignment) {
                 if !trimmedCaption.isEmpty {
                     Text(caption)
@@ -139,8 +143,6 @@ struct MoodSelectorView: View {
                         .padding(isBand ? 14 : 20)
                 }
             }
-            // 実際の焼き込み(ImageCompositor)の見え方に近づけた近似。正は書き出し側。
-            .overlay { framePreviewOverlay(mood: mood) }
             .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 

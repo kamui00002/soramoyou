@@ -536,6 +536,10 @@ class PostViewModel: ObservableObject {
         // 焼き込む要素が無ければそのまま返す
         guard mood != nil || captionText != nil else { return images }
 
+        // 枠スタイルは「mood の色 × 形」が前提。mood 未選択(=枠なし)なら bottomBand の
+        // 白文字・下配置を適用せず classic 扱いにする（帯なしで白文字が浮く事故を防ぐ）。
+        let effectiveStyle: FrameStyle = (mood == nil) ? .classic : selectedFrameStyle
+
         var result: [UIImage] = []
         result.reserveCapacity(images.count)
         for image in images {
@@ -543,7 +547,7 @@ class PostViewModel: ObservableObject {
             // 合成本体（向き正規化・P3 維持）は ImageCompositor.composeToUIImage に集約。
             autoreleasepool {
                 result.append(
-                    ImageCompositor.composeToUIImage(base: image, mood: mood, caption: captionText, style: selectedFrameStyle)
+                    ImageCompositor.composeToUIImage(base: image, mood: mood, caption: captionText, style: effectiveStyle)
                 )
             }
         }

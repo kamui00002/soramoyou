@@ -33,6 +33,8 @@
     }
   ],
   "caption": "string",
+  "mood": "string",                  // 機能1: 気分(calm/uplifted/wistful/dignified/dreamy)。未設定なら無し
+  "frameId": "string",               // 機能1: 枠ID "{mood}_{frameStyle}" 形式（例 calm_matte / wistful_bottomBand）。未設定なら無し
   "hashtags": ["string"],
   "location": {
     "latitude": "number",
