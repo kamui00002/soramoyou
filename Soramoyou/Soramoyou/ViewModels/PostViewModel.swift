@@ -23,6 +23,17 @@ class PostViewModel: ObservableObject {
     /// 解決失敗時は対応する要素が nil。
     @Published var externalEditInfos: [ExternalEditInfo?] = []
     @Published var caption: String = ""
+    /// 機能1: 投稿にまとう気分（mood）。nil=未選択。フレーム＋キャプションの世界観を決める。
+    @Published var selectedMood: Mood?
+    /// 選択中の枠スタイル（mood の色 × この形で焼き込む。mood 未選択時は無視）
+    @Published var selectedFrameStyle: FrameStyle = .classic
+    /// 機能1: フレーム（額縁）に焼き込む一言。通常の `caption`（ハッシュタグ用）とは完全に別。
+    /// フレームには **この値のみ** を焼く（caption は一切フレームに出さない）。mood 選択時のみ意味を持つ。
+    @Published var frameCaption: String = ""
+    /// 機能1: フレーム文字色（"#RRGGBB"）。nil=おまかせ（style 自動色）。mood 選択時のみ意味を持つ。
+    @Published var frameTextColorHex: String?
+    /// 機能1: フレーム文字フォント。nil=mood 既定フォント。mood 選択時のみ意味を持つ。
+    @Published var frameFontStyle: FrameFontStyle?
     @Published var hashtags: [String] = []
     @Published var location: Location?
     @Published var visibility: Visibility = .public
@@ -45,6 +56,12 @@ class PostViewModel: ObservableObject {
     private let storageService: StorageServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
     private let userId: String?
+
+    /// 再編集対象の投稿コンテキスト（非nil＝既存投稿の上書き更新モード）。
+    /// savePost はこの有無で createPost / updatePost を切り替える。
+    private var editingContext: PostEditingContext?
+    /// 上書き更新する既存投稿 ID（再編集モードのときのみ非nil）。
+    var editingPostId: String? { editingContext?.postId }
 
     private var uploadedImageURLs: [String] = []
     private var uploadedThumbnailURLs: [String] = []
@@ -118,7 +135,22 @@ class PostViewModel: ObservableObject {
     }
     
     // MARK: - Post Info Management
-    
+
+    /// 再編集モードの seed を流し込む（既存投稿の値を投稿情報画面へ復元）。
+    /// 以降 savePost は createPost ではなく updatePost（postId 上書き・カウント/作成日時保持）を行う。
+    func seedForEditing(_ context: PostEditingContext) {
+        editingContext = context
+        caption = context.caption ?? ""
+        frameCaption = context.frameCaption ?? ""
+        frameTextColorHex = context.frameTextColorHex
+        frameFontStyle = context.frameFontStyle
+        selectedMood = context.mood
+        selectedFrameStyle = context.frameStyle
+        visibility = context.visibility
+        hashtags = context.hashtags
+        location = context.location
+    }
+
     /// キャプションを設定
     func setCaption(_ caption: String) {
         self.caption = caption
@@ -257,11 +289,16 @@ class PostViewModel: ObservableObject {
         }
 
         do {
-            // 1. 編集済み画像をアップロード（リトライ可能）
+            // 1. mood フレーム＋キャプションを編集済み画像へ焼き込む（非破壊・フル解像度・1回だけ）。
+            //    editedImages は破壊的に書き換えず合成済み配列をアップロードへ渡す
+            //    （リトライ・再投稿での二重焼きを防ぐ）。mood/caption が無ければ素通し。
+            let imagesToUpload = composeMoodFrameIfNeeded(editedImages)
+
+            // 2. 編集済み画像をアップロード（リトライ可能）
             let imageURLs = try await RetryableOperation.executeIfRetryable(
                 operationName: "PostViewModel.uploadImages"
             ) { [self] in
-                try await self.uploadImages()
+                try await self.uploadImages(imagesToUpload)
             }
 
             // 2. オリジナル画像をアップロード（ユーザーが選択した場合のみ）
@@ -276,18 +313,32 @@ class PostViewModel: ObservableObject {
 
             // 3. Firestoreに投稿データを保存
             let post = try await createPost(imageURLs: imageURLs, originalImageURLs: originalImageURLs)
-            
-            // 3. 投稿を保存（リトライ可能）
-            _ = try await RetryableOperation.executeIfRetryable(
-                operationName: "PostViewModel.createPost"
-            ) { [self] in
-                try await self.firestoreService.createPost(post)
+
+            // 3. 投稿を保存 or 更新（リトライ可能）。再編集モードは既存 doc を上書き更新する。
+            if let editing = editingContext {
+                _ = try await RetryableOperation.executeIfRetryable(
+                    operationName: "PostViewModel.updatePost"
+                ) { [self] in
+                    try await self.firestoreService.updatePost(post)
+                }
+                // 更新成功後、旧 Storage の孤児ファイルをベストエフォート削除（失敗は無視＝投稿更新は成立済み）。
+                // 再アップロードで画像 URL は変わるため Kingfisher の URL キャッシュは自然に更新される。
+                for path in editing.oldStoragePaths {
+                    try? await storageService.deleteImage(path: path)
+                }
+            } else {
+                _ = try await RetryableOperation.executeIfRetryable(
+                    operationName: "PostViewModel.createPost"
+                ) { [self] in
+                    try await self.firestoreService.createPost(post)
+                }
             }
 
             // パーソナルAI編集の学習コーパスへ記録（端末内・投稿成功時のみ・ベストエフォート）。
             // 記録に失敗しても投稿成功は妨げない。skyType は AI判定 or ユーザー選択を使う。
             // ⚠️ 未編集（中立）レシピは学習データを薄めるため記録しない（isNeutral でゲート）。
-            if let recipe = editRecipe, !recipe.isNeutral {
+            // 再編集（上書き更新）ではコーパスへ重複記録しない（新規投稿のみ学習に使う）。
+            if editingContext == nil, let recipe = editRecipe, !recipe.isNeutral {
                 RecipeCorpusStore().append(
                     RecipeCorpusEntry(
                         recipe: recipe,
@@ -296,6 +347,18 @@ class PostViewModel: ObservableObject {
                     ),
                     userId: userId
                 )
+            }
+
+            // 機能1: mood 付き投稿を計装（LoggingService ファサード経由・PII なし）
+            if let mood = selectedMood {
+                LoggingService.shared.logEvent("post_with_mood", parameters: [
+                    "mood": mood.rawValue,
+                    "frame_style": selectedFrameStyle.rawValue,
+                    "has_caption": !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    // フレーム文字のカスタム選択（PII なし・bool/列挙のみ）
+                    "has_custom_text_color": frameTextColorHex != nil,
+                    "font_style": frameFontStyle?.rawValue ?? "default"
+                ])
             }
 
             // 4. 投稿作成を通知（プロフィール画面の自動更新用）☁️
@@ -321,13 +384,10 @@ class PostViewModel: ObservableObject {
     /// 🔧 2026-04-24 修正 (ultrareview bug_002):
     /// アップロード時の Storage パスを返すようにし、Post.images[].storagePath として
     /// Firestore に永続化する。投稿削除時に URL から不正なパスを組み立てる問題を解消。
-    private func uploadImages() async throws -> [UploadedImage] {
+    private func uploadImages(_ imagesToUpload: [UIImage]) async throws -> [UploadedImage] {
         guard let userId = userId else {
             throw PostViewModelError.userNotAuthenticated
         }
-
-        // 配列のスナップショットを取得（async待機中の変更を防ぐ）
-        let imagesToUpload = editedImages
 
         var uploaded: [UploadedImage] = []
         let totalImages = Double(imagesToUpload.count)
@@ -478,27 +538,86 @@ class PostViewModel: ObservableObject {
         }
 
         // 投稿データを作成（effectiveSkyTypeを使用 ☁️）
+        // キャプションは前後の空白・改行を除去して保存する。空白のみのキャプションは
+        // 焼き込み側（composeMoodFrameIfNeeded）と判定を揃えて nil 扱いにし、
+        // 「保存値あり／焼き込みなし」の不一致を防ぐ。
+        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        // フレーム用コメントは通常 caption と別保存。mood 未選択時はフレーム自体が出ないので nil。
+        let trimmedFrameCaption = frameCaption.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 再編集モード（既存投稿の上書き）では ID・カウント・作成日時・抽出メタを元投稿から保持する。
+        let editing = editingContext
+        // 原画像は再編集で変わらない＝元投稿のものをそのまま引き継ぐ（再アップロードしない）。
+        // 新規投稿時のみ、ユーザーが保存を選んだ場合に今回アップロードした原画像を使う。
+        let finalOriginalImages = editing?.originalImages ?? originalImageInfos
         let post = Post(
-            id: UUID().uuidString,
+            id: editing?.postId ?? UUID().uuidString,
             userId: userId,
             images: imageInfos,
-            originalImages: originalImageInfos,
+            originalImages: finalOriginalImages,
             editSettings: editSettings,
             attachedRecipe: editRecipe,
-            caption: caption.isEmpty ? nil : caption,
+            caption: trimmedCaption.isEmpty ? nil : trimmedCaption,
+            mood: selectedMood,
+            // frameId = "mood_style"（色=mood × 形=style）。mood 未選択なら nil。
+            frameId: selectedMood.map { "\($0.rawValue)_\(selectedFrameStyle.rawValue)" },
+            frameCaption: (selectedMood != nil && !trimmedFrameCaption.isEmpty) ? trimmedFrameCaption : nil,
+            // 文字色・フォントは mood 選択時のみ保存（おまかせ/既定は nil＝焼き込み側の自動解決へ委ねる）。
+            frameTextColorHex: selectedMood != nil ? frameTextColorHex : nil,
+            frameFontStyle: selectedMood != nil ? frameFontStyle : nil,
             hashtags: hashtags.isEmpty ? nil : hashtags,
             location: location,
-            skyColors: extractedInfo?.skyColors,
-            capturedAt: extractedInfo?.capturedAt,
-            timeOfDay: extractedInfo?.timeOfDay,
-            skyType: effectiveSkyType,  // ユーザー選択 or AI判定
-            colorTemperature: extractedInfo?.colorTemperature,
-            visibility: visibility
+            // 再編集時はメタを再導出せず元投稿の値を保持。新規時は抽出値を使用。
+            skyColors: editing?.skyColors ?? extractedInfo?.skyColors,
+            capturedAt: editing?.capturedAt ?? extractedInfo?.capturedAt,
+            timeOfDay: editing?.timeOfDay ?? extractedInfo?.timeOfDay,
+            skyType: editing?.skyType ?? effectiveSkyType,  // 再編集=保持 / 新規=ユーザー選択 or AI判定
+            colorTemperature: editing?.colorTemperature ?? extractedInfo?.colorTemperature,
+            visibility: visibility,
+            // カウント・作成日時は再編集で不変（Firestore ルール isValidPostUpdate 要件）。新規は既定(0/now)。
+            likesCount: editing?.likesCount ?? 0,
+            commentsCount: editing?.commentsCount ?? 0,
+            createdAt: editing?.createdAt ?? Date()
         )
 
         return post
     }
-    
+
+    /// mood / キャプションがあれば編集済み画像へフレーム＋キャプションを焼き込む（非破壊）。
+    ///
+    /// - mood も caption も無ければ入力をそのまま返す（passthrough）。
+    /// - Display P3 / HDR を保つため、CIImage 空間で orientation を適用し、合成結果は
+    ///   `CIContextPool` の outputColorSpace(Display P3) で UIImage 化する
+    ///   （`UIImage(ciImage:)` / UIGraphicsImageRenderer 経由は広色域を落とすため使わない）。
+    /// - フル解像度合成のメモリスパイクを避けるため 1 枚ずつ `autoreleasepool` で囲む。
+    private func composeMoodFrameIfNeeded(_ images: [UIImage]) -> [UIImage] {
+        // フレームに焼くのは frameCaption（専用欄）のみ。通常 caption（ハッシュタグ用）は一切焼かない。
+        let trimmedFrameCaption = frameCaption.trimmingCharacters(in: .whitespacesAndNewlines)
+        let frameText = trimmedFrameCaption.isEmpty ? nil : trimmedFrameCaption
+
+        // 額縁＋下プレートは mood 選択時のみ生成する。mood 未選択なら何も焼かず素通し
+        // （写真の上に文字が浮く旧挙動を排除＝完全分離）。
+        guard let mood = selectedMood else { return images }
+
+        // 文字色（おまかせ=nil）・フォント（mood 既定=nil）の上書き。解析不可な hex は nil 扱い＝自動色。
+        let colorOverride = frameTextColorHex.flatMap { UIColor(hex: $0) }
+        let fontOverride = frameFontStyle
+
+        var result: [UIImage] = []
+        result.reserveCapacity(images.count)
+        for image in images {
+            // フル解像度合成のメモリスパイクを避けるため 1 枚ずつ autoreleasepool で囲む。
+            // 合成本体（向き正規化・P3 維持）は ImageCompositor.composeToUIImage に集約。
+            autoreleasepool {
+                result.append(
+                    ImageCompositor.composeToUIImage(base: image, mood: mood, caption: frameText,
+                                                     style: selectedFrameStyle,
+                                                     captionColor: colorOverride, fontStyle: fontOverride)
+                )
+            }
+        }
+        return result
+    }
+
     /// アップロード済み画像をロールバック
     private func rollbackUploadedImages() async {
         // アップロード済み画像を削除
@@ -579,6 +698,12 @@ class PostViewModel: ObservableObject {
         editSettings = nil
         externalEditInfos = []  // ⭐️ Issue #4
         caption = ""
+        selectedMood = nil
+        selectedFrameStyle = .classic
+        frameCaption = ""
+        frameTextColorHex = nil
+        frameFontStyle = nil
+        editingContext = nil
         hashtags = []
         location = nil
         visibility = .public

@@ -30,6 +30,10 @@ struct GalleryDetailView: View {
     @State private var saveResultMessage: String?
     @State private var showingSaveResult = false
     @State private var shareImages: [UIImage] = []
+    /// 再編集（投稿済み画像の上書き）起動ペイロード。non-nil で EditView を全画面提示。
+    @State private var editLaunch: ReEditLaunchPayload?
+    /// 元画像ダウンロード中フラグ（編集準備中の二重起動防止＋表示用）。
+    @State private var isPreparingEdit = false
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
@@ -125,8 +129,19 @@ struct GalleryDetailView: View {
 
                         Divider()
 
-                        // 自分の投稿の場合のみ削除ボタンを表示
+                        // 自分の投稿の場合のみ編集・削除を表示
                         if viewModel.isOwnPost(post) {
+                            // 再編集: 元画像(originalImages)を持つ投稿のみ。
+                            // 旧投稿(元画像なし)は再編集すると焼き込み済み画像を再び焼く＝二重焼きになるため非表示。
+                            if hasOriginalImages {
+                                // Menu はタップで即閉じるためラベル切替/.disabled は見えない。
+                                // 二重起動防止は prepareReEdit() 内の guard、DL 中表示は overlay が担う。
+                                Button {
+                                    Task { await prepareReEdit() }
+                                } label: {
+                                    Label("編集", systemImage: "slider.horizontal.3")
+                                }
+                            }
                             Button(role: .destructive) {
                                 showingDeleteConfirmation = true
                             } label: {
@@ -155,6 +170,16 @@ struct GalleryDetailView: View {
                     await viewModel.loadAuthor(userId: post.userId)
                     await commentViewModel.fetchComments(postId: post.id)
                 }
+            }
+            // 再編集: 元画像＋レシピをエディタへ。保存時は既存投稿を上書き更新する。
+            // item: 方式で「画像が確実に揃ってから」EditView を構築する（stale-state 回避）。
+            .fullScreenCover(item: $editLaunch) { launch in
+                EditView(
+                    images: launch.images,
+                    userId: launch.post.userId,          // 自分の投稿のみ編集可なので post.userId = 自分
+                    initialRecipe: launch.post.attachedRecipe,
+                    editingContext: launch.editingContext
+                )
             }
             // 投稿削除確認アラート
             .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
@@ -245,9 +270,9 @@ struct GalleryDetailView: View {
             .sheet(isPresented: $showingShareSheet) {
                 ImageShareSheet(images: shareImages)
             }
-            // 保存中オーバーレイ
+            // 保存中／再編集の元画像DL中オーバーレイ（G1: Menu 内ボタンの「準備中…」は見えないため）
             .overlay {
-                if isSaving {
+                if isSaving || isPreparingEdit {
                     ZStack {
                         Color.black.opacity(0.4)
                             .ignoresSafeArea()
@@ -255,7 +280,7 @@ struct GalleryDetailView: View {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                 .scaleEffect(1.2)
-                            Text("保存中...")
+                            Text(isPreparingEdit ? "編集の準備中..." : "保存中...")
                                 .font(.subheadline)
                                 .foregroundColor(.white)
                         }
@@ -297,6 +322,35 @@ struct GalleryDetailView: View {
     }
 
     /// 現在表示中の画像を共有シートで共有
+    /// 再編集: 元画像(originalImages)を order 順に DL し、元投稿の seed を付けてエディタを起動する。
+    /// 失敗・元画像なしのときはエラーを表示して起動しない。
+    @MainActor
+    private func prepareReEdit() async {
+        guard !isPreparingEdit, hasOriginalImages else { return }
+        isPreparingEdit = true
+        defer { isPreparingEdit = false }
+
+        let infos = (post.originalImages ?? []).sorted { $0.order < $1.order }
+        let urls = infos.map { $0.url }.filter { !$0.isEmpty }
+        guard !urls.isEmpty else {
+            saveResultMessage = "元画像が見つかりませんでした"
+            showingSaveResult = true
+            return
+        }
+        do {
+            let images = try await downloadService.downloadImages(from: urls)
+            guard !images.isEmpty else {
+                saveResultMessage = "元画像の読み込みに失敗しました"
+                showingSaveResult = true
+                return
+            }
+            editLaunch = ReEditLaunchPayload(post: post, images: images)
+        } catch {
+            saveResultMessage = "元画像の読み込みに失敗しました"
+            showingSaveResult = true
+        }
+    }
+
     private func shareCurrentImage() async {
         isSaving = true
         defer { isSaving = false }

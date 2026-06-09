@@ -27,6 +27,10 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.createPost は未実装です")
     }
 
+    func updatePost(_ post: Post) async throws -> Post {
+        fatalError("MockFirestoreService.updatePost は未実装です")
+    }
+
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
         fatalError("MockFirestoreService.fetchPosts は未実装です")
     }

@@ -41,17 +41,21 @@ struct EditView: View {
     private let originalImages: [UIImage]
     /// 各画像の外部編集情報（写真Appバッジ表示用）⭐️ Issue #4
     private let externalEditInfos: [ExternalEditInfo?]
+    /// 再編集（投稿済み画像の上書き更新）コンテキスト。非nil＝既存投稿を編集して上書き保存する。
+    private let editingContext: PostEditingContext?
 
     init(
         images: [UIImage],
         userId: String?,
         externalEditInfos: [ExternalEditInfo?] = [],
-        initialRecipe: EditRecipe? = nil
+        initialRecipe: EditRecipe? = nil,
+        editingContext: PostEditingContext? = nil
     ) {
         self.userId = userId
         self.originalImages = images
         self.externalEditInfos = externalEditInfos
-        // initialRecipe: レシピ共有（他の投稿のレシピで編集）から起動された場合の初期レシピ
+        self.editingContext = editingContext
+        // initialRecipe: レシピ共有（他の投稿のレシピで編集）/ 再編集 から起動された場合の初期レシピ
         _viewModel = StateObject(wrappedValue: EditViewModel(
             images: images,
             userId: userId,
@@ -174,7 +178,8 @@ struct EditView: View {
                         editSettings: payload.editSettings,
                         editRecipe: payload.editRecipe,
                         userId: userId,
-                        externalEditInfos: externalEditInfos
+                        externalEditInfos: externalEditInfos,
+                        editingContext: editingContext
                     )
                 }
                 .navigationViewStyle(.stack)
