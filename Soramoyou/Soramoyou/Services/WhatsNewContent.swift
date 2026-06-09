@@ -19,7 +19,7 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    static let currentID = "2026-06-phase1"
+    static let currentID = "2026-06-frame"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -32,26 +32,36 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（Phase 1）で増えた2機能の紹介ページ。
+    /// 今回（気分フレーム）で増えた3機能の紹介ページ。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "sun.haze.fill",
+            icon: "photo.artframe",
             badge: "新機能",
-            title: "ゴールデンアワー通知",
-            description: "日没前、空がいちばん美しい時間を\nお知らせ。設定からONにできます",
+            title: "気分フレーム",
+            description: "5つの気分から選んで、写真に\n額縁とひとことを添えられます",
             gradientColors: [
-                Color(red: 0.98, green: 0.76, blue: 0.53),
-                Color(red: 0.93, green: 0.52, blue: 0.39)
+                Color(red: 0.72, green: 0.62, blue: 0.92),
+                Color(red: 0.96, green: 0.73, blue: 0.84)
             ]
         ),
         WhatsNewPage(
-            icon: "wand.and.rays",
+            icon: "paintpalette.fill",
             badge: "新機能",
-            title: "このレシピで編集",
-            description: "気に入った投稿の編集レシピを\nワンタップで自分の写真に試せる",
+            title: "文字の色とフォント",
+            description: "フレームに入れる一言は、色も\nフォントも自由に選べます",
             gradientColors: [
-                Color(red: 0.53, green: 0.81, blue: 0.98),
+                Color(red: 0.40, green: 0.78, blue: 0.78),
                 Color(red: 0.39, green: 0.58, blue: 0.93)
+            ]
+        ),
+        WhatsNewPage(
+            icon: "slider.horizontal.3",
+            badge: "新機能",
+            title: "投稿をあとから編集",
+            description: "投稿した写真を、ホームや\nプロフィールから編集し直せます",
+            gradientColors: [
+                Color(red: 0.55, green: 0.85, blue: 0.70),
+                Color(red: 0.30, green: 0.70, blue: 0.60)
             ]
         )
     ]
