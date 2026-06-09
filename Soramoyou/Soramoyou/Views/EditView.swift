@@ -43,18 +43,22 @@ struct EditView: View {
     private let externalEditInfos: [ExternalEditInfo?]
     /// 再編集（投稿済み画像の上書き更新）コンテキスト。非nil＝既存投稿を編集して上書き保存する。
     private let editingContext: PostEditingContext?
+    /// 投稿種別（通常/配置写真/広角合成）。入口モードから引き継ぎ PostInfoView へ渡す。
+    private let postKind: PostKind
 
     init(
         images: [UIImage],
         userId: String?,
         externalEditInfos: [ExternalEditInfo?] = [],
         initialRecipe: EditRecipe? = nil,
-        editingContext: PostEditingContext? = nil
+        editingContext: PostEditingContext? = nil,
+        postKind: PostKind = .single
     ) {
         self.userId = userId
         self.originalImages = images
         self.externalEditInfos = externalEditInfos
         self.editingContext = editingContext
+        self.postKind = postKind
         // initialRecipe: レシピ共有（他の投稿のレシピで編集）/ 再編集 から起動された場合の初期レシピ
         _viewModel = StateObject(wrappedValue: EditViewModel(
             images: images,
@@ -179,7 +183,8 @@ struct EditView: View {
                         editRecipe: payload.editRecipe,
                         userId: userId,
                         externalEditInfos: externalEditInfos,
-                        editingContext: editingContext
+                        editingContext: editingContext,
+                        postKind: postKind
                     )
                 }
                 .navigationViewStyle(.stack)

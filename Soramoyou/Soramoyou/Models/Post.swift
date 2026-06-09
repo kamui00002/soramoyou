@@ -31,6 +31,12 @@ struct Post: Identifiable, Codable {
     let frameTextColorHex: String?
     /// 機能1: フレーム文字フォント。ユーザー未選択・旧投稿は nil＝mood 既定フォント。
     let frameFontStyle: FrameFontStyle?
+    /// 投稿種別（single/collage/panorama）。nil=旧投稿・通常投稿＝single 相当。
+    let postKind: PostKind?
+    /// 配置写真のレイアウト（postKind==.collage のときのみ）。
+    let collageLayout: CollageLayout?
+    /// 配置写真の各パネルの一言ラベル（朝/昼/夜/雨 など・任意）。collage のときのみ。
+    let panelLabels: [String]?
     let hashtags: [String]?
     let location: Location?
     let skyColors: [String]? // 最大5色、16進数カラーコード
@@ -57,6 +63,9 @@ struct Post: Identifiable, Codable {
         frameCaption: String? = nil,
         frameTextColorHex: String? = nil,
         frameFontStyle: FrameFontStyle? = nil,
+        postKind: PostKind? = nil,
+        collageLayout: CollageLayout? = nil,
+        panelLabels: [String]? = nil,
         hashtags: [String]? = nil,
         location: Location? = nil,
         skyColors: [String]? = nil,
@@ -82,6 +91,9 @@ struct Post: Identifiable, Codable {
         self.frameCaption = frameCaption
         self.frameTextColorHex = frameTextColorHex
         self.frameFontStyle = frameFontStyle
+        self.postKind = postKind
+        self.collageLayout = collageLayout
+        self.panelLabels = panelLabels
         self.hashtags = hashtags
         self.location = location
         // skyColorsは最大5色まで
@@ -138,6 +150,18 @@ struct Post: Identifiable, Codable {
 
         if let frameFontStyle = frameFontStyle {
             data["frameFontStyle"] = frameFontStyle.rawValue
+        }
+
+        if let postKind = postKind {
+            data["postKind"] = postKind.rawValue
+        }
+
+        if let collageLayout = collageLayout {
+            data["collageLayout"] = collageLayout.rawValue
+        }
+
+        if let panelLabels = panelLabels {
+            data["panelLabels"] = panelLabels
         }
 
         if let hashtags = hashtags {
@@ -242,6 +266,19 @@ struct Post: Identifiable, Codable {
         } else {
             self.frameFontStyle = nil
         }
+
+        // 投稿種別/配置レイアウト（後方互換: 旧データ・未知値は nil＝single 相当）
+        if let kindRaw = documentData["postKind"] as? String {
+            self.postKind = PostKind(rawValue: kindRaw)
+        } else {
+            self.postKind = nil
+        }
+        if let layoutRaw = documentData["collageLayout"] as? String {
+            self.collageLayout = CollageLayout(rawValue: layoutRaw)
+        } else {
+            self.collageLayout = nil
+        }
+        self.panelLabels = documentData["panelLabels"] as? [String]
 
         self.hashtags = documentData["hashtags"] as? [String]
         

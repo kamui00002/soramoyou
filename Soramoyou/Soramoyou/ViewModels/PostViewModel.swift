@@ -34,6 +34,13 @@ class PostViewModel: ObservableObject {
     @Published var frameTextColorHex: String?
     /// 機能1: フレーム文字フォント。nil=mood 既定フォント。mood 選択時のみ意味を持つ。
     @Published var frameFontStyle: FrameFontStyle?
+    /// 投稿種別。.single=通常 / .collage=配置写真 / .panorama=広角合成。
+    /// 入口（PostView のモード選択）で確定し、savePost の畳み込み・保存メタ分岐を駆動する。
+    @Published var postKind: PostKind = .single
+    /// 配置写真のレイアウト（postKind==.collage のとき有効）。
+    @Published var collageLayout: CollageLayout = .grid2x2
+    /// 配置写真の各パネルの一言ラベル（朝/昼/夜/雨 など・任意。index は selectedImages と対応）。
+    @Published var panelLabels: [String] = ["", "", "", ""]
     @Published var hashtags: [String] = []
     @Published var location: Location?
     @Published var visibility: Visibility = .public
@@ -289,10 +296,18 @@ class PostViewModel: ObservableObject {
         }
 
         do {
-            // 1. mood フレーム＋キャプションを編集済み画像へ焼き込む（非破壊・フル解像度・1回だけ）。
-            //    editedImages は破壊的に書き換えず合成済み配列をアップロードへ渡す
-            //    （リトライ・再投稿での二重焼きを防ぐ）。mood/caption が無ければ素通し。
-            let imagesToUpload = composeMoodFrameIfNeeded(editedImages)
+            // 1a. 配置写真(collage)は複数枚を1枚に畳む（v1。広角合成は手前のフローで畳み込み済み）。
+            //     畳み込みは非破壊（editedImages は書き換えない）＝リトライ・再投稿での二重合成を防ぐ。
+            let folded = foldImagesIfNeeded(editedImages)
+            // collage は「1枚に並べて必ず成功」が約束。万一 compose に失敗（folded が1枚にならない）したら、
+            // 4枚バラ撒き＋collageメタ不整合の投稿を作らず、明示エラーで中断する（中途半端な保存を防ぐ）。
+            if postKind == .collage && folded.count != 1 {
+                throw PostViewModelError.collageCompositionFailed
+            }
+
+            // 1b. mood フレーム＋一言を焼き込む（mood 選択時のみ）。
+            //     配置写真モードとは排他（二重額縁を避けるため collage では mood を焼かない）。
+            let imagesToUpload = (postKind == .collage) ? folded : composeMoodFrameIfNeeded(folded)
 
             // 2. 編集済み画像をアップロード（リトライ可能）
             let imageURLs = try await RetryableOperation.executeIfRetryable(
@@ -301,9 +316,10 @@ class PostViewModel: ObservableObject {
                 try await self.uploadImages(imagesToUpload)
             }
 
-            // 2. オリジナル画像をアップロード（ユーザーが選択した場合のみ）
+            // 2. オリジナル画像をアップロード（ユーザーが選択した場合のみ）。
+            //    配置写真は素材N枚を原画像として残さない（images=合成1枚との非対称・再編集破綻を防ぐ）。
             var originalImageURLs: [UploadedOriginalImage]? = nil
-            if saveOriginalImages && !selectedImages.isEmpty {
+            if saveOriginalImages && !selectedImages.isEmpty && postKind != .collage {
                 originalImageURLs = try await RetryableOperation.executeIfRetryable(
                     operationName: "PostViewModel.uploadOriginalImages"
                 ) { [self] in
@@ -358,6 +374,15 @@ class PostViewModel: ObservableObject {
                     // フレーム文字のカスタム選択（PII なし・bool/列挙のみ）
                     "has_custom_text_color": frameTextColorHex != nil,
                     "font_style": frameFontStyle?.rawValue ?? "default"
+                ])
+            }
+
+            // v1: 配置写真投稿を計装（PII なし・列挙/boolのみ）
+            if postKind == .collage {
+                LoggingService.shared.logEvent("collage_created", parameters: [
+                    "layout": collageLayout.rawValue,
+                    "panel_count": min(4, selectedImages.count),
+                    "has_labels": panelLabels.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 ])
             }
 
@@ -495,7 +520,9 @@ class PostViewModel: ObservableObject {
     }
 
     /// 投稿データを作成
-    private func createPost(
+    /// アップロード済み URL から Post を構築する（純粋・副作用なし）。
+    /// `internal`（private でない）なのは collage 分岐の検証テストから直接呼ぶため（@testable import）。
+    func createPost(
         imageURLs: [UploadedImage],
         originalImageURLs: [UploadedOriginalImage]? = nil
     ) throws -> Post {
@@ -549,11 +576,28 @@ class PostViewModel: ObservableObject {
         // 原画像は再編集で変わらない＝元投稿のものをそのまま引き継ぐ（再アップロードしない）。
         // 新規投稿時のみ、ユーザーが保存を選んだ場合に今回アップロードした原画像を使う。
         let finalOriginalImages = editing?.originalImages ?? originalImageInfos
+
+        // 配置写真(collage)は「合成済み1枚」を保存する特別扱い:
+        // - 原画像(素材N枚)は残さない（images=1枚との非対称・再編集破綻を防ぐ）
+        // - 抽出メタ(時間帯/空種別/色温度/撮影日時/空色)は1値で表せないので付けない（検索の歪み防止）
+        let isCollage = (postKind == .collage)
+        // 保存するラベル: collage かつ非空ラベルがあるときのみ。
+        // 枚数ソースは「素材枚数」selectedImages。imageInfos は collage では畳み込み後=1枚なので
+        // それを使うとパネル2〜4のラベルが欠落する（レビュー指摘の data-loss を修正）。
+        let savedPanelLabels: [String]? = {
+            guard isCollage else { return nil }
+            let count = max(1, min(4, selectedImages.count))
+            let trimmed = (0..<count).map { i -> String in
+                i < panelLabels.count ? panelLabels[i].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+            }
+            return trimmed.contains { !$0.isEmpty } ? trimmed : nil
+        }()
+
         let post = Post(
             id: editing?.postId ?? UUID().uuidString,
             userId: userId,
             images: imageInfos,
-            originalImages: finalOriginalImages,
+            originalImages: isCollage ? nil : finalOriginalImages,
             editSettings: editSettings,
             attachedRecipe: editRecipe,
             caption: trimmedCaption.isEmpty ? nil : trimmedCaption,
@@ -564,14 +608,18 @@ class PostViewModel: ObservableObject {
             // 文字色・フォントは mood 選択時のみ保存（おまかせ/既定は nil＝焼き込み側の自動解決へ委ねる）。
             frameTextColorHex: selectedMood != nil ? frameTextColorHex : nil,
             frameFontStyle: selectedMood != nil ? frameFontStyle : nil,
+            // 投稿種別: .single は nil 保存（旧投稿とドキュメント形状を一致＝後方互換）。
+            postKind: postKind == .single ? nil : postKind,
+            collageLayout: isCollage ? collageLayout : nil,
+            panelLabels: savedPanelLabels,
             hashtags: hashtags.isEmpty ? nil : hashtags,
             location: location,
-            // 再編集時はメタを再導出せず元投稿の値を保持。新規時は抽出値を使用。
-            skyColors: editing?.skyColors ?? extractedInfo?.skyColors,
-            capturedAt: editing?.capturedAt ?? extractedInfo?.capturedAt,
-            timeOfDay: editing?.timeOfDay ?? extractedInfo?.timeOfDay,
-            skyType: editing?.skyType ?? effectiveSkyType,  // 再編集=保持 / 新規=ユーザー選択 or AI判定
-            colorTemperature: editing?.colorTemperature ?? extractedInfo?.colorTemperature,
+            // 再編集時はメタを再導出せず元投稿の値を保持。新規時は抽出値を使用。配置写真は付けない。
+            skyColors: isCollage ? nil : (editing?.skyColors ?? extractedInfo?.skyColors),
+            capturedAt: isCollage ? nil : (editing?.capturedAt ?? extractedInfo?.capturedAt),
+            timeOfDay: isCollage ? nil : (editing?.timeOfDay ?? extractedInfo?.timeOfDay),
+            skyType: isCollage ? nil : (editing?.skyType ?? effectiveSkyType),  // 再編集=保持 / 新規=選択 or AI判定
+            colorTemperature: isCollage ? nil : (editing?.colorTemperature ?? extractedInfo?.colorTemperature),
             visibility: visibility,
             // カウント・作成日時は再編集で不変（Firestore ルール isValidPostUpdate 要件）。新規は既定(0/now)。
             likesCount: editing?.likesCount ?? 0,
@@ -580,6 +628,21 @@ class PostViewModel: ObservableObject {
         )
 
         return post
+    }
+
+    /// 配置写真(collage)モードのとき、複数の編集済み画像を1枚に畳む（非破壊）。
+    ///
+    /// - postKind==.collage: SkyCollageCompositor で 2×2 / 縦4 に並べた1枚を返す（P3/HDR維持）。
+    ///   合成失敗（compositor が nil）時は安全側で元配列をそのまま返す（投稿は継続）。
+    /// - それ以外（single/panorama）: 素通し。広角合成(panorama)は手前のプレビュー画面で
+    ///   既に1枚に畳まれた状態で editedImages に入っている前提。
+    private func foldImagesIfNeeded(_ images: [UIImage]) -> [UIImage] {
+        guard postKind == .collage, images.count >= 2 else { return images }
+        let labels = panelLabels.map { $0.isEmpty ? nil : $0 }
+        if let collaged = SkyCollageCompositor.composeToUIImage(photos: images, labels: labels, layout: collageLayout) {
+            return [collaged]
+        }
+        return images
     }
 
     /// mood / キャプションがあれば編集済み画像へフレーム＋キャプションを焼き込む（非破壊）。
@@ -703,6 +766,9 @@ class PostViewModel: ObservableObject {
         frameCaption = ""
         frameTextColorHex = nil
         frameFontStyle = nil
+        postKind = .single
+        collageLayout = .grid2x2
+        panelLabels = ["", "", "", ""]
         editingContext = nil
         hashtags = []
         location = nil
@@ -759,7 +825,8 @@ enum PostViewModelError: LocalizedError {
     case imageCompressionFailed
     case uploadFailed
     case saveFailed
-    
+    case collageCompositionFailed
+
     var errorDescription: String? {
         switch self {
         case .userNotAuthenticated:
@@ -772,6 +839,8 @@ enum PostViewModelError: LocalizedError {
             return "画像のアップロードに失敗しました"
         case .saveFailed:
             return "投稿の保存に失敗しました"
+        case .collageCompositionFailed:
+            return "配置写真の作成に失敗しました。写真を選び直してお試しください"
         }
     }
 }
