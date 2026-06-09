@@ -27,6 +27,9 @@ class PostViewModel: ObservableObject {
     @Published var selectedMood: Mood?
     /// 選択中の枠スタイル（mood の色 × この形で焼き込む。mood 未選択時は無視）
     @Published var selectedFrameStyle: FrameStyle = .classic
+    /// 機能1: フレーム（額縁）に焼き込む一言。通常の `caption`（ハッシュタグ用）とは完全に別。
+    /// フレームには **この値のみ** を焼く（caption は一切フレームに出さない）。mood 選択時のみ意味を持つ。
+    @Published var frameCaption: String = ""
     @Published var hashtags: [String] = []
     @Published var location: Location?
     @Published var visibility: Visibility = .public
@@ -497,6 +500,8 @@ class PostViewModel: ObservableObject {
         // 焼き込み側（composeMoodFrameIfNeeded）と判定を揃えて nil 扱いにし、
         // 「保存値あり／焼き込みなし」の不一致を防ぐ。
         let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        // フレーム用コメントは通常 caption と別保存。mood 未選択時はフレーム自体が出ないので nil。
+        let trimmedFrameCaption = frameCaption.trimmingCharacters(in: .whitespacesAndNewlines)
         let post = Post(
             id: UUID().uuidString,
             userId: userId,
@@ -508,6 +513,7 @@ class PostViewModel: ObservableObject {
             mood: selectedMood,
             // frameId = "mood_style"（色=mood × 形=style）。mood 未選択なら nil。
             frameId: selectedMood.map { "\($0.rawValue)_\(selectedFrameStyle.rawValue)" },
+            frameCaption: (selectedMood != nil && !trimmedFrameCaption.isEmpty) ? trimmedFrameCaption : nil,
             hashtags: hashtags.isEmpty ? nil : hashtags,
             location: location,
             skyColors: extractedInfo?.skyColors,
@@ -529,16 +535,13 @@ class PostViewModel: ObservableObject {
     ///   （`UIImage(ciImage:)` / UIGraphicsImageRenderer 経由は広色域を落とすため使わない）。
     /// - フル解像度合成のメモリスパイクを避けるため 1 枚ずつ `autoreleasepool` で囲む。
     private func composeMoodFrameIfNeeded(_ images: [UIImage]) -> [UIImage] {
-        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-        let captionText = trimmedCaption.isEmpty ? nil : caption
-        let mood = selectedMood
+        // フレームに焼くのは frameCaption（専用欄）のみ。通常 caption（ハッシュタグ用）は一切焼かない。
+        let trimmedFrameCaption = frameCaption.trimmingCharacters(in: .whitespacesAndNewlines)
+        let frameText = trimmedFrameCaption.isEmpty ? nil : trimmedFrameCaption
 
-        // 焼き込む要素が無ければそのまま返す
-        guard mood != nil || captionText != nil else { return images }
-
-        // 枠スタイルは「mood の色 × 形」が前提。mood 未選択(=枠なし)なら bottomBand の
-        // 白文字・下配置を適用せず classic 扱いにする（帯なしで白文字が浮く事故を防ぐ）。
-        let effectiveStyle: FrameStyle = (mood == nil) ? .classic : selectedFrameStyle
+        // 額縁＋下プレートは mood 選択時のみ生成する。mood 未選択なら何も焼かず素通し
+        // （写真の上に文字が浮く旧挙動を排除＝完全分離）。
+        guard let mood = selectedMood else { return images }
 
         var result: [UIImage] = []
         result.reserveCapacity(images.count)
@@ -547,7 +550,7 @@ class PostViewModel: ObservableObject {
             // 合成本体（向き正規化・P3 維持）は ImageCompositor.composeToUIImage に集約。
             autoreleasepool {
                 result.append(
-                    ImageCompositor.composeToUIImage(base: image, mood: mood, caption: captionText, style: effectiveStyle)
+                    ImageCompositor.composeToUIImage(base: image, mood: mood, caption: frameText, style: selectedFrameStyle)
                 )
             }
         }
@@ -636,6 +639,7 @@ class PostViewModel: ObservableObject {
         caption = ""
         selectedMood = nil
         selectedFrameStyle = .classic
+        frameCaption = ""
         hashtags = []
         location = nil
         visibility = .public

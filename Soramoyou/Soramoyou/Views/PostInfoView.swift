@@ -249,7 +249,7 @@ struct PostInfoView: View {
         MoodSelectorView(
             selectedMood: $viewModel.selectedMood,
             selectedFrameStyle: $viewModel.selectedFrameStyle,
-            caption: viewModel.caption,
+            frameCaption: $viewModel.frameCaption,
             previewImage: viewModel.editedImages.first
         )
     }

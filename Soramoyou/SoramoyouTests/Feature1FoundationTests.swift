@@ -97,18 +97,22 @@ final class Feature1FoundationTests: XCTestCase {
         let image = ImageInfo(url: "https://example.com/a.jpg", width: 100, height: 200, order: 0)
         let post = Post(
             id: "p1", userId: "u1", images: [image],
-            caption: "暮れていく空", mood: .wistful, frameId: "frame_wistful_01",
+            caption: "暮れていく空 #夕焼け", mood: .wistful, frameId: "frame_wistful_01",
+            frameCaption: "金色のひととき",
             visibility: .public
         )
 
         let data = post.toFirestoreData()
         XCTAssertEqual(data["mood"] as? String, "wistful")
         XCTAssertEqual(data["frameId"] as? String, "frame_wistful_01")
+        // フレーム用コメントは通常 caption と別キーで保存される
+        XCTAssertEqual(data["frameCaption"] as? String, "金色のひととき")
 
         let restored = try Post(from: data)
         XCTAssertEqual(restored.mood, .wistful)
         XCTAssertEqual(restored.frameId, "frame_wistful_01")
-        XCTAssertEqual(restored.caption, "暮れていく空")
+        XCTAssertEqual(restored.caption, "暮れていく空 #夕焼け")
+        XCTAssertEqual(restored.frameCaption, "金色のひととき", "フレーム用コメントが往復するべき")
     }
 
     func testPostWithoutMoodIsBackwardCompatible() throws {
@@ -119,17 +123,28 @@ final class Feature1FoundationTests: XCTestCase {
         let data = post.toFirestoreData()
         XCTAssertNil(data["mood"])
         XCTAssertNil(data["frameId"])
+        XCTAssertNil(data["frameCaption"])
 
         let restored = try Post(from: data)
         XCTAssertNil(restored.mood)
         XCTAssertNil(restored.frameId)
+        XCTAssertNil(restored.frameCaption)
     }
 
     // MARK: - ImageCompositor 契約
 
-    func testComposeKeepsCanvasExtent() {
+    func testComposeGrowsCanvasWhenFramed() {
+        // 新方式: 写真の外側に余白＋下プレートを足すので、出力は base より大きい（写真は欠けない）。
         let base = makeSolidBase(gray: 128, width: 240, height: 360)
         let out = ImageCompositor.compose(.init(base: base, caption: "テスト", mood: .calm))
+        XCTAssertGreaterThan(out.extent.width, 240, "側余白で幅が増える")
+        XCTAssertGreaterThan(out.extent.height, 360, "余白＋プレートで縦が増える")
+    }
+
+    func testComposePassthroughWhenNoMood() {
+        // mood 無し＝フレームなし。extent は base のまま（額縁を付けない）。
+        let base = makeSolidBase(gray: 128, width: 240, height: 360)
+        let out = ImageCompositor.compose(.init(base: base, caption: "テスト", mood: nil))
         XCTAssertEqual(out.extent.width, 240, accuracy: 1)
         XCTAssertEqual(out.extent.height, 360, accuracy: 1)
     }
@@ -141,95 +156,39 @@ final class Feature1FoundationTests: XCTestCase {
         XCTAssertNotNil(ctx.createCGImage(out, from: out.extent))
     }
 
-    func testEmptyCaptionLeavesBasePixelsUnchanged() {
-        // caption 未入力 & フレームなし → 合成は base そのまま（passthrough）。
+    func testFrameWithoutCaptionStillFramesButHasNoPlate() {
+        // mood あり・コメント無し → 余白フレームは付くがプレート無し（adaptive plate ≈0）。
+        // コメント有りはプレート分だけ縦が高くなる。
         let base = makeSolidBase(gray: 128, width: 240, height: 360)
-        let passthrough = ImageCompositor.compose(.init(base: base, caption: nil, mood: .calm))
-        // base 自体は白画素ゼロ（gray 128 < 150）。passthrough も同じであること。
-        XCTAssertEqual(whiteStats(base).count, 0)
-        XCTAssertEqual(whiteStats(passthrough).count, 0)
-
-        // 空白のみのキャプションも passthrough 扱い。
-        let blank = ImageCompositor.compose(.init(base: base, caption: "   ", mood: .calm))
-        XCTAssertEqual(whiteStats(blank).count, 0)
+        let noCaption = ImageCompositor.compose(.init(base: base, caption: nil, mood: .calm, style: .classic))
+        let withCaption = ImageCompositor.compose(.init(base: base, caption: "ひとこと", mood: .calm, style: .classic))
+        XCTAssertGreaterThan(noCaption.extent.width, 240, "コメント無しでも余白フレームは付く")
+        XCTAssertGreaterThan(
+            withCaption.extent.height, noCaption.extent.height,
+            "コメント有りはプレート分だけ縦が増えるべき"
+        )
     }
 
-    func testCaptionAddsWhitePixels() {
-        // 暗い base に白系キャプションを焼くと白画素が現れる。
+    func testCaptionRendersInBottomPlateNotOverPhoto() {
+        // コメントは写真の上ではなく下プレートに描かれる。bottomBand は枠が透明・帯が濃色・文字が白なので
+        // 白画素＝コメントのみ。その重心が下部(プレート)にあることを検証する（写真領域=上部ではない）。
         let base = makeSolidBase(gray: 30, width: 240, height: 360)
-        XCTAssertEqual(whiteStats(base).count, 0, "base は暗いので白画素ゼロのはず")
+        XCTAssertEqual(whiteStats(base).count, 0, "base は暗いので白画素ゼロ")
 
-        let captioned = ImageCompositor.compose(
-            .init(base: base, caption: "しずかな空にひとことを", mood: .calm)
+        let out = ImageCompositor.compose(.init(base: base, caption: "しずかな空にひとことを", mood: .calm, style: .bottomBand))
+        let stats = whiteStats(out)
+        XCTAssertGreaterThan(stats.count, 0, "コメントの白画素が現れるべき")
+        XCTAssertGreaterThan(
+            stats.centroidY, out.extent.height * 0.6,
+            "コメントは下プレートに描かれるべき(重心が下部)。写真の上に乗っていたら失敗"
         )
-        XCTAssertGreaterThan(whiteStats(captioned).count, 0, "キャプションの白画素が現れるはず")
     }
 
-    func testCaptionPlacementTopVsBottomIsNotMirrored() {
-        // .top 指定は視覚上部、.bottom 指定は視覚下部に出る（mirror していない）ことを
-        // 行重心で機械検証する。dignified=.top / calm=.bottom はともに白文字。
+    func testEmptyCaptionProducesNoCaptionPixels() {
+        // 空白のみ/未入力のコメントは焼かない（bottomBand 帯は濃色なので白画素は出ない）。
         let base = makeSolidBase(gray: 30, width: 240, height: 360)
-        let text = "しずかな空にひとことを"
-
-        let top = ImageCompositor.compose(.init(base: base, caption: text, mood: .dignified))
-        let bottom = ImageCompositor.compose(.init(base: base, caption: text, mood: .calm))
-
-        let topStats = whiteStats(top)
-        let bottomStats = whiteStats(bottom)
-        XCTAssertGreaterThan(topStats.count, 0)
-        XCTAssertGreaterThan(bottomStats.count, 0)
-
-        // 行 0 = 上端。top 配置の重心は bottom 配置より十分小さい（＝上にある）。
-        XCTAssertLessThan(
-            topStats.centroidY, bottomStats.centroidY,
-            "top 配置(\(topStats.centroidY)) が bottom 配置(\(bottomStats.centroidY)) より上に来ていない"
-        )
-    }
-
-    // MARK: - フレーム生成（renderFrame）
-
-    /// 指定座標のアルファ(0...1)を返す
-    private func alpha(_ image: CIImage, x: Int, y: Int) -> Double {
-        let ctx = CIContext()
-        let w = Int(image.extent.width), h = Int(image.extent.height)
-        guard w > 0, h > 0, let cg = ctx.createCGImage(image, from: image.extent) else { return 0 }
-        var bytes = [UInt8](repeating: 0, count: w * h * 4)
-        let cs = CGColorSpaceCreateDeviceRGB()
-        let c = CGContext(
-            data: &bytes, width: w, height: h, bitsPerComponent: 8,
-            bytesPerRow: w * 4, space: cs,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        )
-        c?.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        let cx = min(max(x, 0), w - 1), cy = min(max(y, 0), h - 1)
-        return Double(bytes[(cy * w + cx) * 4 + 3]) / 255.0
-    }
-
-    func testRenderFrameKeepsExtent() {
-        let extent = CGRect(x: 0, y: 0, width: 240, height: 360)
-        guard let frame = ImageCompositor.renderFrame(mood: .wistful, in: extent) else {
-            XCTFail("renderFrame が nil")
-            return
-        }
-        XCTAssertEqual(frame.extent.width, 240, accuracy: 1)
-        XCTAssertEqual(frame.extent.height, 360, accuracy: 1)
-    }
-
-    func testRenderFrameHasTransparentCenterAndColoredEdge() {
-        // 最大の失敗モード=「中心くり抜き忘れ」を検出する。
-        // 中心は透過(写真が見える)・縁は不透明(枠の色)であること。
-        let w = 240, h = 360
-        let extent = CGRect(x: 0, y: 0, width: w, height: h)
-        guard let frame = ImageCompositor.renderFrame(mood: .calm, in: extent) else {
-            XCTFail("renderFrame が nil")
-            return
-        }
-        let centerAlpha = alpha(frame, x: w / 2, y: h / 2)
-        // 上辺中央の枠内(border≈w*0.045≈11px なので y=4 は枠の中)
-        let edgeAlpha = alpha(frame, x: w / 2, y: 4)
-
-        XCTAssertLessThan(centerAlpha, 0.1, "中心は透過しているべき(写真が主役)。塗りつぶし=くり抜き忘れ")
-        XCTAssertGreaterThan(edgeAlpha, 0.5, "縁(枠)には色が乗っているべき")
+        let blank = ImageCompositor.compose(.init(base: base, caption: "   ", mood: .calm, style: .bottomBand))
+        XCTAssertEqual(whiteStats(blank).count, 0, "空白コメントは白文字を焼かない")
     }
 
     // MARK: - 焼き込み seam（composeToUIImage / orientation 往復）
@@ -260,26 +219,28 @@ final class Feature1FoundationTests: XCTestCase {
         return (Double(bytes[i]) + Double(bytes[i + 1]) + Double(bytes[i + 2])) / 3.0
     }
 
-    func testComposeToUIImageNormalizesOrientationAndBurnsIn() throws {
-        // raw 240×360 を .right(横向き保存)として作る。表示時は回転して 360×240 になる。
-        // 投稿フローで実際に来る「向きタグ付き画像」を模す（CIImage は向きを無視する罠の回帰）。
+    func testComposeToUIImageNormalizesOrientationAndFrames() throws {
+        // raw 240×360 を .right(横向き保存)として作る。向きを適用すると 360×240(横長)になる。
+        // 投稿フローで来る「向きタグ付き画像」を模す（CIImage は向きを無視する罠の回帰）。
         let base = try XCTUnwrap(makeSolidUIImage(gray: 30, width: 240, height: 360, orientation: .right))
         XCTAssertEqual(base.imageOrientation, .right)
 
-        let out = ImageCompositor.composeToUIImage(base: base, mood: .calm, caption: "ひとことを添えて")
+        // matte: 白マットなので端は白＝base(暗)より明るいことも併せて検証できる
+        let out = ImageCompositor.composeToUIImage(base: base, mood: .calm, caption: "ひとことを添えて", style: .matte)
 
         // 1) 向きが .up に正規化される（uploadImages→encodeJPEG の正規化と整合）
         XCTAssertEqual(out.imageOrientation, .up)
-        // 2) .right 適用で幅高さが入れ替わる（240×360 → 360×240）
-        XCTAssertEqual(out.size.width, 360, accuracy: 1)
-        XCTAssertEqual(out.size.height, 240, accuracy: 1)
+        // 2) 向き適用後は横長(写真 360×240)。フレーム余白で更に大きくなるが、横長(width>height)は保たれる。
+        //    向きを無視すると縦長(width<height)になるため、これで orientation 反映を担保する。
+        XCTAssertGreaterThan(out.size.width, out.size.height, "向き適用後の横長が保たれるべき(orientation 反映の回帰)")
+        XCTAssertGreaterThan(out.size.width, 360, "フレーム余白で 360 より大きいべき")
 
         let outCI = try XCTUnwrap(out.cgImage.map { CIImage(cgImage: $0) })
-        // 3) キャプションの白画素が焼き込まれている
-        XCTAssertGreaterThan(whiteStats(outCI).count, 0, "キャプションが焼き込まれているべき")
-        // 4) 端にフレーム枠の色が乗っている（base gray30 より明るい）
-        let edgeBrightness = brightness(outCI, x: Int(out.size.width) / 2, y: 4)
-        XCTAssertGreaterThan(edgeBrightness, 50, "端にフレーム枠が乗っているべき(base 30 より明るい)")
+        // 3) コメントの白画素が焼き込まれている
+        XCTAssertGreaterThan(whiteStats(outCI).count, 0, "コメントが焼き込まれているべき")
+        // 4) 端(マット余白)が base gray30 より明るい＝フレームが付いている
+        let edgeBrightness = brightness(outCI, x: 4, y: Int(out.size.height) / 2)
+        XCTAssertGreaterThan(edgeBrightness, 50, "端にフレーム(白マット)が乗っているべき(base 30 より明るい)")
     }
 
     func testComposeToUIImagePassthroughWhenNoMoodNoCaption() throws {
@@ -304,31 +265,18 @@ final class Feature1FoundationTests: XCTestCase {
         }
     }
 
-    func testFrameStylesHaveDistinctStructure() {
-        // 3スタイルは構造が異なる：classic/matte=全周に枠、bottomBand=側枠なし＋下帯。
-        let w = 240, h = 360
-        let extent = CGRect(x: 0, y: 0, width: w, height: h)
-        guard
-            let classic = ImageCompositor.renderFrame(mood: .calm, style: .classic, in: extent),
-            let matte = ImageCompositor.renderFrame(mood: .calm, style: .matte, in: extent),
-            let band = ImageCompositor.renderFrame(mood: .calm, style: .bottomBand, in: extent)
-        else {
-            XCTFail("renderFrame が nil")
-            return
-        }
+    func testFrameStylesProduceDistinctCanvasStructure() throws {
+        // 3スタイルの構造差をキャンバス寸法で検証：classic/matte=左右に余白(幅増)、
+        // bottomBand=左右余白なし(幅は写真のまま)＋下帯(縦増)。
+        let base = try XCTUnwrap(makeSolidUIImage(gray: 30, width: 240, height: 360, orientation: .up))
+        let classic = ImageCompositor.composeToUIImage(base: base, mood: .calm, caption: "あ", style: .classic)
+        let matte = ImageCompositor.composeToUIImage(base: base, mood: .calm, caption: "あ", style: .matte)
+        let band = ImageCompositor.composeToUIImage(base: base, mood: .calm, caption: "あ", style: .bottomBand)
 
-        // 左辺中央：classic / matte は側枠があり不透明、bottomBand は側枠なしで透過。
-        XCTAssertGreaterThan(alpha(classic, x: 4, y: h / 2), 0.5, "classic は側枠が乗るべき")
-        XCTAssertGreaterThan(alpha(matte, x: 4, y: h / 2), 0.5, "matte は側枠が乗るべき")
-        XCTAssertLessThan(alpha(band, x: 4, y: h / 2), 0.1, "bottomBand は側枠なし(透過)であるべき")
-
-        // 下辺中央：bottomBand は下帯が乗る。
-        XCTAssertGreaterThan(alpha(band, x: w / 2, y: h - 6), 0.3, "bottomBand は下帯が乗るべき")
-
-        // 中心：全スタイルとも写真が見えるよう透過。
-        XCTAssertLessThan(alpha(classic, x: w / 2, y: h / 2), 0.1)
-        XCTAssertLessThan(alpha(matte, x: w / 2, y: h / 2), 0.1)
-        XCTAssertLessThan(alpha(band, x: w / 2, y: h / 2), 0.1)
+        XCTAssertGreaterThan(classic.size.width, 240, "classic は側余白で幅が増えるべき")
+        XCTAssertGreaterThan(matte.size.width, 240, "matte は側余白で幅が増えるべき")
+        XCTAssertEqual(band.size.width, 240, accuracy: 1, "bottomBand は側余白なし＝幅は写真のまま")
+        XCTAssertGreaterThan(band.size.height, 360, "bottomBand は下帯で縦が増えるべき")
     }
 
     func testComposeToUIImageAppliesFrameStyle() throws {

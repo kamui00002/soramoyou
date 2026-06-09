@@ -24,6 +24,9 @@ struct Post: Identifiable, Codable {
     let mood: Mood?
     /// 機能1: 適用した気分フレームの ID。フレーム未適用・旧投稿は nil。
     let frameId: String?
+    /// 機能1: フレーム（額縁）に焼き込む一言コメント。通常の `caption`（ハッシュタグ等）とは別物。
+    /// フレームには **この値だけ** を焼く。未入力・旧投稿は nil。
+    let frameCaption: String?
     let hashtags: [String]?
     let location: Location?
     let skyColors: [String]? // 最大5色、16進数カラーコード
@@ -47,6 +50,7 @@ struct Post: Identifiable, Codable {
         caption: String? = nil,
         mood: Mood? = nil,
         frameId: String? = nil,
+        frameCaption: String? = nil,
         hashtags: [String]? = nil,
         location: Location? = nil,
         skyColors: [String]? = nil,
@@ -69,6 +73,7 @@ struct Post: Identifiable, Codable {
         self.caption = caption
         self.mood = mood
         self.frameId = frameId
+        self.frameCaption = frameCaption
         self.hashtags = hashtags
         self.location = location
         // skyColorsは最大5色まで
@@ -113,6 +118,10 @@ struct Post: Identifiable, Codable {
 
         if let frameId = frameId {
             data["frameId"] = frameId
+        }
+
+        if let frameCaption = frameCaption {
+            data["frameCaption"] = frameCaption
         }
 
         if let hashtags = hashtags {
@@ -209,6 +218,7 @@ struct Post: Identifiable, Codable {
             self.mood = nil
         }
         self.frameId = documentData["frameId"] as? String
+        self.frameCaption = documentData["frameCaption"] as? String
 
         self.hashtags = documentData["hashtags"] as? [String]
         
