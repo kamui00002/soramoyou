@@ -12,6 +12,7 @@
 import XCTest
 import CoreImage
 import UIKit
+import SwiftUI
 import FirebaseFirestore
 @testable import Soramoyou
 
@@ -334,5 +335,129 @@ final class Feature1FoundationTests: XCTestCase {
         // "calm_bottomBand" → bottomBand 復元
         let band = Post(id: "p3", userId: "u1", images: [img], mood: .calm, frameId: "calm_bottomBand", visibility: .public)
         XCTAssertEqual(PostEditingContext(post: band).frameStyle, .bottomBand)
+    }
+
+    // MARK: - フレーム文字の色・フォント選択
+
+    /// UIColor の RGBA 成分を取り出す（テスト比較用）
+    private func rgba(_ color: UIColor) -> (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat) {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return (r, g, b, a)
+    }
+
+    func testFrameFontStyleMapsToFontDesignStably() {
+        // raw value は Firestore 保存値。固定であること＋Font.Design への対応を担保。
+        XCTAssertEqual(FrameFontStyle.allCases.count, 4)
+        XCTAssertEqual(FrameFontStyle.standard.rawValue, "standard")
+        XCTAssertEqual(FrameFontStyle.rounded.rawValue, "rounded")
+        XCTAssertEqual(FrameFontStyle.serif.rawValue, "serif")
+        XCTAssertEqual(FrameFontStyle.mono.rawValue, "mono")
+        XCTAssertEqual(FrameFontStyle.standard.fontDesign, .default)
+        XCTAssertEqual(FrameFontStyle.rounded.fontDesign, .rounded)
+        XCTAssertEqual(FrameFontStyle.serif.fontDesign, .serif)
+        XCTAssertEqual(FrameFontStyle.mono.fontDesign, .monospaced)
+        for f in FrameFontStyle.allCases {
+            XCTAssertFalse(f.displayName.isEmpty)
+            XCTAssertFalse(f.iconName.isEmpty)
+        }
+    }
+
+    func testColorHexRoundTrip() {
+        // "#RRGGBB" → UIColor → "#RRGGBB" が一致する
+        let hex = "#3366CC"
+        let color = try? XCTUnwrap(UIColor(hex: hex))
+        XCTAssertNotNil(color)
+        XCTAssertEqual(color?.toHexString(), "#3366CC")
+        // 先頭 # なし・小文字も解析できる
+        XCTAssertEqual(UIColor(hex: "ff0000")?.toHexString(), "#FF0000")
+        // 不正値は nil
+        XCTAssertNil(UIColor(hex: "xyz"))
+        XCTAssertNil(UIColor(hex: "#12"))
+        // Color 経由でも往復する
+        XCTAssertEqual(Color(hex: "#00FF80")?.toHexString(), "#00FF80")
+    }
+
+    func testResolveCaptionColorOverrideWinsAndStyleDefaults() {
+        // override 指定時はそれを最優先（style/mood に関わらず）
+        let red = UIColor(red: 1, green: 0, blue: 0, alpha: 1)
+        let resolved = ImageCompositor.resolveCaptionColor(style: .classic, mood: .calm, override: red)
+        let c = rgba(resolved)
+        XCTAssertEqual(c.r, 1, accuracy: 0.02)
+        XCTAssertEqual(c.g, 0, accuracy: 0.02)
+        XCTAssertEqual(c.b, 0, accuracy: 0.02)
+
+        // nil（おまかせ）は style 既定色：matte=濃色 / bottomBand=白
+        let matte = rgba(ImageCompositor.resolveCaptionColor(style: .matte, mood: .calm, override: nil))
+        XCTAssertLessThan((matte.r + matte.g + matte.b) / 3, 0.3, "matte は濃い文字色（白マットに対し）")
+        let band = rgba(ImageCompositor.resolveCaptionColor(style: .bottomBand, mood: .calm, override: nil))
+        XCTAssertGreaterThan((band.r + band.g + band.b) / 3, 0.9, "bottomBand は白文字（濃色帯に対し）")
+    }
+
+    func testResolveFontDesignOverrideWinsAndMoodDefault() {
+        // override 指定時はそのデザイン
+        XCTAssertEqual(ImageCompositor.resolveFontDesign(mood: .calm, override: .serif), .serif)
+        XCTAssertEqual(ImageCompositor.resolveFontDesign(mood: .calm, override: .mono), .monospaced)
+        // nil は mood 既定（calm=.default / wistful=.serif）
+        XCTAssertEqual(ImageCompositor.resolveFontDesign(mood: .calm, override: nil), Mood.calm.style.fontDesign)
+        XCTAssertEqual(ImageCompositor.resolveFontDesign(mood: .wistful, override: nil), Mood.wistful.style.fontDesign)
+    }
+
+    func testComposeCanvasUnchangedWithColorFontOverrides() {
+        // 文字色・フォントの上書きはレイアウト（キャンバス寸法）に影響しない＝写真の見え方は不変。
+        let base = makeSolidBase(gray: 128, width: 240, height: 360)
+        let plain = ImageCompositor.compose(.init(base: base, caption: "ことば", mood: .calm, style: .classic))
+        let styled = ImageCompositor.compose(.init(
+            base: base, caption: "ことば", mood: .calm, style: .classic,
+            captionColor: UIColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1), fontStyle: .serif
+        ))
+        XCTAssertEqual(plain.extent.width, styled.extent.width, accuracy: 1, "色/フォント上書きで幅は変わらない")
+        XCTAssertEqual(plain.extent.height, styled.extent.height, accuracy: 1, "色/フォント上書きで高さは変わらない")
+    }
+
+    func testPostFrameTextColorAndFontRoundTrip() throws {
+        let image = ImageInfo(url: "https://example.com/a.jpg", width: 100, height: 200, order: 0)
+        let post = Post(
+            id: "p10", userId: "u1", images: [image],
+            mood: .calm, frameId: "calm_classic", frameCaption: "晴れた日",
+            frameTextColorHex: "#FFCC00", frameFontStyle: .serif,
+            visibility: .public
+        )
+        let data = post.toFirestoreData()
+        XCTAssertEqual(data["frameTextColorHex"] as? String, "#FFCC00")
+        XCTAssertEqual(data["frameFontStyle"] as? String, "serif")
+
+        let restored = try Post(from: data)
+        XCTAssertEqual(restored.frameTextColorHex, "#FFCC00", "文字色 hex が往復するべき")
+        XCTAssertEqual(restored.frameFontStyle, .serif, "フォントが往復するべき")
+    }
+
+    func testPostBackwardCompatNoFrameTextColorFont() throws {
+        // 旧投稿（色・フォントなし）は nil のまま壊れない。
+        let image = ImageInfo(url: "https://example.com/b.jpg", width: 100, height: 200, order: 0)
+        let post = Post(id: "p11", userId: "u1", images: [image], mood: .calm, frameId: "calm_classic", visibility: .public)
+        let data = post.toFirestoreData()
+        XCTAssertNil(data["frameTextColorHex"])
+        XCTAssertNil(data["frameFontStyle"])
+        let restored = try Post(from: data)
+        XCTAssertNil(restored.frameTextColorHex)
+        XCTAssertNil(restored.frameFontStyle)
+        // 未知のフォント raw も nil（mood 既定へフォールバック）
+        var corrupt = data
+        corrupt["frameFontStyle"] = "unknownFont"
+        XCTAssertNil(try Post(from: corrupt).frameFontStyle)
+    }
+
+    func testPostEditingContextExtractsColorAndFont() {
+        let img = ImageInfo(url: "https://e.com/a.jpg", width: 100, height: 200, order: 0)
+        let post = Post(
+            id: "p12", userId: "u1", images: [img],
+            mood: .dreamy, frameId: "dreamy_matte", frameCaption: "ゆめ",
+            frameTextColorHex: "#102030", frameFontStyle: .rounded,
+            visibility: .public
+        )
+        let ctx = PostEditingContext(post: post)
+        XCTAssertEqual(ctx.frameTextColorHex, "#102030", "再編集 seed に文字色が引き継がれるべき")
+        XCTAssertEqual(ctx.frameFontStyle, .rounded, "再編集 seed にフォントが引き継がれるべき")
     }
 }

@@ -256,6 +256,8 @@ struct PostInfoView: View {
             selectedMood: $viewModel.selectedMood,
             selectedFrameStyle: $viewModel.selectedFrameStyle,
             frameCaption: $viewModel.frameCaption,
+            frameTextColorHex: $viewModel.frameTextColorHex,
+            frameFontStyle: $viewModel.frameFontStyle,
             previewImage: viewModel.editedImages.first
         )
     }

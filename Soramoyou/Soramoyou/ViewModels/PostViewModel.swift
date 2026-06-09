@@ -30,6 +30,10 @@ class PostViewModel: ObservableObject {
     /// 機能1: フレーム（額縁）に焼き込む一言。通常の `caption`（ハッシュタグ用）とは完全に別。
     /// フレームには **この値のみ** を焼く（caption は一切フレームに出さない）。mood 選択時のみ意味を持つ。
     @Published var frameCaption: String = ""
+    /// 機能1: フレーム文字色（"#RRGGBB"）。nil=おまかせ（style 自動色）。mood 選択時のみ意味を持つ。
+    @Published var frameTextColorHex: String?
+    /// 機能1: フレーム文字フォント。nil=mood 既定フォント。mood 選択時のみ意味を持つ。
+    @Published var frameFontStyle: FrameFontStyle?
     @Published var hashtags: [String] = []
     @Published var location: Location?
     @Published var visibility: Visibility = .public
@@ -138,6 +142,8 @@ class PostViewModel: ObservableObject {
         editingContext = context
         caption = context.caption ?? ""
         frameCaption = context.frameCaption ?? ""
+        frameTextColorHex = context.frameTextColorHex
+        frameFontStyle = context.frameFontStyle
         selectedMood = context.mood
         selectedFrameStyle = context.frameStyle
         visibility = context.visibility
@@ -348,7 +354,10 @@ class PostViewModel: ObservableObject {
                 LoggingService.shared.logEvent("post_with_mood", parameters: [
                     "mood": mood.rawValue,
                     "frame_style": selectedFrameStyle.rawValue,
-                    "has_caption": !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    "has_caption": !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    // フレーム文字のカスタム選択（PII なし・bool/列挙のみ）
+                    "has_custom_text_color": frameTextColorHex != nil,
+                    "font_style": frameFontStyle?.rawValue ?? "default"
                 ])
             }
 
@@ -549,6 +558,9 @@ class PostViewModel: ObservableObject {
             // frameId = "mood_style"（色=mood × 形=style）。mood 未選択なら nil。
             frameId: selectedMood.map { "\($0.rawValue)_\(selectedFrameStyle.rawValue)" },
             frameCaption: (selectedMood != nil && !trimmedFrameCaption.isEmpty) ? trimmedFrameCaption : nil,
+            // 文字色・フォントは mood 選択時のみ保存（おまかせ/既定は nil＝焼き込み側の自動解決へ委ねる）。
+            frameTextColorHex: selectedMood != nil ? frameTextColorHex : nil,
+            frameFontStyle: selectedMood != nil ? frameFontStyle : nil,
             hashtags: hashtags.isEmpty ? nil : hashtags,
             location: location,
             // 再編集時はメタを再導出せず元投稿の値を保持。新規時は抽出値を使用。
@@ -583,6 +595,10 @@ class PostViewModel: ObservableObject {
         // （写真の上に文字が浮く旧挙動を排除＝完全分離）。
         guard let mood = selectedMood else { return images }
 
+        // 文字色（おまかせ=nil）・フォント（mood 既定=nil）の上書き。解析不可な hex は nil 扱い＝自動色。
+        let colorOverride = frameTextColorHex.flatMap { UIColor(hex: $0) }
+        let fontOverride = frameFontStyle
+
         var result: [UIImage] = []
         result.reserveCapacity(images.count)
         for image in images {
@@ -590,7 +606,9 @@ class PostViewModel: ObservableObject {
             // 合成本体（向き正規化・P3 維持）は ImageCompositor.composeToUIImage に集約。
             autoreleasepool {
                 result.append(
-                    ImageCompositor.composeToUIImage(base: image, mood: mood, caption: frameText, style: selectedFrameStyle)
+                    ImageCompositor.composeToUIImage(base: image, mood: mood, caption: frameText,
+                                                     style: selectedFrameStyle,
+                                                     captionColor: colorOverride, fontStyle: fontOverride)
                 )
             }
         }
@@ -680,6 +698,8 @@ class PostViewModel: ObservableObject {
         selectedMood = nil
         selectedFrameStyle = .classic
         frameCaption = ""
+        frameTextColorHex = nil
+        frameFontStyle = nil
         editingContext = nil
         hashtags = []
         location = nil

@@ -21,6 +21,10 @@ struct MoodSelectorView: View {
     @Binding var selectedFrameStyle: FrameStyle
     /// フレーム（額縁）に焼く一言。通常の投稿キャプション（ハッシュタグ用）とは別欄（双方向バインド）。
     @Binding var frameCaption: String
+    /// フレーム文字色（"#RRGGBB"）。nil=おまかせ（自動色）。双方向バインド。
+    @Binding var frameTextColorHex: String?
+    /// フレーム文字フォント。nil=mood 既定フォント。双方向バインド。
+    @Binding var frameFontStyle: FrameFontStyle?
     /// プレビュー用の編集後画像（先頭1枚）。無ければプレビューは出さない。
     let previewImage: UIImage?
 
@@ -48,6 +52,10 @@ struct MoodSelectorView: View {
                 frameStylePicker
 
                 frameCaptionField
+
+                frameFontPicker
+
+                frameColorPicker(mood: mood)
 
                 if let image = previewImage {
                     moodFramePreview(image: image, mood: mood)
@@ -143,6 +151,100 @@ struct MoodSelectorView: View {
         .padding(.top, 4)
     }
 
+    // MARK: - Frame font picker
+
+    /// フレーム文字のフォント選択（おまかせ＝mood 既定 ＋ 4 種）。mood 選択後に表示。
+    private var frameFontPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("文字のフォント")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.8))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    // おまかせ（nil＝mood 既定フォント）
+                    FrameFontChip(
+                        title: "おまかせ",
+                        iconName: "wand.and.stars",
+                        isSelected: frameFontStyle == nil,
+                        action: { selectFont(nil) }
+                    )
+                    ForEach(FrameFontStyle.allCases) { font in
+                        FrameFontChip(
+                            title: font.displayName,
+                            iconName: font.iconName,
+                            isSelected: frameFontStyle == font,
+                            action: { selectFont(font) }
+                        )
+                    }
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// フォントを選択（変化時のみ計装）。
+    private func selectFont(_ font: FrameFontStyle?) {
+        guard frameFontStyle != font else { return }
+        frameFontStyle = font
+        LoggingService.shared.logEvent("frame_font_selected", parameters: ["font_style": font?.rawValue ?? "default"])
+    }
+
+    // MARK: - Frame color picker
+
+    /// フレーム文字の色選択。おまかせ（自動色）トグル＋フルカラーピッカー。mood 選択後に表示。
+    @ViewBuilder
+    private func frameColorPicker(mood: Mood) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("文字の色")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.8))
+
+            Toggle(isOn: autoColorBinding(mood: mood)) {
+                Text("おまかせ（自動で読みやすい色）")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .tint(Color(red: 0.39, green: 0.58, blue: 0.93))
+
+            // おまかせ OFF のときのみピッカーを出す（おまかせ中は自動色に委ねる）。
+            if frameTextColorHex != nil {
+                ColorPicker(selection: colorBinding(mood: mood), supportsOpacity: false) {
+                    Text("色を選ぶ")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.9))
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// 「おまかせ」トグルのバインディング。ON→hex=nil、OFF→現在の自動色を初期値にセット。
+    private func autoColorBinding(mood: Mood) -> Binding<Bool> {
+        Binding(
+            get: { frameTextColorHex == nil },
+            set: { isAuto in
+                if isAuto {
+                    frameTextColorHex = nil
+                } else {
+                    // 自動 OFF：今の自動解決色を初期値に（プレビューと連続な見た目で開始）
+                    let resolved = ImageCompositor.resolveCaptionColor(style: selectedFrameStyle, mood: mood, override: nil)
+                    frameTextColorHex = resolved.toHexString()
+                }
+            }
+        )
+    }
+
+    /// ColorPicker 用 Color バインディング（hex ⇄ Color）。設定すると hex が入る＝おまかせ自動解除。
+    private func colorBinding(mood: Mood) -> Binding<Color> {
+        Binding(
+            get: {
+                if let hex = frameTextColorHex, let c = Color(hex: hex) { return c }
+                return Color(uiColor: ImageCompositor.resolveCaptionColor(style: selectedFrameStyle, mood: mood, override: nil))
+            },
+            set: { frameTextColorHex = $0.toHexString() }
+        )
+    }
+
     // MARK: - Preview
 
     /// 実焼き込み（写真の外側に余白＋下プレート、コメントはプレートに描く）を近似するプレビュー。
@@ -153,7 +255,10 @@ struct MoodSelectorView: View {
         let palette = mood.style.palette
         let style = selectedFrameStyle
         let sideInset: CGFloat = (style == .bottomBand) ? 0 : (style == .matte ? 14 : 12)
-        let captionColor: Color = (style == .matte) ? Color(white: 0.12) : .white
+        // 文字色・フォントは焼き込みと同じ解決関数を使う（選んだ色／フォントとプレビューを一致させる）。
+        let overrideColor = frameTextColorHex.flatMap { UIColor(hex: $0) }
+        let captionColor = Color(uiColor: ImageCompositor.resolveCaptionColor(style: style, mood: mood, override: overrideColor))
+        let fontDesign = ImageCompositor.resolveFontDesign(mood: mood, override: frameFontStyle)
 
         VStack(spacing: 0) {
             Image(uiImage: image)
@@ -167,7 +272,7 @@ struct MoodSelectorView: View {
 
             if !trimmed.isEmpty {
                 Text(trimmed)
-                    .font(.system(size: 14, design: mood.style.fontDesign))
+                    .font(.system(size: 14, design: fontDesign))
                     .fontWeight(.semibold)
                     .foregroundColor(captionColor)
                     .multilineTextAlignment(.center)
@@ -243,6 +348,46 @@ struct MoodButton: View {
         .scaleEffect(isSelected ? 1.02 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
         .accessibilityLabel("\(mood.displayName)の気分")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+// MARK: - Frame Font Chip
+
+/// フレーム文字フォントの選択チップ（「おまかせ」＋ 4 種フォント列）
+struct FrameFontChip: View {
+    let title: String
+    let iconName: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        }) {
+            HStack(spacing: 5) {
+                Image(systemName: iconName)
+                    .font(.system(size: 13))
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundColor(isSelected ? .white : .white.opacity(0.7))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(isSelected ? Color(red: 0.39, green: 0.58, blue: 0.93) : .white.opacity(0.1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9)
+                            .stroke(isSelected ? Color.white.opacity(0.4) : Color.white.opacity(0.2), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isSelected ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+        .accessibilityLabel("\(title)のフォント")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

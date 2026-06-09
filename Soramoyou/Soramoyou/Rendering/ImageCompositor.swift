@@ -42,13 +42,48 @@ enum ImageCompositor {
         var mood: Mood?
         /// 枠の形（色は mood、形は style）。余白量・プレート・文字色に影響する。
         var style: FrameStyle
+        /// コメント文字色の上書き（ユーザー選択）。nil なら style/mood から自動決定。
+        var captionColor: UIColor?
+        /// コメントフォントの上書き（ユーザー選択）。nil なら mood 既定フォント。
+        var fontStyle: FrameFontStyle?
 
-        init(base: CIImage, caption: String? = nil, mood: Mood? = nil, style: FrameStyle = .classic) {
+        init(base: CIImage, caption: String? = nil, mood: Mood? = nil, style: FrameStyle = .classic,
+             captionColor: UIColor? = nil, fontStyle: FrameFontStyle? = nil) {
             self.base = base
             self.caption = caption
             self.mood = mood
             self.style = style
+            self.captionColor = captionColor
+            self.fontStyle = fontStyle
         }
+    }
+
+    // MARK: - 文字色・フォントの解決（プレビューと焼き込みの単一の正）
+
+    /// コメント文字色を解決する。**プレビュー(MoodSelectorView)と焼き込み(本合成)の両方がこれを使う**
+    /// ことで、選んだ色と焼ける色のズレを防ぐ。
+    ///
+    /// - override 指定時はそれを優先。
+    /// - nil（おまかせ）のときは style ごとの自動色（背景に対しコントラスト確保）。
+    static func resolveCaptionColor(style: FrameStyle, mood: Mood, override: UIColor?) -> UIColor {
+        if let override { return override }
+        switch style {
+        case .classic:
+            // グラデ枠（mood 主色）に対し、輝度で白/濃色を切替えてコントラスト確保
+            return readableTextColor(on: UIColor(mood.style.palette.first ?? .white))
+        case .matte:
+            // ギャラリー銘板：白マットに濃い文字
+            return UIColor(white: 0.12, alpha: 1)
+        case .bottomBand:
+            // 濃色帯に白文字
+            return .white
+        }
+    }
+
+    /// コメントフォントデザインを解決する（プレビュー・焼き込み共通）。
+    /// - override 指定時はそのデザイン。nil なら mood 既定（`MoodStyle.fontDesign`）。
+    static func resolveFontDesign(mood: Mood, override: FrameFontStyle?) -> Font.Design {
+        override?.fontDesign ?? mood.style.fontDesign
     }
 
     // MARK: - レイアウト
@@ -69,34 +104,32 @@ enum ImageCompositor {
     ///
     /// - classic / matte: 上下左右に余白、写真の下にプレート（コメント時）。
     /// - bottomBand: 余白なし（写真は全幅）＋下に色プレート（バンド）。
-    private static func layout(style: FrameStyle, photo: CGSize, hasCaption: Bool, mood: Mood) -> Layout {
+    private static func layout(style: FrameStyle, photo: CGSize, hasCaption: Bool,
+                               mood: Mood, colorOverride: UIColor?) -> Layout {
         let pw = photo.width
         let ph = photo.height
 
         let side: CGFloat       // 左右・上の余白
         let plate: CGFloat      // 下プレート高（コメント領域）
         let bottom: CGFloat     // プレート下の余白
-        let captionColor: UIColor
 
         switch style {
         case .classic:
             side = max(20, pw * 0.05)
             plate = hasCaption ? max(64, pw * 0.15) : 0
             bottom = side
-            // グラデ枠（mood 主色）に対し、輝度で白/濃色を切替えてコントラスト確保
-            captionColor = readableTextColor(on: UIColor(mood.style.palette.first ?? .white))
         case .matte:
             side = max(24, pw * 0.06)
             plate = hasCaption ? max(72, pw * 0.17) : 0
             bottom = side
-            // ギャラリー銘板：白マットに濃い文字
-            captionColor = UIColor(white: 0.12, alpha: 1)
         case .bottomBand:
             side = 0
             plate = hasCaption ? max(80, pw * 0.18) : pw * 0.07   // 帯はこのスタイルの個性なのでコメント無しでも薄く残す
             bottom = 0
-            captionColor = .white                                  // 濃色帯に白文字
         }
+
+        // 文字色は解決関数に一本化（プレビューと同じ結果。override=ユーザー選択 / nil=style 自動色）
+        let captionColor = resolveCaptionColor(style: style, mood: mood, override: colorOverride)
 
         let top = (style == .bottomBand) ? 0 : side
         let cw = pw + side * 2
@@ -127,12 +160,16 @@ enum ImageCompositor {
 
         let trimmed = input.caption?.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasCaption = !(trimmed?.isEmpty ?? true)
-        let lay = layout(style: input.style, photo: CGSize(width: pw, height: ph), hasCaption: hasCaption, mood: mood)
+        let lay = layout(style: input.style, photo: CGSize(width: pw, height: ph),
+                         hasCaption: hasCaption, mood: mood, colorOverride: input.captionColor)
         let canvasRect = CGRect(origin: .zero, size: lay.canvas)
+
+        // 文字フォントも解決関数に一本化（override=ユーザー選択 / nil=mood 既定）
+        let fontDesign = resolveFontDesign(mood: mood, override: input.fontStyle)
 
         // 1. フレーム背景（余白＋プレート塗り＋写真縁の線＋プレート上のコメント）を 1 枚にラスタライズ（sRGB）
         let frameLayer = renderFrameLayer(
-            layout: lay, style: input.style, mood: mood,
+            layout: lay, style: input.style, mood: mood, fontDesign: fontDesign,
             caption: hasCaption ? trimmed : nil, canvas: canvasRect
         )
 
@@ -156,12 +193,15 @@ enum ImageCompositor {
     /// 流れ: cgImage → `.oriented`(向き適用) → compose(余白＋プレート生成) → `createCGImage`(Display P3) → UIImage(.up)。
     /// - 失敗時（cgImage 取得不可 / レンダ失敗）は入力画像をそのまま返す。
     /// - `caption` は **フレーム用コメント**（通常の投稿キャプションとは別物）。
-    static func composeToUIImage(base image: UIImage, mood: Mood?, caption: String?, style: FrameStyle = .classic) -> UIImage {
+    static func composeToUIImage(base image: UIImage, mood: Mood?, caption: String?,
+                                 style: FrameStyle = .classic,
+                                 captionColor: UIColor? = nil, fontStyle: FrameFontStyle? = nil) -> UIImage {
         guard let cgImage = image.cgImage else { return image }
         let pool = CIContextPool.shared
         let oriented = CIImage(cgImage: cgImage)
             .oriented(CGImagePropertyOrientation(image.imageOrientation))
-        let composed = compose(Input(base: oriented, caption: caption, mood: mood, style: style))
+        let composed = compose(Input(base: oriented, caption: caption, mood: mood, style: style,
+                                     captionColor: captionColor, fontStyle: fontStyle))
         guard let outputCGImage = pool.ciContext.createCGImage(
             composed,
             from: composed.extent,
@@ -182,6 +222,7 @@ enum ImageCompositor {
     /// 写真領域は「穴」（透明）にしておき、compose 側で不透明な写真を上に重ねる。
     /// プレートとコメントは写真の外側なので、写真を重ねても隠れない。
     private static func renderFrameLayer(layout lay: Layout, style: FrameStyle, mood: Mood,
+                                         fontDesign: Font.Design,
                                          caption: String?, canvas: CGRect) -> CIImage? {
         guard canvas.width > 0, canvas.height > 0 else { return nil }
         let palette = mood.style.palette.map { UIColor($0).cgColor }
@@ -236,7 +277,7 @@ enum ImageCompositor {
             // --- コメント（プレート内に描画）---
             if let caption, !lay.plateRect.isNull {
                 drawCaption(caption, in: lay.plateRect, canvasHeight: full.height,
-                            color: lay.captionColor, design: mood.style.fontDesign, cg: cg)
+                            color: lay.captionColor, design: fontDesign, cg: cg)
             }
         }
     }

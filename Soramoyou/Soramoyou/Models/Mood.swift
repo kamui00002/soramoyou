@@ -103,6 +103,51 @@ enum FrameStyle: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - FrameFontStyle
+
+/// フレーム文字に使うフォントの種類（ユーザー選択）。
+///
+/// `nil`（未選択）のときは mood ごとの既定フォント（`MoodStyle.fontDesign`）を使う。
+/// 各ケースは SwiftUI の `Font.Design` に 1:1 対応。raw value は Firestore 保存値なので固定文字列。
+enum FrameFontStyle: String, Codable, CaseIterable, Identifiable {
+    case standard    // 端正（.default）
+    case rounded     // 丸ゴシック（.rounded）
+    case serif       // 明朝（.serif）
+    case mono        // 等幅（.monospaced）
+
+    var id: String { rawValue }
+
+    /// 対応する SwiftUI フォントデザイン
+    var fontDesign: Font.Design {
+        switch self {
+        case .standard: return .default
+        case .rounded:  return .rounded
+        case .serif:    return .serif
+        case .mono:     return .monospaced
+        }
+    }
+
+    /// 表示名（フォント選択 UI 用）
+    var displayName: String {
+        switch self {
+        case .standard: return "標準"
+        case .rounded:  return "丸ゴ"
+        case .serif:    return "明朝"
+        case .mono:     return "等幅"
+        }
+    }
+
+    /// SF Symbols アイコン名（選択チップ用）
+    var iconName: String {
+        switch self {
+        case .standard: return "textformat"
+        case .rounded:  return "textformat.alt"
+        case .serif:    return "textformat.size"
+        case .mono:     return "chevron.left.forwardslash.chevron.right"
+        }
+    }
+}
+
 // MARK: - TextPlacement
 
 /// キャプションの配置位置（フレーム内の縦方向）

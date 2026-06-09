@@ -27,6 +27,10 @@ struct Post: Identifiable, Codable {
     /// 機能1: フレーム（額縁）に焼き込む一言コメント。通常の `caption`（ハッシュタグ等）とは別物。
     /// フレームには **この値だけ** を焼く。未入力・旧投稿は nil。
     let frameCaption: String?
+    /// 機能1: フレーム文字色（"#RRGGBB"）。ユーザー未選択（おまかせ）・旧投稿は nil＝style 自動色。
+    let frameTextColorHex: String?
+    /// 機能1: フレーム文字フォント。ユーザー未選択・旧投稿は nil＝mood 既定フォント。
+    let frameFontStyle: FrameFontStyle?
     let hashtags: [String]?
     let location: Location?
     let skyColors: [String]? // 最大5色、16進数カラーコード
@@ -51,6 +55,8 @@ struct Post: Identifiable, Codable {
         mood: Mood? = nil,
         frameId: String? = nil,
         frameCaption: String? = nil,
+        frameTextColorHex: String? = nil,
+        frameFontStyle: FrameFontStyle? = nil,
         hashtags: [String]? = nil,
         location: Location? = nil,
         skyColors: [String]? = nil,
@@ -74,6 +80,8 @@ struct Post: Identifiable, Codable {
         self.mood = mood
         self.frameId = frameId
         self.frameCaption = frameCaption
+        self.frameTextColorHex = frameTextColorHex
+        self.frameFontStyle = frameFontStyle
         self.hashtags = hashtags
         self.location = location
         // skyColorsは最大5色まで
@@ -122,6 +130,14 @@ struct Post: Identifiable, Codable {
 
         if let frameCaption = frameCaption {
             data["frameCaption"] = frameCaption
+        }
+
+        if let frameTextColorHex = frameTextColorHex {
+            data["frameTextColorHex"] = frameTextColorHex
+        }
+
+        if let frameFontStyle = frameFontStyle {
+            data["frameFontStyle"] = frameFontStyle.rawValue
         }
 
         if let hashtags = hashtags {
@@ -219,6 +235,13 @@ struct Post: Identifiable, Codable {
         }
         self.frameId = documentData["frameId"] as? String
         self.frameCaption = documentData["frameCaption"] as? String
+        self.frameTextColorHex = documentData["frameTextColorHex"] as? String
+        // フォント: 旧データ・未知の値は nil（mood 既定へフォールバック）
+        if let fontRaw = documentData["frameFontStyle"] as? String {
+            self.frameFontStyle = FrameFontStyle(rawValue: fontRaw)
+        } else {
+            self.frameFontStyle = nil
+        }
 
         self.hashtags = documentData["hashtags"] as? [String]
         

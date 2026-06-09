@@ -18,6 +18,8 @@ struct PostEditingContext {
     // MARK: - 編集可能（エディタ/投稿情報で書き換わる）
     let caption: String?
     let frameCaption: String?
+    let frameTextColorHex: String?
+    let frameFontStyle: FrameFontStyle?
     let mood: Mood?
     let frameStyle: FrameStyle
     let visibility: Visibility
@@ -42,6 +44,8 @@ struct PostEditingContext {
         self.postId = post.id
         self.caption = post.caption
         self.frameCaption = post.frameCaption
+        self.frameTextColorHex = post.frameTextColorHex
+        self.frameFontStyle = post.frameFontStyle
         self.mood = post.mood
         self.frameStyle = Self.parseStyle(from: post.frameId)
         self.visibility = post.visibility
