@@ -204,13 +204,14 @@ enum ImageCompositor {
         let width = extent.width
         let height = extent.height
 
-        // palette を sRGB CGColor へ（先頭=主色）
-        let cgColors = style.palette.map { UIColor($0).cgColor }
+        // palette を sRGB CGColor へ（先頭=主色）。枠をはっきり見せるため不透明化する。
+        let cgColors = style.palette.map { UIColor($0).withAlphaComponent(1).cgColor }
         let primary = cgColors.first ?? UIColor.white.cgColor
 
-        // 枠太さ・角丸は画像幅比（v1 たたき台。感性チューニングは後で MoodStyle へ逃がす）
-        let border = max(8, width * 0.045)
-        let corner = width * 0.03
+        // 枠太さ・角丸は画像幅比。Step1 で「変化が一目で分かる」太さへ強化
+        //（感性チューニングは後で MoodStyle / フレームバリアントへ逃がす）。
+        let border = max(24, width * 0.075)
+        let corner = width * 0.035
 
         let format = UIGraphicsImageRendererFormat.preferred()
         format.opaque = false
@@ -220,14 +221,13 @@ enum ImageCompositor {
         let layer = renderer.image { context in
             let cg = context.cgContext
             let full = CGRect(x: 0, y: 0, width: width, height: height)
+            let innerRect = full.insetBy(dx: border, dy: border)
+            let innerCorner = max(0, corner - border * 0.5)
 
             // (A) 縁グラデーション: 外周角丸をクリップ→内側角丸をくり抜いて「枠リング」だけ塗る。
             //     中心は完全透過のまま＝写真が見える（くり抜き忘れが最大の失敗モード）。
             let outer = UIBezierPath(roundedRect: full, cornerRadius: corner)
-            let inner = UIBezierPath(
-                roundedRect: full.insetBy(dx: border, dy: border),
-                cornerRadius: max(0, corner - border * 0.5)
-            )
+            let inner = UIBezierPath(roundedRect: innerRect, cornerRadius: innerCorner)
             cg.saveGState()
             outer.append(inner)
             cg.addPath(outer.cgPath)
@@ -246,16 +246,25 @@ enum ImageCompositor {
             }
             cg.restoreGState()
 
-            // (B) 角の装飾: mood の SF Symbol を主色で薄く左上に1つだけ（過剰装飾を避ける）。
-            let glyphSize = width * 0.09
-            let config = UIImage.SymbolConfiguration(pointSize: glyphSize, weight: .light)
+            // (A') 写真と枠の境目に白のクッキリ線を1本入れる。境界が締まり「額装」感が出て
+            //      空写真に枠が馴染んで消える問題を防ぐ（視認性アップ）。
+            let hairline = max(3, width * 0.005)
+            let hairlinePath = UIBezierPath(roundedRect: innerRect, cornerRadius: innerCorner)
+            cg.setStrokeColor(UIColor.white.withAlphaComponent(0.9).cgColor)
+            cg.setLineWidth(hairline)
+            cg.addPath(hairlinePath.cgPath)
+            cg.strokePath()
+
+            // (B) 角の装飾: mood の SF Symbol を主色で左上に1つ（控えめだが視認できる濃さに）。
+            let glyphSize = width * 0.10
+            let config = UIImage.SymbolConfiguration(pointSize: glyphSize, weight: .semibold)
             if let symbol = UIImage(systemName: mood.iconName, withConfiguration: config)?
                 .withTintColor(UIColor(cgColor: primary), renderingMode: .alwaysOriginal) {
-                let pad = border * 0.7
+                let pad = border * 0.6
                 symbol.draw(
                     in: CGRect(x: pad, y: pad, width: glyphSize, height: glyphSize),
                     blendMode: .normal,
-                    alpha: 0.55
+                    alpha: 0.85
                 )
             }
         }

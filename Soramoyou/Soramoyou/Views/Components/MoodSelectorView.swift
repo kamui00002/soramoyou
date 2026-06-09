@@ -102,14 +102,20 @@ struct MoodSelectorView: View {
                         .padding(20)
                 }
             }
+            // 実際の焼き込み(ImageCompositor)の見え方に近づける：太い色帯＋白い内枠線。
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(
                         LinearGradient(colors: style.palette, startPoint: .top, endPoint: .bottom),
-                        lineWidth: 6
+                        lineWidth: 16
                     )
             )
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(Color.white.opacity(0.9), lineWidth: 2)
+                    .padding(15)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     /// TextPlacement を SwiftUI の Alignment へ変換
