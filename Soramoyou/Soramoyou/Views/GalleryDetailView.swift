@@ -9,6 +9,13 @@
 import SwiftUI
 import Kingfisher
 
+/// 再編集エディタ起動ペイロード（fullScreenCover(item:) 用。画像が確実に揃ってから提示する）。
+private struct EditLaunchPayload: Identifiable {
+    let id = UUID()
+    let images: [UIImage]
+    let context: PostEditingContext
+}
+
 struct GalleryDetailView: View {
     let post: Post
     /// 投稿削除時に呼ばれるコールバック（一覧からの除去などに使用）
@@ -30,6 +37,10 @@ struct GalleryDetailView: View {
     @State private var saveResultMessage: String?
     @State private var showingSaveResult = false
     @State private var shareImages: [UIImage] = []
+    /// 再編集（投稿済み画像の上書き）起動ペイロード。non-nil で EditView を全画面提示。
+    @State private var editLaunch: EditLaunchPayload?
+    /// 元画像ダウンロード中フラグ（編集準備中の二重起動防止＋表示用）。
+    @State private var isPreparingEdit = false
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
@@ -125,8 +136,18 @@ struct GalleryDetailView: View {
 
                         Divider()
 
-                        // 自分の投稿の場合のみ削除ボタンを表示
+                        // 自分の投稿の場合のみ編集・削除を表示
                         if viewModel.isOwnPost(post) {
+                            // 再編集: 元画像(originalImages)を持つ投稿のみ。
+                            // 旧投稿(元画像なし)は再編集すると焼き込み済み画像を再び焼く＝二重焼きになるため非表示。
+                            if hasOriginalImages {
+                                Button {
+                                    Task { await prepareReEdit() }
+                                } label: {
+                                    Label(isPreparingEdit ? "準備中…" : "編集", systemImage: "slider.horizontal.3")
+                                }
+                                .disabled(isPreparingEdit)
+                            }
                             Button(role: .destructive) {
                                 showingDeleteConfirmation = true
                             } label: {
@@ -155,6 +176,16 @@ struct GalleryDetailView: View {
                     await viewModel.loadAuthor(userId: post.userId)
                     await commentViewModel.fetchComments(postId: post.id)
                 }
+            }
+            // 再編集: 元画像＋レシピをエディタへ。保存時は既存投稿を上書き更新する。
+            // item: 方式で「画像が確実に揃ってから」EditView を構築する（stale-state 回避）。
+            .fullScreenCover(item: $editLaunch) { launch in
+                EditView(
+                    images: launch.images,
+                    userId: post.userId,                 // 自分の投稿のみ編集可なので post.userId = 自分
+                    initialRecipe: post.attachedRecipe,
+                    editingContext: launch.context
+                )
             }
             // 投稿削除確認アラート
             .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
@@ -297,6 +328,35 @@ struct GalleryDetailView: View {
     }
 
     /// 現在表示中の画像を共有シートで共有
+    /// 再編集: 元画像(originalImages)を order 順に DL し、元投稿の seed を付けてエディタを起動する。
+    /// 失敗・元画像なしのときはエラーを表示して起動しない。
+    @MainActor
+    private func prepareReEdit() async {
+        guard !isPreparingEdit, hasOriginalImages else { return }
+        isPreparingEdit = true
+        defer { isPreparingEdit = false }
+
+        let infos = (post.originalImages ?? []).sorted { $0.order < $1.order }
+        let urls = infos.map { $0.url }.filter { !$0.isEmpty }
+        guard !urls.isEmpty else {
+            saveResultMessage = "元画像が見つかりませんでした"
+            showingSaveResult = true
+            return
+        }
+        do {
+            let images = try await downloadService.downloadImages(from: urls)
+            guard !images.isEmpty else {
+                saveResultMessage = "元画像の読み込みに失敗しました"
+                showingSaveResult = true
+                return
+            }
+            editLaunch = EditLaunchPayload(images: images, context: PostEditingContext(post: post))
+        } catch {
+            saveResultMessage = "元画像の読み込みに失敗しました"
+            showingSaveResult = true
+        }
+    }
+
     private func shareCurrentImage() async {
         isSaving = true
         defer { isSaving = false }

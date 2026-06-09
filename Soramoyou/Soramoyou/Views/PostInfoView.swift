@@ -34,6 +34,7 @@ struct PostInfoView: View {
         editRecipe: EditRecipe? = nil,
         userId: String?,
         externalEditInfos: [ExternalEditInfo?] = [],
+        editingContext: PostEditingContext? = nil,
         locationService: LocationServiceProtocol = LocationService()
     ) {
         let postViewModel = PostViewModel(userId: userId)
@@ -43,6 +44,11 @@ struct PostInfoView: View {
         if !editedImages.isEmpty {
             // 通常経路: EditView から生成済みの編集後画像を受け取る（全編集を保持）
             postViewModel.setEditedImages(editedImages, editSettings: editSettings, editRecipe: editRecipe)
+        }
+        // 再編集（投稿済み画像の上書き更新）の場合は、元投稿の caption / frameCaption / mood /
+        // 枠スタイル / 公開範囲 / ハッシュタグ / 保持メタを seed する。以降 savePost は updatePost になる。
+        if let editingContext {
+            postViewModel.seedForEditing(editingContext)
         }
         // 編集済み画像が無い場合（下書き編集など）は onAppear で editSettings を適用して再生成する。
         // ⚠️ ここで再生成 Task を起こさないこと。@StateObject の throwaway インスタンス上で
@@ -151,13 +157,13 @@ struct PostInfoView: View {
                     Text(errorMessage)
                 }
             }
-            .alert("投稿完了", isPresented: $viewModel.isPostSaved) {
+            .alert(viewModel.editingPostId != nil ? "更新完了" : "投稿完了", isPresented: $viewModel.isPostSaved) {
                 Button("OK") {
-                    // 投稿完了後、画面を閉じてホーム画面に戻る
+                    // 完了後、画面を閉じる
                     dismiss()
                 }
             } message: {
-                Text("投稿が完了しました")
+                Text(viewModel.editingPostId != nil ? "投稿を更新しました" : "投稿が完了しました")
             }
             .onAppear {
                 // 編集済み画像がない場合（下書き経路など）は editSettings から再生成する。
@@ -752,7 +758,14 @@ struct PostInfoView: View {
     }
 
     // MARK: - Action Buttons
-    
+
+    /// 保存ボタンの表示名（新規投稿＝「投稿」/ 再編集＝「更新」）。
+    private var saveButtonTitle: String {
+        let editing = viewModel.editingPostId != nil
+        if viewModel.isUploading { return editing ? "更新中..." : "投稿中..." }
+        return editing ? "更新する" : "投稿"
+    }
+
     private var actionButtons: some View {
         VStack(spacing: 12) {
             Button(action: {
@@ -771,7 +784,7 @@ struct PostInfoView: View {
                     } else {
                         Image(systemName: "paperplane.fill")
                     }
-                    Text(viewModel.isUploading ? "投稿中..." : "投稿")
+                    Text(saveButtonTitle)
                 }
                 .font(.headline)
                 .foregroundColor(.white)

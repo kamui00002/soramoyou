@@ -291,4 +291,48 @@ final class Feature1FoundationTests: XCTestCase {
         let bandCI = try XCTUnwrap(band.cgImage.map { CIImage(cgImage: $0) })
         XCTAssertGreaterThan(whiteStats(bandCI).count, 0, "bottomBand は白文字キャプションの白画素が出るべき")
     }
+
+    // MARK: - PostEditingContext（再編集 seed）
+
+    func testPostEditingContextExtractsFieldsAndParsesStyle() {
+        let img = ImageInfo(
+            url: "https://e.com/a.jpg", thumbnail: "https://e.com/a_t.jpg",
+            width: 100, height: 200, order: 0,
+            storagePath: "posts/u1/a.jpg", thumbnailStoragePath: "posts/u1/a_t.jpg"
+        )
+        let orig = ImageInfo(url: "https://e.com/o.jpg", width: 100, height: 200, order: 0, storagePath: "originals/u1/o.jpg")
+        let post = Post(
+            id: "p9", userId: "u1", images: [img], originalImages: [orig],
+            caption: "本文 #空", mood: .wistful, frameId: "wistful_matte", frameCaption: "夕暮れ",
+            hashtags: ["空"], skyColors: ["#abcdef"], visibility: .followers,
+            likesCount: 7, commentsCount: 3
+        )
+        let ctx = PostEditingContext(post: post)
+        XCTAssertEqual(ctx.postId, "p9")
+        XCTAssertEqual(ctx.mood, .wistful)
+        XCTAssertEqual(ctx.frameStyle, .matte, "frameId 末尾から枠スタイルを復元するべき")
+        XCTAssertEqual(ctx.caption, "本文 #空")
+        XCTAssertEqual(ctx.frameCaption, "夕暮れ")
+        XCTAssertEqual(ctx.visibility, .followers)
+        XCTAssertEqual(ctx.likesCount, 7)
+        XCTAssertEqual(ctx.commentsCount, 3)
+        XCTAssertEqual(ctx.skyColors, ["#abcdef"])
+        // 旧 Storage パス（孤児削除用）に 画像・サムネ・オリジナル が含まれる
+        XCTAssertTrue(ctx.oldStoragePaths.contains("posts/u1/a.jpg"))
+        XCTAssertTrue(ctx.oldStoragePaths.contains("posts/u1/a_t.jpg"))
+        XCTAssertTrue(ctx.oldStoragePaths.contains("originals/u1/o.jpg"))
+    }
+
+    func testPostEditingContextStyleFallbackAndBandParse() {
+        let img = ImageInfo(url: "https://e.com/a.jpg", width: 100, height: 200, order: 0)
+        // frameId なし → classic
+        let noFrame = Post(id: "p1", userId: "u1", images: [img], visibility: .public)
+        XCTAssertEqual(PostEditingContext(post: noFrame).frameStyle, .classic)
+        // 旧形式 "frame_wistful_01" → 末尾 "01" は FrameStyle に無い → classic フォールバック
+        let legacy = Post(id: "p2", userId: "u1", images: [img], frameId: "frame_wistful_01", visibility: .public)
+        XCTAssertEqual(PostEditingContext(post: legacy).frameStyle, .classic)
+        // "calm_bottomBand" → bottomBand 復元
+        let band = Post(id: "p3", userId: "u1", images: [img], mood: .calm, frameId: "calm_bottomBand", visibility: .public)
+        XCTAssertEqual(PostEditingContext(post: band).frameStyle, .bottomBand)
+    }
 }

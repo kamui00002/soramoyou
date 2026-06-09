@@ -53,6 +53,12 @@ class PostViewModel: ObservableObject {
     private let firestoreService: FirestoreServiceProtocol
     private let userId: String?
 
+    /// 再編集対象の投稿コンテキスト（非nil＝既存投稿の上書き更新モード）。
+    /// savePost はこの有無で createPost / updatePost を切り替える。
+    private var editingContext: PostEditingContext?
+    /// 上書き更新する既存投稿 ID（再編集モードのときのみ非nil）。
+    var editingPostId: String? { editingContext?.postId }
+
     private var uploadedImageURLs: [String] = []
     private var uploadedThumbnailURLs: [String] = []
     private var uploadedOriginalImageURLs: [String] = []  // オリジナル画像のパス
@@ -125,7 +131,20 @@ class PostViewModel: ObservableObject {
     }
     
     // MARK: - Post Info Management
-    
+
+    /// 再編集モードの seed を流し込む（既存投稿の値を投稿情報画面へ復元）。
+    /// 以降 savePost は createPost ではなく updatePost（postId 上書き・カウント/作成日時保持）を行う。
+    func seedForEditing(_ context: PostEditingContext) {
+        editingContext = context
+        caption = context.caption ?? ""
+        frameCaption = context.frameCaption ?? ""
+        selectedMood = context.mood
+        selectedFrameStyle = context.frameStyle
+        visibility = context.visibility
+        hashtags = context.hashtags
+        location = context.location
+    }
+
     /// キャプションを設定
     func setCaption(_ caption: String) {
         self.caption = caption
@@ -288,18 +307,32 @@ class PostViewModel: ObservableObject {
 
             // 3. Firestoreに投稿データを保存
             let post = try await createPost(imageURLs: imageURLs, originalImageURLs: originalImageURLs)
-            
-            // 3. 投稿を保存（リトライ可能）
-            _ = try await RetryableOperation.executeIfRetryable(
-                operationName: "PostViewModel.createPost"
-            ) { [self] in
-                try await self.firestoreService.createPost(post)
+
+            // 3. 投稿を保存 or 更新（リトライ可能）。再編集モードは既存 doc を上書き更新する。
+            if let editing = editingContext {
+                _ = try await RetryableOperation.executeIfRetryable(
+                    operationName: "PostViewModel.updatePost"
+                ) { [self] in
+                    try await self.firestoreService.updatePost(post)
+                }
+                // 更新成功後、旧 Storage の孤児ファイルをベストエフォート削除（失敗は無視＝投稿更新は成立済み）。
+                // 再アップロードで画像 URL は変わるため Kingfisher の URL キャッシュは自然に更新される。
+                for path in editing.oldStoragePaths {
+                    try? await storageService.deleteImage(path: path)
+                }
+            } else {
+                _ = try await RetryableOperation.executeIfRetryable(
+                    operationName: "PostViewModel.createPost"
+                ) { [self] in
+                    try await self.firestoreService.createPost(post)
+                }
             }
 
             // パーソナルAI編集の学習コーパスへ記録（端末内・投稿成功時のみ・ベストエフォート）。
             // 記録に失敗しても投稿成功は妨げない。skyType は AI判定 or ユーザー選択を使う。
             // ⚠️ 未編集（中立）レシピは学習データを薄めるため記録しない（isNeutral でゲート）。
-            if let recipe = editRecipe, !recipe.isNeutral {
+            // 再編集（上書き更新）ではコーパスへ重複記録しない（新規投稿のみ学習に使う）。
+            if editingContext == nil, let recipe = editRecipe, !recipe.isNeutral {
                 RecipeCorpusStore().append(
                     RecipeCorpusEntry(
                         recipe: recipe,
@@ -502,8 +535,10 @@ class PostViewModel: ObservableObject {
         let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         // フレーム用コメントは通常 caption と別保存。mood 未選択時はフレーム自体が出ないので nil。
         let trimmedFrameCaption = frameCaption.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 再編集モード（既存投稿の上書き）では ID・カウント・作成日時・抽出メタを元投稿から保持する。
+        let editing = editingContext
         let post = Post(
-            id: UUID().uuidString,
+            id: editing?.postId ?? UUID().uuidString,
             userId: userId,
             images: imageInfos,
             originalImages: originalImageInfos,
@@ -516,12 +551,17 @@ class PostViewModel: ObservableObject {
             frameCaption: (selectedMood != nil && !trimmedFrameCaption.isEmpty) ? trimmedFrameCaption : nil,
             hashtags: hashtags.isEmpty ? nil : hashtags,
             location: location,
-            skyColors: extractedInfo?.skyColors,
-            capturedAt: extractedInfo?.capturedAt,
-            timeOfDay: extractedInfo?.timeOfDay,
-            skyType: effectiveSkyType,  // ユーザー選択 or AI判定
-            colorTemperature: extractedInfo?.colorTemperature,
-            visibility: visibility
+            // 再編集時はメタを再導出せず元投稿の値を保持。新規時は抽出値を使用。
+            skyColors: editing?.skyColors ?? extractedInfo?.skyColors,
+            capturedAt: editing?.capturedAt ?? extractedInfo?.capturedAt,
+            timeOfDay: editing?.timeOfDay ?? extractedInfo?.timeOfDay,
+            skyType: editing?.skyType ?? effectiveSkyType,  // 再編集=保持 / 新規=ユーザー選択 or AI判定
+            colorTemperature: editing?.colorTemperature ?? extractedInfo?.colorTemperature,
+            visibility: visibility,
+            // カウント・作成日時は再編集で不変（Firestore ルール isValidPostUpdate 要件）。新規は既定(0/now)。
+            likesCount: editing?.likesCount ?? 0,
+            commentsCount: editing?.commentsCount ?? 0,
+            createdAt: editing?.createdAt ?? Date()
         )
 
         return post
@@ -640,6 +680,7 @@ class PostViewModel: ObservableObject {
         selectedMood = nil
         selectedFrameStyle = .classic
         frameCaption = ""
+        editingContext = nil
         hashtags = []
         location = nil
         visibility = .public

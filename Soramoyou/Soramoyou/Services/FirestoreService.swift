@@ -11,6 +11,9 @@ import FirebaseFirestore
 protocol FirestoreServiceProtocol {
     // Posts
     func createPost(_ post: Post) async throws -> Post
+    /// 既存投稿を上書き更新する（再編集）。likesCount/commentsCount/createdAt/userId は保持して呼ぶこと
+    /// （Firestore ルール isValidPostUpdate がカウント不変を要求するため）。postsCount は加算しない。
+    func updatePost(_ post: Post) async throws -> Post
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
     func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?)
     func fetchPost(postId: String) async throws -> Post
@@ -126,7 +129,22 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.createFailed(error)
         }
     }
-    
+
+    /// 既存投稿を上書き更新（再編集）。同じ docId に setData で全置換する。
+    /// 呼び出し側で likesCount/commentsCount/createdAt/userId を保持済みであること（ルール要件）。
+    /// 新規作成ではないので postsCount のインクリメントは行わない。
+    func updatePost(_ post: Post) async throws -> Post {
+        do {
+            let data = post.toFirestoreData()
+            try await postsCollection.document(post.id).setData(data)
+            return post
+        } catch let error as FirestoreServiceError {
+            throw error
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
+        }
+    }
+
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
         do {
             var query: Query = postsCollection
