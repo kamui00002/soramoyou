@@ -26,6 +26,10 @@ struct PostEditingContext {
     let hashtags: [String]
 
     // MARK: - 保持メタ（再編集では変えない。Firestore ルール要件＋一貫性のため）
+    /// 既存の原画像（再編集では原画像自体は変わらない＝そのまま引き継ぐ）。
+    /// これを保持しないと上書き更新(setData全置換)で originalImages が消え、
+    /// 次回以降の再編集や「編集前/編集後」トグルが壊れる（＝元画像 data-loss）。
+    let originalImages: [ImageInfo]?
     let likesCount: Int
     let commentsCount: Int
     let createdAt: Date
@@ -59,14 +63,14 @@ struct PostEditingContext {
         self.skyType = post.skyType
         self.colorTemperature = post.colorTemperature
         self.location = post.location
+        self.originalImages = post.originalImages
 
+        // 削除対象は「置換される編集済み画像（＋サムネ）」のみ。原画像は保持して引き継ぐので
+        // 削除しない（原画像 blob を消すと再編集不可になる＝C1 data-loss の原因だった）。
         var paths: [String] = []
         for img in post.images {
             if let p = img.storagePath { paths.append(p) }
             if let t = img.thumbnailStoragePath { paths.append(t) }
-        }
-        for img in post.originalImages ?? [] {
-            if let p = img.storagePath { paths.append(p) }
         }
         self.oldStoragePaths = paths
     }

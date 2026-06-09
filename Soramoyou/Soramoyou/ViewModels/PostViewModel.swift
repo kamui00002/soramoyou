@@ -546,11 +546,14 @@ class PostViewModel: ObservableObject {
         let trimmedFrameCaption = frameCaption.trimmingCharacters(in: .whitespacesAndNewlines)
         // 再編集モード（既存投稿の上書き）では ID・カウント・作成日時・抽出メタを元投稿から保持する。
         let editing = editingContext
+        // 原画像は再編集で変わらない＝元投稿のものをそのまま引き継ぐ（再アップロードしない）。
+        // 新規投稿時のみ、ユーザーが保存を選んだ場合に今回アップロードした原画像を使う。
+        let finalOriginalImages = editing?.originalImages ?? originalImageInfos
         let post = Post(
             id: editing?.postId ?? UUID().uuidString,
             userId: userId,
             images: imageInfos,
-            originalImages: originalImageInfos,
+            originalImages: finalOriginalImages,
             editSettings: editSettings,
             attachedRecipe: editRecipe,
             caption: trimmedCaption.isEmpty ? nil : trimmedCaption,

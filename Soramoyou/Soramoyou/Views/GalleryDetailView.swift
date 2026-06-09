@@ -134,12 +134,13 @@ struct GalleryDetailView: View {
                             // 再編集: 元画像(originalImages)を持つ投稿のみ。
                             // 旧投稿(元画像なし)は再編集すると焼き込み済み画像を再び焼く＝二重焼きになるため非表示。
                             if hasOriginalImages {
+                                // Menu はタップで即閉じるためラベル切替/.disabled は見えない。
+                                // 二重起動防止は prepareReEdit() 内の guard、DL 中表示は overlay が担う。
                                 Button {
                                     Task { await prepareReEdit() }
                                 } label: {
-                                    Label(isPreparingEdit ? "準備中…" : "編集", systemImage: "slider.horizontal.3")
+                                    Label("編集", systemImage: "slider.horizontal.3")
                                 }
-                                .disabled(isPreparingEdit)
                             }
                             Button(role: .destructive) {
                                 showingDeleteConfirmation = true
@@ -269,9 +270,9 @@ struct GalleryDetailView: View {
             .sheet(isPresented: $showingShareSheet) {
                 ImageShareSheet(images: shareImages)
             }
-            // 保存中オーバーレイ
+            // 保存中／再編集の元画像DL中オーバーレイ（G1: Menu 内ボタンの「準備中…」は見えないため）
             .overlay {
-                if isSaving {
+                if isSaving || isPreparingEdit {
                     ZStack {
                         Color.black.opacity(0.4)
                             .ignoresSafeArea()
@@ -279,7 +280,7 @@ struct GalleryDetailView: View {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                 .scaleEffect(1.2)
-                            Text("保存中...")
+                            Text(isPreparingEdit ? "編集の準備中..." : "保存中...")
                                 .font(.subheadline)
                                 .foregroundColor(.white)
                         }

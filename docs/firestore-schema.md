@@ -35,6 +35,9 @@
   "caption": "string",
   "mood": "string",                  // 機能1: 気分(calm/uplifted/wistful/dignified/dreamy)。未設定なら無し
   "frameId": "string",               // 機能1: 枠ID "{mood}_{frameStyle}" 形式（例 calm_matte / wistful_bottomBand）。未設定なら無し
+  "frameCaption": "string",          // 機能1: 額縁に焼く一言（通常 caption とは別）。未設定なら無し
+  "frameTextColorHex": "string",     // 機能1: フレーム文字色 "#RRGGBB"。未設定なら無し＝style自動色（おまかせ）
+  "frameFontStyle": "string",        // 機能1: フレーム文字フォント(standard/rounded/serif/mono)。未設定なら無し＝mood既定
   "hashtags": ["string"],
   "location": {
     "latitude": "number",

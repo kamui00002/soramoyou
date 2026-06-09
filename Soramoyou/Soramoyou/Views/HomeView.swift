@@ -698,7 +698,10 @@ struct PostDetailView: View {
 
     @ViewBuilder
     private var savingOverlay: some View {
-        if isSaving {
+        // 保存中だけでなく「再編集の元画像DL中」もオーバーレイを出す。
+        // 再編集ボタンは Menu 内＝タップで即閉じるためボタン上の「準備中…」表記は見えない。
+        // 数秒の DL 中に無反応にならないよう、ここで全画面インジケータを出す（G1 対応）。
+        if isSaving || isPreparingReEdit {
             ZStack {
                 Color.black.opacity(0.4)
                     .ignoresSafeArea()
@@ -706,7 +709,7 @@ struct PostDetailView: View {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.2)
-                    Text("保存中...")
+                    Text(isPreparingReEdit ? "編集の準備中..." : "保存中...")
                         .font(.subheadline)
                         .foregroundColor(.white)
                 }
@@ -892,12 +895,13 @@ struct PostDetailView: View {
                     // 再編集: 元画像(originalImages)を持つ投稿のみ。
                     // 旧投稿(元画像なし)は再編集すると焼き込み済み画像を再び焼く＝二重焼きになるため非表示。
                     if hasOriginalImages {
+                        // Menu はタップで即閉じるためラベル切替/.disabled は見えない。
+                        // 二重起動防止は prepareReEdit() 内の guard に任せ、DL 中の表示は savingOverlay が担う。
                         Button {
                             Task { await prepareReEdit() }
                         } label: {
-                            Label(isPreparingReEdit ? "準備中…" : "編集", systemImage: "slider.horizontal.3")
+                            Label("編集", systemImage: "slider.horizontal.3")
                         }
-                        .disabled(isPreparingReEdit)
                     }
                     Button(role: .destructive) {
                         showingDeleteConfirmation = true

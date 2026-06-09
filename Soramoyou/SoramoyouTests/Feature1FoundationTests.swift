@@ -318,10 +318,13 @@ final class Feature1FoundationTests: XCTestCase {
         XCTAssertEqual(ctx.likesCount, 7)
         XCTAssertEqual(ctx.commentsCount, 3)
         XCTAssertEqual(ctx.skyColors, ["#abcdef"])
-        // 旧 Storage パス（孤児削除用）に 画像・サムネ・オリジナル が含まれる
+        // 原画像は再編集で変わらない＝引き継ぐ（C1 data-loss 対策）
+        XCTAssertEqual(ctx.originalImages?.first?.url, "https://e.com/o.jpg", "原画像を保持して引き継ぐべき")
+        // 旧 Storage パス（孤児削除用）には「置換される編集済み画像＋サムネ」のみ含む。
         XCTAssertTrue(ctx.oldStoragePaths.contains("posts/u1/a.jpg"))
         XCTAssertTrue(ctx.oldStoragePaths.contains("posts/u1/a_t.jpg"))
-        XCTAssertTrue(ctx.oldStoragePaths.contains("originals/u1/o.jpg"))
+        // 原画像パスは削除対象に含めない（保持するため。含めると再編集不可になる）。
+        XCTAssertFalse(ctx.oldStoragePaths.contains("originals/u1/o.jpg"), "原画像パスは削除対象に含めない（保持）")
     }
 
     func testPostEditingContextStyleFallbackAndBandParse() {
@@ -376,6 +379,17 @@ final class Feature1FoundationTests: XCTestCase {
         XCTAssertNil(UIColor(hex: "#12"))
         // Color 経由でも往復する
         XCTAssertEqual(Color(hex: "#00FF80")?.toHexString(), "#00FF80")
+    }
+
+    func testToHexStringClampsWideGamutToValidHex() {
+        // ColorPicker は広色域(Display P3)の色も返しうる。toHexString は 00..FF にクランプして
+        // 常に妥当な6桁hexを出す＝preview と bake が同じ(クランプ済み)hexを使い続けられる(方針④)。
+        let wide = UIColor(displayP3Red: 1.2, green: -0.1, blue: 0.5, alpha: 1)
+        let hex = wide.toHexString()
+        XCTAssertEqual(hex.count, 7, "\"#RRGGBB\" の7文字であるべき")
+        XCTAssertTrue(hex.hasPrefix("#"))
+        // クランプ後のhexは必ず再パースできる（preview==bake の連続性の担保）
+        XCTAssertNotNil(UIColor(hex: hex), "クランプ後hexは常に再パース可能であるべき")
     }
 
     func testResolveCaptionColorOverrideWinsAndStyleDefaults() {

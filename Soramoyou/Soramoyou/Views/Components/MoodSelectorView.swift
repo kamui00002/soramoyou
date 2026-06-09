@@ -431,3 +431,42 @@ struct FrameStyleChip: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
+
+// MARK: - Preview
+
+/// mood 選択あり（枠・色・フォントの各ピッカーが見える状態）と未選択の2状態を確認する。
+#Preview("mood 選択あり") {
+    MoodSelectorViewPreviewHost(initialMood: .calm)
+        .padding()
+        .background(Color.black)
+}
+
+#Preview("mood 未選択") {
+    MoodSelectorViewPreviewHost(initialMood: nil)
+        .padding()
+        .background(Color.black)
+}
+
+/// バインディングを保持してプレビューで実際に操作できるようにするホスト。
+private struct MoodSelectorViewPreviewHost: View {
+    @State private var mood: Mood?
+    @State private var style: FrameStyle = .classic
+    @State private var caption: String = "静かな空に、ひとことを"
+    @State private var colorHex: String?
+    @State private var fontStyle: FrameFontStyle?
+
+    init(initialMood: Mood?) {
+        _mood = State(initialValue: initialMood)
+    }
+
+    var body: some View {
+        MoodSelectorView(
+            selectedMood: $mood,
+            selectedFrameStyle: $style,
+            frameCaption: $caption,
+            frameTextColorHex: $colorHex,
+            frameFontStyle: $fontStyle,
+            previewImage: nil
+        )
+    }
+}
