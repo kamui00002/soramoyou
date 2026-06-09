@@ -305,6 +305,14 @@ class PostViewModel: ObservableObject {
                 )
             }
 
+            // 機能1: mood 付き投稿を計装（LoggingService ファサード経由・PII なし）
+            if let mood = selectedMood {
+                LoggingService.shared.logEvent("post_with_mood", parameters: [
+                    "mood": mood.rawValue,
+                    "has_caption": !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ])
+            }
+
             // 4. 投稿作成を通知（プロフィール画面の自動更新用）☁️
             NotificationCenter.default.post(name: .postCreated, object: nil)
 
@@ -482,6 +490,10 @@ class PostViewModel: ObservableObject {
         }
 
         // 投稿データを作成（effectiveSkyTypeを使用 ☁️）
+        // キャプションは前後の空白・改行を除去して保存する。空白のみのキャプションは
+        // 焼き込み側（composeMoodFrameIfNeeded）と判定を揃えて nil 扱いにし、
+        // 「保存値あり／焼き込みなし」の不一致を防ぐ。
+        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         let post = Post(
             id: UUID().uuidString,
             userId: userId,
@@ -489,7 +501,7 @@ class PostViewModel: ObservableObject {
             originalImages: originalImageInfos,
             editSettings: editSettings,
             attachedRecipe: editRecipe,
-            caption: caption.isEmpty ? nil : caption,
+            caption: trimmedCaption.isEmpty ? nil : trimmedCaption,
             mood: selectedMood,
             frameId: selectedMood?.rawValue,  // v1 はフレーム=mood 由来。複数フレーム対応は将来
             hashtags: hashtags.isEmpty ? nil : hashtags,
