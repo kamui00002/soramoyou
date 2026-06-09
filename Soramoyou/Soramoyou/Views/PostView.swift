@@ -11,6 +11,9 @@ struct PostView: View {
     @StateObject private var viewModel: PhotoSelectionViewModel
     @EnvironmentObject var authViewModel: AuthViewModel
     @State private var showEditView = false
+    /// 投稿モード（通常/配置写真）。配置写真は4枚固定・ログイン必須。
+    /// 広角合成(.panorama)は OpenCV 必須のため本ブランチでは未提供（別ブランチで追加）。
+    @State private var postKind: PostKind = .single
 
     init() {
         // 認証状態に応じて最大選択数を設定
@@ -81,7 +84,8 @@ struct PostView: View {
                 EditView(
                     images: viewModel.selectedImages,
                     userId: authViewModel.currentUser?.id,
-                    externalEditInfos: viewModel.pickedMetadata
+                    externalEditInfos: viewModel.pickedMetadata,
+                    postKind: postKind
                 )
             }
         }
@@ -90,33 +94,66 @@ struct PostView: View {
             updateMaxSelectionCount()
         }
         .onChange(of: authViewModel.isAuthenticated) { _ in
+            // ログアウトで配置写真が使えなくなったら通常モードへ戻す（無効な選択を残さない）
+            if !availableKinds.contains(postKind) {
+                postKind = .single
+            }
             updateMaxSelectionCount()
         }
     }
     
+    /// 選択可能枚数。配置写真は「ちょうど4枚」が要件なので 4 固定（ピッカー生成前に確定が必須）。
     private var maxSelectionCount: Int {
-        authViewModel.isAuthenticated ? 10 : 3
+        if postKind == .collage { return 4 }
+        return authViewModel.isAuthenticated ? 10 : 3
     }
-    
+
     private func updateMaxSelectionCount() {
-        let newMaxCount = authViewModel.isAuthenticated ? 10 : 3
-        viewModel.updateMaxSelectionCount(newMaxCount)
+        viewModel.updateMaxSelectionCount(maxSelectionCount)
+    }
+
+    /// 選べる投稿モード（配置写真はログイン必須＝未ログインでは通常のみ）。
+    private var availableKinds: [PostKind] {
+        authViewModel.isAuthenticated ? [.single, .collage] : [.single]
+    }
+
+    /// 配置写真モードで「ちょうど4枚」を満たしているか。
+    private var collageReady: Bool {
+        postKind != .collage || viewModel.selectedImages.count == 4
     }
     
     // MARK: - Photo Selection View
     
     private var photoSelectionView: some View {
         VStack(spacing: 24) {
-            Image(systemName: "photo.on.rectangle")
+            // 投稿モード選択（配置写真はログイン必須＝未ログインでは表示しない）
+            if availableKinds.count > 1 {
+                Picker("投稿モード", selection: $postKind) {
+                    ForEach(availableKinds) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .onChange(of: postKind) { _ in
+                    // モードで枚数上限が変わる。PHPicker の selectionLimit は生成時に固定されるため、
+                    // ピッカーを開く前にここで確定させておく。
+                    updateMaxSelectionCount()
+                }
+            }
+
+            Image(systemName: postKind == .collage ? "square.grid.2x2" : "photo.on.rectangle")
                 .font(.system(size: 60))
                 .foregroundColor(.white.opacity(0.8))
-            
-            Text("写真を選択")
+
+            Text(postKind == .collage ? "配置写真をつくる" : "写真を選択")
                 .font(.title2)
                 .fontWeight(.semibold)
                 .foregroundColor(.white)
-            
-            Text("空の写真を選択して投稿しましょう")
+
+            Text(postKind == .collage
+                 ? "朝・昼・夜・雨など、空を4枚選んで1枚に並べます"
+                 : "空の写真を選択して投稿しましょう")
                 .font(.body)
                 .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
@@ -150,9 +187,17 @@ struct PostView: View {
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.8))
                 
-                Text(authViewModel.isAuthenticated ? "最大10枚" : "最大3枚（ログインで10枚まで）")
+                Text(postKind == .collage
+                     ? "ちょうど4枚を選んでください"
+                     : (authViewModel.isAuthenticated ? "最大10枚" : "最大3枚（ログインで10枚まで）"))
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.8))
+
+                if postKind == .single && !authViewModel.isAuthenticated {
+                    Text("配置写真はログインで使えます")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.7))
+                }
             }
             .padding(.top)
         }
@@ -181,6 +226,14 @@ struct PostView: View {
                 }
                 .padding()
                 
+                // 配置写真モードで枚数不足のときのガイド
+                if postKind == .collage && !collageReady {
+                    Text("配置写真はちょうど4枚です（今 \(viewModel.selectedImages.count) 枚）")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.9))
+                        .padding(.horizontal)
+                }
+
                 // アクションボタン
                 VStack(spacing: 12) {
                     Button(action: {
@@ -204,7 +257,7 @@ struct PostView: View {
                         )
                         .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
                     }
-                    .disabled(viewModel.isLoading || viewModel.selectedImages.isEmpty)
+                    .disabled(viewModel.isLoading || viewModel.selectedImages.isEmpty || !collageReady)
                     
                     Button(action: {
                         viewModel.clearSelection()

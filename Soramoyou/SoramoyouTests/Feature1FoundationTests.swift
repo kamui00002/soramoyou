@@ -462,6 +462,44 @@ final class Feature1FoundationTests: XCTestCase {
         XCTAssertNil(try Post(from: corrupt).frameFontStyle)
     }
 
+    // MARK: - 配置写真（v1）Post 往復
+
+    func testPostCollageFieldsRoundTrip() throws {
+        let image = ImageInfo(url: "https://example.com/c.jpg", width: 200, height: 200, order: 0)
+        let post = Post(
+            id: "pc1", userId: "u1", images: [image],
+            postKind: .collage, collageLayout: .grid2x2, panelLabels: ["朝", "昼", "夜", "雨"],
+            visibility: .public
+        )
+        let data = post.toFirestoreData()
+        XCTAssertEqual(data["postKind"] as? String, "collage")
+        XCTAssertEqual(data["collageLayout"] as? String, "grid2x2")
+        XCTAssertEqual(data["panelLabels"] as? [String], ["朝", "昼", "夜", "雨"])
+
+        let restored = try Post(from: data)
+        XCTAssertEqual(restored.postKind, .collage)
+        XCTAssertEqual(restored.collageLayout, .grid2x2)
+        XCTAssertEqual(restored.panelLabels, ["朝", "昼", "夜", "雨"])
+        XCTAssertTrue(restored.postKind?.isComposite == true)
+    }
+
+    func testPostSingleKindOmitsCollageFields() throws {
+        // 通常投稿は postKind=nil（旧投稿とドキュメント形状一致）・collage系フィールド無し。
+        let image = ImageInfo(url: "https://example.com/s.jpg", width: 200, height: 200, order: 0)
+        let post = Post(id: "ps1", userId: "u1", images: [image], visibility: .public)
+        let data = post.toFirestoreData()
+        XCTAssertNil(data["postKind"])
+        XCTAssertNil(data["collageLayout"])
+        XCTAssertNil(data["panelLabels"])
+        let restored = try Post(from: data)
+        XCTAssertNil(restored.postKind)
+        XCTAssertNil(restored.collageLayout)
+        // 未知の postKind 値は nil（single 相当）にフォールバック
+        var corrupt = data
+        corrupt["postKind"] = "unknownKind"
+        XCTAssertNil(try Post(from: corrupt).postKind)
+    }
+
     func testPostEditingContextExtractsColorAndFont() {
         let img = ImageInfo(url: "https://e.com/a.jpg", width: 100, height: 200, order: 0)
         let post = Post(

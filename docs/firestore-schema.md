@@ -38,6 +38,9 @@
   "frameCaption": "string",          // 機能1: 額縁に焼く一言（通常 caption とは別）。未設定なら無し
   "frameTextColorHex": "string",     // 機能1: フレーム文字色 "#RRGGBB"。未設定なら無し＝style自動色（おまかせ）
   "frameFontStyle": "string",        // 機能1: フレーム文字フォント(standard/rounded/serif/mono)。未設定なら無し＝mood既定
+  "postKind": "string",              // 投稿種別(single/collage/panorama)。未設定=single相当。collage/panoramaは合成済み1枚をimagesに保存
+  "collageLayout": "string",         // 配置写真レイアウト(grid2x2/vertical4)。postKind=collage時のみ
+  "panelLabels": ["string"],         // 配置写真の各パネルの一言(朝/昼/夜/雨等・任意)。collage時のみ
   "hashtags": ["string"],
   "location": {
     "latitude": "number",

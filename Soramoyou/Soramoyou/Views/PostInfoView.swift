@@ -35,10 +35,13 @@ struct PostInfoView: View {
         userId: String?,
         externalEditInfos: [ExternalEditInfo?] = [],
         editingContext: PostEditingContext? = nil,
+        postKind: PostKind = .single,
         locationService: LocationServiceProtocol = LocationService()
     ) {
         let postViewModel = PostViewModel(userId: userId)
         postViewModel.setSelectedImages(images)
+        // 投稿種別（通常/配置写真/広角合成）を入口モードから引き継ぐ。savePost の畳み込み・保存メタを駆動。
+        postViewModel.postKind = postKind
         // 各画像の外部編集情報を保持（ギャラリーで写真Appバッジ表示用）⭐️ Issue #4
         postViewModel.setExternalEditInfos(externalEditInfos)
         if !editedImages.isEmpty {
@@ -92,8 +95,12 @@ struct PostInfoView: View {
                         // キャプション入力
                         captionSection
 
-                        // 気分（mood）選択 — 機能1
-                        moodSection
+                        // 機能1: 配置写真モードはレイアウト＋ラベル、それ以外は気分(mood)選択（排他）
+                        if viewModel.postKind == .collage {
+                            collageArrangeSection
+                        } else {
+                            moodSection
+                        }
 
                         // ハッシュタグ表示
                         hashtagSection
@@ -259,6 +266,15 @@ struct PostInfoView: View {
             frameTextColorHex: $viewModel.frameTextColorHex,
             frameFontStyle: $viewModel.frameFontStyle,
             previewImage: viewModel.editedImages.first
+        )
+    }
+
+    /// 配置写真セクション（v1）。レイアウト選択＋各パネルの一言ラベル。気分フレームとは排他。
+    private var collageArrangeSection: some View {
+        CollageArrangeView(
+            layout: $viewModel.collageLayout,
+            labels: $viewModel.panelLabels,
+            previewImages: viewModel.editedImages
         )
     }
 
