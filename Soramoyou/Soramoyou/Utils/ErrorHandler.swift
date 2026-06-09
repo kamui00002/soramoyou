@@ -49,7 +49,7 @@ struct ErrorHandler {
         // PostViewModelError: ビジネスロジックエラーまたはユーザーエラー
         if let postError = error as? PostViewModelError {
             switch postError {
-            case .userNotAuthenticated, .noImages:
+            case .userNotAuthenticated, .noImages, .collageCompositionFailed:
                 return .userError
             case .imageCompressionFailed, .uploadFailed, .saveFailed:
                 return .systemError

@@ -69,19 +69,21 @@ enum SkyCollageCompositor {
     }
 
     /// レイアウトとラベル有無からキャンバスサイズと各パネル矩形を決める。
-    private static func makeLayout(_ layout: CollageLayout, hasAnyLabel: Bool) -> (canvas: CGSize, panels: [Panel]) {
+    /// 余白は `gutterRatio`（長辺比）で決まる＝Input.gutterRatio を実際に消費する。
+    private static func makeLayout(_ layout: CollageLayout, hasAnyLabel: Bool,
+                                   gutterRatio: CGFloat) -> (canvas: CGSize, panels: [Panel]) {
         let s = canvasLongSide
         switch layout {
         case .grid2x2:
             let canvas = CGSize(width: s, height: s)              // 正方
-            let g = s * 0.018
+            let g = s * gutterRatio
             let cellW = (s - 3 * g) / 2
             let cellH = (s - 3 * g) / 2
             return (canvas, gridPanels(cols: 2, rows: 2, cellW: cellW, cellH: cellH, gutter: g, hasAnyLabel: hasAnyLabel))
         case .vertical4:
             let width = s * 0.5625                                 // 9:16 縦長
             let height = s
-            let g = height * 0.016
+            let g = height * gutterRatio
             let cellW = width - 2 * g
             let cellH = (height - 5 * g) / 4
             return (CGSize(width: width, height: height),
@@ -120,7 +122,7 @@ enum SkyCollageCompositor {
         }
         let hasAnyLabel = labels.contains { $0 != nil }
 
-        let (canvas, panels) = makeLayout(input.layout, hasAnyLabel: hasAnyLabel)
+        let (canvas, panels) = makeLayout(input.layout, hasAnyLabel: hasAnyLabel, gutterRatio: input.gutterRatio)
         let canvasRect = CGRect(origin: .zero, size: canvas)
 
         // 1. 背景＋境界線＋ラベルを 1 枚の sRGB オーバーレイにラスタライズ（写真はこの上に重なる）

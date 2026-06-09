@@ -118,7 +118,7 @@ struct PostView: View {
     }
 
     /// 配置写真モードで「ちょうど4枚」を満たしているか。
-    private var collageReady: Bool {
+    private var isCollageReady: Bool {
         postKind != .collage || viewModel.selectedImages.count == 4
     }
     
@@ -227,7 +227,7 @@ struct PostView: View {
                 .padding()
                 
                 // 配置写真モードで枚数不足のときのガイド
-                if postKind == .collage && !collageReady {
+                if postKind == .collage && !isCollageReady {
                     Text("配置写真はちょうど4枚です（今 \(viewModel.selectedImages.count) 枚）")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.9))
@@ -257,7 +257,7 @@ struct PostView: View {
                         )
                         .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
                     }
-                    .disabled(viewModel.isLoading || viewModel.selectedImages.isEmpty || !collageReady)
+                    .disabled(viewModel.isLoading || viewModel.selectedImages.isEmpty || !isCollageReady)
                     
                     Button(action: {
                         viewModel.clearSelection()

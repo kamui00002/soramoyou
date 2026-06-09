@@ -26,7 +26,8 @@ enum PostKind: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// 合成系（複数素材を1枚に畳んだ）投稿か。再編集の出し分け等に使う。
+    /// 合成系（複数素材を1枚に畳んだ）投稿か判定する述語。
+    /// 例: 「合成投稿は元素材を復元できないので再編集を出さない」等の判定に使える。
     var isComposite: Bool { self == .collage || self == .panorama }
 
     /// 投稿モード選択 UI 用の表示名
@@ -47,14 +48,6 @@ enum CollageLayout: String, Codable, CaseIterable, Identifiable {
     case vertical4   // 縦1列4分割（時間の流れを縦に）
 
     var id: String { rawValue }
-
-    /// このレイアウトが要求する写真枚数
-    var requiredPhotoCount: Int {
-        switch self {
-        case .grid2x2:   return 4
-        case .vertical4: return 4
-        }
-    }
 
     /// 表示名（レイアウト選択 UI 用）
     var displayName: String {

@@ -296,9 +296,14 @@ class PostViewModel: ObservableObject {
         }
 
         do {
-            // 1a. 配置写真(collage)は複数枚を1枚に畳む（v1。広角合成は手前のフローで畳み済み）。
+            // 1a. 配置写真(collage)は複数枚を1枚に畳む（v1。広角合成は手前のフローで畳み込み済み）。
             //     畳み込みは非破壊（editedImages は書き換えない）＝リトライ・再投稿での二重合成を防ぐ。
             let folded = foldImagesIfNeeded(editedImages)
+            // collage は「1枚に並べて必ず成功」が約束。万一 compose に失敗（folded が1枚にならない）したら、
+            // 4枚バラ撒き＋collageメタ不整合の投稿を作らず、明示エラーで中断する（中途半端な保存を防ぐ）。
+            if postKind == .collage && folded.count != 1 {
+                throw PostViewModelError.collageCompositionFailed
+            }
 
             // 1b. mood フレーム＋一言を焼き込む（mood 選択時のみ）。
             //     配置写真モードとは排他（二重額縁を避けるため collage では mood を焼かない）。
@@ -515,7 +520,9 @@ class PostViewModel: ObservableObject {
     }
 
     /// 投稿データを作成
-    private func createPost(
+    /// アップロード済み URL から Post を構築する（純粋・副作用なし）。
+    /// `internal`（private でない）なのは collage 分岐の検証テストから直接呼ぶため（@testable import）。
+    func createPost(
         imageURLs: [UploadedImage],
         originalImageURLs: [UploadedOriginalImage]? = nil
     ) throws -> Post {
@@ -574,10 +581,12 @@ class PostViewModel: ObservableObject {
         // - 原画像(素材N枚)は残さない（images=1枚との非対称・再編集破綻を防ぐ）
         // - 抽出メタ(時間帯/空種別/色温度/撮影日時/空色)は1値で表せないので付けない（検索の歪み防止）
         let isCollage = (postKind == .collage)
-        // 保存するラベル: collage かつ非空ラベルがあるときのみ（写真枚数に合わせて trim）。
+        // 保存するラベル: collage かつ非空ラベルがあるときのみ。
+        // 枚数ソースは「素材枚数」selectedImages。imageInfos は collage では畳み込み後=1枚なので
+        // それを使うとパネル2〜4のラベルが欠落する（レビュー指摘の data-loss を修正）。
         let savedPanelLabels: [String]? = {
             guard isCollage else { return nil }
-            let count = max(1, min(4, imageInfos.count))
+            let count = max(1, min(4, selectedImages.count))
             let trimmed = (0..<count).map { i -> String in
                 i < panelLabels.count ? panelLabels[i].trimmingCharacters(in: .whitespacesAndNewlines) : ""
             }
@@ -816,7 +825,8 @@ enum PostViewModelError: LocalizedError {
     case imageCompressionFailed
     case uploadFailed
     case saveFailed
-    
+    case collageCompositionFailed
+
     var errorDescription: String? {
         switch self {
         case .userNotAuthenticated:
@@ -829,6 +839,8 @@ enum PostViewModelError: LocalizedError {
             return "画像のアップロードに失敗しました"
         case .saveFailed:
             return "投稿の保存に失敗しました"
+        case .collageCompositionFailed:
+            return "配置写真の作成に失敗しました。写真を選び直してお試しください"
         }
     }
 }
