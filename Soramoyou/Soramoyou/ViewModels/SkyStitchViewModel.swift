@@ -32,11 +32,15 @@ final class SkyStitchViewModel: ObservableObject {
 
     @Published private(set) var state: State = .idle
 
-    private let stitch: @Sendable ([UIImage]) -> SkyStitchResult
+    /// 撮り方（横パン / 4隅）。既定は 4隅（ユーザーが実際に行う2×2撮影）。
+    /// 変更時は呼び出し側(View)が runStitch を呼び直して繋ぎ直す。
+    @Published var style: SkyStitchStyle = .grid
+
+    private let stitch: @Sendable ([UIImage], SkyStitchStyle) -> SkyStitchResult
     private let logger = Logger(subsystem: "com.soramoyou", category: "SkyStitchViewModel")
 
     init(
-        stitch: @escaping @Sendable ([UIImage]) -> SkyStitchResult = { SkyStitcher.stitch($0) }
+        stitch: @escaping @Sendable ([UIImage], SkyStitchStyle) -> SkyStitchResult = { SkyStitcher.stitch($0, style: $1) }
     ) {
         self.stitch = stitch
     }
@@ -47,7 +51,8 @@ final class SkyStitchViewModel: ObservableObject {
     func runStitch(_ images: [UIImage]) async {
         state = .stitching
         let stitchFn = stitch
-        let result = await Task.detached(priority: .userInitiated) { stitchFn(images) }.value
+        let style = self.style
+        let result = await Task.detached(priority: .userInitiated) { stitchFn(images, style) }.value
 
         switch result.status {
         case .ok:
@@ -71,7 +76,8 @@ final class SkyStitchViewModel: ObservableObject {
         LoggingService.shared.logEvent("stitch_completed", parameters: [
             "succeeded": succeeded,
             "status": Self.statusLabel(result.status),
-            "input_count": images.count
+            "input_count": images.count,
+            "style": style.rawValue
         ])
     }
 

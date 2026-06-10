@@ -24,24 +24,63 @@ struct SkyStitchResult {
     let image: UIImage?           // status == .ok のときのみ非 nil
 }
 
+/// 撮り方（合成チューニングの切り替え）。横パンと4隅(2×2 面合成)でワープ/クロップを変える。
+/// - pan : 左→右に重ねた横パン。円筒ワープ + 内接矩形クロップ（地平線が反りにくく、四隅の黒帯を除去）。
+/// - grid: 上下左右(4隅)に振った面合成。球面ワープ + 外周黒のみクロップ（上下の内容を残す）。
+enum SkyStitchStyle: String, CaseIterable, Identifiable {
+    case pan
+    case grid
+
+    var id: String { rawValue }
+
+    /// 表示名（撮り方セレクタ用）
+    var displayName: String {
+        switch self {
+        case .pan:  return "横パン"
+        case .grid: return "4隅"
+        }
+    }
+
+    /// ブリッジに渡すワープ種別（0=球面 / 1=円筒 / 2=平面）。
+    /// pan=円筒（横パンで地平線が反りにくい）、grid=球面（上下左右の回転に強い＝全象限を残す）。
+    var warperCode: Int { self == .pan ? 1 : 0 }
+    /// ブリッジに渡すクロップ種別（0=なし / 1=内接矩形 / 2=外周黒のみ / 3=許容85% / 4=許容70%）。
+    /// pan=内接矩形（四隅の黒帯を除去）、grid=許容70%（球面の黒翼を削りつつ地上・空を最大限残す。実写4枚で確定）。
+    var cropCode: Int { self == .pan ? 1 : 4 }
+}
+
 /// 空写真の広角合成器（薄い Swift ファサード）。重い処理なので非 UI スレッドから呼ぶこと。
 enum SkyStitcher {
 
     /// 2〜N枚の空写真を1枚の広角に合成する。
+    /// - Parameter style: 撮り方（既定 .pan＝横パン）。4隅(2×2)は .grid を渡す。
     /// - Note: stitch 結果は独立アーティファクト。将来 enhance/upscale(M3) を呼び出し側で
     ///         合成と焼き込みの間に差し込めるよう、注入は呼び出し側責務にする。
-    static func stitch(_ images: [UIImage]) -> SkyStitchResult {
+    static func stitch(_ images: [UIImage], style: SkyStitchStyle = .pan) -> SkyStitchResult {
         guard images.count >= 2 else {
             return SkyStitchResult(status: .needMoreImages, image: nil)
         }
         #if SORAMOYOU_OPENCV
-        let bridge = SkyStitcherBridge.stitch(images)
+        let bridge = SkyStitcherBridge.stitch(images, warper: style.warperCode, crop: style.cropCode)
         let status = Self.map(bridge.statusCode)
         return SkyStitchResult(status: status, image: status == .ok ? bridge.image : nil)
         #else
         return SkyStitchResult(status: .unavailable, image: nil)
         #endif
     }
+
+    #if SORAMOYOU_OPENCV
+    /// 検証用: warper/crop を直接指定して合成する（撮り方別チューニングの手元比較に使う）。
+    /// 本番は `stitch(_:style:)` 経由。warper:0=球面/1=円筒/2=平面、crop:0=なし/1=内接矩形/2=外周黒のみ。
+    static func stitchRaw(_ images: [UIImage], warper: Int, crop: Int) -> SkyStitchResult {
+        guard images.count >= 2 else {
+            return SkyStitchResult(status: .needMoreImages, image: nil)
+        }
+        let bridge = SkyStitcherBridge.stitch(images, warper: warper, crop: crop)
+        let status = Self.map(bridge.statusCode)
+        return SkyStitchResult(status: status, image: status == .ok ? bridge.image : nil)
+    }
+    #endif
 
     #if SORAMOYOU_OPENCV
     /// cv::Stitcher::Status (Int) → Swift enum。OK=0, ERR_NEED_MORE_IMGS=1,

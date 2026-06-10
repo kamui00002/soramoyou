@@ -26,7 +26,7 @@ final class SkyStitchViewModelTests: XCTestCase {
     @MainActor
     private func makeVM(stitchStatus: SkyStitchStatus, image: UIImage?) -> SkyStitchViewModel {
         SkyStitchViewModel(
-            stitch: { _ in SkyStitchResult(status: stitchStatus, image: image) }
+            stitch: { _, _ in SkyStitchResult(status: stitchStatus, image: image) }
         )
     }
 

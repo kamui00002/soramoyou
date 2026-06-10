@@ -158,7 +158,7 @@ struct PostView: View {
     private var previewModeHint: String? {
         switch postKind {
         case .collage:  return "この4枚をタイル状に並べて1枚にします"
-        case .panorama: return "この4枚を横につなげて1枚の広い空にします（順番は自動）"
+        case .panorama: return "この4枚を1枚の広い空に合成します（撮り方は次の画面で選べます）"
         case .single:   return nil
         }
     }
@@ -184,7 +184,7 @@ struct PostView: View {
     private var modeDescription: String {
         switch postKind {
         case .collage:  return "好きな空を4枚、タイル状に並べて1枚にします（例：朝・昼・夕・夜）。合成はしません"
-        case .panorama: return "少しずつ重ねて撮った空4枚を、横に広い1枚に繋ぎます。選ぶ順番は気にしなくてOK（自動でつなげます）"
+        case .panorama: return "少しずつ重ねて撮った空4枚を、1枚の広い空に合成します。横パン／4隅どちらの撮り方でもOK（次の画面で選べます・順番は自動）"
         case .single:   return "空の写真を選択して投稿しましょう"
         }
     }

@@ -47,8 +47,11 @@ struct SkyStitchView: View {
                 )
                 .ignoresSafeArea()
 
-                content
-                    .padding()
+                VStack(spacing: 16) {
+                    stylePicker
+                    content
+                }
+                .padding()
             }
             .navigationTitle("広角合成")
             .navigationBarTitleDisplayMode(.inline)
@@ -65,6 +68,28 @@ struct SkyStitchView: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    /// 撮り方セレクタ（横パン / 4隅）。切り替えると同じ4枚で繋ぎ直す（試して良い方を採用）。
+    private var stylePicker: some View {
+        VStack(spacing: 6) {
+            Picker("撮り方", selection: $viewModel.style) {
+                ForEach(SkyStitchStyle.allCases) { s in
+                    Text(s.displayName).tag(s)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: viewModel.style) { _ in
+                // 撮り方を変えたら同じ写真で繋ぎ直す
+                Task { await viewModel.runStitch(images) }
+            }
+            Text(viewModel.style == .grid
+                 ? "上下左右に振って撮った4枚向け。つながりが微妙なら「横パン」も試して"
+                 : "左→右に振って撮った4枚向け。つながりが微妙なら「4隅」も試して")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.75))
+                .multilineTextAlignment(.center)
+        }
     }
 
     @ViewBuilder
@@ -166,7 +191,7 @@ struct SkyStitchView: View {
         images: [placeholder, placeholder],
         onStitched: { _ in },
         viewModel: SkyStitchViewModel(
-            stitch: { _ in SkyStitchResult(status: .ok, image: placeholder) }
+            stitch: { _, _ in SkyStitchResult(status: .ok, image: placeholder) }
         )
     )
 }

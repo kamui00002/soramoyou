@@ -49,7 +49,7 @@ enum WhatsNewContent {
             icon: "camera.viewfinder",
             badge: "つかいかた",
             title: "重ねて撮るのがコツ",
-            description: "左から右へ、前の写真と少し重ねて\n4枚撮ると繋がります。順番は気にせずOK",
+            description: "少し重ねて4枚撮るだけ。横パンでも\n上下左右(4隅)でもOK、合成画面で選べます",
             gradientColors: [
                 Color(red: 0.53, green: 0.81, blue: 0.98),
                 Color(red: 0.39, green: 0.58, blue: 0.93)
