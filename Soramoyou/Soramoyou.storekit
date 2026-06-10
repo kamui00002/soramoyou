@@ -1,0 +1,35 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+    ]
+  },
+  "identifier" : "B0C1D2E3-F4A5-4B6C-8D7E-9F0A1B2C3D4E",
+  "nonRenewingSubscriptions" : [
+  ],
+  "products" : [
+    {
+      "displayPrice" : "300",
+      "familyShareable" : false,
+      "internalID" : "A1B2C3D4",
+      "localizations" : [
+        {
+          "description" : "重ね撮りした空を1枚の広角写真に合成して投稿できる機能を解放します（買い切り・1回購入で恒久解放）。",
+          "displayName" : "広角合成",
+          "locale" : "ja_JP"
+        }
+      ],
+      "productID" : "com.yoshidometoru.Soramoyou.panorama",
+      "referenceName" : "広角合成（パノラマ）",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+  },
+  "subscriptionGroups" : [
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}
