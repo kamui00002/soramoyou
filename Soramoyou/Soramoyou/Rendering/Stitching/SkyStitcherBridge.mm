@@ -8,6 +8,7 @@
 #if defined(SORAMOYOU_OPENCV) && __has_include(<opencv2/opencv.hpp>)
   #import <opencv2/opencv.hpp>
   #import <opencv2/stitching.hpp>
+  #import <opencv2/stitching/warpers.hpp>
   #import <opencv2/imgproc.hpp>
   #define SKY_OPENCV_AVAILABLE 1
 #endif
@@ -55,6 +56,44 @@ static UIImage *UIImageFromMat(const cv::Mat &bgr) {
     return out;
 }
 
+// ワープ後の黒い余白（四隅の黒帯）を、黒を一切含まない「最大の内接長方形」で切り落とす。
+// 合成された中身は削らず、空いた黒部分だけをトリミングするので品質は落ちない。
+static void CropBlackBorders(cv::Mat &pano) {
+    if (pano.empty()) return;
+    cv::Mat gray; cv::cvtColor(pano, gray, cv::COLOR_BGR2GRAY);
+    // ワープ余白はちょうど黒(0)。実写の暗部(屋根/影)は >1 なので有効として残る。
+    cv::Mat content; cv::threshold(gray, content, 1, 255, cv::THRESH_BINARY);
+    // 継ぎ目や小さな暗部による穴で内接矩形が痩せないよう、小さな穴を閉じる。
+    cv::morphologyEx(content, content, cv::MORPH_CLOSE,
+                     cv::getStructuringElement(cv::MORPH_RECT, cv::Size(7, 7)));
+
+    // 各列で「上方向に連続する有効画素数」をヒストグラムにし、行ごとに最大長方形を求める（O(W*H)）。
+    const int rows = content.rows, cols = content.cols;
+    std::vector<int> height(cols, 0), stk;
+    stk.reserve(cols + 1);
+    long bestArea = 0;
+    cv::Rect best(0, 0, 0, 0);
+    for (int r = 0; r < rows; ++r) {
+        const uchar *cr = content.ptr<uchar>(r);
+        for (int c = 0; c < cols; ++c) height[c] = cr[c] ? height[c] + 1 : 0;
+        stk.clear();
+        for (int c = 0; c <= cols; ++c) {
+            const int curr = (c == cols) ? 0 : height[c];
+            while (!stk.empty() && curr < height[stk.back()]) {
+                const int hh = height[stk.back()]; stk.pop_back();
+                const int left = stk.empty() ? 0 : stk.back() + 1;
+                const long area = (long)hh * (c - left);
+                if (area > bestArea) { bestArea = area; best = cv::Rect(left, r - hh + 1, c - left, hh); }
+            }
+            stk.push_back(c);
+        }
+    }
+    // 妥当な大きさのときだけ採用（万一の過剰トリミング防止）。
+    if (best.width > cols / 3 && best.height > rows / 3) {
+        pano = pano(best).clone();
+    }
+}
+
 + (SkyStitchBridgeResult *)stitch:(NSArray<UIImage *> *)images {
     SkyStitchBridgeResult *result = [SkyStitchBridgeResult new];
     @autoreleasepool {
@@ -77,10 +116,15 @@ static UIImage *UIImageFromMat(const cv::Mat &bgr) {
         st->setSeamFinder(cv::makePtr<cv::detail::GraphCutSeamFinder>(
             cv::detail::GraphCutSeamFinderBase::COST_COLOR));
         st->setBlender(cv::makePtr<cv::detail::MultiBandBlender>(false)); // 継ぎ目段差を消す
+        // 横パンの空向け: 球面ワープは弓なりに歪むので円筒ワープにする（地平線が反りにくい）。
+        st->setWarper(cv::makePtr<cv::CylindricalWarper>());
         cv::Mat pano;
         cv::Stitcher::Status status = st->stitch(mats, pano);
         result.statusCode = (NSInteger)status;
-        if (status == cv::Stitcher::OK && !pano.empty()) result.image = UIImageFromMat(pano);
+        if (status == cv::Stitcher::OK && !pano.empty()) {
+            CropBlackBorders(pano);                              // 四隅の黒帯を内接矩形で除去
+            result.image = UIImageFromMat(pano);
+        }
     }
     return result;
 }
