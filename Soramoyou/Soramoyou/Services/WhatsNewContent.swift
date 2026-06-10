@@ -38,7 +38,7 @@ enum WhatsNewContent {
             icon: "square.grid.2x2",
             badge: "新機能",
             title: "配置写真",
-            description: "朝・昼・夜・雨など空を4枚並べて\n1枚にできます（投稿モードで選択）",
+            description: "好きな空を4枚、自由に並べて1枚に。\n同じ空の朝・昼・夕・夜で「空の一日」も（投稿モードで選択）",
             gradientColors: [
                 Color(red: 0.55, green: 0.80, blue: 0.95),
                 Color(red: 0.39, green: 0.58, blue: 0.93)
