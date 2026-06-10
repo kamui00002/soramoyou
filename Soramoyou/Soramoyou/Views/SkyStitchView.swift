@@ -1,11 +1,11 @@
 // ⭐️ SkyStitchView.swift
-// 広角合成(v2)のプレビュー＋課金画面
+// 広角合成(v2)のプレビュー画面（無料）
 //
 //  Created on 2026-06-10.
 //
-//  「成功時のみ課金」UX:
-//    合成中 → 成功プレビュー（ここで初めて購入ボタンを出す）→ 購入成功で onStitched に合成画像を渡す。
-//    失敗時は撮り直し誘導のみで購入ボタンを出さない（料金は発生しない旨を明示）。
+//  UX:
+//    合成中 → 成功プレビュー（この仕上がりで保存）→ onStitched に合成画像を渡して閉じる。
+//    失敗時は撮り直し誘導のみ。
 //  onStitched で受け取った1枚を呼び出し側(PostView)が通常の投稿パイプライン(EditView→PostInfoView→
 //  savePost postKind=.panorama)へ流す。
 //
@@ -15,7 +15,7 @@ import SwiftUI
 struct SkyStitchView: View {
     /// 合成元の写真（2枚以上）
     let images: [UIImage]
-    /// 合成＋購入が完了したときに、合成済み1枚を呼び出し側へ渡す。
+    /// 合成が完了したときに、合成済み1枚を呼び出し側へ渡す。
     let onStitched: (UIImage) -> Void
 
     @StateObject private var viewModel: SkyStitchViewModel
@@ -28,7 +28,7 @@ struct SkyStitchView: View {
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
-    /// 通常 init（本番）。@MainActor 文脈で SkyStitchViewModel()（PaymentService.shared 既定）を生成する。
+    /// 通常 init（本番）。@MainActor 文脈で SkyStitchViewModel() を生成する。
     @MainActor
     init(images: [UIImage], onStitched: @escaping (UIImage) -> Void) {
         self.init(images: images, onStitched: onStitched, viewModel: SkyStitchViewModel())
@@ -63,26 +63,8 @@ struct SkyStitchView: View {
                     await viewModel.runStitch(images)
                 }
             }
-            .task(id: isPurchased) {
-                // 購入完了したら合成画像を呼び出し側へ橋渡しし、本画面を閉じる
-                if let image = purchasedImage {
-                    onStitched(image)
-                    dismiss()
-                }
-            }
         }
         .navigationViewStyle(.stack)
-    }
-
-    /// 購入完了状態か（.task(id:) のトリガ用）
-    private var isPurchased: Bool {
-        if case .purchased = viewModel.state { return true }
-        return false
-    }
-
-    private var purchasedImage: UIImage? {
-        if case .purchased(let img) = viewModel.state { return img }
-        return nil
     }
 
     @ViewBuilder
@@ -92,11 +74,6 @@ struct SkyStitchView: View {
             loadingCard(message: "空をつなげています…")
         case .previewReady(let image):
             previewCard(image: image)
-        case .purchasing:
-            loadingCard(message: "購入処理中…")
-        case .purchased(let image):
-            // 橋渡しは .task(id:) で行う。一瞬の表示。
-            previewCard(image: image, purchasing: true)
         case .failed(let message):
             failedCard(message: message)
         }
@@ -113,7 +90,7 @@ struct SkyStitchView: View {
         }
     }
 
-    private func previewCard(image: UIImage, purchasing: Bool = false) -> some View {
+    private func previewCard(image: UIImage) -> some View {
         VStack(spacing: 16) {
             Text("プレビュー")
                 .font(.subheadline)
@@ -131,11 +108,13 @@ struct SkyStitchView: View {
                 .foregroundColor(.white.opacity(0.85))
 
             Button(action: {
-                Task { await viewModel.purchaseAndProceed() }
+                // 合成画像を呼び出し側へ橋渡しし、本画面を閉じる
+                onStitched(image)
+                dismiss()
             }) {
                 HStack {
-                    Image(systemName: "sparkles")
-                    Text(purchaseButtonTitle)
+                    Image(systemName: "checkmark.circle.fill")
+                    Text("この仕上がりで保存")
                 }
                 .font(.headline)
                 .foregroundColor(.white)
@@ -147,20 +126,7 @@ struct SkyStitchView: View {
                         .background(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.5), lineWidth: 1))
                 )
             }
-            .disabled(purchasing)
-
-            Text("合成できなかった場合は料金は発生しません")
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.7))
         }
-    }
-
-    /// 価格が取れていれば「この仕上がりで保存（¥xxx）」、無ければ汎用文言。
-    private var purchaseButtonTitle: String {
-        if let price = viewModel.displayPrice {
-            return "この仕上がりで保存（\(price)）"
-        }
-        return "この仕上がりで保存"
     }
 
     private func failedCard(message: String) -> some View {
@@ -200,17 +166,7 @@ struct SkyStitchView: View {
         images: [placeholder, placeholder],
         onStitched: { _ in },
         viewModel: SkyStitchViewModel(
-            payment: SkyStitchPreviewPayment(),
             stitch: { _ in SkyStitchResult(status: .ok, image: placeholder) }
         )
     )
-}
-
-/// #Preview 専用のダミー課金（実 StoreKit に触れない）。
-private final class SkyStitchPreviewPayment: PaymentServiceProtocol {
-    func displayPrice(for productID: String) -> String? { "¥300" }
-    func loadProducts() async {}
-    func purchase(productID: String) async throws -> PurchaseOutcome { .success }
-    func isEntitled(to productID: String) async -> Bool { false }
-    func restore() async throws {}
 }

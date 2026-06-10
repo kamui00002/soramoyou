@@ -19,7 +19,7 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    static let currentID = "2026-06-collage"
+    static let currentID = "2026-06-panorama"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -32,46 +32,27 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（気分フレーム＋配置写真）の新機能紹介ページ。
+    /// 今回（広角合成）の新機能紹介ページ。
+    /// 「並べる（配置写真）」との取り違えを防ぐため、広角＝横に繋ぐことと順番自動・無料を明示する。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "square.grid.2x2",
-            badge: "新機能",
-            title: "配置写真",
-            description: "朝・昼・夜・雨など空を4枚並べて\n1枚にできます（投稿モードで選択）",
+            icon: "pano",
+            badge: "新機能・無料",
+            title: "広角合成",
+            description: "少しずつ重ねて撮った空4枚を、\n横に広い1枚の空につなげます",
             gradientColors: [
-                Color(red: 0.55, green: 0.80, blue: 0.95),
+                Color(red: 0.95, green: 0.62, blue: 0.36),
+                Color(red: 0.96, green: 0.73, blue: 0.55)
+            ]
+        ),
+        WhatsNewPage(
+            icon: "camera.viewfinder",
+            badge: "つかいかた",
+            title: "重ねて撮るのがコツ",
+            description: "左から右へ、前の写真と少し重ねて\n4枚撮ると繋がります。順番は気にせずOK",
+            gradientColors: [
+                Color(red: 0.53, green: 0.81, blue: 0.98),
                 Color(red: 0.39, green: 0.58, blue: 0.93)
-            ]
-        ),
-        WhatsNewPage(
-            icon: "photo.artframe",
-            badge: "新機能",
-            title: "気分フレーム",
-            description: "5つの気分から選んで、写真に\n額縁とひとことを添えられます",
-            gradientColors: [
-                Color(red: 0.72, green: 0.62, blue: 0.92),
-                Color(red: 0.96, green: 0.73, blue: 0.84)
-            ]
-        ),
-        WhatsNewPage(
-            icon: "paintpalette.fill",
-            badge: "新機能",
-            title: "文字の色とフォント",
-            description: "フレームに入れる一言は、色も\nフォントも自由に選べます",
-            gradientColors: [
-                Color(red: 0.40, green: 0.78, blue: 0.78),
-                Color(red: 0.39, green: 0.58, blue: 0.93)
-            ]
-        ),
-        WhatsNewPage(
-            icon: "slider.horizontal.3",
-            badge: "新機能",
-            title: "投稿をあとから編集",
-            description: "投稿した写真を、ホームや\nプロフィールから編集し直せます",
-            gradientColors: [
-                Color(red: 0.55, green: 0.85, blue: 0.70),
-                Color(red: 0.30, green: 0.70, blue: 0.60)
             ]
         )
     ]

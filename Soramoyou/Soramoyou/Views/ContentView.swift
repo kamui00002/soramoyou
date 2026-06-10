@@ -40,11 +40,6 @@ struct ContentView: View {
                                 hasRequestedATT = true
                                 await AdService.shared.initialize()
                             }
-
-                            // 広角合成(v2)の課金: Transaction 監視を開始し、プロダクトを先読み。
-                            // init ではなくビュー表示後（AdMob と同思想）。
-                            PaymentService.shared.startTransactionListener()
-                            await PaymentService.shared.loadProducts()
                         }
                     }
             } else if authViewModel.isAuthenticated {

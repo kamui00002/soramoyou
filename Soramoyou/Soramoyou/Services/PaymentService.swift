@@ -1,7 +1,13 @@
 // ⭐️ PaymentService.swift
-// StoreKit2 課金ファサード（広角合成 v2 の機能解放）
+// StoreKit2 課金ファサード
 //
 //  Created on 2026-06-10.
+//
+//  ⚠️ 温存中（未配線）: 当初 広角合成(v2) を有料にする想定で実装したが、広角合成は無料化した。
+//  この StoreKit2 ファサード一式は将来の「AI 補正」課金で再利用するため温存している。
+//  現在どこからも参照していない（ContentView の起動配線・SettingsView の復元行・購入フローは外した）。
+//  再有効化時: ① ContentView でリスナー開始＋loadProducts、② 機能側で purchase/isEntitled、
+//             ③ SettingsView に「購入を復元」行を復活（ガイドライン 3.1.1）、④ .storekit / ASC を整備。
 //
 //  AdService と同じ流儀（static let shared + protocol + os.Logger）で StoreKit2 を薄く包む。
 //  設計の要点:

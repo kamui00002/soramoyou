@@ -11,9 +11,9 @@ struct PostView: View {
     @StateObject private var viewModel: PhotoSelectionViewModel
     @EnvironmentObject var authViewModel: AuthViewModel
     @State private var showEditView = false
-    /// 広角合成(.panorama)のプレビュー＋課金画面の表示フラグ。
+    /// 広角合成(.panorama)のプレビュー画面の表示フラグ。
     @State private var showStitch = false
-    /// 合成＋購入が完了した広角画像（stitch 画面を閉じた後に EditView へ渡す）。
+    /// 合成が完了した広角画像（stitch 画面を閉じた後に EditView へ渡す）。
     @State private var pendingStitched: UIImage?
     /// 投稿モード（通常/配置写真/広角合成）。配置写真・広角合成は4枚固定・ログイン必須。
     @State private var postKind: PostKind = .single
@@ -91,7 +91,7 @@ struct PostView: View {
                     postKind: postKind
                 )
             }
-            // 広角合成(v2): 合成＋課金プレビュー。閉じた後、購入済みなら合成1枚で EditView を開く。
+            // 広角合成(v2): 合成プレビュー。閉じた後、合成済み1枚で EditView を開く。
             .fullScreenCover(isPresented: $showStitch, onDismiss: {
                 if let stitched = pendingStitched {
                     pendingStitched = nil
@@ -100,7 +100,7 @@ struct PostView: View {
                 }
             }) {
                 SkyStitchView(images: viewModel.selectedImages) { stitched in
-                    // 購入完了 → 合成画像を保持して stitch 画面を閉じる（onDismiss で EditView へ）
+                    // 合成完了（保存ボタン）→ 合成画像を保持して stitch 画面を閉じる（onDismiss で EditView へ）
                     pendingStitched = stitched
                     showStitch = false
                 }
@@ -134,6 +134,16 @@ struct PostView: View {
         viewModel.updateMaxSelectionCount(maxSelectionCount)
     }
 
+    /// 投稿モードを切り替える。
+    /// モードで枚数上限が変わり、PHPicker の selectionLimit は生成時に固定されるため、
+    /// ここで必ず updateMaxSelectionCount を呼んでピッカーを開く前に確定させる（重要）。
+    private func selectMode(_ kind: PostKind) {
+        guard postKind != kind else { return }
+        postKind = kind
+        updateMaxSelectionCount()
+        LoggingService.shared.logEvent("post_mode_selected", parameters: ["mode": kind.rawValue])
+    }
+
     /// 選べる投稿モード（配置写真・広角合成はログイン必須＝未ログインでは通常のみ）。
     private var availableKinds: [PostKind] {
         authViewModel.isAuthenticated ? [.single, .collage, .panorama] : [.single]
@@ -142,6 +152,15 @@ struct PostView: View {
     /// 4枚モードで「ちょうど4枚」を満たしているか。
     private var isPhotoCountReady: Bool {
         !requiresFourPhotos || viewModel.selectedImages.count == 4
+    }
+
+    /// プレビューで「この写真たちがどうなるか」を伝えるヒント（通常モードは無し）。
+    private var previewModeHint: String? {
+        switch postKind {
+        case .collage:  return "この4枚をタイル状に並べて1枚にします"
+        case .panorama: return "この4枚を横につなげて1枚の広い空にします（順番は自動）"
+        case .single:   return nil
+        }
     }
 
     // MARK: - モード別の表示文言
@@ -164,9 +183,27 @@ struct PostView: View {
 
     private var modeDescription: String {
         switch postKind {
-        case .collage:  return "朝・昼・夜・雨など、空を4枚選んで1枚に並べます"
-        case .panorama: return "重ねて撮った空を4枚選ぶと、1枚の広い空に合成します（課金）"
+        case .collage:  return "好きな空を4枚、タイル状に並べて1枚にします（例：朝・昼・夕・夜）。合成はしません"
+        case .panorama: return "少しずつ重ねて撮った空4枚を、横に広い1枚に繋ぎます。選ぶ順番は気にしなくてOK（自動でつなげます）"
         case .single:   return "空の写真を選択して投稿しましょう"
+        }
+    }
+
+    /// モード別のアクセントカラー（選択チップの淡い色分け用・主役は写真なので控えめに）。
+    private func modeAccent(_ kind: PostKind) -> Color {
+        switch kind {
+        case .single:   return Color(red: 0.39, green: 0.58, blue: 0.93)  // 空の青
+        case .collage:  return Color(red: 0.30, green: 0.70, blue: 0.60)  // タイル＝青緑
+        case .panorama: return Color(red: 0.95, green: 0.62, blue: 0.36)  // 横長＝夕焼けオレンジ
+        }
+    }
+
+    /// モード別アイコン（チップ用・「並べる」と「横に繋ぐ」を形で区別）。
+    private func modeChipIcon(_ kind: PostKind) -> String {
+        switch kind {
+        case .single:   return "photo"
+        case .collage:  return "square.grid.2x2"
+        case .panorama: return "pano"
         }
     }
     
@@ -174,20 +211,20 @@ struct PostView: View {
     
     private var photoSelectionView: some View {
         VStack(spacing: 24) {
-            // 投稿モード選択（配置写真はログイン必須＝未ログインでは表示しない）
+            // 投稿モード選択（配置写真・広角合成はログイン必須＝未ログインでは表示しない）
             if availableKinds.count > 1 {
-                Picker("投稿モード", selection: $postKind) {
+                HStack(spacing: 8) {
                     ForEach(availableKinds) { kind in
-                        Text(kind.displayName).tag(kind)
+                        PostModeChip(
+                            title: kind.displayName,
+                            icon: modeChipIcon(kind),
+                            accent: modeAccent(kind),
+                            isSelected: postKind == kind,
+                            action: { selectMode(kind) }
+                        )
                     }
                 }
-                .pickerStyle(.segmented)
                 .padding(.horizontal)
-                .onChange(of: postKind) { _ in
-                    // モードで枚数上限が変わる。PHPicker の selectionLimit は生成時に固定されるため、
-                    // ピッカーを開く前にここで確定させておく。
-                    updateMaxSelectionCount()
-                }
             }
 
             Image(systemName: modeIconName)
@@ -255,6 +292,28 @@ struct PostView: View {
     private var photoPreviewView: some View {
         ScrollView {
             VStack(spacing: 16) {
+                // この写真たちが「どうなるか」をモード別に明示（並べる / 横に繋ぐ の取り違え防止）
+                if let hint = previewModeHint {
+                    HStack(spacing: 8) {
+                        Image(systemName: modeChipIcon(postKind))
+                            .font(.system(size: 16))
+                        Text(hint)
+                            .font(.caption)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(modeAccent(postKind).opacity(0.35))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.3), lineWidth: 1))
+                    )
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                }
+
                 // 選択された写真のグリッド表示
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 8),
@@ -283,7 +342,7 @@ struct PostView: View {
                 // アクションボタン
                 VStack(spacing: 12) {
                     Button(action: {
-                        // 広角合成は合成＋課金プレビューへ。それ以外は編集画面へ。
+                        // 広角合成は合成プレビューへ。それ以外は編集画面へ。
                         if postKind == .panorama {
                             showStitch = true
                         } else {
@@ -358,6 +417,48 @@ struct PhotoPreviewItem: View {
             }
             .padding(8)
         }
+    }
+}
+
+// MARK: - Post Mode Chip
+
+/// 投稿モード選択チップ（通常／配置写真／広角合成）。
+/// アイコン＋ラベル＋選択時の淡いアクセント色で、モードの違いを「色だけに頼らず」伝える。
+struct PostModeChip: View {
+    let title: String
+    let icon: String
+    let accent: Color
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        }) {
+            VStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundColor(isSelected ? .white : .white.opacity(0.75))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? accent.opacity(0.85) : .white.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(isSelected ? Color.white.opacity(0.55) : Color.white.opacity(0.25), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isSelected ? 1.03 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+        .accessibilityLabel("\(title)モード")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
