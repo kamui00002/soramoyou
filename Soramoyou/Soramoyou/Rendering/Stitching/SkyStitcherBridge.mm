@@ -192,15 +192,35 @@ static void CropTolerantBorder(cv::Mat &pano, double minFrac) {
         cv::Stitcher::Status status = st->stitch(mats, pano);
         result.statusCode = (NSInteger)status;
         if (status == cv::Stitcher::OK && !pano.empty()) {
-            // クロップ選択: 0=なし, 1=最大内接矩形(横パン), 2=外周黒のみ, 3=許容85%, 4=許容70%
-            switch (crop) {
-                case 1: CropBlackBorders(pano);          break;
-                case 2: CropExteriorBlack(pano);         break;
-                case 3: CropTolerantBorder(pano, 0.85);  break;
-                case 4: CropTolerantBorder(pano, 0.70);  break;
-                default: break; // 0 = クロップなし
+            // 実際に合成へ使われた枚数（残りは特徴不足で黙って捨てられる）。
+            const NSInteger usedCount = (NSInteger)st->component().size();
+            const double longSide  = std::max(pano.cols, pano.rows);
+            const double shortSide = std::max(1, std::min(pano.cols, pano.rows));
+            const double aspect    = longSide / shortSide;
+            // フィールドの「1部屋になる/細い帯」報告を診断できるよう1行だけ残す（合成は稀な操作＝ログ過多にならない）。
+            NSLog(@"SKYSTITCH used=%ld/%lu out=%dx%d aspect=%.2f warper=%ld crop=%ld",
+                  (long)usedCount, (unsigned long)mats.size(), pano.cols, pano.rows, aspect, (long)warper, (long)crop);
+
+            // ガード1【写真ドロップ】: 入力の一部しか繋げられなかった（部屋の境目の白壁等で特徴が一致しない）。
+            // 黙って部分結果（例: 4枚中の1部屋だけ）を出さず、「重ねて撮り直す」誘導へ落とす。
+            if (usedCount < (NSInteger)mats.size()) {
+                result.statusCode = (NSInteger)cv::Stitcher::ERR_NEED_MORE_IMGS; // 1 → needMoreImages
             }
-            result.image = UIImageFromMat(pano);
+            // ガード2【異常出力】: 比率/サイズが破綻（円筒ワープ暴走の 26:1 帯など）。破綻として弾く。
+            else if (aspect > 8.0 || longSide > 8000.0) {
+                result.statusCode = (NSInteger)cv::Stitcher::ERR_CAMERA_PARAMS_ADJUST_FAIL; // 3
+            }
+            // 正常: クロップ選択して画像確定。0=なし, 1=最大内接矩形(横パン), 2=外周黒のみ, 3=許容85%, 4=許容70%
+            else {
+                switch (crop) {
+                    case 1: CropBlackBorders(pano);          break;
+                    case 2: CropExteriorBlack(pano);         break;
+                    case 3: CropTolerantBorder(pano, 0.85);  break;
+                    case 4: CropTolerantBorder(pano, 0.70);  break;
+                    default: break; // 0 = クロップなし
+                }
+                result.image = UIImageFromMat(pano);
+            }
         }
     }
     return result;

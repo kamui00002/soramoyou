@@ -70,19 +70,6 @@ enum SkyStitcher {
     }
 
     #if SORAMOYOU_OPENCV
-    /// 検証用: warper/crop を直接指定して合成する（撮り方別チューニングの手元比較に使う）。
-    /// 本番は `stitch(_:style:)` 経由。warper:0=球面/1=円筒/2=平面、crop:0=なし/1=内接矩形/2=外周黒のみ。
-    static func stitchRaw(_ images: [UIImage], warper: Int, crop: Int) -> SkyStitchResult {
-        guard images.count >= 2 else {
-            return SkyStitchResult(status: .needMoreImages, image: nil)
-        }
-        let bridge = SkyStitcherBridge.stitch(images, warper: warper, crop: crop)
-        let status = Self.map(bridge.statusCode)
-        return SkyStitchResult(status: status, image: status == .ok ? bridge.image : nil)
-    }
-    #endif
-
-    #if SORAMOYOU_OPENCV
     /// cv::Stitcher::Status (Int) → Swift enum。OK=0, ERR_NEED_MORE_IMGS=1,
     /// ERR_HOMOGRAPHY_EST_FAIL=2, ERR_CAMERA_PARAMS_ADJUST_FAIL=3。
     /// スタブの番兵 -999 も .unavailable へ落として契約を一貫させる。

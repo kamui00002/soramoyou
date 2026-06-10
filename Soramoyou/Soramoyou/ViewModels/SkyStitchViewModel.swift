@@ -62,9 +62,9 @@ final class SkyStitchViewModel: ObservableObject {
                 state = .failed("合成結果を取得できませんでした。写真を選び直してお試しください")
             }
         case .needMoreImages:
-            state = .failed("写真の重なりが足りません。少しずつ重ねて撮った写真でお試しください")
+            state = .failed("4枚すべてはつながりませんでした。少しずつ重ねて撮り直すか、繋がらないときは「配置写真」で並べてみてください")
         case .homographyEstFailed, .cameraParamsAdjustFailed:
-            state = .failed("うまく繋げませんでした。手ブレを抑え、重ねて撮り直してください")
+            state = .failed("うまく繋げませんでした。手ブレを抑えて重ねて撮り直すか、「配置写真」で並べてみてください")
         case .unavailable:
             state = .failed("この端末では広角合成を利用できません")
         case .failed:
