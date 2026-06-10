@@ -103,7 +103,7 @@ struct SkyStitchView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
 
-            Text("この仕上がりで保存できます")
+            Text("順番は自動でつなげました")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.85))
 

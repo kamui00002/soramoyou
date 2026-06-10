@@ -80,6 +80,48 @@ final class PostViewModelCollageTests: XCTestCase {
     }
 
     @MainActor
+    func testCreatePostCompositeNilsExternalEditInfo() throws {
+        // 合成投稿(collage/panorama)は端末内で生成した新規画像なので、素材1枚目の外部編集情報を
+        // 引き継がない（ギャラリーの「写真Appで編集済み」等のバッジ誤表示を防ぐ）。F5 回帰防止。
+        for kind in [PostKind.collage, PostKind.panorama] {
+            let vm = PostViewModel(userId: "u1")
+            vm.setSelectedImages([dummyImage()])
+            vm.postKind = kind
+            // 素材に外部編集情報がある状態を模す（4枚分。合成後は1枚でも元4枚分が残りうる）。
+            vm.setExternalEditInfos([
+                ExternalEditInfo(hasAdjustments: true, formatIdentifier: "com.apple.photo"),
+                ExternalEditInfo(hasAdjustments: true, formatIdentifier: "com.apple.photo"),
+                ExternalEditInfo(hasAdjustments: true, formatIdentifier: "com.apple.photo"),
+                ExternalEditInfo(hasAdjustments: true, formatIdentifier: "com.apple.photo")
+            ])
+            let folded = [UploadedImage(
+                url: "https://e.com/c.jpg", thumbnail: "https://e.com/c_t.jpg",
+                width: 1000, height: 1000, storagePath: "posts/u1/c.jpg", thumbnailStoragePath: "posts/u1/c_t.jpg"
+            )]
+            let post = try vm.createPost(imageURLs: folded, originalImageURLs: nil)
+            XCTAssertEqual(post.images.count, 1)
+            XCTAssertNil(post.images[0].externalEditInfo, "\(kind) は合成画像に素材の外部編集情報を付けない")
+        }
+    }
+
+    @MainActor
+    func testCreatePostSingleKeepsExternalEditInfo() throws {
+        // 通常投稿(.single)は素材＝投稿画像が1対1なので、外部編集情報を従来どおり保持する
+        // （合成分岐が単写真に波及しないことの確認）。
+        let vm = PostViewModel(userId: "u1")
+        vm.setSelectedImages([dummyImage()])
+        vm.postKind = .single
+        vm.setExternalEditInfos([ExternalEditInfo(hasAdjustments: true, formatIdentifier: "com.apple.photo")])
+        let imageURLs = [UploadedImage(
+            url: "https://e.com/s.jpg", thumbnail: "https://e.com/s_t.jpg",
+            width: 800, height: 600, storagePath: "posts/u1/s.jpg", thumbnailStoragePath: "posts/u1/s_t.jpg"
+        )]
+        let post = try vm.createPost(imageURLs: imageURLs, originalImageURLs: nil)
+        XCTAssertEqual(post.images[0].externalEditInfo?.formatIdentifier, "com.apple.photo",
+                       "単写真は外部編集情報を保持する")
+    }
+
+    @MainActor
     func testCreatePostSingleKeepsOriginalsAndMeta() throws {
         // 通常投稿(.single)は従来どおり原画像・メタを保持する（collage 分岐が単写真に波及しないことの確認）。
         let vm = PostViewModel(userId: "u1")

@@ -36,8 +36,8 @@ final class SkyStitchViewModelTests: XCTestCase {
     func testStitchOkLeadsToPreviewReady() async {
         let vm = makeVM(stitchStatus: .ok, image: dummyImage())
         await vm.runStitch([dummyImage(), dummyImage()])
+        // previewReady(UIImage) は associated value 非Optional＝guard 通過自体が「合成画像あり」の検証。
         guard case .previewReady = vm.state else { return XCTFail("ok なら previewReady。実際: \(vm.state)") }
-        XCTAssertNotNil(vm.stitchedImage)
     }
 
     @MainActor

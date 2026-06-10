@@ -532,10 +532,13 @@ class PostViewModel: ObservableObject {
 
         // ImageInfo配列を作成（アップロード時に収集したサイズ情報を使用）
         // 外部編集情報は selectedImages と同じ index で externalEditInfos から取得 ⭐️ Issue #4
+        // 合成投稿(collage/panorama)は端末内で生成した新規画像で、特定の素材1枚に紐づかない。
+        // 素材1枚目の外部編集情報を合成画像へ誤付与しないよう nil 化する
+        // （ギャラリーの「写真Appで編集済み」等のバッジ誤表示を防ぐ。collage が抽出メタを付けない方針と同趣旨）。
         let imageInfos = imageURLs.enumerated().map { index, uploaded -> ImageInfo in
-            let externalEditInfo = externalEditInfos.indices.contains(index)
-                ? externalEditInfos[index]
-                : nil
+            let externalEditInfo: ExternalEditInfo? = postKind.isComposite
+                ? nil
+                : (externalEditInfos.indices.contains(index) ? externalEditInfos[index] : nil)
             return ImageInfo(
                 url: uploaded.url,
                 thumbnail: uploaded.thumbnail,

@@ -225,6 +225,10 @@ struct PostView: View {
                     }
                 }
                 .padding(.horizontal)
+                // segmented Picker を自作チップに置換したため、VoiceOver のグループ文脈を明示的に補う
+                // （各チップは .isSelected トレイトを保持。.contain で子要素を個別操作可能なまま束ねる）。
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("投稿モード")
             }
 
             Image(systemName: modeIconName)

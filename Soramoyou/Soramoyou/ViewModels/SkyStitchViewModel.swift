@@ -41,12 +41,6 @@ final class SkyStitchViewModel: ObservableObject {
         self.stitch = stitch
     }
 
-    /// 合成済み画像（previewReady のとき）。
-    var stitchedImage: UIImage? {
-        if case .previewReady(let img) = state { return img }
-        return nil
-    }
-
     // MARK: - 合成
 
     /// 4枚（2枚以上）を合成する。重い処理なので非UIスレッドで実行し、結果でプレビュー or 撮り直し誘導。
