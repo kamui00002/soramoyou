@@ -152,7 +152,7 @@ struct PostView: View {
                 .foregroundColor(.white)
 
             Text(postKind == .collage
-                 ? "朝・昼・夜・雨など、空を4枚選んで1枚に並べます"
+                 ? "好きな空を4枚選んで1枚に並べます。同じ空の朝・昼・夕・夜で「空の一日」も"
                  : "空の写真を選択して投稿しましょう")
                 .font(.body)
                 .foregroundColor(.white.opacity(0.9))
