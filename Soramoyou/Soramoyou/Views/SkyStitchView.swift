@@ -48,7 +48,7 @@ struct SkyStitchView: View {
                 .ignoresSafeArea()
 
                 VStack(spacing: 16) {
-                    stylePicker
+                    shootingHint
                     content
                 }
                 .padding()
@@ -70,34 +70,13 @@ struct SkyStitchView: View {
         .navigationViewStyle(.stack)
     }
 
-    /// 合成中かどうか（合成中の撮り方切替＝並走合成を防ぐために使う）。
-    private var isStitching: Bool {
-        if case .stitching = viewModel.state { return true }
-        return false
-    }
-
-    /// 撮り方セレクタ（横パン / 4隅）。切り替えると同じ4枚で繋ぎ直す（試して良い方を採用）。
-    private var stylePicker: some View {
-        VStack(spacing: 6) {
-            Picker("撮り方", selection: $viewModel.style) {
-                ForEach(SkyStitchStyle.allCases) { s in
-                    Text(s.displayName).tag(s)
-                }
-            }
-            .pickerStyle(.segmented)
-            // 合成中は切替不可（並走合成と古い結果の後着上書きを UI 側でも抑止。VM 側は世代ガードで防御）。
-            .disabled(isStitching)
-            .onChange(of: viewModel.style) { _ in
-                // 撮り方を変えたら同じ写真で繋ぎ直す
-                Task { await viewModel.runStitch(images) }
-            }
-            Text(viewModel.style == .grid
-                 ? "上下左右に振って撮った4枚向け。つながりが微妙なら「横パン」も試して"
-                 : "左→右に振って撮った4枚向け。つながりが微妙なら「4隅」も試して")
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.75))
-                .multilineTextAlignment(.center)
-        }
+    /// 撮り方の案内（上下左右に振って重ねて4枚＝4隅撮り）。
+    /// 重なりが大きいほど黒のない領域（内接矩形）が大きく取れる＝ワイドに仕上がる。
+    private var shootingHint: some View {
+        Text("上下左右に少しずつ振って、重ねながら4枚。重ねるほど広く仕上がります")
+            .font(.caption)
+            .foregroundColor(.white.opacity(0.85))
+            .multilineTextAlignment(.center)
     }
 
     @ViewBuilder
@@ -199,7 +178,7 @@ struct SkyStitchView: View {
         images: [placeholder, placeholder],
         onStitched: { _ in },
         viewModel: SkyStitchViewModel(
-            stitch: { _, _ in SkyStitchResult(status: .ok, image: placeholder) }
+            stitch: { _ in SkyStitchResult(status: .ok, image: placeholder) }
         )
     )
 }

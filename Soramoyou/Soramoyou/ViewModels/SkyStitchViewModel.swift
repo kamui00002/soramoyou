@@ -32,20 +32,15 @@ final class SkyStitchViewModel: ObservableObject {
 
     @Published private(set) var state: State = .idle
 
-    /// 撮り方（横パン / 4隅）。既定は 4隅（ユーザーが実際に行う2×2撮影）。
-    /// 変更時は呼び出し側(View)が runStitch を呼び直して繋ぎ直す。
-    @Published var style: SkyStitchStyle = .grid
-
-    private let stitch: @Sendable ([UIImage], SkyStitchStyle) -> SkyStitchResult
+    private let stitch: @Sendable ([UIImage]) -> SkyStitchResult
     private let logger = Logger(subsystem: "com.soramoyou", category: "SkyStitchViewModel")
 
-    /// 進行中の合成の世代番号。撮り方切替や「もう一度ためす」で合成が並走したとき、
+    /// 進行中の合成の世代番号。「もう一度ためす」連打などで合成が並走したとき、
     /// 先に始まった古い合成の結果が後着して最新の state を上書きしないよう、最新世代だけを反映する。
-    /// （例: 4隅へ切替済みなのに、遅れて完了した横パンのプレビューが表示される不整合を防ぐ）
     private var stitchGeneration = 0
 
     init(
-        stitch: @escaping @Sendable ([UIImage], SkyStitchStyle) -> SkyStitchResult = { SkyStitcher.stitch($0, style: $1) }
+        stitch: @escaping @Sendable ([UIImage]) -> SkyStitchResult = { SkyStitcher.stitch($0) }
     ) {
         self.stitch = stitch
     }
@@ -58,8 +53,7 @@ final class SkyStitchViewModel: ObservableObject {
         let generation = stitchGeneration
         state = .stitching
         let stitchFn = stitch
-        let style = self.style
-        let result = await Task.detached(priority: .userInitiated) { stitchFn(images, style) }.value
+        let result = await Task.detached(priority: .userInitiated) { stitchFn(images) }.value
 
         // この合成より新しい runStitch が始まっていたら、古い結果は捨てる（state 反映も計装もしない）。
         guard generation == stitchGeneration else { return }
@@ -87,8 +81,7 @@ final class SkyStitchViewModel: ObservableObject {
         LoggingService.shared.logEvent("stitch_completed", parameters: [
             "succeeded": succeeded,
             "status": Self.statusLabel(result.status),
-            "input_count": images.count,
-            "style": style.rawValue
+            "input_count": images.count
         ])
     }
 

@@ -24,47 +24,29 @@ struct SkyStitchResult {
     let image: UIImage?           // status == .ok のときのみ非 nil
 }
 
-/// 撮り方（合成チューニングの切り替え）。横パンと4隅(2×2 面合成)でクロップを変える（ワープは両方とも球面）。
-/// - pan : 左→右に重ねた横パン。球面ワープ + 内接矩形クロップ（ワイドな仕上がり・黒を完全除去）。
-///         ※円筒+内接は縦の視野を全部残すため普通の写真比率(1.3:1)になり「広角感」が出ない
-///           （実写4枚比較 2026-06-11: 球面+内接=2.08:1 黒ゼロ が最良）。円筒は将来候補として bridge に温存。
-/// - grid: 上下左右(4隅)に振った面合成。球面ワープ + 許容70%クロップ（黒翼を削りつつ上下の内容を残す。
-///         内接矩形は樽型合成の中央だけ抜き四隅の地上を捨てるため使えない＝実写4枚で実証済み）。
-enum SkyStitchStyle: String, CaseIterable, Identifiable {
-    case pan
-    case grid
-
-    var id: String { rawValue }
-
-    /// 表示名（撮り方セレクタ用）
-    var displayName: String {
-        switch self {
-        case .pan:  return "横パン"
-        case .grid: return "4隅"
-        }
-    }
-
-    /// ブリッジに渡すワープ種別（0=球面 / 1=円筒・2=平面は未使用・将来チューニング候補）。
-    /// 両モードとも球面（天頂方向を圧縮しワイドに仕上がる）。差はクロップのみ。
-    var warperCode: Int { 0 }
-    /// ブリッジに渡すクロップ種別（0=なし / 1=内接矩形 / 4=許容70%）。
-    /// pan=内接矩形（四隅の黒帯を除去）、grid=許容70%（球面の黒翼を削りつつ地上・空を最大限残す。実写4枚で確定）。
-    var cropCode: Int { self == .pan ? 1 : 4 }
-}
-
 /// 空写真の広角合成器（薄い Swift ファサード）。重い処理なので非 UI スレッドから呼ぶこと。
+///
+/// チューニングは「上下左右に少しずつ振って重ねた4枚（4隅撮り）」を完璧に1枚にする単一方式に固定:
+///   球面ワープ(warper=0) + 内接矩形クロップ(crop=1)。
+/// - 球面: 天頂方向を圧縮しワイドに仕上がる（縦長写真でも「広角」になる）。
+/// - 内接矩形: 黒を一切含まない最大の長方形で切る＝**黒ゼロを保証**（角のワープ余白が残らない）。
+///   重なりが大きいほど内接矩形も大きく＝ワイドに取れるので、UI では「重ねて撮る」を案内する。
+/// ※円筒ワープ・許容クロップ等は将来チューニング候補として SkyStitcherBridge 側に温存（warper/crop 引数）。
 enum SkyStitcher {
 
+    /// ブリッジに渡す固定チューニング: 球面ワープ + 内接矩形クロップ（黒ゼロ保証）。
+    private static let warperCode = 0   // 0=球面
+    private static let cropCode   = 1   // 1=内接矩形（黒を含まない最大の長方形）
+
     /// 2〜N枚の空写真を1枚の広角に合成する。
-    /// - Parameter style: 撮り方（既定 .pan＝横パン）。4隅(2×2)は .grid を渡す。
     /// - Note: stitch 結果は独立アーティファクト。将来 enhance/upscale(M3) を呼び出し側で
     ///         合成と焼き込みの間に差し込めるよう、注入は呼び出し側責務にする。
-    static func stitch(_ images: [UIImage], style: SkyStitchStyle = .pan) -> SkyStitchResult {
+    static func stitch(_ images: [UIImage]) -> SkyStitchResult {
         guard images.count >= 2 else {
             return SkyStitchResult(status: .needMoreImages, image: nil)
         }
         #if SORAMOYOU_OPENCV
-        let bridge = SkyStitcherBridge.stitch(images, warper: style.warperCode, crop: style.cropCode)
+        let bridge = SkyStitcherBridge.stitch(images, warper: warperCode, crop: cropCode)
         let status = Self.map(bridge.statusCode)
         return SkyStitchResult(status: status, image: status == .ok ? bridge.image : nil)
         #else

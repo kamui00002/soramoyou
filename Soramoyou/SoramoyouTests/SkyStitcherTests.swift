@@ -71,14 +71,4 @@ final class SkyStitcherTests: XCTestCase {
         XCTAssertEqual(SkyStitcher.stitch([makeWideSkySource()]).status, .needMoreImages)
         XCTAssertEqual(SkyStitcher.stitch([]).status, .needMoreImages)
     }
-
-    /// 撮り方→ワープ/クロップの対応（実写4枚の手元比較で確定した設定の固定）。
-    /// pan=球面(0)+内接矩形(1)、grid=球面(0)+許容70%(4)。変更時はここが落ちて気づける。
-    /// （2026-06-11 実写比較: pan を円筒→球面へ変更。円筒は縦の視野を全部残し普通の写真比率になるため）
-    func testStitchStyleTuningCodes() {
-        XCTAssertEqual(SkyStitchStyle.pan.warperCode, 0)
-        XCTAssertEqual(SkyStitchStyle.pan.cropCode, 1)
-        XCTAssertEqual(SkyStitchStyle.grid.warperCode, 0)
-        XCTAssertEqual(SkyStitchStyle.grid.cropCode, 4)
-    }
 }
