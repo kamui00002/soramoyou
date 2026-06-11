@@ -97,8 +97,12 @@ static void CropBlackBorders(cv::Mat &pano) {
             stk.push_back(c);
         }
     }
-    // 妥当な大きさのときだけ採用（万一の過剰トリミング防止）。
-    if (best.width > cols / 3 && best.height > rows / 3) {
+    // 黒を含まない最大の長方形が見つかれば必ず採用する（黒ゼロ優先）。
+    // ※以前は best が canvas の 1/3 未満だとクロップを諦める過剰トリミング防止ガードがあったが、
+    //   十字(プラス)型の4隅合成では内接矩形が 1/3 未満になり「クロップ不発→全黒」になっていた
+    //   （しかも RANSAC の非決定性で出る回と出ない回があった）。ガードを外し常にクロップする。
+    //   退化した細い帯は後段のガード3（クロップ後 aspect>8 で失敗扱い）が受け止める。
+    if (best.width > 0 && best.height > 0) {
         pano = pano(best).clone();
     }
 }

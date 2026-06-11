@@ -19,7 +19,7 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    static let currentID = "2026-06-panorama"
+    static let currentID = "2026-06-panorama-2"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 

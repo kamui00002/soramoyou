@@ -184,7 +184,7 @@ struct PostView: View {
     private var modeDescription: String {
         switch postKind {
         case .collage:  return "好きな空を4枚、タイル状に並べて1枚にします（例：朝・昼・夕・夜）。合成はしません"
-        case .panorama: return "少しずつ重ねて撮った空4枚を、1枚の広い空に合成します。横パン／4隅どちらの撮り方でもOK（次の画面で選べます・順番は自動）"
+        case .panorama: return "上下左右に少しずつ振って、重ねながら撮った空4枚を、1枚の広い空に合成します（順番は自動）"
         case .single:   return "空の写真を選択して投稿しましょう"
         }
     }
