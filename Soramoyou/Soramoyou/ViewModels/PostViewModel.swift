@@ -317,9 +317,10 @@ class PostViewModel: ObservableObject {
             }
 
             // 2. オリジナル画像をアップロード（ユーザーが選択した場合のみ）。
-            //    配置写真は素材N枚を原画像として残さない（images=合成1枚との非対称・再編集破綻を防ぐ）。
+            //    合成投稿(collage/panorama)は素材N枚を原画像として残さない（images=合成1枚との非対称・
+            //    再編集導線が postKind を運べず "panorama"/"collage" が消える破綻を防ぐ）。
             var originalImageURLs: [UploadedOriginalImage]? = nil
-            if saveOriginalImages && !selectedImages.isEmpty && postKind != .collage {
+            if saveOriginalImages && !selectedImages.isEmpty && !postKind.isComposite {
                 originalImageURLs = try await RetryableOperation.executeIfRetryable(
                     operationName: "PostViewModel.uploadOriginalImages"
                 ) { [self] in
@@ -532,10 +533,13 @@ class PostViewModel: ObservableObject {
 
         // ImageInfo配列を作成（アップロード時に収集したサイズ情報を使用）
         // 外部編集情報は selectedImages と同じ index で externalEditInfos から取得 ⭐️ Issue #4
+        // 合成投稿(collage/panorama)は端末内で生成した新規画像で、特定の素材1枚に紐づかない。
+        // 素材1枚目の外部編集情報を合成画像へ誤付与しないよう nil 化する
+        // （ギャラリーの「写真Appで編集済み」等のバッジ誤表示を防ぐ。collage が抽出メタを付けない方針と同趣旨）。
         let imageInfos = imageURLs.enumerated().map { index, uploaded -> ImageInfo in
-            let externalEditInfo = externalEditInfos.indices.contains(index)
-                ? externalEditInfos[index]
-                : nil
+            let externalEditInfo: ExternalEditInfo? = postKind.isComposite
+                ? nil
+                : (externalEditInfos.indices.contains(index) ? externalEditInfos[index] : nil)
             return ImageInfo(
                 url: uploaded.url,
                 thumbnail: uploaded.thumbnail,
@@ -578,7 +582,7 @@ class PostViewModel: ObservableObject {
         let finalOriginalImages = editing?.originalImages ?? originalImageInfos
 
         // 配置写真(collage)は「合成済み1枚」を保存する特別扱い:
-        // - 原画像(素材N枚)は残さない（images=1枚との非対称・再編集破綻を防ぐ）
+        // - 原画像(素材N枚)は残さない（images=1枚との非対称・再編集破綻を防ぐ。広角合成 panorama も同様）
         // - 抽出メタ(時間帯/空種別/色温度/撮影日時/空色)は1値で表せないので付けない（検索の歪み防止）
         let isCollage = (postKind == .collage)
         // 保存するラベル: collage かつ非空ラベルがあるときのみ。
@@ -597,7 +601,8 @@ class PostViewModel: ObservableObject {
             id: editing?.postId ?? UUID().uuidString,
             userId: userId,
             images: imageInfos,
-            originalImages: isCollage ? nil : finalOriginalImages,
+            // 合成投稿(collage/panorama)は原画像を残さない＝再編集導線を出さない（postKind 消失防止）。
+            originalImages: postKind.isComposite ? nil : finalOriginalImages,
             editSettings: editSettings,
             attachedRecipe: editRecipe,
             caption: trimmedCaption.isEmpty ? nil : trimmedCaption,

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A776EF40BE7A9AE95FECE753 /* OpenCV in Frameworks */ = {isa = PBXBuildFile; productRef = 339305E0AFD13F7BCE8948CF /* OpenCV */; };
 		E051CA452EE49ACB00CC78AB /* FirebaseAI in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA442EE49ACB00CC78AB /* FirebaseAI */; };
 		E051CA472EE49ACB00CC78AB /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA462EE49ACB00CC78AB /* FirebaseAnalytics */; };
 		E051CA492EE49ACB00CC78AB /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA482EE49ACB00CC78AB /* FirebaseAuth */; };
@@ -61,11 +62,15 @@
 		};
 		TEST1002000000000001 /* SoramoyouTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = SoramoyouTests;
 			sourceTree = "<group>";
 		};
 		TEST2002000000000001 /* SoramoyouUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = SoramoyouUITests;
 			sourceTree = "<group>";
 		};
@@ -84,6 +89,7 @@
 				E051CA452EE49ACB00CC78AB /* FirebaseAI in Frameworks */,
 				E051CA532EE49B3400CC78AB /* GoogleMobileAds in Frameworks */,
 				E051CA542EE49B3500CC78AB /* FirebaseStorage in Frameworks */,
+				A776EF40BE7A9AE95FECE753 /* OpenCV in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -153,6 +159,7 @@
 				E051CA4F2EE49B0200CC78AB /* Kingfisher */,
 				E051CA522EE49B3400CC78AB /* GoogleMobileAds */,
 				E051CA552EE49B3500CC78AB /* FirebaseStorage */,
+				339305E0AFD13F7BCE8948CF /* OpenCV */,
 			);
 			productName = Soramoyou;
 			productReference = E051C9D62EE497CA00CC78AB /* Soramoyou.app */;
@@ -236,6 +243,7 @@
 				E051CA432EE49ACB00CC78AB /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				E051CA4E2EE49B0200CC78AB /* XCRemoteSwiftPackageReference "Kingfisher" */,
 				E051CA512EE49B3400CC78AB /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */,
+				5146A8BEE2068F396EF810AA /* XCRemoteSwiftPackageReference "opencv-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E051C9D72EE497CA00CC78AB /* Products */;
@@ -464,9 +472,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 44;
+				CURRENT_PROJECT_VERSION = 53;
 				DEVELOPMENT_TEAM = B7F79FDM78;
 				ENABLE_PREVIEWS = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"SORAMOYOU_OPENCV=1",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Soramoyou/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "そらもよう";
@@ -490,7 +502,9 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.Soramoyou;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SORAMOYOU_OPENCV";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Soramoyou/Soramoyou-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -502,9 +516,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 44;
+				CURRENT_PROJECT_VERSION = 53;
 				DEVELOPMENT_TEAM = B7F79FDM78;
 				ENABLE_PREVIEWS = YES;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"SORAMOYOU_OPENCV=1",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Soramoyou/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "そらもよう";
@@ -528,7 +546,9 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.Soramoyou;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SORAMOYOU_OPENCV";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Soramoyou/Soramoyou-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -546,6 +566,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.SoramoyouTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SORAMOYOU_OPENCV";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -565,6 +586,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.SoramoyouTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SORAMOYOU_OPENCV";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -650,6 +672,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		5146A8BEE2068F396EF810AA /* XCRemoteSwiftPackageReference "opencv-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/yeatse/opencv-spm";
+			requirement = {
+				kind = exactVersion;
+				version = 5.0.0;
+			};
+		};
 		E051CA432EE49ACB00CC78AB /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
@@ -677,6 +707,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		339305E0AFD13F7BCE8948CF /* OpenCV */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5146A8BEE2068F396EF810AA /* XCRemoteSwiftPackageReference "opencv-spm" */;
+			productName = OpenCV;
+		};
 		E051CA442EE49ACB00CC78AB /* FirebaseAI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = E051CA432EE49ACB00CC78AB /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;

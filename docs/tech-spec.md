@@ -36,6 +36,8 @@ iOSフレームワーク:
 
 その他:
   - Kingfisher or SDWebImageSwiftUI (画像キャッシュ)
+  - opencv-spm 5.0.0 (広角合成 cv::Stitcher。ObjC++ ブリッジ + Bridging Header 経由、
+    SORAMOYOU_OPENCV フラグで条件コンパイル。静的リンクで実出荷サイズは IPA +約1.7MB)
 ```
 
 ## MCP GitHub API 設定

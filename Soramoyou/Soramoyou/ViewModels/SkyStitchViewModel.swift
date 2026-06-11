@@ -1,0 +1,100 @@
+// ⭐️ SkyStitchViewModel.swift
+// 広角合成(v2)の状態機械 — 合成→プレビュー→投稿パイプラインへ橋渡し（無料）
+//
+//  Created on 2026-06-10.
+//
+//  フロー（無料）:
+//    ① 4枚を SkyStitcher で合成（重いので非UIスレッド）
+//    ② .ok ＝ 合成プレビューを表示。失敗時は撮り直し誘導
+//    ③ ユーザーがプレビューを見て納得 → 合成済み1枚を投稿パイプライン
+//       (EditView→PostInfoView→savePost postKind=.panorama) へ
+//
+//  ※ 課金（StoreKit/PaymentService）は当初 v2 を有料にする想定で実装したが、
+//    OpenCV の実出荷サイズ増が小さい（+約1.7MB）こと・IAP の運用コストが価値を上回ることから
+//    広角合成は無料化した。PaymentService 一式は将来の「AI 補正」課金で再利用するため温存する。
+//
+//  テスト容易性のため stitch を注入可能にする（viewmodel.md / swift-test.md 準拠）。
+//
+
+import SwiftUI
+import os.log
+
+@MainActor
+final class SkyStitchViewModel: ObservableObject {
+
+    /// フロー状態。previewReady は合成済み画像を保持する。
+    enum State {
+        case idle
+        case stitching
+        case previewReady(UIImage)   // 合成成功・保存待ち
+        case failed(String)          // 失敗（撮り直し誘導）
+    }
+
+    @Published private(set) var state: State = .idle
+
+    private let stitch: @Sendable ([UIImage]) -> SkyStitchResult
+    private let logger = Logger(subsystem: "com.soramoyou", category: "SkyStitchViewModel")
+
+    /// 進行中の合成の世代番号。「もう一度ためす」連打などで合成が並走したとき、
+    /// 先に始まった古い合成の結果が後着して最新の state を上書きしないよう、最新世代だけを反映する。
+    private var stitchGeneration = 0
+
+    init(
+        stitch: @escaping @Sendable ([UIImage]) -> SkyStitchResult = { SkyStitcher.stitch($0) }
+    ) {
+        self.stitch = stitch
+    }
+
+    // MARK: - 合成
+
+    /// 4枚（2枚以上）を合成する。重い処理なので非UIスレッドで実行し、結果でプレビュー or 撮り直し誘導。
+    func runStitch(_ images: [UIImage]) async {
+        stitchGeneration += 1
+        let generation = stitchGeneration
+        state = .stitching
+        let stitchFn = stitch
+        let result = await Task.detached(priority: .userInitiated) { stitchFn(images) }.value
+
+        // この合成より新しい runStitch が始まっていたら、古い結果は捨てる（state 反映も計装もしない）。
+        guard generation == stitchGeneration else { return }
+
+        switch result.status {
+        case .ok:
+            if let image = result.image {
+                state = .previewReady(image)
+            } else {
+                state = .failed("合成結果を取得できませんでした。写真を選び直してお試しください")
+            }
+        case .needMoreImages:
+            state = .failed("4枚すべてはつながりませんでした。少しずつ重ねて撮り直すか、繋がらないときは「配置写真」で並べてみてください")
+        case .homographyEstFailed, .cameraParamsAdjustFailed:
+            state = .failed("うまく繋げませんでした。手ブレを抑えて重ねて撮り直すか、「配置写真」で並べてみてください")
+        case .unavailable:
+            state = .failed("この端末では広角合成を利用できません")
+        case .failed:
+            state = .failed("合成に失敗しました。写真を選び直してお試しください")
+        }
+
+        // 合成の成功/失敗ファネルを計装（PII なし・列挙のみ）。
+        // 成功 = previewReady への遷移条件（status==.ok かつ画像あり）と同値。
+        let succeeded = (result.status == .ok && result.image != nil)
+        LoggingService.shared.logEvent("stitch_completed", parameters: [
+            "succeeded": succeeded,
+            "status": Self.statusLabel(result.status),
+            "input_count": images.count
+        ])
+    }
+
+    /// 計装用の status ラベル（PII なし・列挙のみ）。
+    private static func statusLabel(_ status: SkyStitchStatus) -> String {
+        switch status {
+        case .ok:                       return "ok"
+        case .needMoreImages:           return "need_more_images"
+        case .homographyEstFailed:      return "homography_failed"
+        case .cameraParamsAdjustFailed: return "camera_params_failed"
+        case .unavailable:              return "unavailable"
+        case .failed:                   return "failed"
+        }
+    }
+
+}

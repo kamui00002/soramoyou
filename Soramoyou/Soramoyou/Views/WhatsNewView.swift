@@ -89,7 +89,7 @@ struct WhatsNewView: View {
         VStack(spacing: DesignTokens.Spacing.lg) {
             Spacer()
 
-            // アイコン（グロー付き）
+            // アイコン（グロー付き）。撮り方の図解を持つページは図解を表示する。
             ZStack {
                 Circle()
                     .fill(
@@ -103,16 +103,20 @@ struct WhatsNewView: View {
                     .frame(width: 200, height: 200)
                     .blur(radius: 20)
 
-                Image(systemName: page.icon)
-                    .font(.system(size: 80))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.white, .white.opacity(0.8)],
-                            startPoint: .top,
-                            endPoint: .bottom
+                if page.showsShootingDiagram {
+                    ShootingGuideDiagram(tint: .white, size: 180)
+                } else {
+                    Image(systemName: page.icon)
+                        .font(.system(size: 80))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.white, .white.opacity(0.8)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
                         )
-                    )
-                    .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
+                        .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
+                }
             }
 
             // 新機能バッジ
