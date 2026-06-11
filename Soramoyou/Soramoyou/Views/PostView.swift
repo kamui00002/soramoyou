@@ -119,9 +119,9 @@ struct PostView: View {
         }
     }
     
-    /// 配置写真・広角合成は「ちょうど4枚」が要件。
+    /// 配置写真・広角合成は「ちょうど4枚」が要件（判定は PostKind.isComposite に集約）。
     private var requiresFourPhotos: Bool {
-        postKind == .collage || postKind == .panorama
+        postKind.isComposite
     }
 
     /// 選択可能枚数。4枚モードは 4 固定（ピッカー生成前に確定が必須）。

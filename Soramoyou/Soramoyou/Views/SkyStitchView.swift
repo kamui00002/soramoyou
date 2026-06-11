@@ -70,6 +70,12 @@ struct SkyStitchView: View {
         .navigationViewStyle(.stack)
     }
 
+    /// 合成中かどうか（合成中の撮り方切替＝並走合成を防ぐために使う）。
+    private var isStitching: Bool {
+        if case .stitching = viewModel.state { return true }
+        return false
+    }
+
     /// 撮り方セレクタ（横パン / 4隅）。切り替えると同じ4枚で繋ぎ直す（試して良い方を採用）。
     private var stylePicker: some View {
         VStack(spacing: 6) {
@@ -79,6 +85,8 @@ struct SkyStitchView: View {
                 }
             }
             .pickerStyle(.segmented)
+            // 合成中は切替不可（並走合成と古い結果の後着上書きを UI 側でも抑止。VM 側は世代ガードで防御）。
+            .disabled(isStitching)
             .onChange(of: viewModel.style) { _ in
                 // 撮り方を変えたら同じ写真で繋ぎ直す
                 Task { await viewModel.runStitch(images) }

@@ -34,13 +34,13 @@ final class SkyStitcherTests: XCTestCase {
 
     /// ソースを45%重ねつつ4分割クロップ→ガイド撮影の4枚を模す（特徴が必ず一致する）。
     private func makeOverlappingTiles(from src: UIImage, count: Int = 4, overlap: Double = 0.45) -> [UIImage] {
-        let W = src.size.width, H = src.size.height, cg = src.cgImage!
-        let tileW = W / (Double(count) - (Double(count) - 1) * overlap)
+        let srcWidth = src.size.width, srcHeight = src.size.height, cg = src.cgImage!
+        let tileW = srcWidth / (Double(count) - (Double(count) - 1) * overlap)
         let step = tileW * (1 - overlap)
         var tiles: [UIImage] = []
         for i in 0..<count {
             let x = step * Double(i)
-            if let c = cg.cropping(to: CGRect(x: x, y: 0, width: min(tileW, W - x), height: H)) {
+            if let c = cg.cropping(to: CGRect(x: x, y: 0, width: min(tileW, srcWidth - x), height: srcHeight)) {
                 tiles.append(UIImage(cgImage: c, scale: 1, orientation: .up))
             }
         }

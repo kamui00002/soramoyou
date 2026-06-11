@@ -39,6 +39,11 @@ final class SkyStitchViewModel: ObservableObject {
     private let stitch: @Sendable ([UIImage], SkyStitchStyle) -> SkyStitchResult
     private let logger = Logger(subsystem: "com.soramoyou", category: "SkyStitchViewModel")
 
+    /// 進行中の合成の世代番号。撮り方切替や「もう一度ためす」で合成が並走したとき、
+    /// 先に始まった古い合成の結果が後着して最新の state を上書きしないよう、最新世代だけを反映する。
+    /// （例: 4隅へ切替済みなのに、遅れて完了した横パンのプレビューが表示される不整合を防ぐ）
+    private var stitchGeneration = 0
+
     init(
         stitch: @escaping @Sendable ([UIImage], SkyStitchStyle) -> SkyStitchResult = { SkyStitcher.stitch($0, style: $1) }
     ) {
@@ -49,10 +54,15 @@ final class SkyStitchViewModel: ObservableObject {
 
     /// 4枚（2枚以上）を合成する。重い処理なので非UIスレッドで実行し、結果でプレビュー or 撮り直し誘導。
     func runStitch(_ images: [UIImage]) async {
+        stitchGeneration += 1
+        let generation = stitchGeneration
         state = .stitching
         let stitchFn = stitch
         let style = self.style
         let result = await Task.detached(priority: .userInitiated) { stitchFn(images, style) }.value
+
+        // この合成より新しい runStitch が始まっていたら、古い結果は捨てる（state 反映も計装もしない）。
+        guard generation == stitchGeneration else { return }
 
         switch result.status {
         case .ok:
@@ -72,7 +82,8 @@ final class SkyStitchViewModel: ObservableObject {
         }
 
         // 合成の成功/失敗ファネルを計装（PII なし・列挙のみ）。
-        let succeeded: Bool = { if case .previewReady = state { return true } else { return false } }()
+        // 成功 = previewReady への遷移条件（status==.ok かつ画像あり）と同値。
+        let succeeded = (result.status == .ok && result.image != nil)
         LoggingService.shared.logEvent("stitch_completed", parameters: [
             "succeeded": succeeded,
             "status": Self.statusLabel(result.status),
