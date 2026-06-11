@@ -166,8 +166,8 @@ static void CropTolerantBorder(cv::Mat &pano, double minFrac) {
             st->setSeamFinder(cv::makePtr<cv::detail::GraphCutSeamFinder>(
                 cv::detail::GraphCutSeamFinderBase::COST_COLOR));
             st->setBlender(cv::makePtr<cv::detail::MultiBandBlender>(false)); // 継ぎ目段差を消す
-            // ワープ選択: 0=球面(既定。上下左右の回転に強い=4隅向き), 1=円筒(横パンで地平線が反りにくい)。
-            // 2=平面(PlaneWarper) は現状 Swift から渡されない将来チューニング候補として温存（円筒で不足なら次候補）。
+            // ワープ選択: 0=球面(既定。天頂を圧縮しワイドに仕上がる＝現行は両モードこれ)。
+            // 1=円筒(縦の視野を保存=縦長になる)・2=平面 は現状 Swift から渡されない将来チューニング候補として温存。
             switch (warper) {
                 case 1: st->setWarper(cv::makePtr<cv::CylindricalWarper>()); break;
                 case 2: st->setWarper(cv::makePtr<cv::PlaneWarper>());       break;
