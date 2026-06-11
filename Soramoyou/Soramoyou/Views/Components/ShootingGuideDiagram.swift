@@ -68,8 +68,11 @@ struct ShootingGuideDiagram: View {
 // MARK: - 撮り方のコツ（ヘルプシート）
 
 /// 合成画面の「？」から開く撮り方ガイド。図解＋コツの箇条書き。
+/// 閉じる操作は呼び出し側に委ねる（このプロジェクトの sheet クローズ慣習＝明示 onClose）。
+/// `@Environment(\.dismiss)` は presentation 文脈次第で効かないことがあるため使わない。
 struct SkyStitchHelpView: View {
-    @Environment(\.dismiss) private var dismiss
+    /// 閉じる操作（呼び出し側で sheet を閉じる）
+    let onClose: () -> Void
 
     /// 白背景でも見える空色（オンボの青系グラデと同系）
     private let skyBlue = Color(red: 0.39, green: 0.58, blue: 0.93)
@@ -102,7 +105,7 @@ struct SkyStitchHelpView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("閉じる") { dismiss() }
+                    Button("閉じる") { onClose() }
                 }
             }
         }
@@ -140,5 +143,5 @@ struct SkyStitchHelpView: View {
 }
 
 #Preview("ヘルプシート") {
-    SkyStitchHelpView()
+    SkyStitchHelpView(onClose: {})
 }

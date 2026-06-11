@@ -79,7 +79,7 @@ struct SkyStitchView: View {
         }
         .navigationViewStyle(.stack)
         .sheet(isPresented: $showHelp) {
-            SkyStitchHelpView()
+            SkyStitchHelpView(onClose: { showHelp = false })
         }
     }
 

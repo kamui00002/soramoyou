@@ -158,7 +158,7 @@ struct PostView: View {
     private var previewModeHint: String? {
         switch postKind {
         case .collage:  return "この4枚をタイル状に並べて1枚にします"
-        case .panorama: return "この4枚を1枚の広い空に合成します（撮り方は次の画面で選べます）"
+        case .panorama: return "この4枚を1枚の広い空に合成します（上下左右に少しずつ振って、重ねて撮るのがコツ）"
         case .single:   return nil
         }
     }

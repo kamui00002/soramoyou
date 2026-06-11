@@ -199,7 +199,7 @@ static void CropTolerantBorder(cv::Mat &pano, double minFrac) {
                 else if (aspect > 8.0 || longSide > 8000.0) {
                     result.statusCode = (NSInteger)cv::Stitcher::ERR_CAMERA_PARAMS_ADJUST_FAIL; // 3
                 }
-                // 正常: クロップ選択して画像確定。0=なし, 1=最大内接矩形(横パン), 4=許容70%(球面4隅)
+                // 正常: クロップ選択して画像確定。0=なし, 1=最大内接矩形(現行・黒を含まない最大長方形), 4=許容70%(将来候補)
                 else {
                     switch (crop) {
                         case 1: CropBlackBorders(pano);          break;
