@@ -21,6 +21,9 @@ struct SkyStitchView: View {
     @StateObject private var viewModel: SkyStitchViewModel
     @Environment(\.dismiss) private var dismiss
 
+    /// 撮り方のコツ（ヘルプシート）の表示状態
+    @State private var showHelp = false
+
     /// 注入用 init（#Preview / テストで stub の viewModel を渡す）。
     init(images: [UIImage], onStitched: @escaping (UIImage) -> Void, viewModel: SkyStitchViewModel) {
         self.images = images
@@ -59,6 +62,13 @@ struct SkyStitchView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") { dismiss() }
                 }
+                // 撮り方のコツ（図解）をいつでも開ける
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showHelp = true }) {
+                        Image(systemName: "questionmark.circle")
+                    }
+                    .accessibilityLabel("撮り方のコツ")
+                }
             }
             .task {
                 // 初回表示で合成を開始（idle のときだけ）
@@ -68,6 +78,9 @@ struct SkyStitchView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .sheet(isPresented: $showHelp) {
+            SkyStitchHelpView()
+        }
     }
 
     /// 撮り方の案内（上下左右に振って重ねて4枚＝4隅撮り）。

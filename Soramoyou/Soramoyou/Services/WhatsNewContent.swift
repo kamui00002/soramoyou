@@ -53,7 +53,8 @@ enum WhatsNewContent {
             gradientColors: [
                 Color(red: 0.53, green: 0.81, blue: 0.98),
                 Color(red: 0.39, green: 0.58, blue: 0.93)
-            ]
+            ],
+            showsShootingDiagram: true   // SF Symbol の代わりに撮り方の図解を表示
         )
     ]
 }
@@ -63,7 +64,7 @@ enum WhatsNewContent {
 /// What's New の1ページぶんのデータ。
 struct WhatsNewPage: Identifiable {
     let id = UUID()
-    /// SF Symbol 名
+    /// SF Symbol 名（showsShootingDiagram=true のページでは未使用）
     let icon: String
     /// アイコン上のバッジ文言（例: "新機能"）
     let badge: String
@@ -71,6 +72,8 @@ struct WhatsNewPage: Identifiable {
     let description: String
     /// 背景グラデーション（OnboardingView と統一感のある配色）
     let gradientColors: [Color]
+    /// true の場合、SF Symbol の代わりに「撮り方の図解」(ShootingGuideDiagram)を表示する。
+    var showsShootingDiagram: Bool = false
 }
 
 // MARK: - WhatsNewGate（表示判定・純関数）
