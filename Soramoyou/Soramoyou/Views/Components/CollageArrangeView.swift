@@ -18,7 +18,7 @@ struct CollageArrangeView: View {
     /// プレビュー用の編集後画像（最大4枚）
     let previewImages: [UIImage]
 
-    /// ラベルの最大文字数（朝/昼/夜/雨 のような短文想定）
+    /// ラベルの最大文字数（朝/昼/夕/夜 のような短文想定）
     private let labelLimit = 12
 
     var body: some View {
@@ -27,7 +27,7 @@ struct CollageArrangeView: View {
                 .font(.headline)
                 .foregroundColor(.white)
 
-            Text("4枚の空を並べて1枚にします（朝・昼・夜・雨など）")
+            Text("好きな空を4枚、自由に並べて1枚に。同じ空の朝・昼・夕・夜で「空の一日」も")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.85))
 
@@ -116,7 +116,7 @@ struct CollageArrangeView: View {
     }
 
     private func placeholder(for i: Int) -> String {
-        let examples = ["朝", "昼", "夜", "雨"]
+        let examples = ["朝", "昼", "夕", "夜"]
         return i < examples.count ? "例: \(examples[i])" : ""
     }
 
@@ -217,7 +217,7 @@ struct CollageLayoutChip: View {
 
 private struct CollageArrangePreviewHost: View {
     @State private var layout: CollageLayout = .grid2x2
-    @State private var labels: [String] = ["朝", "昼", "夜", "雨"]
+    @State private var labels: [String] = ["朝", "昼", "夕", "夜"]
     var body: some View {
         CollageArrangeView(layout: $layout, labels: $labels, previewImages: [])
     }
