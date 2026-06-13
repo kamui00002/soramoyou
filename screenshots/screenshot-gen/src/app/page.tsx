@@ -778,6 +778,322 @@ function Slide8() {
   );
 }
 
+// ─── iPad スライド（3:4 ポスター。iPhone セットと同じ stylized-minimal トーン）──
+// iPhone スライドは縦長(0.46)前提に縦位置がチューニングされているため流用せず、
+// iPad(2048×2732 = 0.75)専用の「ヘッドライン上 / コンテンツ中央 / 補足下」スキャフォールドを
+// 1つ用意し、中央ゾーンに iPhone 版と同じ部品（SkyTile / アプリアイコン / 4隅グループ / 2×2グリッド）を流用する。
+const IPAD_W = 2048;
+const IPAD_H = 2732;
+const IPAD_SIZES = [{ label: '13"', w: 2048, h: 2732 }] as const;
+
+// iPad ポスターの共通枠。ヘッドラインと補足は iPad 比率に合わせてここで持ち、
+// 中央(children)には機能イラスト部品を差し込む。
+function IpadSlide({
+  bg,
+  label,
+  headline,
+  sub,
+  decorations,
+  children,
+}: {
+  bg: string;
+  label: string;
+  headline: string;
+  sub: string;
+  decorations?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const W = IPAD_W;
+  const H = IPAD_H;
+  return (
+    <div
+      style={{
+        width: W,
+        height: H,
+        position: "relative",
+        overflow: "hidden",
+        background: bg,
+      }}
+    >
+      {decorations}
+
+      {/* ヘッドライン — 上部 */}
+      <div
+        style={{
+          position: "absolute",
+          top: H * 0.075,
+          width: "100%",
+          textAlign: "center",
+          padding: `0 ${W * 0.08}px`,
+        }}
+      >
+        <div
+          style={{
+            fontSize: W * 0.026,
+            fontWeight: 500,
+            color: "rgba(255,255,255,0.78)",
+            letterSpacing: "0.06em",
+            marginBottom: W * 0.012,
+          }}
+        >
+          {label}
+        </div>
+        <HeadlineText
+          text={headline}
+          fontSize={W * 0.064}
+          color="#fff"
+          shadow="0 2px 24px rgba(0,0,0,0.18)"
+        />
+      </div>
+
+      {/* 中央コンテンツ — flex で上下左右中央寄せ */}
+      <div
+        style={{
+          position: "absolute",
+          top: H * 0.27,
+          bottom: H * 0.15,
+          left: 0,
+          right: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {children}
+      </div>
+
+      {/* 補足 — 下部 */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: H * 0.06,
+          width: "100%",
+          textAlign: "center",
+          padding: `0 ${W * 0.1}px`,
+        }}
+      >
+        {sub.split("\n").map((line, i) => (
+          <div
+            key={i}
+            style={{
+              fontSize: W * 0.03,
+              color: "rgba(255,255,255,0.9)",
+              lineHeight: 1.6,
+              fontWeight: 500,
+              textShadow: "0 2px 16px rgba(0,0,0,0.2)",
+            }}
+          >
+            {line}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// iPad Hero — アイコン中央（個人情報露出回避は iPhone hero と同方針）
+function IpadHero() {
+  const W = IPAD_W;
+  const icon = W * 0.32;
+  return (
+    <IpadSlide
+      bg="linear-gradient(180deg, #1a4a8a 0%, #2d7dd2 25%, #5ba8e8 50%, #a8d8f0 72%, #e8f4fd 100%)"
+      label="そらもよう"
+      headline={"今日の空、\nみんなの空"}
+      sub={"空の写真を撮って、編集して、\nみんなとシェアしよう"}
+      decorations={
+        <>
+          <CloudBlob style={{ top: "8%", left: "-8%", width: 760, height: 420 }} />
+          <CloudBlob style={{ top: "6%", right: "-6%", width: 640, height: 360 }} />
+          <CloudBlob style={{ top: "34%", left: "-4%", width: 520, height: 300 }} />
+          <CloudBlob style={{ top: "38%", right: "-8%", width: 560, height: 320 }} />
+          <SunGlow
+            style={{
+              top: "4%",
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: 1100,
+              height: 1100,
+            }}
+          />
+        </>
+      }
+    >
+      <div
+        style={{
+          width: icon,
+          height: icon,
+          borderRadius: icon * 0.22,
+          overflow: "hidden",
+          boxShadow:
+            "0 24px 100px rgba(0,0,0,0.3), 0 0 0 10px rgba(255,255,255,0.25)",
+        }}
+      >
+        <img
+          src={img("/app-icon.png")}
+          alt="そらもよう"
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      </div>
+    </IpadSlide>
+  );
+}
+
+// iPad 広角合成 — 4隅に重ねた4枚 → 矢印 → 1枚の広い空（iPhone Slide7 と同じ意味・部品）
+function IpadWide() {
+  const W = IPAD_W;
+  const tileW = W * 0.2;
+  const tileH = tileW * 0.78;
+  const shift = tileW * 0.3;
+  const groupW = tileW + shift * 2;
+  const groupH = tileH + shift * 2;
+  const afterW = W * 0.6;
+  const afterH = afterW * 0.46;
+  return (
+    <IpadSlide
+      bg="linear-gradient(180deg, #2d6ea8 0%, #4a90d9 30%, #7ab8e8 62%, #c3e6f7 100%)"
+      label="広角合成"
+      headline={"重ねて撮って\n空を広げる"}
+      sub={"上下左右に振って重ねた空4枚が、\n1枚の広い空に"}
+      decorations={
+        <>
+          <CloudBlob style={{ top: "8%", left: "-8%", width: 640, height: 360 }} />
+          <CloudBlob style={{ top: "5%", right: "-6%", width: 520, height: 300 }} />
+          <SunGlow
+            style={{
+              top: "1%",
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: 980,
+              height: 980,
+            }}
+          />
+        </>
+      }
+    >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: W * 0.022,
+        }}
+      >
+        {/* before: 4隅に振って重ねた4枚（2×2で中央が重なる） */}
+        <div style={{ position: "relative", width: groupW, height: groupH }}>
+          {[[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([cx, cy], i) => (
+            <div
+              key={i}
+              style={{
+                position: "absolute",
+                left: groupW / 2 + cx * shift,
+                top: groupH / 2 + cy * shift,
+                transform: "translate(-50%, -50%)",
+                zIndex: i,
+                borderRadius: W * 0.014,
+                overflow: "hidden",
+                border: "4px solid rgba(255,255,255,0.92)",
+                boxShadow: "0 8px 22px rgba(0,0,0,0.22)",
+              }}
+            >
+              <SkyTile time="day" w={tileW} h={tileH} />
+            </div>
+          ))}
+        </div>
+
+        {/* つなぐ矢印 */}
+        <div
+          style={{
+            color: "rgba(255,255,255,0.95)",
+            fontSize: W * 0.04,
+            fontWeight: 800,
+            textShadow: "0 2px 10px rgba(0,0,0,0.2)",
+            lineHeight: 1,
+          }}
+        >
+          ↓
+        </div>
+
+        {/* after: 1枚の広い空 */}
+        <div
+          style={{
+            width: afterW,
+            borderRadius: W * 0.025,
+            overflow: "hidden",
+            boxShadow:
+              "0 24px 70px rgba(0,0,0,0.28), 0 0 0 7px rgba(255,255,255,0.34)",
+          }}
+        >
+          <SkyTile time="day" w={afterW} h={afterH} />
+        </div>
+      </div>
+    </IpadSlide>
+  );
+}
+
+// iPad 配置写真 — 好きな空4枚を 2×2 に並べる（iPhone Slide8 と同じ意味・部品）
+function IpadCollage() {
+  const W = IPAD_W;
+  const GRID_W = W * 0.58;
+  const GAP = W * 0.013;
+  const pad = GAP;
+  const cell = (GRID_W - pad * 2 - GAP) / 2;
+  const panels: [SkyTime, string][] = [
+    ["morning", "朝"],
+    ["day", "昼"],
+    ["evening", "夕"],
+    ["night", "夜"],
+  ];
+  return (
+    <IpadSlide
+      bg="linear-gradient(180deg, #16294f 0%, #3a6ea8 32%, #6aa0d0 58%, #e8a06a 100%)"
+      label="配置写真"
+      headline={"好きな空を\n4枚ならべて"}
+      sub={"同じ空の朝・昼・夕・夜で\n「空の一日」も"}
+      decorations={
+        <>
+          <CloudBlob style={{ top: "8%", right: "-8%", width: 560, height: 320 }} />
+          <CloudBlob style={{ bottom: "12%", left: "-8%", width: 520, height: 300 }} />
+        </>
+      }
+    >
+      <div
+        style={{
+          width: GRID_W,
+          padding: pad,
+          background: "rgba(255,255,255,0.92)",
+          borderRadius: W * 0.025,
+          boxShadow: "0 24px 70px rgba(0,0,0,0.3)",
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: GAP,
+        }}
+      >
+        {panels.map(([t, lb]) => (
+          <div
+            key={t}
+            style={{ borderRadius: W * 0.014, overflow: "hidden", background: "#fff" }}
+          >
+            <SkyTile time={t} w={cell} h={cell * 0.82} />
+            <div
+              style={{
+                textAlign: "center",
+                padding: `${W * 0.008}px 0`,
+                fontSize: W * 0.022,
+                fontWeight: 700,
+                color: "#2a2a2a",
+                background: "#fff",
+              }}
+            >
+              {lb}
+            </div>
+          </div>
+        ))}
+      </div>
+    </IpadSlide>
+  );
+}
+
 // ─── Slide Registry ──────────────────────────────────────
 
 const SLIDES = [
@@ -791,17 +1107,26 @@ const SLIDES = [
   { id: "collage", label: "配置写真", component: Slide8 },
 ];
 
+// iPad は新機能を主役に hero / 広角 / 配置 の3枚（ASC は端末ごとに枚数が異なってよい）
+const IPAD_SLIDES = [
+  { id: "hero", label: "ヒーロー", component: IpadHero },
+  { id: "panorama", label: "広角合成", component: IpadWide },
+  { id: "collage", label: "配置写真", component: IpadCollage },
+];
+
 // ─── Preview + Export ────────────────────────────────────
 
 function ScreenshotPreview({
   slide,
   index,
-  sizeIdx,
+  canvasW,
+  canvasH,
   onExport,
 }: {
-  slide: (typeof SLIDES)[number];
+  slide: { id: string; label: string; component: () => React.JSX.Element };
   index: number;
-  sizeIdx: number;
+  canvasW: number;
+  canvasH: number;
   onExport: (el: HTMLDivElement, name: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -812,11 +1137,11 @@ function ScreenshotPreview({
     if (!containerRef.current) return;
     const obs = new ResizeObserver(([entry]) => {
       const cw = entry.contentRect.width;
-      setScale(cw / IPHONE_W);
+      setScale(cw / canvasW);
     });
     obs.observe(containerRef.current);
     return () => obs.disconnect();
-  }, []);
+  }, [canvasW]);
 
   const SlideComponent = slide.component;
 
@@ -825,7 +1150,7 @@ function ScreenshotPreview({
       <div
         ref={containerRef}
         className="w-full relative overflow-hidden rounded-xl border border-gray-200 bg-gray-50 cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all"
-        style={{ aspectRatio: `${IPHONE_W}/${IPHONE_H}` }}
+        style={{ aspectRatio: `${canvasW}/${canvasH}` }}
         onClick={() => {
           if (slideRef.current) {
             onExport(
@@ -840,8 +1165,8 @@ function ScreenshotPreview({
           style={{
             transform: `scale(${scale})`,
             transformOrigin: "top left",
-            width: IPHONE_W,
-            height: IPHONE_H,
+            width: canvasW,
+            height: canvasH,
           }}
         >
           <SlideComponent />
@@ -858,9 +1183,17 @@ function ScreenshotPreview({
 
 export default function ScreenshotsPage() {
   const [ready, setReady] = useState(false);
+  const [device, setDevice] = useState<"iphone" | "ipad">("iphone");
   const [sizeIdx, setSizeIdx] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [exportLog, setExportLog] = useState<string[]>([]);
+
+  // 端末ごとのキャンバス寸法・スライド・出力サイズ。iPhone スライドはそのまま、
+  // iPad は専用の 3:4 ポスター（IPAD_SLIDES）を使う。
+  const dev =
+    device === "ipad"
+      ? { w: IPAD_W, h: IPAD_H, slides: IPAD_SLIDES, sizes: IPAD_SIZES }
+      : { w: IPHONE_W, h: IPHONE_H, slides: SLIDES, sizes: IPHONE_SIZES };
 
   useEffect(() => {
     preloadAllImages().then(() => setReady(true));
@@ -868,7 +1201,7 @@ export default function ScreenshotsPage() {
 
   const exportSlide = useCallback(
     async (el: HTMLDivElement, name: string) => {
-      const size = IPHONE_SIZES[sizeIdx];
+      const size = dev.sizes[sizeIdx];
       setExporting(true);
       setExportLog((l) => [...l, `Exporting ${name}...`]);
 
@@ -878,13 +1211,13 @@ export default function ScreenshotsPage() {
       el.style.zIndex = "-1";
       el.style.transform = "none";
 
-      // 画面は IPHONE_W × IPHONE_H で描画し、出力キャンバス側で size.w × size.h に
-      // 合わせる。pixelRatio だけで均一スケールすると IPHONE_H:IPHONE_W と
-      // size.h:size.w の比率差で 1〜10px 程度の高さズレが発生し、
-      // App Store Connect の画像サイズ検証に弾かれる（例: 1284×2789 ≠ 1284×2778）。
+      // 画面は dev.w × dev.h で描画し、出力キャンバス側で size.w × size.h に
+      // 合わせる。pixelRatio だけで均一スケールすると縦横比の差で
+      // 1〜10px 程度のズレが発生し、App Store Connect の画像サイズ検証に
+      // 弾かれる（例: 1284×2789 ≠ 1284×2778）。
       const opts = {
-        width: IPHONE_W,
-        height: IPHONE_H,
+        width: dev.w,
+        height: dev.h,
         canvasWidth: size.w,
         canvasHeight: size.h,
         cacheBust: true,
@@ -910,7 +1243,7 @@ export default function ScreenshotsPage() {
         setExporting(false);
       }
     },
-    [sizeIdx]
+    [sizeIdx, dev.w, dev.h, dev.sizes]
   );
 
   const exportAll = useCallback(async () => {
@@ -921,8 +1254,8 @@ export default function ScreenshotsPage() {
       document.querySelectorAll<HTMLDivElement>("[data-slide-export]");
     for (let i = 0; i < cards.length; i++) {
       const el = cards[i];
-      const name = `${String(i + 1).padStart(2, "0")}-${SLIDES[i].id}`;
-      const size = IPHONE_SIZES[sizeIdx];
+      const name = `${String(i + 1).padStart(2, "0")}-${dev.slides[i].id}`;
+      const size = dev.sizes[sizeIdx];
 
       el.style.position = "fixed";
       el.style.left = "0px";
@@ -932,8 +1265,8 @@ export default function ScreenshotsPage() {
 
       // 単体書き出しと同様、出力キャンバスで target size に合わせる。
       const opts = {
-        width: IPHONE_W,
-        height: IPHONE_H,
+        width: dev.w,
+        height: dev.h,
         canvasWidth: size.w,
         canvasHeight: size.h,
         cacheBust: true,
@@ -960,7 +1293,7 @@ export default function ScreenshotsPage() {
       await new Promise((r) => setTimeout(r, 300));
     }
     setExporting(false);
-  }, [sizeIdx]);
+  }, [sizeIdx, dev.w, dev.h, dev.slides, dev.sizes]);
 
   if (!ready) {
     return (
@@ -981,13 +1314,25 @@ export default function ScreenshotsPage() {
 
           <div className="flex items-center gap-3">
             <select
+              value={device}
+              onChange={(e) => {
+                setDevice(e.target.value as "iphone" | "ipad");
+                setSizeIdx(0);
+              }}
+              className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm bg-white"
+            >
+              <option value="iphone">iPhone</option>
+              <option value="ipad">iPad</option>
+            </select>
+
+            <select
               value={sizeIdx}
               onChange={(e) => setSizeIdx(Number(e.target.value))}
               className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm bg-white"
             >
-              {IPHONE_SIZES.map((s, i) => (
+              {dev.sizes.map((s, i) => (
                 <option key={i} value={i}>
-                  iPhone {s.label} ({s.w}x{s.h})
+                  {device === "ipad" ? "iPad" : "iPhone"} {s.label} ({s.w}x{s.h})
                 </option>
               ))}
             </select>
@@ -1006,12 +1351,13 @@ export default function ScreenshotsPage() {
       {/* Preview Grid */}
       <div className="max-w-7xl mx-auto p-6">
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-          {SLIDES.map((slide, i) => (
+          {dev.slides.map((slide, i) => (
             <ScreenshotPreview
               key={slide.id}
               slide={slide}
               index={i}
-              sizeIdx={sizeIdx}
+              canvasW={dev.w}
+              canvasH={dev.h}
               onExport={exportSlide}
             />
           ))}
@@ -1020,13 +1366,13 @@ export default function ScreenshotsPage() {
 
       {/* Offscreen render for export */}
       <div style={{ position: "absolute", left: -9999, top: 0, opacity: 0 }}>
-        {SLIDES.map((slide) => {
+        {dev.slides.map((slide) => {
           const SlideComponent = slide.component;
           return (
             <div
               key={slide.id}
               data-slide-export
-              style={{ width: IPHONE_W, height: IPHONE_H }}
+              style={{ width: dev.w, height: dev.h }}
             >
               <SlideComponent />
             </div>
