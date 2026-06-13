@@ -31,15 +31,28 @@ SPECS = [
 OUT_DIR = "appstore-submit-ipad"
 
 
+def _gauss1d(x: np.ndarray, sigma: float) -> np.ndarray:
+    """1次元ガウシアン平滑化（端は edge パディング）。補間セグメント境界の折れを均す。"""
+    r = int(sigma * 3)
+    k = np.exp(-(np.arange(-r, r + 1) ** 2) / (2 * sigma * sigma))
+    k /= k.sum()
+    return np.convolve(np.pad(x, (r, r), mode="edge"), k, mode="valid")
+
+
 def gradient_column(scaled: Image.Image, sx: int, blue: bool) -> Image.Image:
     """スケール済みパネルの x=sx 列を取り出し、必要なら汚染行を補間で除去して返す。"""
     col = np.asarray(scaled)[:, sx, :].astype(float)  # (TH, 3)
     if blue:
+        # 08-search のみ: 右端純グラデ列に主電話のベゼル角が数行混入するため、
+        # 青くない/暗い行を線形補間で除去 → さらに縦ガウシアンで補間境界の折れ
+        # （横方向の段＝継ぎ目に見える）を均してシームレスにする。
         contam = (col[:, 0] >= col[:, 2] - 8) | (col.max(axis=1) < 70)
         idx = np.arange(len(col))
         good = ~contam
         for c in range(3):
             col[:, c] = np.interp(idx, idx[good], col[good, c])
+        for c in range(3):
+            col[:, c] = _gauss1d(col[:, c], 60)
     return Image.fromarray(np.clip(col, 0, 255).astype("uint8").reshape(len(col), 1, 3))
 
 
