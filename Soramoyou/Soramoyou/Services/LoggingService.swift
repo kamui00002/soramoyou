@@ -8,15 +8,35 @@
 import Foundation
 import FirebaseCrashlytics
 import FirebaseAnalytics
+import PostHog
 import os.log
 
 /// ロギングとモニタリングサービス
 class LoggingService {
     static let shared = LoggingService()
-    
+
     private let logger = Logger(subsystem: "com.soramoyou", category: "LoggingService")
-    
+
     private init() {}
+
+    // MARK: - PostHog セットアップ
+
+    // PostHog の Project API key は「クライアント公開キー」。
+    // GoogleService-Info.plist と同様にアプリに同梱する前提のキーで、git にコミットして問題ない
+    // （イベント送信と feature flag 読み取りのみ可能。データを閲覧できるのは別の Personal API key の方）。
+    private static let postHogAPIKey = "phc_ygTnSrCc4AEp6G9m4hD8VLadRGjPPF7w4nYDBMMjX8LL"
+    private static let postHogHost = "https://us.i.posthog.com"
+
+    /// PostHog SDK を初期化する（アプリ起動時に一度だけ呼ぶ）
+    func configurePostHog() {
+        let config = PostHogConfig(projectToken: Self.postHogAPIKey, host: Self.postHogHost)
+        // 起動・バックグラウンド遷移などのライフサイクルイベントを自動計測
+        config.captureApplicationLifecycleEvents = true
+        #if DEBUG
+        config.debug = true
+        #endif
+        PostHogSDK.shared.setup(config)
+    }
     
     // MARK: - Crashlytics
     
@@ -90,7 +110,10 @@ class LoggingService {
         
         // Firebase Analyticsにイベントを記録
         Analytics.logEvent(name, parameters: sanitizedParameters)
-        
+
+        // PostHogにも同じイベントを記録（サニタイズ済みパラメータを流用）
+        PostHogSDK.shared.capture(name, properties: sanitizedParameters)
+
         // ログにも記録
         logger.info("Analytics event: \(name), parameters: \(sanitizedParameters?.description ?? "none")")
     }
@@ -152,7 +175,12 @@ class LoggingService {
         let sanitizedValue = sanitizeValue(value)
         
         Analytics.setUserProperty(sanitizedValue, forName: name)
-        
+
+        // PostHog にも反映（super property として以降の全イベントに付与）
+        if let sanitizedValue = sanitizedValue {
+            PostHogSDK.shared.register([name: sanitizedValue])
+        }
+
         // ログにも記録
         logger.info("User property set: \(name) = \(sanitizedValue ?? "nil")")
     }
@@ -163,11 +191,15 @@ class LoggingService {
         guard let userID = userID, !userID.isEmpty else {
             Analytics.setUserID(nil)
             Crashlytics.crashlytics().setUserID(nil)
+            // ログアウト相当: PostHog の識別をリセットして匿名ユーザーに戻す
+            PostHogSDK.shared.reset()
             return
         }
-        
+
         Analytics.setUserID(userID)
         Crashlytics.crashlytics().setUserID(userID)
+        // PostHog でも内部 UID で識別（email / displayName は渡さない）
+        PostHogSDK.shared.identify(userID)
         
         // ログにも記録（userID は個人情報なので privacy: .private で第三者には <private> 表示にする）
         logger.info("User ID set: \(userID, privacy: .private)")

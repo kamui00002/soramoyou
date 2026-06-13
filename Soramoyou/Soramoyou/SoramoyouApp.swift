@@ -21,6 +21,9 @@ struct SoramoyouApp: App {
         // Firebase初期化
         FirebaseApp.configure()
 
+        // PostHog初期化（プロダクト分析。Firebaseと並行してLoggingService経由で送信）
+        LoggingService.shared.configurePostHog()
+
         // Crashlyticsの設定
         setupCrashlytics()
 
