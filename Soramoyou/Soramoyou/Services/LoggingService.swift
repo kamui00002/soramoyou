@@ -17,6 +17,12 @@ class LoggingService {
 
     private let logger = Logger(subsystem: "com.soramoyou", category: "LoggingService")
 
+    /// 直前に PostHog へ identify 済みのユーザーID（nil = 匿名）。
+    /// 起動毎の認証リスナー即時通知などで setUserID(nil) が走るたびに reset() すると、
+    /// 匿名 distinct_id が毎回再発番されゲストのファネル分析が壊れる。
+    /// 「identify 済み → 匿名」への実遷移（＝本当のログアウト）でのみ reset() するために保持する。
+    private var lastIdentifiedUserID: String?
+
     private init() {}
 
     // MARK: - PostHog セットアップ
@@ -191,8 +197,13 @@ class LoggingService {
         guard let userID = userID, !userID.isEmpty else {
             Analytics.setUserID(nil)
             Crashlytics.crashlytics().setUserID(nil)
-            // ログアウト相当: PostHog の識別をリセットして匿名ユーザーに戻す
-            PostHogSDK.shared.reset()
+            // PostHog の reset() は「identify 済み → 匿名」への実遷移（本当のログアウト）でのみ呼ぶ。
+            // 起動毎にゲスト経路で setUserID(nil) が走るたびに reset() すると匿名IDが再発番され、
+            // ゲストが毎起動「別の新規ユーザー」として計上されてしまうため。
+            if lastIdentifiedUserID != nil {
+                PostHogSDK.shared.reset()
+                lastIdentifiedUserID = nil
+            }
             return
         }
 
@@ -200,7 +211,8 @@ class LoggingService {
         Crashlytics.crashlytics().setUserID(userID)
         // PostHog でも内部 UID で識別（email / displayName は渡さない）
         PostHogSDK.shared.identify(userID)
-        
+        lastIdentifiedUserID = userID
+
         // ログにも記録（userID は個人情報なので privacy: .private で第三者には <private> 表示にする）
         logger.info("User ID set: \(userID, privacy: .private)")
     }
