@@ -614,6 +614,170 @@ function Slide6() {
   );
 }
 
+// ─── 空のイラスト（実写を使わず CSS で flat に描く・hero / ShootingGuideDiagram と同系の stylized-minimal）──
+
+type SkyTime = "morning" | "day" | "evening" | "night";
+
+// 時間帯ごとの空の見た目（グラデ背景・太陽/月の色と位置・雲の色）。
+const SKY_STYLES: Record<
+  SkyTime,
+  { bg: string; orb: string; glow: string; orbX: number; orbY: number; cloudTint: string; cloudOpacity: number; stars?: boolean }
+> = {
+  morning: {
+    bg: "linear-gradient(180deg, #ffe7cf 0%, #fdd2b0 22%, #cfe4ef 60%, #bfe0f2 100%)",
+    orb: "radial-gradient(circle, #ffd989 0%, #ffb45e 68%, rgba(255,180,94,0) 72%)",
+    glow: "0 0 40px rgba(255,190,110,0.55)",
+    orbX: 0.2, orbY: 0.62, cloudTint: "#ffffff", cloudOpacity: 0.9,
+  },
+  day: {
+    bg: "linear-gradient(180deg, #4a93da 0%, #6fb0e6 48%, #a7d6f1 100%)",
+    orb: "radial-gradient(circle, #fff7da 0%, #ffe89a 68%, rgba(255,232,154,0) 72%)",
+    glow: "0 0 46px rgba(255,240,180,0.7)",
+    orbX: 0.74, orbY: 0.2, cloudTint: "#ffffff", cloudOpacity: 0.98,
+  },
+  evening: {
+    bg: "linear-gradient(180deg, #5b3b86 0%, #b5527a 36%, #ef8a52 70%, #f7b56a 100%)",
+    orb: "radial-gradient(circle, #fff0c0 0%, #ff9d52 68%, rgba(255,157,82,0) 72%)",
+    glow: "0 0 50px rgba(255,150,90,0.55)",
+    orbX: 0.5, orbY: 0.62, cloudTint: "#f3c9a8", cloudOpacity: 0.8,
+  },
+  night: {
+    bg: "linear-gradient(180deg, #10204a 0%, #1d2f5e 45%, #38386e 100%)",
+    orb: "radial-gradient(circle, #fdf6df 0%, #efe6c2 72%, rgba(239,230,194,0) 74%)",
+    glow: "0 0 34px rgba(245,240,210,0.45)",
+    orbX: 0.74, orbY: 0.2, cloudTint: "#9aa6c4", cloudOpacity: 0.4, stars: true,
+  },
+};
+
+// flat な雲（白い塊）。横長のベース＋丸いこぶで雲形にする。w は雲の幅(px)。
+function Cloud({ x, y, w, tint = "#ffffff", opacity = 0.95 }: { x: number; y: number; w: number; tint?: string; opacity?: number }) {
+  const h = w * 0.52;
+  return (
+    <div style={{ position: "absolute", left: x, top: y, width: w, height: h }}>
+      <div style={{ position: "absolute", bottom: 0, width: "100%", height: h * 0.5, borderRadius: h, background: tint, opacity }} />
+      <div style={{ position: "absolute", left: w * 0.04, bottom: h * 0.18, width: h * 0.66, height: h * 0.66, borderRadius: "50%", background: tint, opacity }} />
+      <div style={{ position: "absolute", left: w * 0.3, bottom: h * 0.26, width: h * 0.86, height: h * 0.86, borderRadius: "50%", background: tint, opacity }} />
+      <div style={{ position: "absolute", left: w * 0.58, bottom: h * 0.18, width: h * 0.6, height: h * 0.6, borderRadius: "50%", background: tint, opacity }} />
+    </div>
+  );
+}
+
+// 空イラスト1枚。time で朝/昼/夕/夜を flat に描く（実写は使わない）。w/h は px。
+function SkyTile({ time, w, h, radius = 0 }: { time: SkyTime; w: number; h: number; radius?: number }) {
+  const s = SKY_STYLES[time];
+  const orbSize = Math.min(w, h) * 0.42;
+  const starR = Math.max(3, w * 0.012);
+  return (
+    <div style={{ position: "relative", overflow: "hidden", width: w, height: h, borderRadius: radius, background: s.bg }}>
+      {/* 太陽 / 月 */}
+      <div style={{ position: "absolute", left: w * s.orbX, top: h * s.orbY, width: orbSize, height: orbSize, transform: "translate(-50%, -50%)", borderRadius: "50%", background: s.orb, boxShadow: s.glow }} />
+      {/* 星（夜のみ） */}
+      {s.stars && [[0.14, 0.18], [0.3, 0.4], [0.46, 0.13], [0.82, 0.42], [0.62, 0.26], [0.9, 0.2]].map(([sx, sy], i) => (
+        <div key={i} style={{ position: "absolute", left: w * sx, top: h * sy, width: starR, height: starR, borderRadius: "50%", background: "#fff", opacity: 0.85 }} />
+      ))}
+      {/* 雲 */}
+      <Cloud x={w * 0.05} y={h * 0.24} w={w * 0.42} tint={s.cloudTint} opacity={s.cloudOpacity} />
+      <Cloud x={w * 0.48} y={h * 0.52} w={w * 0.5} tint={s.cloudTint} opacity={s.cloudOpacity} />
+    </div>
+  );
+}
+
+// Slide 7: 広角合成 — 「重ねて撮った同じ空4枚 → 横に広い1枚」を絵で示す（実写なし）。
+// 撮り方図解ではなく成果(広い空)を主役にしつつ、重なる4枚で「合成」だと分かるようにする。
+function Slide7() {
+  // before: 上下左右に振って重ねた同じ空4枚（4隅＝2×2で中央が重なる）
+  const tileW = IPHONE_W * 0.32;
+  const tileH = tileW * 0.78;
+  const shift = tileW * 0.3;
+  const groupW = tileW + shift * 2;
+  const groupH = tileH + shift * 2;
+  // after: 合成結果＝上下左右に広がった1枚の広い空（横長すぎを抑え4隅感を出す）
+  const afterW = IPHONE_W * 0.82;
+  const afterH = afterW * 0.52;
+  return (
+    <div style={{ width: IPHONE_W, height: IPHONE_H, position: "relative", overflow: "hidden", background: "linear-gradient(180deg, #2d6ea8 0%, #4a90d9 30%, #7ab8e8 62%, #c3e6f7 100%)" }}>
+      <CloudBlob style={{ top: "8%", left: "-10%", width: 520, height: 300 }} />
+      <CloudBlob style={{ top: "5%", right: "-8%", width: 420, height: 260 }} />
+      <SunGlow style={{ top: "2%", left: "50%", transform: "translateX(-50%)", width: 680, height: 680 }} />
+
+      {/* 見出し */}
+      <div style={{ position: "absolute", top: IPHONE_H * 0.06, width: "100%" }}>
+        <Caption canvasW={IPHONE_W} headline={"重ねて撮って\n空を広げる"} label="広角合成" color="#fff" />
+      </div>
+
+      {/* before: 4隅に振って重ねた4枚（2×2で中央が重なる＝ShootingGuideDiagram と同じ「4隅撮り」。横パンと誤解されないよう横一列にしない） */}
+      <div style={{ position: "absolute", top: IPHONE_H * 0.25, left: "50%", transform: "translateX(-50%)", width: groupW, height: groupH }}>
+        {[[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([cx, cy], i) => (
+          <div key={i} style={{ position: "absolute", left: groupW / 2 + cx * shift, top: groupH / 2 + cy * shift, transform: "translate(-50%, -50%)", zIndex: i, borderRadius: IPHONE_W * 0.02, overflow: "hidden", border: "3px solid rgba(255,255,255,0.92)", boxShadow: "0 8px 22px rgba(0,0,0,0.22)" }}>
+            <SkyTile time="day" w={tileW} h={tileH} />
+          </div>
+        ))}
+      </div>
+
+      {/* つなぐ矢印 */}
+      <div style={{ position: "absolute", top: IPHONE_H * 0.25 + groupH + IPHONE_H * 0.006, width: "100%", textAlign: "center", color: "rgba(255,255,255,0.95)", fontSize: IPHONE_W * 0.055, fontWeight: 800, textShadow: "0 2px 10px rgba(0,0,0,0.2)" }}>
+        ↓
+      </div>
+
+      {/* after: 1枚の広い空（上下左右に広がった＝4隅合成の成果） */}
+      <div style={{ position: "absolute", top: IPHONE_H * 0.53, left: "50%", transform: "translateX(-50%)", width: afterW, borderRadius: IPHONE_W * 0.04, overflow: "hidden", boxShadow: "0 24px 70px rgba(0,0,0,0.28), 0 0 0 6px rgba(255,255,255,0.34)" }}>
+        <SkyTile time="day" w={afterW} h={afterH} />
+      </div>
+
+      {/* 補足 */}
+      <div style={{ position: "absolute", top: IPHONE_H * 0.77, width: "100%", textAlign: "center", padding: `0 ${IPHONE_W * 0.1}px` }}>
+        <div style={{ fontSize: IPHONE_W * 0.048, color: "rgba(255,255,255,0.92)", lineHeight: 1.6, fontWeight: 500, textShadow: "0 2px 16px rgba(0,0,0,0.2)" }}>
+          上下左右に振って重ねた空4枚が、
+          <br />
+          1枚の広い空に
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Slide 8: 配置写真 — 好きな空4枚を「自由に並べる」。朝・昼・夕・夜は一例(「空の一日」)。
+// 実写ではなく flat な空イラスト4枚を 2×2 にして、白フレーム＋一言ラベル帯で見せる。
+function Slide8() {
+  const GAP = IPHONE_W * 0.018;
+  const GRID_W = IPHONE_W * 0.8;
+  const pad = GAP;
+  const cell = (GRID_W - pad * 2 - GAP) / 2;
+  const panels: [SkyTime, string][] = [["morning", "朝"], ["day", "昼"], ["evening", "夕"], ["night", "夜"]];
+  return (
+    <div style={{ width: IPHONE_W, height: IPHONE_H, position: "relative", overflow: "hidden", background: "linear-gradient(180deg, #16294f 0%, #3a6ea8 32%, #6aa0d0 58%, #e8a06a 100%)" }}>
+      <CloudBlob style={{ top: "8%", right: "-10%", width: 440, height: 270 }} />
+      <CloudBlob style={{ bottom: "13%", left: "-10%", width: 400, height: 250 }} />
+
+      {/* 見出し */}
+      <div style={{ position: "absolute", top: IPHONE_H * 0.06, width: "100%" }}>
+        <Caption canvasW={IPHONE_W} headline={"好きな空を\n4枚ならべて"} label="配置写真" color="#fff" />
+      </div>
+
+      {/* 2×2 グリッド（白フレーム＋一言ラベル帯） */}
+      <div style={{ position: "absolute", top: IPHONE_H * 0.3, left: "50%", transform: "translateX(-50%)", width: GRID_W, padding: pad, background: "rgba(255,255,255,0.92)", borderRadius: IPHONE_W * 0.04, boxShadow: "0 24px 70px rgba(0,0,0,0.3)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: GAP }}>
+        {panels.map(([t, lb]) => (
+          <div key={t} style={{ borderRadius: IPHONE_W * 0.022, overflow: "hidden", background: "#fff" }}>
+            <SkyTile time={t} w={cell} h={cell * 0.82} />
+            <div style={{ textAlign: "center", padding: `${IPHONE_W * 0.012}px 0`, fontSize: IPHONE_W * 0.032, fontWeight: 700, color: "#2a2a2a", background: "#fff" }}>
+              {lb}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 補足 */}
+      <div style={{ position: "absolute", bottom: IPHONE_H * 0.06, width: "100%", textAlign: "center", padding: `0 ${IPHONE_W * 0.08}px` }}>
+        <div style={{ fontSize: IPHONE_W * 0.046, color: "rgba(255,255,255,0.92)", lineHeight: 1.6, fontWeight: 500, textShadow: "0 2px 16px rgba(0,0,0,0.2)" }}>
+          同じ空の朝・昼・夕・夜で
+          <br />
+          「空の一日」も
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Slide Registry ──────────────────────────────────────
 
 const SLIDES = [
@@ -623,6 +787,8 @@ const SLIDES = [
   { id: "postinfo", label: "投稿分析", component: Slide4 },
   { id: "search", label: "検索", component: Slide5 },
   { id: "profile", label: "プロフィール", component: Slide6 },
+  { id: "panorama", label: "広角合成", component: Slide7 },
+  { id: "collage", label: "配置写真", component: Slide8 },
 ];
 
 // ─── Preview + Export ────────────────────────────────────
