@@ -133,17 +133,21 @@ struct MoodSelectorView: View {
             Text("フレームに入れる一言")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.8))
+            // ⚠️ インライン Binding(get:set:) は実機の実キーボード入力で「打った文字が表示されない」
+            //   不具合の原因になりうる。直接束縛にして、文字数制限は .onChange で後追いクランプする。
             TextField(
                 "",
-                text: Binding(
-                    get: { frameCaption },
-                    set: { frameCaption = String($0.prefix(frameCaptionLimit)) }
-                ),
+                text: $frameCaption,
                 prompt: Text("空を見て感じたこと（任意）").foregroundColor(.white.opacity(0.45))
             )
             .foregroundColor(.white)
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.12)))
+            .onChange(of: frameCaption) { newValue in
+                if newValue.count > frameCaptionLimit {
+                    frameCaption = String(newValue.prefix(frameCaptionLimit))
+                }
+            }
             Text("\(frameCaption.count)/\(frameCaptionLimit)・通常のコメント（ハッシュタグ）とは別です")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.6))
