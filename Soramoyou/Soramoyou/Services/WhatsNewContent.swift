@@ -19,7 +19,7 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    static let currentID = "2026-06-panorama-2"
+    static let currentID = "2026-06-feedback"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -32,29 +32,28 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（広角合成）の新機能紹介ページ。
-    /// 「並べる（配置写真）」との取り違えを防ぐため、広角＝横に繋ぐことと順番自動・無料を明示する。
+    /// 今回（フィードバック導線・コメント改善）の新機能紹介ページ。
+    /// フィードバックは「どこから送れるか（設定＞サポート）」を文言に明記して発見しやすくする。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "pano",
-            badge: "新機能・無料",
-            title: "広角合成",
-            description: "少しずつ重ねて撮った空4枚を、\n横に広い1枚の空につなげます",
+            icon: "bubble.left.and.text.bubble.right.fill",
+            badge: "新機能",
+            title: "ご意見・ご要望",
+            description: "アプリへの感想・不具合・要望を\n「設定 ＞ サポート」からいつでも送れます",
             gradientColors: [
-                Color(red: 0.95, green: 0.62, blue: 0.36),
-                Color(red: 0.96, green: 0.73, blue: 0.55)
+                Color(red: 0.62, green: 0.52, blue: 0.93),
+                Color(red: 0.78, green: 0.66, blue: 0.96)
             ]
         ),
         WhatsNewPage(
-            icon: "camera.viewfinder",
-            badge: "つかいかた",
-            title: "重ねて撮るのがコツ",
-            description: "上下左右に少しずつ振って、\n重ねながら4枚。順番は自動でつなげます",
+            icon: "person.crop.circle.fill",
+            badge: "改善",
+            title: "コメントが見やすく",
+            description: "コメントに投稿者の名前とアイコンが\n表示されるようになりました",
             gradientColors: [
                 Color(red: 0.53, green: 0.81, blue: 0.98),
                 Color(red: 0.39, green: 0.58, blue: 0.93)
-            ],
-            showsShootingDiagram: true   // SF Symbol の代わりに撮り方の図解を表示
+            ]
         )
     ]
 }
