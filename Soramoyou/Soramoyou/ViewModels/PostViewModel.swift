@@ -163,9 +163,12 @@ class PostViewModel: ObservableObject {
         self.caption = caption
         extractHashtags(from: caption)
     }
-    
+
     /// ハッシュタグを抽出
-    private func extractHashtags(from text: String) {
+    /// ⚠️ TextEditor の束縛 setter から毎キーストローク呼ぶと、@Published hashtags の更新が
+    ///   入力中の再描画レースを起こし「打った文字が表示されない」不具合になる（実機で再現）。
+    ///   そのため呼び出しは `$viewModel.caption` 直接束縛＋`.onChange` から行うこと。
+    func extractHashtags(from text: String) {
         let hashtagPattern = #"#(\w+)"#
         let regex = try? NSRegularExpression(pattern: hashtagPattern, options: [])
         let nsString = text as NSString

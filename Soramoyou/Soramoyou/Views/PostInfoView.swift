@@ -231,10 +231,10 @@ struct PostInfoView: View {
                 .font(.headline)
                 .foregroundColor(.white)
             
-            TextEditor(text: Binding(
-                get: { viewModel.caption },
-                set: { viewModel.setCaption($0) }
-            ))
+            // ⚠️ インライン Binding(get:set:) ＋ setter 内 extractHashtags（@Published更新）は、
+            //   実機の実キーボード入力中に再描画レースを起こし「打った文字が表示されない」不具合になる。
+            //   直接束縛にして、ハッシュタグ抽出は入力確定後の .onChange で行う。
+            TextEditor(text: $viewModel.caption)
             .frame(height: 100)
             .padding(8)
             .background(
@@ -247,6 +247,9 @@ struct PostInfoView: View {
             )
             .foregroundColor(.primary)
             .scrollContentBackground(.hidden)
+            .onChange(of: viewModel.caption) { newValue in
+                viewModel.extractHashtags(from: newValue)
+            }
             
             Text("ハッシュタグは「#」で始まる単語で自動的に抽出されます")
                 .font(.caption)

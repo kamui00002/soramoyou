@@ -87,9 +87,12 @@ struct CollageArrangeView: View {
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.7))
                         .frame(width: 18)
+                    // ⚠️ インライン Binding(get:set:) は実機の実キーボード入力で「打った文字が表示されない」
+                    //   不具合の原因になりうる。直接の subscript 束縛にし、文字数制限は .onChange でクランプする。
+                    //   labels は常に4要素だが、念のため範囲外は .constant("") にフォールバックして crash を防ぐ。
                     TextField(
                         "",
-                        text: bindingForLabel(i),
+                        text: i < labels.count ? $labels[i] : .constant(""),
                         prompt: Text(placeholder(for: i)).foregroundColor(.white.opacity(0.45))
                     )
                     .foregroundColor(.white)
@@ -102,17 +105,11 @@ struct CollageArrangeView: View {
                 .foregroundColor(.white.opacity(0.6))
         }
         .padding(.top, 4)
-    }
-
-    /// labels 配列の i 番目への安全なバインディング（要素不足は補う・最大文字数でクランプ）。
-    private func bindingForLabel(_ i: Int) -> Binding<String> {
-        Binding(
-            get: { i < labels.count ? labels[i] : "" },
-            set: { newValue in
-                while labels.count <= i { labels.append("") }
-                labels[i] = String(newValue.prefix(labelLimit))
+        .onChange(of: labels) { newLabels in
+            for idx in newLabels.indices where newLabels[idx].count > labelLimit {
+                labels[idx] = String(newLabels[idx].prefix(labelLimit))
             }
-        )
+        }
     }
 
     private func placeholder(for i: Int) -> String {
