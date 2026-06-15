@@ -17,6 +17,7 @@ struct SettingsView: View {
     @StateObject private var viewModel = SettingsViewModel()
     @State private var showingPrivacyPolicy = false
     @State private var showingTermsOfService = false
+    @State private var showingFeedback = false
     @State private var showingLogoutConfirmation = false
     @State private var showingDeleteAccountConfirmation = false
     @State private var reauthEmail = ""
@@ -79,6 +80,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showingTermsOfService) {
                 TermsOfServiceView()
+            }
+            .sheet(isPresented: $showingFeedback) {
+                FeedbackView()
             }
             .alert("ログアウト", isPresented: $showingLogoutConfirmation) {
                 Button("キャンセル", role: .cancel) { }
@@ -326,6 +330,20 @@ struct SettingsView: View {
             sectionHeader(title: "サポート", icon: "questionmark.circle")
 
             settingsCard {
+                // ご意見・ご要望（アプリ内フィードバック → Firestore。ログイン時のみ）
+                if authViewModel.currentUser != nil {
+                    SettingsRow(
+                        title: "ご意見・ご要望",
+                        icon: "bubble.left.and.text.bubble.right.fill",
+                        iconColor: .purple
+                    ) {
+                        showingFeedback = true
+                    }
+
+                    Divider()
+                        .padding(.leading, 44)
+                }
+
                 // お問い合わせ
                 SettingsRow(
                     title: "お問い合わせ",
