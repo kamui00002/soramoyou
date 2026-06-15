@@ -190,7 +190,7 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.fetchComments は未実装です")
     }
 
-    func addComment(postId: String, userId: String, content: String) async throws -> Comment {
+    func addComment(postId: String, userId: String, content: String, authorName: String?, authorPhotoURL: String?) async throws -> Comment {
         fatalError("MockFirestoreService.addComment は未実装です")
     }
 

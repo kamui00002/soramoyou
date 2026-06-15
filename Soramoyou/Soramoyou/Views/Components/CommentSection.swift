@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import Kingfisher
 
 /// コメントセクション（一覧 + 入力欄）
 struct CommentSection: View {
@@ -346,32 +347,72 @@ struct CommentRow: View {
     let onDelete: () -> Void
     @State private var showDeleteConfirm = false
 
-    /// ユーザーIDからパステルカラーを生成
+    /// ユーザーIDからパステルカラーを生成（写真が無いときのアバター背景色）
     private var avatarColor: Color {
         let hash = comment.userId.hashValue
         let hue = Double(abs(hash) % 360) / 360.0
         return Color(hue: hue, saturation: 0.3, brightness: 0.9)
     }
 
-    /// ユーザーIDから表示名の頭文字を生成
+    /// 表示名（投稿時点で保存した authorName。無ければ「ユーザー」）
+    private var displayName: String {
+        let name = comment.authorName?.trimmingCharacters(in: .whitespaces) ?? ""
+        return name.isEmpty ? "ユーザー" : name
+    }
+
+    /// 表示名の頭文字（写真が無いときのアバター。名前が無ければ person アイコンを使うので空文字を返す）
     private var avatarInitial: String {
-        String(comment.userId.prefix(2)).uppercased()
+        let name = comment.authorName?.trimmingCharacters(in: .whitespaces) ?? ""
+        return name.isEmpty ? "" : String(name.prefix(1)).uppercased()
+    }
+
+    /// アバター（プロフィール写真があれば KFImage、無ければ頭文字 / person アイコン）
+    @ViewBuilder
+    private var avatarView: some View {
+        if let urlString = comment.authorPhotoURL, let url = URL(string: urlString) {
+            KFImage(url)
+                .placeholder { avatarFallback }
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 32, height: 32)
+                .clipShape(Circle())
+        } else {
+            avatarFallback
+        }
+    }
+
+    private var avatarFallback: some View {
+        Circle()
+            .fill(avatarColor)
+            .frame(width: 32, height: 32)
+            .overlay(
+                Group {
+                    if avatarInitial.isEmpty {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.white.opacity(0.9))
+                    } else {
+                        Text(avatarInitial)
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                    }
+                }
+            )
     }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // アバター
-            Circle()
-                .fill(avatarColor)
-                .frame(width: 32, height: 32)
-                .overlay(
-                    Text(avatarInitial)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                )
+            // アバター（プロフィール写真 or 頭文字）
+            avatarView
 
             // コメント本文（吹き出し風）
             VStack(alignment: .leading, spacing: 4) {
+                // 投稿者名
+                Text(displayName)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                    .padding(.leading, 4)
+
                 Text(comment.content)
                     .font(.system(size: 14, design: .rounded))
                     .foregroundColor(DesignTokens.Colors.textPrimary)

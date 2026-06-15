@@ -101,11 +101,19 @@ class CommentViewModel: ObservableObject {
         isSending = true
         errorMessage = nil
 
+        // 投稿者の表示名・写真を Firestore プロフィールから取得して非正規化保存する。
+        // 注意: Firebase Auth プロフィールには表示名/写真が同期されていないため
+        //       authService.currentUser() ではなく users コレクションを参照する。
+        //       取得失敗（匿名・プロフィール未作成・通信エラー）でもコメント投稿は止めない（best-effort）。
+        let profile = try? await firestoreService.fetchUser(userId: userId)
+
         do {
             let comment = try await firestoreService.addComment(
                 postId: postId,
                 userId: userId,
-                content: content
+                content: content,
+                authorName: profile?.displayName,
+                authorPhotoURL: profile?.photoURL
             )
             // 新しいコメントを先頭に追加（降順表示のため）
             comments.insert(comment, at: 0)
