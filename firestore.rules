@@ -320,6 +320,26 @@ service cloud.firestore {
     }
 
     // ============================================
+    // Feedback collection (アプリ内フィードバック)
+    // ============================================
+    match /feedback/{feedbackId} {
+      // フィードバックは管理者のみ読み取り可能（Firebase コンソール / Cloud Functions 経由）
+      allow read: if false;
+
+      // 作成: 認証済みユーザーのみ、自分のIDで、本文1〜1000文字
+      //   ※ クライアント Feedback.toFirestoreData と上限を一致させること
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['userId', 'message', 'createdAt'])
+                    && request.resource.data.message is string
+                    && request.resource.data.message.size() >= 1
+                    && request.resource.data.message.size() <= 1000;
+
+      // 更新・削除は不可
+      allow update, delete: if false;
+    }
+
+    // ============================================
     // Collections collection (コレクション)
     // ============================================
     match /collections/{collectionId} {
