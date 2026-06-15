@@ -197,4 +197,8 @@ extension FirestoreServiceProtocol {
     func deleteComment(commentId: String, postId: String, userId: String) async throws {
         fatalError("MockFirestoreService.deleteComment は未実装です")
     }
+
+    func submitFeedback(_ feedback: Feedback) async throws {
+        fatalError("MockFirestoreService.submitFeedback は未実装です")
+    }
 }

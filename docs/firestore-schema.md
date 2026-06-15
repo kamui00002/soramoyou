@@ -94,6 +94,21 @@
 }
 ```
 
+## feedback コレクション（アプリ内フィードバック）
+```json
+{
+  "feedbackId": "string (ドキュメントID)",
+  "userId": "string",                // 送信者（auth.uid と一致が必須）
+  "message": "string",               // 本文（1〜1000文字）
+  "category": "string",              // 種別 bug/request/other（任意）
+  "appVersion": "string",            // 例 "1.7.4 (57)"（任意・トラブル切り分け用）
+  "deviceInfo": "string",            // 例 "iOS 18.5 / iPhone"（任意）
+  "createdAt": "timestamp"           // serverTimestamp
+}
+```
+- セキュリティ: 作成は認証済みユーザーが自分のIDでのみ（rules `hasAll(['userId','message','createdAt'])` + message 1〜1000文字）。**読み取り・更新・削除は不可**（管理者が Firebase コンソールで閲覧）。
+- email・表示名などの PII は保存しない（userId のみ）。
+
 ---
 
 ## Firebase使用時の重要事項

@@ -69,6 +69,9 @@ protocol FirestoreServiceProtocol {
     func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?)
     func addComment(postId: String, userId: String, content: String) async throws -> Comment
     func deleteComment(commentId: String, postId: String, userId: String) async throws
+
+    // Feedback
+    func submitFeedback(_ feedback: Feedback) async throws
 }
 
 class FirestoreService: FirestoreServiceProtocol {
@@ -581,7 +584,20 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.createFailed(error)
         }
     }
-    
+
+    // MARK: - Feedback
+
+    /// アプリ内フィードバックを送信する（`feedback` コレクションに作成）
+    func submitFeedback(_ feedback: Feedback) async throws {
+        do {
+            try await db.collection("feedback")
+                .document(feedback.id)
+                .setData(feedback.toFirestoreData())
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
+        }
+    }
+
     // MARK: - Block
     
     /// ユーザーをブロックする
