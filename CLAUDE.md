@@ -42,6 +42,7 @@
 | @docs/ui-spec.md | 画面構成 / 遷移 / デザインガイドライン / 「そらもよう」特有の機能仕様（フィルター・編集ツール・装備・検索・位置情報） |
 | @docs/firestore-schema.md | Firestore コレクションスキーマ / セキュリティ / パフォーマンス / 画像処理方針 |
 | @docs/build-deploy.md | テスト・動作確認 / ポート設定 / PR / .gitignore / Info.plist / デバッグ / Issue / 最終確認チェックリスト |
+| @docs/pre-release-checklist.md | リリース前チェックリスト（実データでハッピーパス / Firestore index / 著者表示 / 蓄積系MVP / 提出メカニクス）。新機能PR・提出前に確認 |
 | @docs/roadmap.md | Phase 1 開発ロードマップ / Phase 2・3 実装予定 |
 | @docs/user-context.md | ユーザー開発スタイル / Claude の対応方針 |
 
