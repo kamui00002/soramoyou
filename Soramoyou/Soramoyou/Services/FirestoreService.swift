@@ -67,7 +67,7 @@ protocol FirestoreServiceProtocol {
 
     // Comments
     func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?)
-    func addComment(postId: String, userId: String, content: String) async throws -> Comment
+    func addComment(postId: String, userId: String, content: String, authorName: String?, authorPhotoURL: String?) async throws -> Comment
     func deleteComment(commentId: String, postId: String, userId: String) async throws
 }
 
@@ -766,8 +766,17 @@ class FirestoreService: FirestoreServiceProtocol {
     }
 
     /// コメントを追加
-    func addComment(postId: String, userId: String, content: String) async throws -> Comment {
-        let comment = Comment(userId: userId, postId: postId, content: content)
+    /// - Parameters:
+    ///   - authorName: 投稿者の表示名（投稿時点の値を非正規化して保存。取得できなければ nil）
+    ///   - authorPhotoURL: 投稿者のプロフィール画像URL（同上）
+    func addComment(postId: String, userId: String, content: String, authorName: String?, authorPhotoURL: String?) async throws -> Comment {
+        let comment = Comment(
+            userId: userId,
+            postId: postId,
+            content: content,
+            authorName: authorName,
+            authorPhotoURL: authorPhotoURL
+        )
 
         do {
             let batch = db.batch()
