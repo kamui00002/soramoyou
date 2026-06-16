@@ -113,7 +113,7 @@ struct SoramoyouWidgetEntryView: View {
         if let image = loadedImage {
             photo(image)
         } else {
-            SkyGradient.linearGradient(for: entry.phase)
+            AbstractSkyView(phase: entry.phase, date: entry.date)
         }
     }
 
