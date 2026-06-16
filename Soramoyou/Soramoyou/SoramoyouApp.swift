@@ -30,6 +30,13 @@ struct SoramoyouApp: App {
 
         // 注意: AdMob/ATT初期化はContentViewのonAppearで実行
         // init()ではビューが表示されていないため、ATTダイアログが表示されない
+
+        #if DEBUG
+        // シミュレータ確認用：launchArg SEED_WIDGET でサンプルの空をウィジェットキャッシュへ投入する。
+        if ProcessInfo.processInfo.arguments.contains("SEED_WIDGET") {
+            WidgetCacheManager.shared.debugSeed()
+        }
+        #endif
     }
     
     /// Crashlyticsの設定

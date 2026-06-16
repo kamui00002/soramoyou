@@ -124,4 +124,51 @@ final class WidgetCacheManager {
             return nil
         }
     }
+
+    #if DEBUG
+    // MARK: - シミュレータ確認用シード（launchArg SEED_WIDGET から呼ぶ・本番に影響なし）
+
+    /// サンプルの空画像を数枚キャッシュへ書き、ウィジェットの写真表示をログインなしで確認できるようにする。
+    func debugSeed() {
+        let samples: [(id: String, tod: String, top: (Double, Double, Double), bottom: (Double, Double, Double))] = [
+            ("seed-morning", "morning", (0.42, 0.68, 0.93), (0.87, 0.94, 0.99)),
+            ("seed-day", "afternoon", (0.13, 0.45, 0.90), (0.75, 0.89, 0.99)),
+            ("seed-evening", "evening", (0.99, 0.55, 0.32), (0.90, 0.38, 0.43)),
+            ("seed-night", "night", (0.05, 0.07, 0.18), (0.13, 0.16, 0.32))
+        ]
+        let now = Date()
+        for (i, sample) in samples.enumerated() {
+            let image = Self.makeGradientImage(top: sample.top, bottom: sample.bottom)
+            try? writer.cache(
+                image: image,
+                postId: sample.id,
+                timeOfDay: sample.tod,
+                skyColors: [],
+                createdAt: now.addingTimeInterval(Double(-i) * 3600)
+            )
+        }
+        WidgetCenter.shared.reloadAllTimelines()
+        print("✅ [Widget] debugSeed: \(samples.count) 件のサンプル空をキャッシュ")
+    }
+
+    private static func makeGradientImage(top: (Double, Double, Double), bottom: (Double, Double, Double)) -> UIImage {
+        let size = CGSize(width: 600, height: 600)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { ctx in
+            let cg = ctx.cgContext
+            let colors = [
+                UIColor(red: top.0, green: top.1, blue: top.2, alpha: 1).cgColor,
+                UIColor(red: bottom.0, green: bottom.1, blue: bottom.2, alpha: 1).cgColor
+            ] as CFArray
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
+                cg.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: size.height), options: [])
+            }
+            // 識別マーカー（「確かに写真が出ている」を一目で分かるように）：太陽/月＋地平線シルエット。
+            cg.setFillColor(UIColor(white: 1.0, alpha: 0.92).cgColor)
+            cg.fillEllipse(in: CGRect(x: 400, y: 110, width: 96, height: 96))
+            cg.setFillColor(UIColor(red: 0.10, green: 0.12, blue: 0.10, alpha: 0.45).cgColor)
+            cg.fill(CGRect(x: 0, y: 470, width: size.width, height: 130))
+        }
+    }
+    #endif
 }
