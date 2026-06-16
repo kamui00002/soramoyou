@@ -18,7 +18,7 @@
 1. [Google Cloud Console](https://console.cloud.google.com/)にアクセス
 2. プロジェクト「Soramoyou (soramoyou-ios)」を選択
 3. **APIとサービス > 認証情報**に移動
-4. 公開されているAPIキー（`AIzaSyC4BrIDzZz6kgGiOrqfIp2nwKNhR5X1QkQ`）を確認
+4. 公開されているAPIキー（`[削除済み — 実値は非記載]`）を確認
 5. 以下のいずれかを実行：
    - **推奨**: APIキーに制限を設定（iOSアプリのバンドルID、Firebaseプロジェクトなど）
    - **代替**: 古いAPIキーを削除し、新しいAPIキーを生成
