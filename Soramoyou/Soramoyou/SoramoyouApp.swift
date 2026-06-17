@@ -36,6 +36,10 @@ struct SoramoyouApp: App {
         if ProcessInfo.processInfo.arguments.contains("SEED_WIDGET") {
             WidgetCacheManager.shared.debugSeed()
         }
+        // 一バケット偏り（evening 5枚）を再現し、アルバムと今の空が別写真を選ぶか検証ログを出す。
+        if ProcessInfo.processInfo.arguments.contains("SEED_WIDGET_ONE_BUCKET") {
+            WidgetCacheManager.shared.debugSeedOneBucket()
+        }
         #endif
     }
     

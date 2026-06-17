@@ -22,15 +22,17 @@ enum WidgetPhotoSelector {
     private static func rotatingPick(
         _ entries: [WidgetIndex.Entry],
         at date: Date,
-        rotationInterval: TimeInterval
+        rotationInterval: TimeInterval,
+        slotOffset: Int = 0
     ) -> WidgetIndex.Entry? {
         guard !entries.isEmpty else { return nil }
         let ordered = entries.sorted {
             $0.createdAt != $1.createdAt ? $0.createdAt > $1.createdAt : $0.postId < $1.postId
         }
         // 経過したスロット数で索引を進める（負時刻でも安全に正の剰余にする）。
+        // slotOffset は「アルバム（offset 0）と同じ在庫でも別の写真を出す」ための位置ずらし（Mode B 用）。
         let interval = max(rotationInterval, 1)
-        let slot = Int((date.timeIntervalSince1970 / interval).rounded(.down))
+        let slot = Int((date.timeIntervalSince1970 / interval).rounded(.down)) + slotOffset
         let index = ((slot % ordered.count) + ordered.count) % ordered.count
         return ordered[index]
     }
@@ -61,11 +63,20 @@ enum WidgetPhotoSelector {
         for bucket in bucketsByNearness(to: phase.timeOfDay) {
             let matches = entries.filter { $0.timeOfDay == bucket.rawValue }
             if !matches.isEmpty {
-                return rotatingPick(matches, at: date, rotationInterval: rotationInterval)
+                return rotatingPick(matches, at: date, rotationInterval: rotationInterval,
+                                    slotOffset: albumDecorrelationOffset(for: matches.count))
             }
         }
         // どの時間帯にも該当が無い（全て timeOfDay=nil 等）→ 手持ち全体から（グラデにはしない）。
-        return rotatingPick(entries, at: date, rotationInterval: rotationInterval)
+        return rotatingPick(entries, at: date, rotationInterval: rotationInterval,
+                            slotOffset: albumDecorrelationOffset(for: entries.count))
+    }
+
+    /// アルバム（offset 0）と同じ在庫を回しても別の写真が出るよう、回転位置をずらす量。
+    /// 在庫の約半分ずらして「いちばん離れた」写真を選ぶ（在庫2枚以上なら必ずアルバムと別の写真）。
+    /// 在庫1枚のときは 0（ずらしようがない＝同じ1枚しか無い）。
+    static func albumDecorrelationOffset(for count: Int) -> Int {
+        count >= 2 ? count / 2 : 0
     }
 
     /// 指定の時間帯から「近い順」に全 `TimeOfDay` を並べる（巡回距離・決定的）。

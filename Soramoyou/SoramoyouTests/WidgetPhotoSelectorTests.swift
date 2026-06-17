@@ -87,6 +87,38 @@ final class WidgetPhotoSelectorTests: XCTestCase {
         XCTAssertNil(WidgetPhotoSelector.skyPick(from: [], phase: .night, at: date(0)))
     }
 
+    // MARK: - アルバムとの非相関（同じ在庫でも別の写真）
+
+    func testAlbumDecorrelationOffset() {
+        XCTAssertEqual(WidgetPhotoSelector.albumDecorrelationOffset(for: 0), 0)
+        XCTAssertEqual(WidgetPhotoSelector.albumDecorrelationOffset(for: 1), 0, "1枚はずらせない＝同じ1枚")
+        XCTAssertEqual(WidgetPhotoSelector.albumDecorrelationOffset(for: 2), 1)
+        XCTAssertEqual(WidgetPhotoSelector.albumDecorrelationOffset(for: 5), 2)
+    }
+
+    func testSkyPickDiffersFromAlbumWithSingleBucket() {
+        // 在庫が evening の1バケットに偏っていても、今の空はアルバムと別の写真を出す（全スロットで）。
+        let entries = (0..<5).map { i in entry("p\(i)", timeOfDay: "evening", createdAt: Double(500 - i)) }
+        for slot in 0..<12 {
+            let when = date(Double(slot) * 3600)
+            let album = WidgetPhotoSelector.albumPick(from: entries, at: when)?.postId
+            let sky = WidgetPhotoSelector.skyPick(from: entries, phase: .goldenHour, at: when)?.postId
+            XCTAssertNotNil(album)
+            XCTAssertNotNil(sky)
+            XCTAssertNotEqual(album, sky, "slot \(slot): 同じ在庫（1バケット）でもアルバムと別の写真")
+        }
+    }
+
+    func testSkyPickSameAsAlbumOnlyWithSinglePhoto() {
+        // 在庫が1枚だけのときは、ずらしようがないので同じ1枚になる（仕様・避けられない）。
+        let entries = [entry("only", timeOfDay: "evening", createdAt: 100)]
+        let when = date(0)
+        let album = WidgetPhotoSelector.albumPick(from: entries, at: when)?.postId
+        let sky = WidgetPhotoSelector.skyPick(from: entries, phase: .goldenHour, at: when)?.postId
+        XCTAssertEqual(album, "only")
+        XCTAssertEqual(sky, "only", "在庫1枚なら今の空もアルバムも同じ1枚")
+    }
+
     // MARK: - 近い時間帯の並び順（巡回距離・直前優先）
 
     func testBucketsByNearnessFromNight() {

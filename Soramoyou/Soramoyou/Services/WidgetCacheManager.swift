@@ -198,5 +198,56 @@ final class WidgetCacheManager {
             cg.fill(CGRect(x: 0, y: 470, width: size.width, height: 130))
         }
     }
+
+    /// 「写真が1つの時間帯に偏った」状態（evening 5枚）を再現し、実 App Group データから
+    /// アルバムと今の空が **別の写真** を選ぶかを検証ログに出す（オフセット修正の実データ確認用）。
+    /// 各画像に大きな番号を焼くので、実ウィジェットを並べたとき別番号が出るか目視もできる。
+    func debugSeedOneBucket() {
+        // 純粋な「1バケット偏り」を作るため、既存キャッシュを消してから evening だけ入れる。
+        try? writer.clear()
+        let now = Date()
+        for i in 0..<5 {
+            let image = Self.makeNumberedImage(number: i + 1)
+            _ = try? writer.cache(
+                image: image,
+                postId: "evening-\(i)",
+                timeOfDay: "evening",
+                skyColors: [],
+                createdAt: now.addingTimeInterval(Double(-i) * 3600)
+            )
+        }
+        WidgetCenter.shared.reloadAllTimelines()
+        // 実データ（App Group の index）から読み戻して、アルバムと今の空が別の写真を選ぶか検証。
+        let index = writer.loadIndex()
+        let album = WidgetPhotoSelector.albumPick(from: index.entries, at: now)?.postId ?? "nil"
+        let sky = WidgetPhotoSelector.skyPick(from: index.entries, phase: .goldenHour, at: now)?.postId ?? "nil"
+        print("🔎 [Widget一バケット検証] entries=\(index.entries.count) album=\(album) sky=\(sky) 別写真=\(album != sky)")
+    }
+
+    /// 中央に大きな番号を焼いた evening 配色の確認用画像。
+    private static func makeNumberedImage(number: Int) -> UIImage {
+        let size = CGSize(width: 600, height: 600)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { ctx in
+            let cg = ctx.cgContext
+            let colors = [
+                UIColor(red: 0.99, green: 0.55, blue: 0.32, alpha: 1).cgColor,
+                UIColor(red: 0.90, green: 0.38, blue: 0.43, alpha: 1).cgColor
+            ] as CFArray
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
+                cg.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: size.height), options: [])
+            }
+            let str = "\(number)" as NSString
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.boldSystemFont(ofSize: 320),
+                .foregroundColor: UIColor.white
+            ]
+            let textSize = str.size(withAttributes: attrs)
+            str.draw(
+                at: CGPoint(x: (size.width - textSize.width) / 2, y: (size.height - textSize.height) / 2),
+                withAttributes: attrs
+            )
+        }
+    }
     #endif
 }
