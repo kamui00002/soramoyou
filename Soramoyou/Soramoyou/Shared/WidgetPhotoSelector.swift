@@ -44,8 +44,11 @@ enum WidgetPhotoSelector {
         rotatingPick(entries, at: date, rotationInterval: rotationInterval)
     }
 
-    /// Mode B（今の空）: 現在の局面に合う時間帯の写真から決定的に 1 枚選ぶ。
-    /// - 一致する写真が無ければ nil（呼び出し側で Mode C グラデにフォールバックする）。
+    /// Mode B（今の空）: 現在の局面に合う時間帯の写真を優先しつつ、無ければ手持ちの写真から 1 枚選ぶ。
+    /// - まず現在の時間帯（朝/昼/夕/夜）に一致する写真を探す（時刻に寄り添う本来の挙動）。
+    /// - 一致が無ければ **全写真にフォールバック**（空のグラデより「自分の空」を出す方が嬉しい）。
+    ///   これにより EXIF 撮影日時の無い写真・配置写真（timeOfDay=nil）も表示対象になる。
+    /// - 写真が 1 枚も無いときだけ nil（呼び出し側で Mode C グラデにフォールバックする）。
     static func skyPick(
         from entries: [WidgetIndex.Entry],
         phase: SkyPhase,
@@ -54,7 +57,9 @@ enum WidgetPhotoSelector {
     ) -> WidgetIndex.Entry? {
         let bucket = phase.timeOfDay.rawValue
         let matches = entries.filter { $0.timeOfDay == bucket }
-        return rotatingPick(matches, at: date, rotationInterval: rotationInterval)
+        // 時間帯一致を優先。無ければ全写真へ。これで「写真はあるのにグラデ」を防ぐ。
+        let pool = matches.isEmpty ? entries : matches
+        return rotatingPick(pool, at: date, rotationInterval: rotationInterval)
     }
 
     /// Mode A のタイムライン用に、基準時刻から `rotationInterval` 間隔で `count` 枚ぶんの

@@ -67,9 +67,23 @@ final class WidgetPhotoSelectorTests: XCTestCase {
         XCTAssertEqual(picked?.postId, "c")
     }
 
-    func testSkyPickNoMatchReturnsNil() {
-        // night バケットの写真は無い → nil（呼び出し側で Mode C フォールバック）。
-        XCTAssertNil(WidgetPhotoSelector.skyPick(from: threeEntries, phase: .night, at: date(0)))
+    func testSkyPickNoMatchFallsBackToAnyPhoto() {
+        // night バケットの写真は無い → グラデではなく手持ちの写真へフォールバック。
+        let picked = WidgetPhotoSelector.skyPick(from: threeEntries, phase: .night, at: date(0))
+        XCTAssertNotNil(picked, "一致が無くても写真があればフォールバックで出す")
+        XCTAssertTrue(["a", "b", "c"].contains(picked?.postId ?? ""))
+    }
+
+    func testSkyPickFallbackIncludesNilTimeOfDayPhotos() {
+        // timeOfDay=nil（EXIF撮影日時なし・配置写真）も、一致が無いときのフォールバック対象になる。
+        let entries = [entry("x", timeOfDay: nil, createdAt: 100)]
+        let picked = WidgetPhotoSelector.skyPick(from: entries, phase: .day, at: date(0))
+        XCTAssertEqual(picked?.postId, "x", "nil タグの写真もフォールバックで表示される")
+    }
+
+    func testSkyPickEmptyReturnsNil() {
+        // 写真が 1 枚も無いときだけ nil（→ Mode C グラデにフォールバック）。
+        XCTAssertNil(WidgetPhotoSelector.skyPick(from: [], phase: .night, at: date(0)))
     }
 
     // MARK: - タイムライン
