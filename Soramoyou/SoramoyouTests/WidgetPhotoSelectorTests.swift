@@ -67,23 +67,38 @@ final class WidgetPhotoSelectorTests: XCTestCase {
         XCTAssertEqual(picked?.postId, "c")
     }
 
-    func testSkyPickNoMatchFallsBackToAnyPhoto() {
-        // night バケットの写真は無い → グラデではなく手持ちの写真へフォールバック。
+    func testSkyPickFallsBackToNearestBucket() {
+        // night の在庫は無い。夕(a,b)と朝(c)が同距離→「直前の時間帯」優先で夕を選ぶ（朝ではない）。
+        // ＝全写真を巡回する Mode A とは違い、近い時間帯に絞るので被りにくい。
         let picked = WidgetPhotoSelector.skyPick(from: threeEntries, phase: .night, at: date(0))
-        XCTAssertNotNil(picked, "一致が無くても写真があればフォールバックで出す")
-        XCTAssertTrue(["a", "b", "c"].contains(picked?.postId ?? ""))
+        XCTAssertEqual(picked?.timeOfDay, "evening", "夜→在庫無し→直前の夕を優先")
+        XCTAssertTrue(["a", "b"].contains(picked?.postId ?? ""))
     }
 
     func testSkyPickFallbackIncludesNilTimeOfDayPhotos() {
-        // timeOfDay=nil（EXIF撮影日時なし・配置写真）も、一致が無いときのフォールバック対象になる。
+        // どの時間帯にも在庫が無い（timeOfDay=nil の写真しか無い）→ 手持ち全体から表示する。
         let entries = [entry("x", timeOfDay: nil, createdAt: 100)]
         let picked = WidgetPhotoSelector.skyPick(from: entries, phase: .day, at: date(0))
-        XCTAssertEqual(picked?.postId, "x", "nil タグの写真もフォールバックで表示される")
+        XCTAssertEqual(picked?.postId, "x", "nil タグの写真も最終フォールバックで表示される")
     }
 
     func testSkyPickEmptyReturnsNil() {
         // 写真が 1 枚も無いときだけ nil（→ Mode C グラデにフォールバック）。
         XCTAssertNil(WidgetPhotoSelector.skyPick(from: [], phase: .night, at: date(0)))
+    }
+
+    // MARK: - 近い時間帯の並び順（巡回距離・直前優先）
+
+    func testBucketsByNearnessFromNight() {
+        // 夜から近い順: 夜 → 夕(直前) → 朝 → 昼。
+        let order = WidgetPhotoSelector.bucketsByNearness(to: .night).map { $0.rawValue }
+        XCTAssertEqual(order, ["night", "evening", "morning", "afternoon"])
+    }
+
+    func testBucketsByNearnessFromAfternoon() {
+        // 昼から近い順: 昼 → 朝(直前) → 夕 → 夜。
+        let order = WidgetPhotoSelector.bucketsByNearness(to: .afternoon).map { $0.rawValue }
+        XCTAssertEqual(order, ["afternoon", "morning", "evening", "night"])
     }
 
     // MARK: - タイムライン

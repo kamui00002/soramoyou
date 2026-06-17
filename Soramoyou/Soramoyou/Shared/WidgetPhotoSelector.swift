@@ -44,10 +44,11 @@ enum WidgetPhotoSelector {
         rotatingPick(entries, at: date, rotationInterval: rotationInterval)
     }
 
-    /// Mode B（今の空）: 現在の局面に合う時間帯の写真を優先しつつ、無ければ手持ちの写真から 1 枚選ぶ。
+    /// Mode B（今の空）: 現在の時間帯に最も近い在庫の写真から決定的に 1 枚選ぶ。
     /// - まず現在の時間帯（朝/昼/夕/夜）に一致する写真を探す（時刻に寄り添う本来の挙動）。
-    /// - 一致が無ければ **全写真にフォールバック**（空のグラデより「自分の空」を出す方が嬉しい）。
-    ///   これにより EXIF 撮影日時の無い写真・配置写真（timeOfDay=nil）も表示対象になる。
+    /// - 無ければ **いちばん近い時間帯**（巡回距離・例: 昼が無ければ朝か夕）の写真へフォールバック。
+    ///   こうすると「今の空」らしさを保ちつつ、全写真を巡回する「アルバム」と被りにくい。
+    /// - どの時間帯にも在庫が無い（timeOfDay=nil の写真しか無い等）ときだけ手持ち全体から。
     /// - 写真が 1 枚も無いときだけ nil（呼び出し側で Mode C グラデにフォールバックする）。
     static func skyPick(
         from entries: [WidgetIndex.Entry],
@@ -55,11 +56,46 @@ enum WidgetPhotoSelector {
         at date: Date,
         rotationInterval: TimeInterval = defaultRotationInterval
     ) -> WidgetIndex.Entry? {
-        let bucket = phase.timeOfDay.rawValue
-        let matches = entries.filter { $0.timeOfDay == bucket }
-        // 時間帯一致を優先。無ければ全写真へ。これで「写真はあるのにグラデ」を防ぐ。
-        let pool = matches.isEmpty ? entries : matches
-        return rotatingPick(pool, at: date, rotationInterval: rotationInterval)
+        guard !entries.isEmpty else { return nil }
+        // 現在の時間帯に近い順にバケットを並べ、在庫のあるいちばん近いバケットから選ぶ。
+        for bucket in bucketsByNearness(to: phase.timeOfDay) {
+            let matches = entries.filter { $0.timeOfDay == bucket.rawValue }
+            if !matches.isEmpty {
+                return rotatingPick(matches, at: date, rotationInterval: rotationInterval)
+            }
+        }
+        // どの時間帯にも該当が無い（全て timeOfDay=nil 等）→ 手持ち全体から（グラデにはしない）。
+        return rotatingPick(entries, at: date, rotationInterval: rotationInterval)
+    }
+
+    /// 指定の時間帯から「近い順」に全 `TimeOfDay` を並べる（巡回距離・決定的）。
+    /// - 朝→昼→夕→夜→朝… の巡回で考える。
+    /// - 距離が同じ場合は **直前の時間帯**（巡回を後ろ向きにたどって近い方）を優先する。
+    ///   例: 夜に夜の写真が無ければ、朝より「さっきまでの夕」を選ぶ＝自然で決定的。
+    static func bucketsByNearness(to current: TimeOfDay) -> [TimeOfDay] {
+        let all = TimeOfDay.allCases
+        let n = all.count
+        guard let currentIndex = all.firstIndex(of: current) else { return all }
+        return all.indices
+            .sorted { a, b in
+                let da = cyclicDistance(a, currentIndex, n)
+                let db = cyclicDistance(b, currentIndex, n)
+                if da != db { return da < db }
+                // 同距離なら直前の時間帯（後ろ向き距離が小さい方）を優先。
+                return backwardDistance(a, currentIndex, n) < backwardDistance(b, currentIndex, n)
+            }
+            .map { all[$0] }
+    }
+
+    /// 長さ `n` の巡回列における 2 索引の最短距離（例: 朝と夜は隣接）。
+    private static func cyclicDistance(_ a: Int, _ b: Int, _ n: Int) -> Int {
+        let d = abs(a - b)
+        return min(d, n - d)
+    }
+
+    /// `current` から後ろ向き（巡回を遡る向き）に `i` まで進む距離。直前の時間帯ほど小さい。
+    private static func backwardDistance(_ i: Int, _ current: Int, _ n: Int) -> Int {
+        ((current - i) % n + n) % n
     }
 
     /// Mode A のタイムライン用に、基準時刻から `rotationInterval` 間隔で `count` 枚ぶんの
