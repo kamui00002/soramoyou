@@ -54,6 +54,8 @@ struct SoramoyouApp: App {
         .onChange(of: scenePhase) { newPhase in
             // フォアグラウンド復帰のたびに、有効ならゴールデンアワー通知の14日窓を洗い替えする
             if newPhase == .active {
+                // インストール済みウィジェットの数・サイズを起動後1回だけ計測（普及度 KPI）
+                WidgetCacheManager.shared.logActiveWidgetsOncePerLaunch()
                 Task {
                     await GoldenHourNotificationManager.shared.rescheduleIfEnabled()
                 }

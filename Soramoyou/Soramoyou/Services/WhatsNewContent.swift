@@ -19,7 +19,7 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    static let currentID = "2026-06-feedback"
+    static let currentID = "2026-06-widget"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -32,27 +32,27 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（フィードバック導線・コメント改善）の新機能紹介ページ。
-    /// フィードバックは「どこから送れるか（設定＞サポート）」を文言に明記して発見しやすくする。
+    /// 今回（ホーム画面ウィジェット）の新機能紹介ページ。
+    /// 「どこから追加するか」「モードの切り替え方」を文言に明記して発見しやすくする。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "bubble.left.and.text.bubble.right.fill",
+            icon: "square.grid.2x2.fill",
             badge: "新機能",
-            title: "ご意見・ご要望",
-            description: "アプリへの感想・不具合・要望を\n「設定 ＞ サポート」からいつでも送れます",
+            title: "ホーム画面ウィジェット",
+            description: "ホーム画面を長押しして「＋」から\nそらもようのウィジェットを追加できます",
             gradientColors: [
-                Color(red: 0.62, green: 0.52, blue: 0.93),
-                Color(red: 0.78, green: 0.66, blue: 0.96)
+                Color(red: 0.42, green: 0.68, blue: 0.93),
+                Color(red: 0.62, green: 0.82, blue: 0.98)
             ]
         ),
         WhatsNewPage(
-            icon: "person.crop.circle.fill",
-            badge: "改善",
-            title: "コメントが見やすく",
-            description: "コメントに投稿者の名前とアイコンが\n表示されるようになりました",
+            icon: "sparkles",
+            badge: "3つのモード",
+            title: "空の見せ方を選べる",
+            description: "アルバム・今の空・抽象色から選べます\nウィジェットを長押し→編集で切り替え",
             gradientColors: [
-                Color(red: 0.53, green: 0.81, blue: 0.98),
-                Color(red: 0.39, green: 0.58, blue: 0.93)
+                Color(red: 0.99, green: 0.72, blue: 0.36),
+                Color(red: 0.96, green: 0.52, blue: 0.42)
             ]
         )
     ]

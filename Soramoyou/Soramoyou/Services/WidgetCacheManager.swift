@@ -26,6 +26,9 @@ final class WidgetCacheManager {
     /// バックフィル件数（Decision 2 = 直近50件）。
     private let backfillLimit = 50
 
+    /// インストール済みウィジェットの計測を「起動後1回」に絞るフラグ。
+    private var didLogActiveWidgets = false
+
     init(
         writer: WidgetCacheWriter = WidgetCacheWriter(),
         firestoreService: FirestoreServiceProtocol = FirestoreService(),
@@ -111,6 +114,31 @@ final class WidgetCacheManager {
         }
     }
 
+    // MARK: - 計測
+
+    /// インストール済みウィジェットの「数」と「サイズ内訳」を起動後1回だけ計測する（best-effort）。
+    /// - ウィジェット拡張から Firebase を呼ばずに済むよう、本体から WidgetCenter に問い合わせる
+    ///   （これがウィジェット普及度の最重要 KPI）。
+    /// - モード（アルバム/今の空/抽象色）は ConfigurationAppIntent が拡張ターゲット専用のため、
+    ///   ここでは計測しない（数とサイズのみ）。
+    /// - 呼び出しはメインスレッド想定（フラグ更新の競合を避ける）。
+    func logActiveWidgetsOncePerLaunch() {
+        guard !didLogActiveWidgets else { return }
+        didLogActiveWidgets = true
+        WidgetCenter.shared.getCurrentConfigurations { result in
+            guard case .success(let infos) = result else { return }
+            let small = infos.filter { $0.family == .systemSmall }.count
+            let medium = infos.filter { $0.family == .systemMedium }.count
+            let large = infos.filter { $0.family == .systemLarge }.count
+            LoggingService.shared.logEvent("widget_active", parameters: [
+                "count": infos.count,
+                "small": small,
+                "medium": medium,
+                "large": large
+            ])
+        }
+    }
+
     // MARK: - ヘルパー
 
     private func downloadImage(from url: URL) async -> UIImage? {
@@ -139,7 +167,7 @@ final class WidgetCacheManager {
         let now = Date()
         for (i, sample) in samples.enumerated() {
             let image = Self.makeGradientImage(top: sample.top, bottom: sample.bottom)
-            try? writer.cache(
+            _ = try? writer.cache(
                 image: image,
                 postId: sample.id,
                 timeOfDay: sample.tod,
