@@ -47,6 +47,15 @@ struct OnboardingView: View {
             ]
         ),
         OnboardingPage(
+            icon: "square.grid.2x2.fill",
+            title: "ホーム画面に飾る",
+            description: "集めた空をウィジェットで\nホーム画面にいつも飾れます",
+            gradientColors: [
+                Color(red: 0.99, green: 0.78, blue: 0.45),
+                Color(red: 0.96, green: 0.58, blue: 0.45)
+            ]
+        ),
+        OnboardingPage(
             icon: "sparkles",
             title: "さあ、始めよう",
             description: "そらもようで\n素敵な空の写真ライフを",

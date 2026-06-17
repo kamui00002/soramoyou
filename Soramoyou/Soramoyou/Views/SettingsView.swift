@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var showingPrivacyPolicy = false
     @State private var showingTermsOfService = false
     @State private var showingFeedback = false
+    @State private var showingWidgetGuide = false
     @State private var showingLogoutConfirmation = false
     @State private var showingDeleteAccountConfirmation = false
     @State private var reauthEmail = ""
@@ -83,6 +84,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showingFeedback) {
                 FeedbackView()
+            }
+            .sheet(isPresented: $showingWidgetGuide) {
+                WidgetGuideView()
             }
             .alert("ログアウト", isPresented: $showingLogoutConfirmation) {
                 Button("キャンセル", role: .cancel) { }
@@ -330,6 +334,18 @@ struct SettingsView: View {
             sectionHeader(title: "サポート", icon: "questionmark.circle")
 
             settingsCard {
+                // ウィジェットの追加方法（ログイン不要・誰でも見られる）
+                SettingsRow(
+                    title: "ウィジェットの追加方法",
+                    icon: "square.grid.2x2.fill",
+                    iconColor: .blue
+                ) {
+                    showingWidgetGuide = true
+                }
+
+                Divider()
+                    .padding(.leading, 44)
+
                 // ご意見・ご要望（アプリ内フィードバック → Firestore。ログイン時のみ）
                 if authViewModel.currentUser != nil {
                     SettingsRow(

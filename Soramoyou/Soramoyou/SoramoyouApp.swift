@@ -30,6 +30,17 @@ struct SoramoyouApp: App {
 
         // 注意: AdMob/ATT初期化はContentViewのonAppearで実行
         // init()ではビューが表示されていないため、ATTダイアログが表示されない
+
+        #if DEBUG
+        // シミュレータ確認用：launchArg SEED_WIDGET でサンプルの空をウィジェットキャッシュへ投入する。
+        if ProcessInfo.processInfo.arguments.contains("SEED_WIDGET") {
+            WidgetCacheManager.shared.debugSeed()
+        }
+        // 一バケット偏り（evening 5枚）を再現し、アルバムと今の空が別写真を選ぶか検証ログを出す。
+        if ProcessInfo.processInfo.arguments.contains("SEED_WIDGET_ONE_BUCKET") {
+            WidgetCacheManager.shared.debugSeedOneBucket()
+        }
+        #endif
     }
     
     /// Crashlyticsの設定
@@ -47,6 +58,8 @@ struct SoramoyouApp: App {
         .onChange(of: scenePhase) { newPhase in
             // フォアグラウンド復帰のたびに、有効ならゴールデンアワー通知の14日窓を洗い替えする
             if newPhase == .active {
+                // インストール済みウィジェットの数・サイズを起動後1回だけ計測（普及度 KPI）
+                WidgetCacheManager.shared.logActiveWidgetsOncePerLaunch()
                 Task {
                     await GoldenHourNotificationManager.shared.rescheduleIfEnabled()
                 }

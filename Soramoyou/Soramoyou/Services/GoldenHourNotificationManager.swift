@@ -140,6 +140,12 @@ final class GoldenHourNotificationManager: NSObject {
         let latitude = defaults.double(forKey: DefaultsKey.latitude)
         let longitude = defaults.double(forKey: DefaultsKey.longitude)
 
+        // ウィジェットの太陽計算用に、同じ粗い座標を App Group にも dual-write する（best-effort）。
+        // これで「今の空 / 抽象色」の局面計算が東京固定でなく実際の現在地ベースになる。
+        // enable() も rescheduleIfEnabled()（フォアグラウンド洗い替え）も必ずここを通るため、
+        // 通知を有効にしている間は常に最新の粗い座標がウィジェットへ反映される。
+        WidgetLocationStore.write(latitude: latitude, longitude: longitude)
+
         // 既存のゴールデンアワー通知だけを削除してから登録（洗い替え）
         await removePendingGoldenHourNotifications()
 

@@ -354,6 +354,12 @@ class PostViewModel: ObservableObject {
                 }
             }
 
+            // ウィジェット用ローカルキャッシュへ best-effort で書き出す（失敗しても投稿成功は妨げない）。
+            // 焼き込み済みの実画像（imagesToUpload の代表1枚）を使い、自分の投稿だけをローカル化する。
+            if let widgetImage = imagesToUpload.first {
+                WidgetCacheManager.shared.cacheOnPost(image: widgetImage, post: post)
+            }
+
             // パーソナルAI編集の学習コーパスへ記録（端末内・投稿成功時のみ・ベストエフォート）。
             // 記録に失敗しても投稿成功は妨げない。skyType は AI判定 or ユーザー選択を使う。
             // ⚠️ 未編集（中立）レシピは学習データを薄めるため記録しない（isNeutral でゲート）。

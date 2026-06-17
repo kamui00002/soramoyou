@@ -19,6 +19,8 @@ class AuthViewModel: ObservableObject {
     private let authService: AuthServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
     private var authStateTask: Task<Void, Never>?
+    /// ウィジェット用バックフィルを起動ごとに1回だけ走らせるためのフラグ。
+    private var didRunWidgetBackfill = false
 
     init(authService: AuthServiceProtocol = AuthService(),
          firestoreService: FirestoreServiceProtocol = FirestoreService()) {
@@ -157,6 +159,10 @@ class AuthViewModel: ObservableObject {
 
             // ユーザーIDをLoggingServiceからクリア
             LoggingService.shared.setUserID(nil)
+
+            // ウィジェットのローカルキャッシュも消す（別ユーザーの空が残らないように）。
+            WidgetCacheManager.shared.clearOnSignOut()
+            didRunWidgetBackfill = false
         } catch {
             // エラーをログに記録
             ErrorHandler.logError(error, context: "AuthViewModel.signOut")
@@ -191,6 +197,12 @@ class AuthViewModel: ObservableObject {
             // ユーザーIDをLoggingServiceに設定/クリア
             if let user = user {
                 LoggingService.shared.setUserID(user.id)
+                // 認証済みになったら、ウィジェット用に既存投稿を起動ごと1回だけバックフィル（best-effort）。
+                if !didRunWidgetBackfill {
+                    didRunWidgetBackfill = true
+                    let uid = user.id
+                    Task { await WidgetCacheManager.shared.backfill(userId: uid) }
+                }
             } else {
                 LoggingService.shared.setUserID(nil)
             }
