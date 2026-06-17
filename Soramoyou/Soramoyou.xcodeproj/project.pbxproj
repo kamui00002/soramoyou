@@ -92,6 +92,7 @@
 				Shared/AppGroup.swift,
 				Shared/SkyPhase.swift,
 				Shared/WidgetIndex.swift,
+				Shared/WidgetLocationStore.swift,
 				Shared/WidgetPhotoSelector.swift,
 			);
 			target = E0AC935E2FE12E3C0074C971 /* SoramoyouWidgetExtension */;

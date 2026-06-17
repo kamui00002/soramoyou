@@ -88,10 +88,13 @@ enum WidgetLocation {
     static let tokyo = (latitude: 35.6762, longitude: 139.6503)
 
     /// 太陽計算に使う座標。
-    /// - TODO: 本体側で最後に取得した座標を App Group に dual-write したら、ここで読む（Decision 5）。
-    ///   現状は未配線のため東京固定。日本国内では局面判定の誤差は小さい（経度差で±数十分）。
+    /// - 本体がゴールデンアワー通知で取得した粗い現在地を App Group に dual-write していれば、それを読む（Decision 5）。
+    /// - 未取得（通知 OFF など）の場合は東京フォールバック。日本国内では局面判定の誤差は小さい（経度差で±数十分）。
     static func current() -> (latitude: Double, longitude: Double) {
-        tokyo
+        if let record = WidgetLocationStore.read() {
+            return (record.latitude, record.longitude)
+        }
+        return tokyo
     }
 }
 
