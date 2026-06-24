@@ -32,8 +32,8 @@ class SettingsViewModel: ObservableObject {
     @Published var notifyNewPostsFromEveryone = false
     /// プッシュ通知まわりの案内（許可されていない／保存失敗）。誘導アラートに使う。
     @Published var pushNotificationMessage: String?
-    /// 直近に読み込んだ自分の User。プレフ保存時に followersCount 等を 0 に潰さないよう、これを基に更新する。
-    private var loadedUser: User?
+    /// 通知プレフのトグル切替（直近 Task）。連打時に最後の操作を最終状態にするための直列化に使う（golden-hour と同様）。
+    private var notificationToggleTask: Task<Void, Never>?
 
     private let authService: AuthServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
@@ -104,7 +104,6 @@ class SettingsViewModel: ObservableObject {
         guard let userId = authService.currentUser()?.id else { return }
         do {
             let user = try await firestoreService.fetchUser(userId: userId)
-            loadedUser = user
             notifyReactions = user.notifyReactions
             notifyNewPostsFromFollowing = user.notifyNewPostsFromFollowing
             notifyNewPostsFromEveryone = user.notifyNewPostsFromEveryone
@@ -114,9 +113,22 @@ class SettingsViewModel: ObservableObject {
         }
     }
 
-    /// 配信プレフのトグル切り替え。Firestore へ保存し、ON にしたときは「良い瞬間」として通知許可を要求する。
-    /// 保存は fetch した実カウント入りの User を基にプレフだけ反転して merge する（カウント0潰しを避ける）。
+    /// 配信プレフのトグル切り替え（FIFO 直列化）。
+    /// トグルの Binding は切替ごとに独立 Task を起動し、保存は await を跨ぐため、未管理だと
+    /// 「ON 直後に OFF→遅れて ON 側が復帰して上書き」で操作と逆の最終状態になり得る。
+    /// 直前の切替の完了を待ってから実行し、最後の操作を必ず最終状態にする（golden-hour と同様）。
     func setNotificationPreference(_ pref: PushPreference, enabled: Bool) async {
+        let previous = notificationToggleTask
+        let task = Task { [weak self] in
+            await previous?.value
+            await self?.performSetNotificationPreference(pref, enabled: enabled)
+        }
+        notificationToggleTask = task
+        await task.value
+    }
+
+    /// トグル切り替えの本体。Firestore へターゲット保存し、ON 時は「良い瞬間」として通知許可を要求する。
+    private func performSetNotificationPreference(_ pref: PushPreference, enabled: Bool) async {
         apply(pref, enabled)  // 楽観的に UI 更新
 
         guard let userId = authService.currentUser()?.id else {
@@ -125,18 +137,18 @@ class SettingsViewModel: ObservableObject {
         }
 
         do {
-            // 実カウント入りの User を用意する（キャッシュが無ければ Firestore から取得）。
-            var user: User
-            if let cached = loadedUser {
-                user = cached
-            } else {
-                user = try await firestoreService.fetchUser(userId: userId)
-            }
-            user.notifyReactions = notifyReactions
-            user.notifyNewPostsFromFollowing = notifyNewPostsFromFollowing
-            user.notifyNewPostsFromEveryone = notifyNewPostsFromEveryone
-            user.updatedAt = Date()
-            loadedUser = try await firestoreService.updateUser(user)
+            // 通知プレフ3つ（＋updatedAt）だけをターゲット更新。User 全体を書かないので
+            // 設定画面を開いている間に増えたフォロー数等を古い値で巻き戻さない。
+            try await firestoreService.updateNotificationPreferences(
+                userId: userId,
+                notifyReactions: notifyReactions,
+                notifyNewPostsFromFollowing: notifyNewPostsFromFollowing,
+                notifyNewPostsFromEveryone: notifyNewPostsFromEveryone
+            )
+            LoggingService.shared.logEvent("push_pref_changed", parameters: [
+                "pref": prefKey(pref),
+                "enabled": enabled
+            ])
         } catch {
             apply(pref, !enabled)  // 保存失敗なら戻す
             pushNotificationMessage = "通知設定を保存できませんでした。通信環境をご確認ください。"
@@ -147,6 +159,7 @@ class SettingsViewModel: ObservableObject {
         // ON にしたら「良い瞬間」として通知許可を要求＋APNs 登録（拒否なら設定アプリへ誘導）。
         if enabled {
             let granted = await PushNotificationManager.shared.requestAuthorizationAndRegister()
+            LoggingService.shared.logEvent("push_permission_result", parameters: ["granted": granted])
             if !granted {
                 pushNotificationMessage = "通知がオフになっています。設定アプリで「そらもよう」の通知を許可すると、お知らせが届きます。"
             }
@@ -159,6 +172,15 @@ class SettingsViewModel: ObservableObject {
         case .reactions: notifyReactions = value
         case .newPostsFromFollowing: notifyNewPostsFromFollowing = value
         case .newPostsFromEveryone: notifyNewPostsFromEveryone = value
+        }
+    }
+
+    /// 計装用のプレフ識別子（イベントパラメータ）。
+    private func prefKey(_ pref: PushPreference) -> String {
+        switch pref {
+        case .reactions: return "reactions"
+        case .newPostsFromFollowing: return "following"
+        case .newPostsFromEveryone: return "everyone"
         }
     }
 

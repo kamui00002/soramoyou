@@ -83,6 +83,21 @@ final class PushNotificationManager: NSObject, MessagingDelegate {
         }
     }
 
+    /// ログアウト時に、現在のユーザーの users/{uid}.fcmToken を削除する。
+    /// 共有端末で別アカウントにこの端末のトークンが残り、旧ユーザー宛の通知が誤配信されるのを防ぐ。
+    /// ⚠️ Auth がまだ有効なうち（authService.signOut の前）に呼ぶこと（rules の所有者更新を通すため）。
+    func clearTokenForCurrentUser() async {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        do {
+            try await Firestore.firestore().collection("users").document(uid).updateData([
+                "fcmToken": FieldValue.delete(),
+                "fcmTokenUpdatedAt": FieldValue.delete()
+            ])
+        } catch {
+            print("❌ FCMトークン削除失敗 uid=\(uid) error=\(error.localizedDescription)")
+        }
+    }
+
     // MARK: - MessagingDelegate
 
     /// 登録トークンが発行・更新されたときに呼ばれる。ログイン中なら Firestore に保存する。
@@ -107,8 +122,11 @@ final class PushNotificationManager: NSObject, MessagingDelegate {
             "fcmTokenUpdatedAt": FieldValue.serverTimestamp()
         ], merge: true) { error in
             if let error {
-                // 失敗を握りつぶさない（rules 拒否・ネットワーク等を運用フェーズで検知できるよう必ず残す）。
+                // 失敗を握りつぶさない。print に加えてテレメトリへ送る。
+                // FCMトークン保存失敗は「通知が一切来ないが落ちない」沈黙バグで、本番で検知できないと
+                // 原因不明の苦情になる（Crashlytics は落ちないと拾えない）。トークン値はログに出さない。
                 print("❌ FCMトークン保存失敗 uid=\(uid) error=\(error.localizedDescription)")
+                LoggingService.shared.recordNonFatalError(error, context: "PushNotificationManager.saveToken")
             }
         }
     }

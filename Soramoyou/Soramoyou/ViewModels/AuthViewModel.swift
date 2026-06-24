@@ -153,6 +153,10 @@ class AuthViewModel: ObservableObject {
         errorMessage = nil
 
         do {
+            // サインアウト前に（まだ認証が有効なうちに）この端末の FCM トークンを users から削除する。
+            // signOut 後は rules の所有者更新が通らず削除できない。共有端末での別アカウント誤配信を防ぐ。
+            await PushNotificationManager.shared.clearTokenForCurrentUser()
+
             try await authService.signOut()
             currentUser = nil
             isAuthenticated = false

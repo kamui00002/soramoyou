@@ -61,6 +61,11 @@ function displayNameOf(userData) {
   return userData && userData.displayName ? userData.displayName : "だれか";
 }
 
+/** userData が otherId をブロックしているか（ブロック相手の通知をプッシュで再浮上させない）。 */
+function isBlocked(userData, otherId) {
+  return !!(userData && Array.isArray(userData.blockedUserIds) && userData.blockedUserIds.includes(otherId));
+}
+
 /** 無効トークンエラーか。 */
 function isInvalidTokenError(code) {
   return (
@@ -84,7 +89,8 @@ async function sendToUser(uid, userData, notification, data) {
   } catch (err) {
     const code = err && err.code;
     if (isInvalidTokenError(code)) {
-      await db.collection("users").doc(uid).update({ fcmToken: FieldValue.delete() }).catch(() => {});
+      await db.collection("users").doc(uid).update({ fcmToken: FieldValue.delete() })
+        .catch((e) => logger.warn("fcmToken cleanup failed", { uid, code: String(e && e.code) }));
     } else {
       logger.error("FCM send failed", { uid, code: String(code) });
     }
@@ -99,7 +105,8 @@ async function cleanupInvalidTokens(tokens, tokenToUid, responses) {
       const uid = tokenToUid[tokens[i]];
       if (uid) {
         removals.push(
-          db.collection("users").doc(uid).update({ fcmToken: FieldValue.delete() }).catch(() => {})
+          db.collection("users").doc(uid).update({ fcmToken: FieldValue.delete() })
+            .catch((e) => logger.warn("fcmToken cleanup failed", { uid, code: String(e && e.code) }))
         );
       }
     }
@@ -124,6 +131,8 @@ exports.onLikeCreated = onDocumentCreated("likes/{likeId}", async (event) => {
 
   const owner = await getUser(ownerId);
   if (!owner || !owner.fcmToken || !prefEnabled(owner, "notifyReactions")) return;
+  // 投稿者が いいねした人 をブロックしているなら通知しない。
+  if (isBlocked(owner, likerId)) return;
 
   const liker = await getUser(likerId);
   await sendToUser(
@@ -150,6 +159,8 @@ exports.onCommentCreated = onDocumentCreated("comments/{commentId}", async (even
 
   const owner = await getUser(ownerId);
   if (!owner || !owner.fcmToken || !prefEnabled(owner, "notifyReactions")) return;
+  // 投稿者が コメントした人 をブロックしているなら通知しない。
+  if (isBlocked(owner, commenterId)) return;
 
   // 表示名はコメントに非正規化保存された authorName を優先（無ければ users から）。
   const name = comment.authorName || displayNameOf(await getUser(commenterId));
@@ -171,6 +182,13 @@ exports.onPostCreated = onDocumentCreated("posts/{postId}", async (event) => {
   const postId = event.params.postId;
   if (!posterId) return;
 
+  // 公開範囲を尊重する。private は誰にも通知しない（受信者は本来その投稿を開けない＝漏洩）。
+  // followers はフォロワー枝のみ（読める相手）に送り、全員枝（非フォロワー）はスキップ。
+  // public のみ全員枝も対象。visibility 欠落は public 扱い。
+  const visibility = post.visibility || "public";
+  if (visibility === "private") return;
+  const allowEveryone = visibility === "public";
+
   const poster = await getUser(posterId);
   const name = displayNameOf(poster);
 
@@ -184,23 +202,27 @@ exports.onPostCreated = onDocumentCreated("posts/{postId}", async (event) => {
     followerIds.map(async (uid) => {
       if (uid === posterId || tokenByUid.has(uid)) return;
       const u = await getUser(uid);
-      if (u && u.fcmToken && prefEnabled(u, "notifyNewPostsFromFollowing")) {
+      // 投稿者をブロックしている受信者には送らない。
+      if (u && u.fcmToken && prefEnabled(u, "notifyNewPostsFromFollowing") && !isBlocked(u, posterId)) {
         tokenByUid.set(uid, u.fcmToken);
       }
     })
   );
 
-  // (b) 全員: users where notifyNewPostsFromEveryone == true（欠落=false なので旧ユーザーは入らない）
-  const everyoneSnap = await db
-    .collection("users")
-    .where("notifyNewPostsFromEveryone", "==", true)
-    .get();
-  everyoneSnap.docs.forEach((d) => {
-    const uid = d.id;
-    if (uid === posterId || tokenByUid.has(uid)) return;
-    const u = d.data();
-    if (u && u.fcmToken) tokenByUid.set(uid, u.fcmToken);
-  });
+  // (b) 全員: public 投稿のみ。users where notifyNewPostsFromEveryone == true（欠落=false で旧ユーザーは入らない）
+  if (allowEveryone) {
+    const everyoneSnap = await db
+      .collection("users")
+      .where("notifyNewPostsFromEveryone", "==", true)
+      .get();
+    everyoneSnap.docs.forEach((d) => {
+      const uid = d.id;
+      if (uid === posterId || tokenByUid.has(uid)) return;
+      const u = d.data();
+      // 投稿者をブロックしている受信者には送らない。
+      if (u && u.fcmToken && !isBlocked(u, posterId)) tokenByUid.set(uid, u.fcmToken);
+    });
+  }
 
   if (tokenByUid.size === 0) return;
 

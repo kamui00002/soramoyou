@@ -94,6 +94,10 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.syncPostsCount は未実装です")
     }
 
+    func updateNotificationPreferences(userId: String, notifyReactions: Bool, notifyNewPostsFromFollowing: Bool, notifyNewPostsFromEveryone: Bool) async throws {
+        fatalError("MockFirestoreService.updateNotificationPreferences は未実装です")
+    }
+
     // MARK: - Public Profiles
 
     func fetchPublicProfile(userId: String) async throws -> PublicProfile {
