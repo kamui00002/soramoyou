@@ -116,6 +116,7 @@
 ```
 - セキュリティ: 作成は認証済みユーザーが自分のIDでのみ（rules `hasAll(['userId','message','createdAt'])` + message 1〜1000文字）。**読み取り・更新・削除は不可**（管理者が Firebase コンソールで閲覧）。
 - email・表示名などの PII は保存しない（userId のみ）。
+- 副作用: ドキュメント作成で Cloud Functions `notifyFeedbackToDiscord`（`functions/index.js`）が発火し、開発者の Discord へ Webhook 通知する。Webhook URL は Secret Manager `DISCORD_WEBHOOK_URL`（コードに実値なし）。デプロイには Blaze ＋ `firebase functions:secrets:set DISCORD_WEBHOOK_URL` が必要。
 
 ---
 

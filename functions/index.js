@@ -2,9 +2,10 @@
 // そらもよう Cloud Functions（プッシュ通知の送信側）
 //
 // トリガー（Firestore ドキュメント作成）:
-//   - onLikeCreated    likes/{likeId}      → 投稿者へ「いいねされました」
-//   - onCommentCreated comments/{commentId}→ 投稿者へ「コメントされました」
-//   - onPostCreated    posts/{postId}      → フォロワー / 全員（オプトイン）へ「新しい空」
+//   - onLikeCreated           likes/{likeId}      → 投稿者へ「いいねされました」
+//   - onCommentCreated        comments/{commentId}→ 投稿者へ「コメントされました」
+//   - onPostCreated           posts/{postId}      → フォロワー / 全員（オプトイン）へ「新しい空」
+//   - notifyFeedbackToDiscord feedback/{id}       → 開発者の Discord へ「ご意見・ご要望が届いた」（Webhook）
 //
 // 設計メモ:
 //   - 配信プレフは users/{uid} の notifyReactions / notifyNewPostsFromFollowing /
@@ -23,6 +24,7 @@
 
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
@@ -248,3 +250,94 @@ exports.onPostCreated = onDocumentCreated("posts/{postId}", async (event) => {
     await cleanupInvalidTokens(batch, tokenToUid, resp.responses);
   }
 });
+
+// MARK: - フィードバック → Discord 通知（開発者向け）
+//
+// アプリ内「ご意見・ご要望」が feedback コレクションに作成されたら、開発者の Discord へ即時通知する。
+// Webhook URL は Secret Manager に格納し、コード/リポジトリには実値を絶対に置かない（漏洩防止）。
+//   セットアップ: `firebase functions:secrets:set DISCORD_WEBHOOK_URL`（対話で値を入力）
+// region は setGlobalOptions（asia-northeast1）を継承するため、ここでは secrets のみ指定する。
+
+const DISCORD_WEBHOOK_URL = defineSecret("DISCORD_WEBHOOK_URL");
+
+// 種別 rawValue → 日本語表示名（iOS 側 FeedbackCategory と対応）。
+const FEEDBACK_CATEGORY_LABELS = {
+  bug: "不具合 🐛",
+  request: "要望 ✨",
+  other: "その他 💬",
+};
+
+exports.notifyFeedbackToDiscord = onDocumentCreated(
+  { document: "feedback/{feedbackId}", secrets: [DISCORD_WEBHOOK_URL] },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) {
+      logger.warn("フィードバックのスナップショットが空でした");
+      return;
+    }
+
+    const data = snapshot.data() || {};
+    const feedbackId = event.params.feedbackId;
+
+    // 各フィールドを取り出す（任意項目は未設定なら代替表記）。message は rules で 1〜1000 文字保証済み。
+    const message = (data.message || "(本文なし)").toString();
+    const categoryRaw = data.category ? data.category.toString() : null;
+    const category = categoryRaw
+      ? FEEDBACK_CATEGORY_LABELS[categoryRaw] || categoryRaw
+      : "未指定";
+    const appVersion = data.appVersion ? data.appVersion.toString() : "不明";
+    const deviceInfo = data.deviceInfo ? data.deviceInfo.toString() : "不明";
+    const userId = data.userId ? data.userId.toString() : "不明";
+
+    // createdAt（serverTimestamp）を ISO 文字列へ。未到達でも落ちないようにする。
+    let timestamp;
+    try {
+      timestamp =
+        data.createdAt && typeof data.createdAt.toDate === "function"
+          ? data.createdAt.toDate().toISOString()
+          : new Date().toISOString();
+    } catch (_e) {
+      timestamp = new Date().toISOString();
+    }
+
+    // Discord Embed を組み立てる。field.value は最大 1024 文字なので本文は 1000 文字に丸める。
+    const payload = {
+      username: "そらもよう フィードバック",
+      embeds: [
+        {
+          title: "📮 新しいご意見・ご要望が届きました",
+          color: 0x4a90d9, // そらもようの空色
+          fields: [
+            { name: "種別", value: category, inline: true },
+            { name: "アプリ", value: appVersion, inline: true },
+            { name: "端末", value: deviceInfo, inline: true },
+            { name: "本文", value: message.slice(0, 1000) },
+            { name: "ユーザーID", value: userId, inline: false },
+          ],
+          footer: { text: `feedbackId: ${feedbackId}` },
+          timestamp,
+        },
+      ],
+    };
+
+    // Node 20 はグローバル fetch が使えるため外部 HTTP ライブラリ不要。
+    const webhookUrl = DISCORD_WEBHOOK_URL.value();
+    try {
+      const res = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        logger.error("Discord 通知に失敗しました", { status: res.status, body, feedbackId });
+        // throw でエラーをメトリクスに可視化（既定ではリトライされない）。
+        throw new Error(`Discord webhook responded ${res.status}`);
+      }
+      logger.info("Discord 通知に成功しました", { feedbackId });
+    } catch (err) {
+      logger.error("Discord 通知中に例外が発生しました", { feedbackId, error: err.message });
+      throw err;
+    }
+  }
+);
