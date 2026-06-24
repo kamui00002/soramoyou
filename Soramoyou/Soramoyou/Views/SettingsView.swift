@@ -19,6 +19,7 @@ struct SettingsView: View {
     @State private var showingTermsOfService = false
     @State private var showingFeedback = false
     @State private var showingWidgetGuide = false
+    @State private var showingStitchGuide = false
     @State private var showingLogoutConfirmation = false
     @State private var showingDeleteAccountConfirmation = false
     @State private var reauthEmail = ""
@@ -87,6 +88,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showingWidgetGuide) {
                 WidgetGuideView()
+            }
+            .sheet(isPresented: $showingStitchGuide) {
+                SkyStitchHelpView(onClose: { showingStitchGuide = false })
             }
             .alert("ログアウト", isPresented: $showingLogoutConfirmation) {
                 Button("キャンセル", role: .cancel) { }
@@ -341,6 +345,18 @@ struct SettingsView: View {
                     iconColor: .blue
                 ) {
                     showingWidgetGuide = true
+                }
+
+                Divider()
+                    .padding(.leading, 44)
+
+                // 広角撮影のコツ（合成画面に入る前でも読める・ログイン不要）
+                SettingsRow(
+                    title: "広角撮影のコツ",
+                    icon: "pano",
+                    iconColor: .orange
+                ) {
+                    showingStitchGuide = true
                 }
 
                 Divider()

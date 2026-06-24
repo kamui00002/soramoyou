@@ -62,12 +62,11 @@ struct SkyStitchView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") { dismiss() }
                 }
-                // 撮り方のコツ（図解）をいつでも開ける
+                // 撮り方のコツ（図解）をいつでも開ける。
+                // 「?」アイコンは意味が伝わりにくいので、テキストで明示する。
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showHelp = true }) {
-                        Image(systemName: "questionmark.circle")
-                    }
-                    .accessibilityLabel("撮り方のコツ")
+                    Button("撮り方のコツ") { showHelp = true }
+                        .accessibilityLabel("撮り方のコツ")
                 }
             }
             .task {
