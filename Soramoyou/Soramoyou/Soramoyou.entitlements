@@ -6,8 +6,9 @@
 	<array>
 		<string>group.com.yoshidometoru.Soramoyou</string>
 	</array>
-	<!-- プッシュ通知(APNs)。development を指定し、配布アーカイブ時は Xcode が自動で production へ切替。 -->
-	<key>aps-environment</key>
-	<string>development</string>
+	<!-- ⚠️ QAビルド(リリース-build65-QA)限定で aps-environment を一時除去。
+	     理由: App ID に Push capability/APNs キー未登録のため配布プロファイルに aps を載せられず export が失敗する。
+	     今回のQAは push 配信検証が前提物未了で不可なため、クライアントUX+回帰のみ確認。
+	     配信を実装する際は機能-プッシュ通知ブランチの aps-environment を復活させる(production)。 -->
 </dict>
 </plist>
