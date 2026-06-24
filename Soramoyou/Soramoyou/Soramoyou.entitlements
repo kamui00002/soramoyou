@@ -6,5 +6,8 @@
 	<array>
 		<string>group.com.yoshidometoru.Soramoyou</string>
 	</array>
+	<!-- プッシュ通知(APNs)。development を指定し、配布アーカイブ時は Xcode が自動で production へ切替。 -->
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>
