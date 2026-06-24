@@ -6,5 +6,11 @@
 	<array>
 		<string>group.com.yoshidometoru.Soramoyou</string>
 	</array>
+	<!-- プッシュ通知(APNs)。App ID で Push Notifications capability 有効（ASC API で確認済 2026-06-25）。
+	     TestFlight / App Store 配布ビルドは production APNs 環境を使うため production を指定する
+	     （development だとサンドボックストークンになり配信されない）。配信には別途 Firebase に APNs 認証キー登録＋
+	     push 用 Cloud Functions のデプロイが必要。 -->
+	<key>aps-environment</key>
+	<string>production</string>
 </dict>
 </plist>

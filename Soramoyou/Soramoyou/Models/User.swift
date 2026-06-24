@@ -21,9 +21,15 @@ struct User: Identifiable, Codable {
     var followingCount: Int
     var postsCount: Int
     var blockedUserIds: [String]?
+    // MARK: プッシュ通知の配信プレフ（端末の通知許可とは別物。Cloud Functions が送信可否判定に読む）
+    // ⚠️ 既定値は Cloud Functions 側のフィールド欠落フォールバックと必ず一致させること
+    //    （reactions=true / following=true / everyone=false）。旧ユーザーは欠落＝既定で動く。
+    var notifyReactions: Bool
+    var notifyNewPostsFromFollowing: Bool
+    var notifyNewPostsFromEveryone: Bool
     let createdAt: Date
     var updatedAt: Date
-    
+
     init(
         id: String,
         email: String? = nil,
@@ -36,6 +42,9 @@ struct User: Identifiable, Codable {
         followingCount: Int = 0,
         postsCount: Int = 0,
         blockedUserIds: [String]? = nil,
+        notifyReactions: Bool = true,
+        notifyNewPostsFromFollowing: Bool = true,
+        notifyNewPostsFromEveryone: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -50,6 +59,9 @@ struct User: Identifiable, Codable {
         self.followingCount = followingCount
         self.postsCount = postsCount
         self.blockedUserIds = blockedUserIds
+        self.notifyReactions = notifyReactions
+        self.notifyNewPostsFromFollowing = notifyNewPostsFromFollowing
+        self.notifyNewPostsFromEveryone = notifyNewPostsFromEveryone
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -66,6 +78,9 @@ struct User: Identifiable, Codable {
         self.followingCount = 0
         self.postsCount = 0
         self.blockedUserIds = nil
+        self.notifyReactions = true
+        self.notifyNewPostsFromFollowing = true
+        self.notifyNewPostsFromEveryone = false
         self.createdAt = Date()
         self.updatedAt = Date()
     }
@@ -108,7 +123,12 @@ struct User: Identifiable, Codable {
         data["followersCount"] = followersCount
         data["followingCount"] = followingCount
         data["postsCount"] = postsCount
-        
+
+        // プッシュ通知の配信プレフ（常に書く。merge 書き込みでも欠落させない）
+        data["notifyReactions"] = notifyReactions
+        data["notifyNewPostsFromFollowing"] = notifyNewPostsFromFollowing
+        data["notifyNewPostsFromEveryone"] = notifyNewPostsFromEveryone
+
         if let blockedUserIds = blockedUserIds {
             data["blockedUserIds"] = blockedUserIds
         }
@@ -135,7 +155,11 @@ struct User: Identifiable, Codable {
         self.followingCount = documentData["followingCount"] as? Int ?? 0
         self.postsCount = documentData["postsCount"] as? Int ?? 0
         self.blockedUserIds = documentData["blockedUserIds"] as? [String]
-        
+        // 旧ユーザーはフィールド欠落＝既定値（Cloud Functions 側の欠落フォールバックと一致）
+        self.notifyReactions = documentData["notifyReactions"] as? Bool ?? true
+        self.notifyNewPostsFromFollowing = documentData["notifyNewPostsFromFollowing"] as? Bool ?? true
+        self.notifyNewPostsFromEveryone = documentData["notifyNewPostsFromEveryone"] as? Bool ?? false
+
         // TimestampからDateに変換
         if let createdAtTimestamp = documentData["createdAt"] as? Timestamp {
             self.createdAt = createdAtTimestamp.dateValue()

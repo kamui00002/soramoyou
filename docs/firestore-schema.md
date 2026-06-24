@@ -14,9 +14,17 @@
   "followingCount": "number",
   "postsCount": "number",
   "customEditTools": ["string"],      // 選択した編集ツール名
-  "customEditToolsOrder": ["string"]  // 表示順
+  "customEditToolsOrder": ["string"], // 表示順
+  "fcmToken": "string",               // プッシュ通知の登録トークン（端末ごと・PushNotificationManagerが保存／無効時に自動削除）
+  "fcmTokenUpdatedAt": "timestamp",   // fcmToken の更新時刻
+  "notifyReactions": "boolean",       // 通知: 自分の投稿への いいね/コメント（既定 true・欠落=true）
+  "notifyNewPostsFromFollowing": "boolean", // 通知: フォロー中の人の新規投稿（既定 true・欠落=true）
+  "notifyNewPostsFromEveryone": "boolean"   // 通知: 誰かの新規投稿＝全員（既定 false・欠落=false）
 }
 ```
+- 通知プレフ3つの既定値は **iOS `User.swift` と Cloud Functions `functions/index.js` の `PREF_DEFAULTS` で一致必須**（reactions=true / following=true / everyone=false）。旧ユーザーはフィールド欠落＝既定で動く。
+- `fcmToken` は Cloud Functions（送信側）のみが読む。クライアントは書き込み専用（merge）。送信時に無効トークンは自動削除。
+- 送信トリガー: `likes`/`comments`/`posts` のドキュメント作成（`functions/index.js`）。デプロイには Blaze プラン＋APNs認証キーが必要。
 
 ## posts コレクション
 ```json
@@ -108,6 +116,7 @@
 ```
 - セキュリティ: 作成は認証済みユーザーが自分のIDでのみ（rules `hasAll(['userId','message','createdAt'])` + message 1〜1000文字）。**読み取り・更新・削除は不可**（管理者が Firebase コンソールで閲覧）。
 - email・表示名などの PII は保存しない（userId のみ）。
+- 副作用: ドキュメント作成で Cloud Functions `notifyFeedbackToDiscord`（`functions/index.js`）が発火し、開発者の Discord へ Webhook 通知する。Webhook URL は Secret Manager `DISCORD_WEBHOOK_URL`（コードに実値なし）。デプロイには Blaze ＋ `firebase functions:secrets:set DISCORD_WEBHOOK_URL` が必要。
 
 ---
 

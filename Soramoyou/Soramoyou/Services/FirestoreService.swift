@@ -30,6 +30,9 @@ protocol FirestoreServiceProtocol {
     func fetchUser(userId: String) async throws -> User
     func updateUser(_ user: User) async throws -> User
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws
+    /// 通知の配信プレフ3つ（＋updatedAt）だけを更新するターゲット更新。
+    /// User 全体を書く updateUser と違い、followersCount 等の他フィールドを古い値で巻き戻さない。
+    func updateNotificationPreferences(userId: String, notifyReactions: Bool, notifyNewPostsFromFollowing: Bool, notifyNewPostsFromEveryone: Bool) async throws
     func syncPostsCount(userId: String, count: Int) async throws
 
     // Public Profiles (公開情報のみ - 認証済みユーザー)
@@ -350,7 +353,22 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.updateFailed(error)
         }
     }
-    
+
+    func updateNotificationPreferences(userId: String, notifyReactions: Bool, notifyNewPostsFromFollowing: Bool, notifyNewPostsFromEveryone: Bool) async throws {
+        do {
+            // 通知プレフ3つ＋updatedAt だけを更新（updateData）。User 全体を書かないので
+            // followersCount 等を古い値で巻き戻さない。ドキュメントは所有者のプロフィールで必ず存在する。
+            try await usersCollection.document(userId).updateData([
+                "notifyReactions": notifyReactions,
+                "notifyNewPostsFromFollowing": notifyNewPostsFromFollowing,
+                "notifyNewPostsFromEveryone": notifyNewPostsFromEveryone,
+                "updatedAt": Timestamp(date: Date())
+            ])
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws {
         do {
             let docRef = usersCollection.document(userId)

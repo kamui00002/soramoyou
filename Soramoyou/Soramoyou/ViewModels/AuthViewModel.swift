@@ -153,6 +153,10 @@ class AuthViewModel: ObservableObject {
         errorMessage = nil
 
         do {
+            // サインアウト前に（まだ認証が有効なうちに）この端末の FCM トークンを users から削除する。
+            // signOut 後は rules の所有者更新が通らず削除できない。共有端末での別アカウント誤配信を防ぐ。
+            await PushNotificationManager.shared.clearTokenForCurrentUser()
+
             try await authService.signOut()
             currentUser = nil
             isAuthenticated = false
@@ -197,6 +201,11 @@ class AuthViewModel: ObservableObject {
             // ユーザーIDをLoggingServiceに設定/クリア
             if let user = user {
                 LoggingService.shared.setUserID(user.id)
+                // 認証済みになった瞬間に、現在の FCM トークンを取得して users/{uid} に保存する。
+                // MessagingDelegate の didReceiveRegistrationToken はコールド起動時に Auth が
+                // currentUser を復元する前に発火しうる（→未ログイン扱いで保存スキップ→以後トークン不変で
+                // 二度と発火しない＝送信先が一生書かれない）。ここで確実に同期して取りこぼしを塞ぐ。
+                PushNotificationManager.shared.syncTokenIfLoggedIn()
                 // 認証済みになったら、ウィジェット用に既存投稿を起動ごと1回だけバックフィル（best-effort）。
                 if !didRunWidgetBackfill {
                     didRunWidgetBackfill = true
