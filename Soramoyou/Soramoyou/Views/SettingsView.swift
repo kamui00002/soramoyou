@@ -790,7 +790,7 @@ struct PrivacyPolicyView: View {
         ■ お問い合わせ
 
         プライバシーに関するお問い合わせは、以下のメールアドレスまでご連絡ください。
-        メール: dome090111220916@gmail.com
+        メール: soramoyou.app@gmail.com
 
         ■ ポリシーの変更
 
