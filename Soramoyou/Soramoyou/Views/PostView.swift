@@ -1,5 +1,5 @@
 //
-//  PostView.swift
+//  PostView.swift ⭐️
 //  Soramoyou
 //
 //  Created on 2025-12-06.
@@ -13,6 +13,8 @@ struct PostView: View {
     @State private var showEditView = false
     /// 広角合成(.panorama)のプレビュー画面の表示フラグ。
     @State private var showStitch = false
+    /// 広角合成の「撮り方のコツ」ガイド（写真を選ぶ前に読める導線）の表示フラグ。
+    @State private var showStitchGuide = false
     /// 合成が完了した広角画像（stitch 画面を閉じた後に EditView へ渡す）。
     @State private var pendingStitched: UIImage?
     /// 投稿モード（通常/配置写真/広角合成）。配置写真・広角合成は4枚固定・ログイン必須。
@@ -245,7 +247,34 @@ struct PostView: View {
                 .foregroundColor(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
-            
+
+            // 広角合成モードのときだけ、写真を選ぶ「前」に読める撮り方ガイドへの導線。
+            // 合成画面（撮影後）の「？」では遅い、という声を受けて中央に置く。
+            if postKind == .panorama {
+                Button(action: { showStitchGuide = true }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "questionmark.circle")
+                        Text("撮り方のコツ")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(
+                        Capsule()
+                            .fill(.white.opacity(0.18))
+                            .overlay(Capsule().stroke(.white.opacity(0.45), lineWidth: 1))
+                    )
+                }
+                // sheet はボタン自身に付与する。
+                // body 直下の .sheet×1 + .fullScreenCover×2 と同じ階層に重ねると
+                // 表示状態の取り違え（stale-state）で誤った画面が出ることがあるため、ここで局所化する。
+                .sheet(isPresented: $showStitchGuide) {
+                    SkyStitchHelpView(onClose: { showStitchGuide = false })
+                }
+                .accessibilityHint("広角合成の撮り方ガイドを開きます")
+            }
+
             Button(action: {
                 viewModel.startPhotoSelection()
             }) {
