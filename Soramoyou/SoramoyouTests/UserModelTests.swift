@@ -185,5 +185,55 @@ final class UserModelTests: XCTestCase {
         XCTAssertEqual(user.followingCount, 0)
         XCTAssertEqual(user.postsCount, 0)
     }
+
+    // MARK: - プッシュ通知の配信プレフ
+
+    /// 旧ユーザー（通知プレフのキーが無い）でも壊れず、既定値で読めること。
+    /// Cloud Functions 側の欠落フォールバックと一致（reactions=true / following=true / everyone=false）。
+    func testNotificationPreferencesDefaultWhenMissing() throws {
+        // Given - 通知プレフのキーが無い documentData
+        let timestamp = Timestamp(date: Date())
+        let documentData: [String: Any] = [
+            "id": "old-user",
+            "createdAt": timestamp,
+            "updatedAt": timestamp
+        ]
+
+        // When
+        let user = try User(from: documentData)
+
+        // Then - 既定値で読める
+        XCTAssertTrue(user.notifyReactions)
+        XCTAssertTrue(user.notifyNewPostsFromFollowing)
+        XCTAssertFalse(user.notifyNewPostsFromEveryone)
+    }
+
+    /// 明示的な値が読み込み・書き出しで保たれること（送信側が読むため toFirestoreData に必ず出る）。
+    func testNotificationPreferencesRoundTrip() throws {
+        // Given - 既定と異なる値を持つ documentData
+        let timestamp = Timestamp(date: Date())
+        let documentData: [String: Any] = [
+            "id": "user-2",
+            "createdAt": timestamp,
+            "updatedAt": timestamp,
+            "notifyReactions": false,
+            "notifyNewPostsFromFollowing": false,
+            "notifyNewPostsFromEveryone": true
+        ]
+
+        // When
+        let user = try User(from: documentData)
+
+        // Then - 明示値が反映される
+        XCTAssertFalse(user.notifyReactions)
+        XCTAssertFalse(user.notifyNewPostsFromFollowing)
+        XCTAssertTrue(user.notifyNewPostsFromEveryone)
+
+        // toFirestoreData が3キーを書き出す（Cloud Functions が送信可否判定に読む）
+        let out = user.toFirestoreData()
+        XCTAssertEqual(out["notifyReactions"] as? Bool, false)
+        XCTAssertEqual(out["notifyNewPostsFromFollowing"] as? Bool, false)
+        XCTAssertEqual(out["notifyNewPostsFromEveryone"] as? Bool, true)
+    }
 }
 

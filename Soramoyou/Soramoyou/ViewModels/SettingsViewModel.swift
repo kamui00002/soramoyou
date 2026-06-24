@@ -23,6 +23,18 @@ class SettingsViewModel: ObservableObject {
     /// 通知を有効化できなかった時のメッセージ（設定アプリへの誘導アラートに使う）
     @Published var goldenHourPermissionMessage: String?
 
+    // MARK: プッシュ通知の配信プレフ（Firestore users/{uid} に保存。端末の通知許可とは別物）
+    /// 自分の投稿への いいね/コメント を知らせる
+    @Published var notifyReactions = true
+    /// フォロー中の人が新規投稿したら知らせる
+    @Published var notifyNewPostsFromFollowing = true
+    /// 誰かが新規投稿したら知らせる（全員）
+    @Published var notifyNewPostsFromEveryone = false
+    /// プッシュ通知まわりの案内（許可されていない／保存失敗）。誘導アラートに使う。
+    @Published var pushNotificationMessage: String?
+    /// 直近に読み込んだ自分の User。プレフ保存時に followersCount 等を 0 に潰さないよう、これを基に更新する。
+    private var loadedUser: User?
+
     private let authService: AuthServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
 
@@ -75,6 +87,78 @@ class SettingsViewModel: ObservableObject {
         case .locationUnavailable:
             isGoldenHourNotificationEnabled = false
             goldenHourPermissionMessage = "現在地を取得できませんでした。時間をおいて再度お試しください。"
+        }
+    }
+
+    // MARK: - プッシュ通知の配信プレフ
+
+    /// プッシュ通知のどれを送るか（端末の許可とは別の「配信内容」プレフ）。
+    enum PushPreference {
+        case reactions              // 自分の投稿への いいね/コメント
+        case newPostsFromFollowing  // フォロー中の人の新規投稿
+        case newPostsFromEveryone   // 誰かの新規投稿（全員）
+    }
+
+    /// 設定画面を開いたときに、現在の配信プレフを Firestore から読み込む。
+    func loadNotificationPreferences() async {
+        guard let userId = authService.currentUser()?.id else { return }
+        do {
+            let user = try await firestoreService.fetchUser(userId: userId)
+            loadedUser = user
+            notifyReactions = user.notifyReactions
+            notifyNewPostsFromFollowing = user.notifyNewPostsFromFollowing
+            notifyNewPostsFromEveryone = user.notifyNewPostsFromEveryone
+        } catch {
+            // 取得失敗時は既定値のまま表示する（保存時に再取得する）。
+            ErrorHandler.logError(error, context: "SettingsViewModel.loadNotificationPreferences", userId: userId)
+        }
+    }
+
+    /// 配信プレフのトグル切り替え。Firestore へ保存し、ON にしたときは「良い瞬間」として通知許可を要求する。
+    /// 保存は fetch した実カウント入りの User を基にプレフだけ反転して merge する（カウント0潰しを避ける）。
+    func setNotificationPreference(_ pref: PushPreference, enabled: Bool) async {
+        apply(pref, enabled)  // 楽観的に UI 更新
+
+        guard let userId = authService.currentUser()?.id else {
+            apply(pref, !enabled)  // 未ログインなら戻す
+            return
+        }
+
+        do {
+            // 実カウント入りの User を用意する（キャッシュが無ければ Firestore から取得）。
+            var user: User
+            if let cached = loadedUser {
+                user = cached
+            } else {
+                user = try await firestoreService.fetchUser(userId: userId)
+            }
+            user.notifyReactions = notifyReactions
+            user.notifyNewPostsFromFollowing = notifyNewPostsFromFollowing
+            user.notifyNewPostsFromEveryone = notifyNewPostsFromEveryone
+            user.updatedAt = Date()
+            loadedUser = try await firestoreService.updateUser(user)
+        } catch {
+            apply(pref, !enabled)  // 保存失敗なら戻す
+            pushNotificationMessage = "通知設定を保存できませんでした。通信環境をご確認ください。"
+            ErrorHandler.logError(error, context: "SettingsViewModel.setNotificationPreference", userId: userId)
+            return
+        }
+
+        // ON にしたら「良い瞬間」として通知許可を要求＋APNs 登録（拒否なら設定アプリへ誘導）。
+        if enabled {
+            let granted = await PushNotificationManager.shared.requestAuthorizationAndRegister()
+            if !granted {
+                pushNotificationMessage = "通知がオフになっています。設定アプリで「そらもよう」の通知を許可すると、お知らせが届きます。"
+            }
+        }
+    }
+
+    /// @Published のプレフ値を更新する（楽観的 UI / 巻き戻し用）。
+    private func apply(_ pref: PushPreference, _ value: Bool) {
+        switch pref {
+        case .reactions: notifyReactions = value
+        case .newPostsFromFollowing: notifyNewPostsFromFollowing = value
+        case .newPostsFromEveryone: notifyNewPostsFromEveryone = value
         }
     }
 

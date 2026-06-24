@@ -76,6 +76,10 @@ struct SettingsView: View {
                 }
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+            .task {
+                // 設定を開いたら現在のプッシュ通知プレフを読み込む（未ログインなら何もしない）。
+                await viewModel.loadNotificationPreferences()
+            }
             .sheet(isPresented: $showingPrivacyPolicy) {
                 PrivacyPolicyView()
             }
@@ -151,6 +155,25 @@ struct SettingsView: View {
                 }
             } message: {
                 if let message = viewModel.goldenHourPermissionMessage {
+                    Text(message)
+                }
+            }
+            // プッシュ通知: 許可されていない／保存失敗時の案内（設定アプリへ誘導）
+            .alert("通知について", isPresented: Binding(
+                get: { viewModel.pushNotificationMessage != nil },
+                set: { if !$0 { viewModel.pushNotificationMessage = nil } }
+            )) {
+                Button("設定を開く") {
+                    viewModel.pushNotificationMessage = nil
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("閉じる", role: .cancel) {
+                    viewModel.pushNotificationMessage = nil
+                }
+            } message: {
+                if let message = viewModel.pushNotificationMessage {
                     Text(message)
                 }
             }
@@ -277,8 +300,85 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal, DesignTokens.Spacing.md)
                 .padding(.vertical, DesignTokens.Spacing.md)
+
+                // プッシュ通知の配信プレフ（ログイン時のみ。端末の通知許可は最初の ON で要求する）
+                if authViewModel.currentUser != nil {
+                    Divider().padding(.leading, 60)
+                    notificationToggleRow(
+                        icon: "heart.fill", iconColor: .pink,
+                        title: "リアクション通知",
+                        description: "自分の投稿への いいね・コメント をお知らせします",
+                        isOn: pushReactionsBinding
+                    )
+                    Divider().padding(.leading, 60)
+                    notificationToggleRow(
+                        icon: "person.2.fill", iconColor: .blue,
+                        title: "フォロー中の新着",
+                        description: "フォロー中の人が新しい空を投稿したらお知らせします",
+                        isOn: pushFollowingBinding
+                    )
+                    Divider().padding(.leading, 60)
+                    notificationToggleRow(
+                        icon: "globe", iconColor: .teal,
+                        title: "みんなの新着",
+                        description: "誰かが新しい空を投稿したらお知らせします",
+                        isOn: pushEveryoneBinding
+                    )
+                }
             }
         }
+    }
+
+    /// 通知トグル1行（アイコン＋見出し＋説明＋トグル）。プッシュ通知プレフ用。
+    private func notificationToggleRow(
+        icon: String, iconColor: Color,
+        title: String, description: String,
+        isOn: Binding<Bool>
+    ) -> some View {
+        HStack(spacing: DesignTokens.Spacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundColor(iconColor)
+                .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 16, weight: .medium, design: .rounded))
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                Text(description)
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+            }
+
+            Spacer()
+
+            Toggle(title, isOn: isOn)
+                .labelsHidden()
+        }
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.vertical, DesignTokens.Spacing.md)
+    }
+
+    // プッシュ通知トグルの Binding（ON 時に許可要求を伴うため、保存・許可は ViewModel が担う）。
+    private var pushReactionsBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.notifyReactions },
+            set: { newValue in Task { await viewModel.setNotificationPreference(.reactions, enabled: newValue) } }
+        )
+    }
+
+    private var pushFollowingBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.notifyNewPostsFromFollowing },
+            set: { newValue in Task { await viewModel.setNotificationPreference(.newPostsFromFollowing, enabled: newValue) } }
+        )
+    }
+
+    private var pushEveryoneBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.notifyNewPostsFromEveryone },
+            set: { newValue in Task { await viewModel.setNotificationPreference(.newPostsFromEveryone, enabled: newValue) } }
+        )
     }
 
     /// ゴールデンアワー通知トグルの Binding。
