@@ -21,6 +21,10 @@ struct SoramoyouApp: App {
         // Firebase初期化
         FirebaseApp.configure()
 
+        // プッシュ通知(FCM)の登録トークン受け取りを有効化（configure() の直後に張る）。
+        // ここでは許可ダイアログは出さない（許可済みユーザーの登録は scenePhase で行う）。
+        PushNotificationManager.shared.configure()
+
         // Crashlyticsの設定
         setupCrashlytics()
 
@@ -60,6 +64,9 @@ struct SoramoyouApp: App {
             if newPhase == .active {
                 // インストール済みウィジェットの数・サイズを起動後1回だけ計測（普及度 KPI）
                 WidgetCacheManager.shared.logActiveWidgetsOncePerLaunch()
+                // すでに通知を許可しているユーザーは、無言で APNs 登録（＝FCMトークン発行）する。
+                // 未許可ユーザーにはここではプロンプトを出さない（プッシュ系トグルON など明示操作で要求）。
+                PushNotificationManager.shared.registerForPushIfAuthorized()
                 Task {
                     await GoldenHourNotificationManager.shared.rescheduleIfEnabled()
                 }

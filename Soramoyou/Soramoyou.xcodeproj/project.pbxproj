@@ -16,6 +16,7 @@
 		E051CA502EE49B0200CC78AB /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA4F2EE49B0200CC78AB /* Kingfisher */; };
 		E051CA532EE49B3400CC78AB /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA522EE49B3400CC78AB /* GoogleMobileAds */; };
 		E051CA542EE49B3500CC78AB /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA552EE49B3500CC78AB /* FirebaseStorage */; };
+		FCEE0A0100000000000000B1 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = FCEE0A0200000000000000B2 /* FirebaseMessaging */; };
 		E0AC93622FE12E3D0074C971 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E0AC93612FE12E3D0074C971 /* WidgetKit.framework */; };
 		E0AC93642FE12E3D0074C971 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E0AC93632FE12E3D0074C971 /* SwiftUI.framework */; };
 		E0AC93712FE12E3F0074C971 /* SoramoyouWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E0AC935F2FE12E3C0074C971 /* SoramoyouWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -142,6 +143,7 @@
 				E051CA452EE49ACB00CC78AB /* FirebaseAI in Frameworks */,
 				E051CA532EE49B3400CC78AB /* GoogleMobileAds in Frameworks */,
 				E051CA542EE49B3500CC78AB /* FirebaseStorage in Frameworks */,
+				FCEE0A0100000000000000B1 /* FirebaseMessaging in Frameworks */,
 				A776EF40BE7A9AE95FECE753 /* OpenCV in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -236,6 +238,7 @@
 				E051CA4F2EE49B0200CC78AB /* Kingfisher */,
 				E051CA522EE49B3400CC78AB /* GoogleMobileAds */,
 				E051CA552EE49B3500CC78AB /* FirebaseStorage */,
+				FCEE0A0200000000000000B2 /* FirebaseMessaging */,
 				339305E0AFD13F7BCE8948CF /* OpenCV */,
 			);
 			productName = Soramoyou;
@@ -948,6 +951,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E051CA432EE49ACB00CC78AB /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
+		};
+		FCEE0A0200000000000000B2 /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E051CA432EE49ACB00CC78AB /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
