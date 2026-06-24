@@ -6,9 +6,11 @@
 	<array>
 		<string>group.com.yoshidometoru.Soramoyou</string>
 	</array>
-	<!-- プッシュ通知(APNs)の aps-environment は、配信実装時（Blaze＋APNs認証キー登録＋Cloud Functions デプロイ）に
-	     production で追加する。それまでは App ID に Push capability/APNs キーが無いため、aps を入れると配布(App Store)用の
-	     export が失敗する。main をストアビルド可能に保つ目的で意図的に未設定にしている（クライアントのトグル/プレフ保存と
-	     PushNotificationManager の受信配線はこの状態でもビルド・動作する。実配信は前提物が揃ってから）。 -->
+	<!-- プッシュ通知(APNs)。App ID で Push Notifications capability 有効（ASC API で確認済 2026-06-25）。
+	     TestFlight / App Store 配布ビルドは production APNs 環境を使うため production を指定する
+	     （development だとサンドボックストークンになり配信されない）。配信には別途 Firebase に APNs 認証キー登録＋
+	     push 用 Cloud Functions のデプロイが必要。 -->
+	<key>aps-environment</key>
+	<string>production</string>
 </dict>
 </plist>
