@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.firebase/
+# package-lock.json は初回 npm install で生成される（このリポには未コミット）。
+# 生成後にコミットしたい場合はこの行を削除して package-lock.json を add すること。
+package-lock.json
