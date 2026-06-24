@@ -118,6 +118,34 @@ git push -u origin [ブランチ名]
 
 ---
 
+## 🚀 TestFlight Upload (ASC API Key 自動化、2026-05-17 整備)
+
+ASC API Key 経由の自動 upload セットアップ済 ([[2026-05-17 App Store Connect API Key で TestFlight 自動 upload セットアップ]] 参照、Obsidian リファレンス)。
+
+「TestFlight 出して」と指示されたら以下を自動実行:
+
+```bash
+make testflight
+# 内部実行: ~/.claude/scripts/xcode-testflight-upload.sh Soramoyou/Soramoyou.xcodeproj Soramoyou
+```
+
+フロー:
+1. `CURRENT_PROJECT_VERSION` を +1
+2. `xcodebuild archive` (Release / generic iOS)
+3. `xcodebuild -exportArchive` で IPA 生成 (ExportOptions.plist は repo 直下)
+4. `xcrun altool --upload-app` で App Store Connect に提出
+
+必要前提 (1 回だけセットアップ済):
+- `~/.appstoreconnect/private_keys/AuthKey_{KEY_ID}.p8` (chmod 600)
+- macOS Keychain: `secret save ASC_KEY_ID` / `secret save ASC_ISSUER_ID`
+- `ExportOptions.plist` (team `B7F79FDM78`, method `app-store-connect`) ← 既存
+
+その他コマンド:
+- `make build-only` — build bump + archive + IPA だけ (upload しない)
+- `make no-bump` — build 番号据え置きで再 archive + upload
+
+---
+
 ## 🤝 Claude の対応方針（要約）
 
 - **段階的に説明** — 一度に全てを説明せずステップごとに確認
