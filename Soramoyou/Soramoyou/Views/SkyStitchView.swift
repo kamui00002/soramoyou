@@ -65,8 +65,8 @@ struct SkyStitchView: View {
                 // 撮り方のコツ（図解）をいつでも開ける。
                 // 「?」アイコンは意味が伝わりにくいので、テキストで明示する。
                 ToolbarItem(placement: .navigationBarTrailing) {
+                    // テキストボタンはラベル文字列がそのまま VoiceOver ラベルになるため accessibilityLabel は不要。
                     Button("撮り方のコツ") { showHelp = true }
-                        .accessibilityLabel("撮り方のコツ")
                 }
             }
             .task {
