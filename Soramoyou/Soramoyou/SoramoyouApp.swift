@@ -12,6 +12,9 @@ import UserNotifications
 
 @main
 struct SoramoyouApp: App {
+    // APNs デバイストークンを受け取り FCM に橋渡しする最小 AppDelegate を SwiftUI ライフサイクルに接続する。
+    // これが無いと APNs トークンが FirebaseMessaging に渡らず、FCM トークンが発行されない（＝通知が届かない）。
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var authViewModel = AuthViewModel()
     @StateObject private var likeManager = LikeManager()
     /// シーンの状態（フォアグラウンド復帰でゴールデンアワー通知を洗い替えするために監視）
