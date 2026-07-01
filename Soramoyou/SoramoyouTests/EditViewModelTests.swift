@@ -351,6 +351,53 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.editRecipe.cropRectNorm?.width ?? -1, 0.8, accuracy: 0.0001)
     }
 
+    /// 🔧 回帰テスト（不具合: スタイル調整 → 普通編集でスタイルが基準に戻る）:
+    /// スタイルパッド (style2DToneNorm / style2DColorNorm) を設定したあとに普通編集ツール
+    /// (露出・明るさ等) を操作しても、スタイルが脱落しないことを検証する。これらは
+    /// EditRecipe 専用フィールドで EditSettings 変換では失われるため、editSettings の
+    /// setter 側で明示的に保全する必要がある。修正前はこのテストは FAIL する。
+    func testEditSettingsSetterPreservesStyle2D() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        // 事前条件: スタイルパッドの値を設定（トーン軸 / カラー軸, 範囲 [-1, 1]）
+        viewModel.editRecipe.style2DToneNorm = 0.3
+        viewModel.editRecipe.style2DColorNorm = -0.4
+
+        // スライダー操作をシミュレート（editSettings.setValue 経由 → 内部で setter 発火）
+        viewModel.setToolValue(0.3, for: .brightness)
+        viewModel.setToolValue(-0.2, for: .contrast)
+        viewModel.setToolValue(0.5, for: .exposure)
+
+        // スタイルが保持されていること（バグ時は nil = 基準に戻る）
+        XCTAssertEqual(viewModel.editRecipe.style2DToneNorm ?? -999, 0.3, accuracy: 0.0001,
+                       "style2DToneNorm が脱落している（スタイル調整が基準に戻る不具合）")
+        XCTAssertEqual(viewModel.editRecipe.style2DColorNorm ?? -999, -0.4, accuracy: 0.0001,
+                       "style2DColorNorm が脱落している（スタイル調整が基準に戻る不具合）")
+    }
+
+    /// 🔧 回帰テスト（リセット経路の保全確認）:
+    /// resetStyle2D() で意図的に基準へ戻したあとに普通編集ツールを操作しても、スタイルが
+    /// nil のまま維持される（サルベージが意図したリセットを壊さない）ことを検証する。
+    func testResetStyle2DStaysResetAfterToolEdit() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        // スタイルを設定してから明示リセット
+        viewModel.editRecipe.style2DToneNorm = 0.5
+        viewModel.editRecipe.style2DColorNorm = 0.5
+        viewModel.resetStyle2D()
+
+        // 普通編集ツールを操作（setter 発火）
+        viewModel.setToolValue(0.3, for: .brightness)
+
+        // リセット済み（nil）のままであること
+        XCTAssertNil(viewModel.editRecipe.style2DToneNorm, "リセットしたスタイルが復活している")
+        XCTAssertNil(viewModel.editRecipe.style2DColorNorm, "リセットしたスタイルが復活している")
+    }
+
     func testLoadEquippedToolsWithoutUser() async {
         // Given
         viewModel = EditViewModel(
