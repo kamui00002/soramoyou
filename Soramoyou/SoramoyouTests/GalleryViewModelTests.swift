@@ -206,6 +206,59 @@ final class GalleryViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.hasActiveFilter)
     }
 
+    /// 🔧 回帰テスト（レビュー F3）: 時間帯と空の種類を「同時に」絞り込む経路。
+    ///
+    /// selectTimeOfDay / selectSkyType は互いを解除しないため両フィルタは同時にアクティブになり、
+    /// クエリは `visibility== + timeOfDay== + skyType== + order(createdAt)` を発行する。これは
+    /// Firestore の 4 フィールド複合インデックス（`firestore.indexes.json` に追加済み）が無いと
+    /// 本番で FAILED_PRECONDITION になる経路（レビュー F1）。
+    ///
+    /// ⚠️ 注意: `MockFirestoreServiceForGallery` は timeOfDay/skyType を両方クライアント側で filter して
+    /// 正常結果を返すため、複合インデックス欠落を再現できない（＝このテストが緑でも本番は失敗し得る）。
+    /// 実データでのハッピーパス確認と複合インデックスの deploy が別途必須。
+    func testCombinedTimeOfDayAndSkyTypeFilter() async {
+        // Given: 時間帯 × 空の種類が混在した投稿
+        mockFirestoreService.posts = [
+            createTestPost(id: "morning-clear", timeOfDay: .morning, skyType: .clear),
+            createTestPost(id: "morning-storm", timeOfDay: .morning, skyType: .storm),
+            createTestPost(id: "night-clear", timeOfDay: .night, skyType: .clear)
+        ]
+
+        // When: 朝 と 晴れ を両方選択（互いに解除されない）
+        await viewModel.selectTimeOfDay(.morning)
+        await viewModel.selectSkyType(.clear)
+
+        // Then: 両フィルタが同時アクティブで、クエリに両方渡り、朝×晴れだけが残る
+        XCTAssertEqual(viewModel.selectedTimeOfDay, .morning)
+        XCTAssertEqual(viewModel.selectedSkyType, .clear)
+        XCTAssertTrue(viewModel.hasActiveFilter)
+        XCTAssertEqual(mockFirestoreService.lastTimeOfDayFilter, .morning)
+        XCTAssertEqual(mockFirestoreService.lastSkyTypeFilter, .clear)
+        XCTAssertEqual(viewModel.posts.count, 1)
+        XCTAssertEqual(viewModel.posts.first?.id, "morning-clear")
+    }
+
+    /// 🔧 回帰テスト（レビュー F5）: 絞り込みでユーザー選択の並び替え（人気順）が失われないこと。
+    ///
+    /// 人気順を選んでから時間帯で絞り込み → 絞り込み中は effectiveSortOrder が新着を強制するが、
+    /// 保存値 sortOrder は人気のまま。絞り込みを解除すると人気順が復元される。
+    func testFilterPreservesUserSortOrderAfterClearing() async {
+        // Given: 人気順を選択
+        mockFirestoreService.posts = createTestPosts(count: 3)
+        await viewModel.setSortOrder(.popular)
+        XCTAssertEqual(viewModel.sortOrder, .popular)
+
+        // When: 時間帯で絞り込む（絞り込み中は表示上 新着固定）
+        await viewModel.selectTimeOfDay(.morning)
+        XCTAssertEqual(viewModel.effectiveSortOrder, .newest, "絞り込み中は表示上 新着に固定される")
+        XCTAssertEqual(viewModel.sortOrder, .popular, "ユーザー選択の並び順は保持される")
+
+        // Then: 絞り込みを解除すると人気順が復元される
+        await viewModel.selectTimeOfDay(.morning) // 同値再選択で解除
+        XCTAssertFalse(viewModel.hasActiveFilter)
+        XCTAssertEqual(viewModel.effectiveSortOrder, .popular, "解除後は人気順が復元される")
+    }
+
     // MARK: - 並び替えテスト（新着・人気）
 
     func testSortByPopularUsesLikesCountField() async {
@@ -385,6 +438,9 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
         limit: Int,
         lastDocument: DocumentSnapshot?
     ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+        // ⚠️ このモックは timeOfDay/skyType を両方クライアント側で filter するため、本番 Firestore の
+        // 複合インデックス制約（両フィルタ同時 → 4 フィールド複合インデックス必須）を再現しない。
+        // インデックス欠落による FAILED_PRECONDITION はモックでは検出できず、実データ検証が必須。
         if shouldThrowError {
             throw FirestoreServiceError.notFound
         }

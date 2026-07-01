@@ -16,17 +16,8 @@ import SwiftUI
 struct GalleryExploreHeader: View {
     @ObservedObject var viewModel: GalleryViewModel
 
-    /// 色で探すプリセット（SearchView と同じ主要色）
-    private let colorPresets: [(name: String, hex: String)] = [
-        ("青", "#0000FF"),
-        ("赤", "#FF0000"),
-        ("緑", "#00FF00"),
-        ("黄", "#FFFF00"),
-        ("紫", "#800080"),
-        ("オレンジ", "#FFA500"),
-        ("ピンク", "#FFC0CB"),
-        ("シアン", "#00FFFF")
-    ]
+    /// 色で探すプリセット（検索タブと共有の定数を参照＝提示色のズレを防ぐ）
+    private var colorPresets: [(name: String, hex: String)] { ColorSelectionButton.presets }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {

@@ -135,9 +135,14 @@ class GalleryViewModel: PaginatedPostsViewModel {
     /// 時間帯で絞り込む（同じ値の再選択で解除）
     func selectTimeOfDay(_ timeOfDay: TimeOfDay?) async {
         selectedTimeOfDay = (selectedTimeOfDay == timeOfDay) ? nil : timeOfDay
-        // 色モードとは排他。絞り込み時は人気順を使わないため新着へ寄せる
+        // 色モードとは排他（色で探す状態は解除する）
         selectedColor = nil
-        if hasActiveFilter { sortOrder = .newest }
+        // 絞り込み中の並び替えは effectiveSortOrder が新着に固定するため、ユーザー選択の
+        // sortOrder 自体は書き換えない（絞り込み解除後に元の並び順を復元するため／レビュー F5）
+        LoggingService.shared.logEvent(
+            "gallery_filter_selected",
+            parameters: ["filter_type": "time_of_day", "value": selectedTimeOfDay?.rawValue ?? "cleared"]
+        )
         await fetchPosts()
     }
 
@@ -145,7 +150,10 @@ class GalleryViewModel: PaginatedPostsViewModel {
     func selectSkyType(_ skyType: SkyType?) async {
         selectedSkyType = (selectedSkyType == skyType) ? nil : skyType
         selectedColor = nil
-        if hasActiveFilter { sortOrder = .newest }
+        LoggingService.shared.logEvent(
+            "gallery_filter_selected",
+            parameters: ["filter_type": "sky_type", "value": selectedSkyType?.rawValue ?? "cleared"]
+        )
         await fetchPosts()
     }
 
@@ -156,6 +164,10 @@ class GalleryViewModel: PaginatedPostsViewModel {
         sortOrder = order
         // 並び替えは通常モード。色モードを抜ける
         selectedColor = nil
+        LoggingService.shared.logEvent(
+            "gallery_sort_changed",
+            parameters: ["sort": order == .popular ? "popular" : "newest"]
+        )
         await fetchPosts()
     }
 
@@ -167,12 +179,20 @@ class GalleryViewModel: PaginatedPostsViewModel {
             selectedSkyType = nil
             sortOrder = .newest
         }
+        LoggingService.shared.logEvent(
+            "gallery_color_searched",
+            parameters: ["color": selectedColor ?? "cleared"]
+        )
         await fetchPosts()
     }
 
     /// 表示順シャッフルを切り替える
     func toggleShuffle() async {
         isShuffled.toggle()
+        LoggingService.shared.logEvent(
+            "gallery_shuffle_toggled",
+            parameters: ["state": isShuffled ? "on" : "off"]
+        )
         if isShuffled {
             // ON: 取得済みの投稿をその場でシャッフル（再取得不要）
             posts.shuffle()
@@ -185,6 +205,10 @@ class GalleryViewModel: PaginatedPostsViewModel {
     /// 表示レイアウト（グリッド/モザイク）を切り替える
     func toggleLayoutMode() {
         layoutMode = (layoutMode == .grid) ? .mosaic : .grid
+        LoggingService.shared.logEvent(
+            "gallery_layout_toggled",
+            parameters: ["mode": layoutMode == .mosaic ? "mosaic" : "grid"]
+        )
     }
 
     // MARK: - Query Hook
