@@ -37,8 +37,9 @@ class EditViewModel: ObservableObject {
     /// get: EditRecipe を EditSettings に変換して返す
     /// set: EditSettings を EditRecipe に変換して保存
     ///
-    /// 注意: `EditSettings` には `toneCurvePoints` / `targetDynamicRange` が含まれないため、
-    /// set の時点で既存の値を保全してから再構築する（スライダー操作でトーンカーブが
+    /// 注意: `EditSettings` には `toneCurvePoints` / `targetDynamicRange` / `cropRectNorm` /
+    /// `style2DToneNorm` / `style2DColorNorm` が含まれないため、set の時点で既存の値を
+    /// 保全してから再構築する（スライダー操作でトーンカーブやスタイル調整が
     /// 失われる不具合を防止）。
     var editSettings: EditSettings {
         get { editRecipe.toEditSettings() }
@@ -46,10 +47,16 @@ class EditViewModel: ObservableObject {
             let existingPoints = editRecipe.toneCurvePoints
             let existingDynamicRange = editRecipe.targetDynamicRange
             let existingCropRect = editRecipe.cropRectNorm
+            // スタイルパッドの値も EditSettings 変換で失われる EditRecipe 専用フィールドのため保全する
+            // （スタイル調整後に普通編集ツールを触るとスタイルが基準に戻る不具合を防止）
+            let existingStyleTone = editRecipe.style2DToneNorm
+            let existingStyleColor = editRecipe.style2DColorNorm
             var newRecipe = EditRecipe(from: newValue)
             newRecipe.toneCurvePoints = existingPoints
             newRecipe.targetDynamicRange = existingDynamicRange
             newRecipe.cropRectNorm = existingCropRect
+            newRecipe.style2DToneNorm = existingStyleTone
+            newRecipe.style2DColorNorm = existingStyleColor
             editRecipe = newRecipe
         }
     }
