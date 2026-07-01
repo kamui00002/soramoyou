@@ -19,7 +19,7 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    static let currentID = "2026-06-widget"
+    static let currentID = "2026-07-gallery-explore"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -32,24 +32,34 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（ホーム画面ウィジェット）の新機能紹介ページ。
-    /// 「どこから追加するか」「モードの切り替え方」を文言に明記して発見しやすくする。
+    /// 今回（ギャラリー強化）の新機能紹介ページ。
+    /// ギャラリー上部のヘッダーで「何ができるようになったか」を発見しやすく伝える。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "square.grid.2x2.fill",
+            icon: "line.3.horizontal.decrease.circle.fill",
             badge: "新機能",
-            title: "ホーム画面ウィジェット",
-            description: "ホーム画面を長押しして「＋」から\nそらもようのウィジェットを追加できます",
+            title: "ギャラリーで絞り込み",
+            description: "ギャラリー上部から時間帯や空の種類で\n絞り込み、新着・人気で並び替えできます",
             gradientColors: [
                 Color(red: 0.42, green: 0.68, blue: 0.93),
                 Color(red: 0.62, green: 0.82, blue: 0.98)
             ]
         ),
         WhatsNewPage(
-            icon: "sparkles",
-            badge: "3つのモード",
-            title: "空の見せ方を選べる",
-            description: "アルバム・今の空・抽象色から選べます\nウィジェットを長押し→編集で切り替え",
+            icon: "paintpalette.fill",
+            badge: "色で探す",
+            title: "空の色から見つける",
+            description: "カラーパレットをタップすると\nその色の空だけを集めて表示します",
+            gradientColors: [
+                Color(red: 0.62, green: 0.52, blue: 0.92),
+                Color(red: 0.42, green: 0.70, blue: 0.95)
+            ]
+        ),
+        WhatsNewPage(
+            icon: "rectangle.grid.1x2.fill",
+            badge: "新しい見せ方",
+            title: "シャッフル＆モザイク",
+            description: "シャッフルでランダムに、モザイク表示で\n写真の形そのままに空を楽しめます",
             gradientColors: [
                 Color(red: 0.99, green: 0.72, blue: 0.36),
                 Color(red: 0.96, green: 0.52, blue: 0.42)

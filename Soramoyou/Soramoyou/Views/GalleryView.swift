@@ -21,17 +21,38 @@ struct GalleryView: View {
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
-    /// デバイス向き・サイズに応じて列数を動的に変更
-    private var columns: [GridItem] {
-        let count: Int
+    /// デバイス向き・サイズに応じた列数
+    private var columnCount: Int {
         if horizontalSizeClass == .regular {
-            count = 5          // iPad
+            return 5           // iPad
         } else if verticalSizeClass == .compact {
-            count = 4          // ランドスケープiPhone
+            return 4           // ランドスケープiPhone
         } else {
-            count = 3          // ポートレートiPhone
+            return 3           // ポートレートiPhone
         }
-        return Array(repeating: GridItem(.flexible(), spacing: 2), count: count)
+    }
+
+    /// 正方形グリッド用の列定義
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 2), count: columnCount)
+    }
+
+    /// 絞り込み・色モードの有無に応じた空状態の文言
+    private var emptyStateType: EmptyStateType {
+        if viewModel.hasActiveFilter || viewModel.isColorMode {
+            return .custom(
+                icon: "line.3.horizontal.decrease.circle",
+                title: "条件に合う投稿がありません",
+                description: "絞り込みや色の条件を変えてみてください",
+                actionTitle: nil
+            )
+        }
+        return .custom(
+            icon: "photo.on.rectangle.angled",
+            title: "まだ投稿がありません",
+            description: "みんなの空の写真がここに表示されます",
+            actionTitle: nil
+        )
     }
 
     /// ViewModelの状態をLoadableStateとして取得
@@ -56,23 +77,22 @@ struct GalleryView: View {
                 .ignoresSafeArea()
 
                 VStack(spacing: 0) {
+                    // 探索ヘッダー（絞り込み・並び替え・色で探す・シャッフル・レイアウト切替）
+                    // ローディング/空状態でも操作できるよう AsyncContentView の外に置く
+                    GalleryExploreHeader(viewModel: viewModel)
+
                     // AsyncContentViewで状態に応じた表示を統一 ⭐️
                     AsyncContentView(
                         state: galleryState,
                         loadingType: .initial,
                         emptyCheck: { $0.isEmpty },
-                        emptyStateType: .custom(
-                            icon: "photo.on.rectangle.angled",
-                            title: "まだ投稿がありません",
-                            description: "みんなの空の写真がここに表示されます",
-                            actionTitle: nil
-                        ),
+                        emptyStateType: emptyStateType,
                         onRetry: {
                             await viewModel.refresh()
                         },
                         content: { _ in
-                            // グリッド表示（viewModel.postsを直接使用してページネーション対応）
-                            galleryGrid
+                            // グリッド／モザイク表示（viewModel.postsを直接使用してページネーション対応）
+                            galleryContent
                         }
                     )
 
@@ -163,34 +183,16 @@ struct GalleryView: View {
         }
     }
 
-    // MARK: - Gallery Grid
+    // MARK: - Gallery Content（グリッド／モザイク切替）
 
-    private var galleryGrid: some View {
+    @ViewBuilder
+    private var galleryContent: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 2) {
-                ForEach(viewModel.posts) { post in
-                    Button {
-                        selectedPost = post
-                    } label: {
-                        GalleryGridItem(post: post)
-                    }
-                    .buttonStyle(CardButtonStyle())
-                    .contextMenu {
-                        Button {
-                            Task { await savePostImage(post: post) }
-                        } label: {
-                            Label("写真に保存", systemImage: "square.and.arrow.down")
-                        }
-                    }
-                    .onAppear {
-                            // ページネーション: 最後の投稿が表示されたら次のページを読み込む
-                            if post.id == viewModel.posts.last?.id {
-                                Task {
-                                    await viewModel.loadMorePosts()
-                                }
-                            }
-                        }
-                }
+            switch viewModel.layoutMode {
+            case .grid:
+                gridLayout
+            case .mosaic:
+                mosaicLayout
             }
 
             // 追加読み込み中のインジケーター
@@ -206,6 +208,60 @@ struct GalleryView: View {
                     .font(.caption)
                     .foregroundColor(DesignTokens.Colors.textTertiary)
                     .padding()
+            }
+        }
+    }
+
+    /// 正方形グリッド表示（従来）
+    private var gridLayout: some View {
+        LazyVGrid(columns: columns, spacing: 2) {
+            ForEach(viewModel.posts) { post in
+                galleryCell(post: post) {
+                    GalleryGridItem(post: post)
+                }
+            }
+        }
+    }
+
+    /// モザイク（Pinterest 風）表示
+    /// ページネーションは各セル（galleryCell）の onAppear が担うため、
+    /// MasonryVGrid 側の onItemAppear は使わない。
+    private var mosaicLayout: some View {
+        MasonryVGrid(
+            items: viewModel.posts,
+            columns: columnCount,
+            spacing: 4,
+            aspectRatio: { $0.thumbnailAspectRatio },
+            content: { post in
+                galleryCell(post: post) {
+                    GalleryMosaicItem(post: post)
+                }
+            }
+        )
+        .padding(.horizontal, 4)
+    }
+
+    /// グリッド／モザイク共通のセル（タップで詳細・長押しで保存・ページネーション）
+    private func galleryCell<CellLabel: View>(post: Post, @ViewBuilder label: () -> CellLabel) -> some View {
+        Button {
+            selectedPost = post
+        } label: {
+            label()
+        }
+        .buttonStyle(CardButtonStyle())
+        .contextMenu {
+            Button {
+                Task { await savePostImage(post: post) }
+            } label: {
+                Label("写真に保存", systemImage: "square.and.arrow.down")
+            }
+        }
+        .onAppear {
+            // ページネーション: 最後の投稿が表示されたら次のページを読み込む
+            if post.id == viewModel.posts.last?.id {
+                Task {
+                    await viewModel.loadMorePosts()
+                }
             }
         }
     }
@@ -283,6 +339,82 @@ struct GalleryGridItem: View {
             .frame(width: geometry.size.width, height: geometry.size.width)
         }
         .aspectRatio(1, contentMode: .fit)
+    }
+}
+
+// MARK: - Gallery Mosaic Item
+
+/// モザイク（masonry）表示用のセル。写真の縦横比を保ったまま表示する。
+struct GalleryMosaicItem: View {
+    let post: Post
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            // サムネイル画像（比率を保って角丸フレームいっぱいに敷く）
+            if let firstImage = post.images.first,
+               let url = URL(string: firstImage.thumbnail ?? firstImage.url) {
+                KFImage(url)
+                    .placeholder {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.3))
+                            .overlay(
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            )
+                    }
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.gray)
+                    )
+            }
+
+            // 複数画像インジケーター
+            if post.images.count > 1 {
+                Image(systemName: "square.stack.fill")
+                    .font(.caption)
+                    .foregroundColor(.white)
+                    .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+                    .padding(6)
+            }
+
+            // 編集設定があることを示すインジケーター
+            if post.editSettings != nil {
+                HStack {
+                    Spacer()
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+                        .padding(6)
+                }
+            }
+        }
+        // 写真の縦横比でセルの高さが決まる（列幅は MasonryVGrid が均等配分）
+        .aspectRatio(post.thumbnailAspectRatio, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Post + サムネイル縦横比
+
+extension Post {
+    /// 先頭画像の縦横比（幅÷高さ）。モザイク表示のセル高さ算出に使う。
+    ///
+    /// 極端なパノラマ・縦長でレイアウトが崩れないよう、表示上の比率を 0.6〜1.7 に丸める。
+    /// 寸法が欠落・不正な旧投稿は 1.0（正方形）にフォールバックする。
+    var thumbnailAspectRatio: CGFloat {
+        guard let first = images.first, first.width > 0, first.height > 0 else {
+            return 1.0
+        }
+        let ratio = CGFloat(first.width) / CGFloat(first.height)
+        return min(max(ratio, 0.6), 1.7)
     }
 }
 

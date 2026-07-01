@@ -42,6 +42,16 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.fetchPostsWithSnapshot は未実装です")
     }
 
+    func fetchPostsWithSnapshot(
+        timeOfDay: TimeOfDay?,
+        skyType: SkyType?,
+        sortField: String,
+        limit: Int,
+        lastDocument: DocumentSnapshot?
+    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+        fatalError("MockFirestoreService.fetchPostsWithSnapshot(絞り込み版) は未実装です")
+    }
+
     func fetchPost(postId: String) async throws -> Post {
         fatalError("MockFirestoreService.fetchPost は未実装です")
     }

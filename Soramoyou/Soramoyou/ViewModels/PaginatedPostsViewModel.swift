@@ -41,6 +41,11 @@ class PaginatedPostsViewModel: ObservableObject {
     /// ページネーション用の最後のドキュメントスナップショット
     var lastDocument: DocumentSnapshot?
 
+    /// 取得世代トークン。`fetchPosts` のたびに +1 し、await 復帰後に世代が一致する場合のみ
+    /// 結果を反映する。絞り込み/並び替えチップの連打で古い（先着の）取得結果が新しい表示を
+    /// 上書きし、posts と選択中の状態が食い違う不具合を防ぐ（レビュー F4）。
+    private var fetchGeneration = 0
+
     // MARK: - Computed Properties（サブクラスでオーバーライド）
 
     /// ViewModel名（エラーログのコンテキストに使用）
@@ -64,6 +69,10 @@ class PaginatedPostsViewModel: ObservableObject {
     /// 既存の投稿をクリアしてから最初のページを取得する。
     /// サブクラスでクエリをカスタマイズしたい場合は `executeQuery` をオーバーライドする。
     func fetchPosts() async {
+        // この取得の世代を確定。await 中により新しい fetchPosts が走ったら、こちらの結果は破棄する。
+        fetchGeneration += 1
+        let generation = fetchGeneration
+
         isLoading = true
         errorMessage = nil
         lastError = nil
@@ -78,6 +87,9 @@ class PaginatedPostsViewModel: ObservableObject {
             ) { [self] in
                 try await self.executeQuery(lastDocument: nil)
             }
+            // 古い取得（await 中に新しい fetchPosts が始まった）の結果は捨てる。
+            // 最新世代がローディング解除・表示更新を担うため、ここでは何もせず抜ける。
+            guard generation == fetchGeneration else { return }
             posts = result.posts
             lastDocument = result.lastDocument
             lastError = nil
@@ -87,6 +99,7 @@ class PaginatedPostsViewModel: ObservableObject {
                 hasMorePosts = false
             }
         } catch {
+            guard generation == fetchGeneration else { return }
             // エラーをログに記録
             ErrorHandler.logError(error, context: "\(viewModelName).fetchPosts")
             // ユーザーフレンドリーなメッセージを表示
@@ -105,8 +118,14 @@ class PaginatedPostsViewModel: ObservableObject {
     func loadMorePosts() async {
         guard !isLoadingMore && hasMorePosts else { return }
 
+        // このページングが属する取得世代。await 中に fetchPosts が走って世代が変わったら、
+        // 取得済みの旧ページを新しい一覧へ append しないよう破棄する。
+        let generation = fetchGeneration
+
         isLoadingMore = true
         errorMessage = nil
+        // 世代不一致で早期 return しても追加読み込みが恒久ブロックされないよう、必ず解除する。
+        defer { isLoadingMore = false }
 
         do {
             // リトライ可能な操作として実行
@@ -115,6 +134,9 @@ class PaginatedPostsViewModel: ObservableObject {
             ) { [self] in
                 try await self.executeQuery(lastDocument: self.lastDocument)
             }
+
+            // 途中で fetchPosts（絞り込み変更など）が走っていたら、この旧ページは捨てる。
+            guard generation == fetchGeneration else { return }
 
             if result.posts.isEmpty {
                 hasMorePosts = false
@@ -128,6 +150,7 @@ class PaginatedPostsViewModel: ObservableObject {
                 }
             }
         } catch {
+            guard generation == fetchGeneration else { return }
             // エラーをログに記録
             ErrorHandler.logError(error, context: "\(viewModelName).loadMorePosts")
             // エラーオブジェクトを保持（ErrorStateView用）
@@ -135,8 +158,6 @@ class PaginatedPostsViewModel: ObservableObject {
             // ユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
         }
-
-        isLoadingMore = false
     }
 
     // MARK: - Refresh

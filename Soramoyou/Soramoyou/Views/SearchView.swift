@@ -145,18 +145,9 @@ struct SearchView: View {
             
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
-                    // 色の選択肢（主要な色）
-                    let colors: [(name: String, hex: String)] = [
-                        ("青", "#0000FF"),
-                        ("赤", "#FF0000"),
-                        ("緑", "#00FF00"),
-                        ("黄", "#FFFF00"),
-                        ("紫", "#800080"),
-                        ("オレンジ", "#FFA500"),
-                        ("ピンク", "#FFC0CB"),
-                        ("シアン", "#00FFFF")
-                    ]
-                    
+                    // 色の選択肢（主要な色）。ギャラリー探索ヘッダーと共有の定数を参照。
+                    let colors = ColorSelectionButton.presets
+
                     ForEach(colors, id: \.hex) { color in
                         ColorSelectionButton(
                             name: color.name,
@@ -366,6 +357,19 @@ struct ColorSelectionButton: View {
     let hex: String
     let isSelected: Bool
     let action: () -> Void
+
+    /// 色で探す共通プリセット（主要8色）。検索タブ（SearchView）とギャラリー探索ヘッダー
+    /// （GalleryExploreHeader）で共有し、片方だけ変更されて提示色がズレるのを防ぐ（レビュー F7）。
+    static let presets: [(name: String, hex: String)] = [
+        ("青", "#0000FF"),
+        ("赤", "#FF0000"),
+        ("緑", "#00FF00"),
+        ("黄", "#FFFF00"),
+        ("紫", "#800080"),
+        ("オレンジ", "#FFA500"),
+        ("ピンク", "#FFC0CB"),
+        ("シアン", "#00FFFF")
+    ]
 
     var body: some View {
         Button(action: {

@@ -16,6 +16,14 @@ protocol FirestoreServiceProtocol {
     func updatePost(_ post: Post) async throws -> Post
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
     func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?)
+    /// ギャラリータブ用: 時間帯／空の種類の絞り込みと並び替え（新着/人気）に対応したページング取得
+    func fetchPostsWithSnapshot(
+        timeOfDay: TimeOfDay?,
+        skyType: SkyType?,
+        sortField: String,
+        limit: Int,
+        lastDocument: DocumentSnapshot?
+    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?)
     func fetchPost(postId: String) async throws -> Post
     func deletePost(postId: String, userId: String) async throws
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
@@ -200,7 +208,40 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-    
+
+    /// ギャラリータブ用: 絞り込み（時間帯／空の種類）＋並び替え（新着/人気）＋ページング取得
+    ///
+    /// クエリ構築は `PostQueryBuilder.buildGalleryQuery` に委譲し、
+    /// FirestoreService はデータ取得のみに集中する。
+    func fetchPostsWithSnapshot(
+        timeOfDay: TimeOfDay?,
+        skyType: SkyType?,
+        sortField: String,
+        limit: Int,
+        lastDocument: DocumentSnapshot?
+    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+        do {
+            let query = PostQueryBuilder.buildGalleryQuery(
+                collection: postsCollection,
+                timeOfDay: timeOfDay,
+                skyType: skyType,
+                sortField: sortField,
+                limit: limit,
+                lastDocument: lastDocument
+            )
+
+            let snapshot = try await query.getDocuments()
+
+            let posts = try snapshot.documents.compactMap { document in
+                try Post(from: document.data())
+            }
+
+            return (posts: posts, lastDocument: snapshot.documents.last)
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
     func fetchPost(postId: String) async throws -> Post {
         do {
             let document = try await postsCollection.document(postId).getDocument()
