@@ -85,6 +85,50 @@ struct PostQueryBuilder {
         )
     }
 
+    // MARK: - ギャラリー用クエリ構築（絞り込み＋並び替え＋ページング）
+
+    /// ギャラリータブ用の Firestore クエリを構築する。
+    ///
+    /// `visibility==public` を土台に、時間帯／空の種類の任意フィルタを重ね、
+    /// 指定フィールドで降順ソートしたページング付きクエリを返す。
+    /// - Parameters:
+    ///   - collection: 対象コレクション参照
+    ///   - timeOfDay: 時間帯フィルタ（nil=すべて）
+    ///   - skyType: 空の種類フィルタ（nil=すべて）
+    ///   - sortField: 並び替えフィールド（"createdAt" or "likesCount"）
+    ///   - limit: 取得上限数
+    ///   - lastDocument: ページング用の最後のドキュメント（nil=最初のページ）
+    /// - Returns: 構築済みの Firestore クエリ
+    static func buildGalleryQuery(
+        collection: CollectionReference,
+        timeOfDay: TimeOfDay?,
+        skyType: SkyType?,
+        sortField: String,
+        limit: Int,
+        lastDocument: DocumentSnapshot?
+    ) -> Query {
+        var query: Query = collection
+            .whereField("visibility", isEqualTo: Visibility.public.rawValue)
+
+        if let timeOfDay = timeOfDay {
+            query = query.whereField("timeOfDay", isEqualTo: timeOfDay.rawValue)
+        }
+
+        if let skyType = skyType {
+            query = query.whereField("skyType", isEqualTo: skyType.rawValue)
+        }
+
+        query = query.order(by: sortField, descending: true)
+            .limit(to: limit)
+
+        // ページング: 指定があればそのドキュメントの後続を取得
+        if let lastDocument = lastDocument {
+            query = query.start(afterDocument: lastDocument)
+        }
+
+        return query
+    }
+
     // MARK: - クライアントサイドフィルタリング
 
     /// クエリ結果にクライアントサイドの色フィルタリングとRGB距離フィルタリングを適用する
