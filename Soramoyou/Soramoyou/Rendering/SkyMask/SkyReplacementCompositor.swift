@@ -18,6 +18,14 @@ struct SkyReplacementOptions {
     /// 拡大画像では逆に境界が硬く残ってしまう。長辺に比例させることで
     /// 境界のなじみ方が解像度に依存しなくなる。
     var featherRadiusFraction: CGFloat = 0.01
+    /// フェザリング前にマスクを膨張させる半径 = 画像長辺 × この係数。
+    ///
+    /// なぜ膨張させるか: フェザリング（ガウシアンブラー）は境界付近の画素を「元の空の色」と
+    /// 「新しい空の色」でなじませるが、その混ざり具合が境界のすぐ外側に元の空の色を薄く
+    /// 残してしまい、青い縁（ハロー）として見えてしまう。フェザリングの前にマスクを外側へ
+    /// 少し広げておくことで、その境界付近を新しい空で塗り潰し、ハローの元になる元の空の色を
+    /// 覆い隠す。0 で無効。
+    var maskDilationFraction: CGFloat = 0.0075
     /// 新しい空の明るさを元写真の空に寄せる簡易トーンマッチを行うか。
     ///
     /// なぜ必要か: 例えば「昼の写真」に「真っ赤な夕焼け空」を単純に貼り合わせると、
@@ -57,7 +65,7 @@ enum SkyReplacementError: Error {
 /// 3. 空被覆率が低すぎる場合はガードして throw（誤爆防止）
 /// 4. 新しい空を元写真の extent へ aspect-fill
 /// 5.（任意）新しい空の明るさを元写真の空領域に寄せる簡易トーンマッチ
-/// 6. マスクをフェザリング（境界のなじみ）
+/// 6. マスクを膨張（6a. ハロー対策で境界を外側へ広げる）→ フェザリング（6b. 境界のなじみ）
 /// 7. `CIBlendWithMask` でマスク合成
 /// 8. レンダリングして `.up` 焼き込み済み UIImage を返す
 ///
@@ -161,10 +169,14 @@ final class SkyReplacementCompositor {
             fittedSky = try toneMatched(fittedSky, toForegroundOf: photoCI, mask: skyMask.mask)
         }
 
-        // 手順6: マスクのフェザリング（境界のなじみ）
+        // 手順6a: マスクの膨張（ハロー対策。境界付近に残る元の空の色を新しい空で覆い隠す）
         let longSide = max(photoCI.extent.width, photoCI.extent.height)
+        let dilationRadius = longSide * options.maskDilationFraction
+        let dilatedMask = dilate(skyMask.mask, radius: dilationRadius, extent: photoCI.extent)
+
+        // 手順6b: マスクのフェザリング（境界のなじみ）
         let featherRadius = max(1.0, longSide * options.featherRadiusFraction)
-        let featheredMask = feather(skyMask.mask, radius: featherRadius, extent: photoCI.extent)
+        let featheredMask = feather(dilatedMask, radius: featherRadius, extent: photoCI.extent)
 
         // 手順7: マスク合成
         // CIBlendWithMask は「マスクが白(1.0)の画素は inputImage、黒(0.0)の画素は backgroundImage が出る」
@@ -322,7 +334,29 @@ final class SkyReplacementCompositor {
         return (Double(pixel[0]) / 255.0, Double(pixel[1]) / 255.0, Double(pixel[2]) / 255.0)
     }
 
-    // MARK: - Private: フェザリング（手順6）
+    // MARK: - Private: マスクの膨張（手順6a）
+
+    /// マスクを `CIMorphologyMaximum`（円形膨張）で外側へ広げる。
+    ///
+    /// なぜ膨張させるか: `SkyReplacementOptions.maskDilationFraction` のコメント参照。
+    /// フェザリングだけでは境界のすぐ外側に元の空の色が薄く残り、青い縁（ハロー）として
+    /// 見えてしまう。フェザリングの前にマスクの白領域（空）を radius 分だけ外側へ広げ、
+    /// その分だけ新しい空で塗り潰すことでハローの元を覆い隠す。
+    ///
+    /// - Parameters:
+    ///   - mask: 膨張対象のマスク（1.0=空、0.0=非空）
+    ///   - radius: 膨張半径（px）。0.5 未満なら膨張をスキップし mask をそのまま返す。
+    ///   - extent: クロップ先の矩形（入力画像の extent）
+    private func dilate(_ mask: CIImage, radius: CGFloat, extent: CGRect) -> CIImage {
+        guard radius >= 0.5 else { return mask }
+
+        let morphology = CIFilter.morphologyMaximum()
+        morphology.inputImage = mask
+        morphology.radius = Float(radius)
+        return morphology.outputImage?.clampedToExtent().cropped(to: extent) ?? mask
+    }
+
+    // MARK: - Private: フェザリング（手順6b）
 
     /// マスクをガウシアンブラーで境界ぼかしする。
     ///

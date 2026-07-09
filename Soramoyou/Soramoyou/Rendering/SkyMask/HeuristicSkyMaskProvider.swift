@@ -64,10 +64,14 @@ final class HeuristicSkyMaskProvider: SkyMaskProviding {
     /// 非空判定のスコア
     private static let nonSkyScore: Double = 0.0
 
-    /// 縦位置の事前確率: この yNorm 以下は「確実に空」として prior=1.0
-    private static let positionPriorFadeStart: Double = 0.40
-    /// 縦位置の事前確率: この yNorm 以上は「確実に非空」として prior=0.0
-    private static let positionPriorFadeEnd: Double = 0.85
+    /// 地平線検出: 画素を「空色」とカウントする colorScore の下限
+    private static let horizonScoreThreshold: Double = 0.5
+    /// 地平線検出: 行を「まだ空」とみなすための空色画素率の下限
+    private static let horizonRowSkyFractionThreshold: Double = 0.30
+    /// 地平線より下へのフェード幅（yNorm 比）。境界を滑らかに落とすため
+    private static let horizonFadeBand: Double = 0.08
+    /// 1行も空色が無い場合の保険の地平線位置（旧 fadeStart と同じ 0.40）
+    private static let fallbackHorizonNorm: Double = 0.40
 
     /// エッジ整形: ガウシアンブラー半径
     private static let edgeBlurRadius: Float = 2.0
@@ -112,16 +116,10 @@ final class HeuristicSkyMaskProvider: SkyMaskProviding {
         // 手順c: 縮小して RGBA8 画素を読む
         let pixels = try readRGBA8Pixels(image: image, gridW: gridW, gridH: gridH)
 
-        // 手順d, e: 画素ごとの空らしさスコア算出＋統計値集計
-        var scoreGrid = [Double](repeating: 0, count: gridW * gridH)
-        var scoreSum: Double = 0
-        var confidentPixelCount = 0
-
+        // 手順d（1パス目）: 画素ごとの色スコアのみを算出する（縦位置の事前確率はまだ掛けない）。
+        // 地平線検出（次段）は写真ごとの実際の色分布に基づくため、先に色スコア全体が必要。
+        var colorScoreGrid = [Double](repeating: 0, count: gridW * gridH)
         for row in 0..<gridH {
-            // メモリ行0=画像の上端（手順c参照）。yNorm は上からの正規化位置。
-            let yNorm = gridH > 1 ? Double(row) / Double(gridH - 1) : 0.0
-            let positionPrior = self.positionPrior(yNorm: yNorm)
-
             for col in 0..<gridW {
                 let pixelIndex = (row * gridW + col) * 4
                 let r = Double(pixels[pixelIndex])     / 255.0
@@ -129,10 +127,28 @@ final class HeuristicSkyMaskProvider: SkyMaskProviding {
                 let b = Double(pixels[pixelIndex + 2]) / 255.0
 
                 let hsv = Self.rgbToHSV(r: r, g: g, b: b)
-                let colorScoreValue = self.colorScore(hue: hsv.h, saturation: hsv.s, value: hsv.v)
-                let score = colorScoreValue * positionPrior
+                colorScoreGrid[row * gridW + col] = self.colorScore(hue: hsv.h, saturation: hsv.s, value: hsv.v)
+            }
+        }
 
-                scoreGrid[row * gridW + col] = score
+        // 手順d'（地平線検出）: 上から連続で「まだ空」とみなせる行を歩き、地平線位置を求める。
+        let horizonNorm = detectHorizonNorm(colorScoreGrid: colorScoreGrid, gridW: gridW, gridH: gridH)
+
+        // 手順e（2パス目）: 縦位置の事前確率（地平線基準）を掛けてスコア確定＋統計値集計
+        var scoreGrid = [Double](repeating: 0, count: gridW * gridH)
+        var scoreSum: Double = 0
+        var confidentPixelCount = 0
+
+        for row in 0..<gridH {
+            // メモリ行0=画像の上端（手順c参照）。yNorm は上からの正規化位置。
+            let yNorm = gridH > 1 ? Double(row) / Double(gridH - 1) : 0.0
+            let positionPrior = self.positionPrior(yNorm: yNorm, horizonNorm: horizonNorm)
+
+            for col in 0..<gridW {
+                let index = row * gridW + col
+                let score = colorScoreGrid[index] * positionPrior
+
+                scoreGrid[index] = score
                 scoreSum += score
 
                 if score <= Self.confidenceLowThreshold || score >= Self.confidenceHighThreshold {
@@ -274,17 +290,59 @@ final class HeuristicSkyMaskProvider: SkyMaskProviding {
         return Self.nonSkyScore
     }
 
-    /// 縦位置の事前確率（上ほど空らしい）
-    /// - Parameter yNorm: 上からの正規化位置 0...1（0=画像の上端、1=画像の下端）
-    private func positionPrior(yNorm: Double) -> Double {
-        if yNorm <= Self.positionPriorFadeStart {
+    /// 地平線検出: 各行の空色画素率を上から連続で歩き、地平線の位置（yNorm）を求める。
+    ///
+    /// なぜ写真ごとに検出するか: 「上から40%」固定の事前確率だと、山際まで空が写る実写
+    /// （地平線が画像の下の方にある構図）では、本来空である下半分のスコアが固定 prior に
+    /// 押し下げられて薄れてしまい、差し替え結果が中途半端な帯になる。写真ごとに地平線の
+    /// 行を検出し、その位置を基準にフェードさせることでこれを避ける。
+    ///
+    /// なぜ「連続条件」で歩くか: 「下の方にある青い池」等を地平線越しに空と誤認しないため。
+    /// 途中に雲や木の枝の行が混ざっても skyFraction が閾値を割らない限り歩行は続く（＝
+    /// 一時的に空色画素が減っても地平線とはみなさない）。
+    ///
+    /// - Parameters:
+    ///   - colorScoreGrid: 手順d（1パス目）で算出した画素ごとの色スコア（縦位置の事前確率は未適用）
+    ///   - gridW: 解析グリッドの幅
+    ///   - gridH: 解析グリッドの高さ
+    /// - Returns: 地平線位置（yNorm 座標）。1行も空色が無ければ `fallbackHorizonNorm`。
+    private func detectHorizonNorm(colorScoreGrid: [Double], gridW: Int, gridH: Int) -> Double {
+        guard gridW > 0, gridH > 0 else { return Self.fallbackHorizonNorm }
+
+        var horizonRow: Int?
+        var row = 0
+        while row < gridH {
+            var skyPixelCount = 0
+            let rowStart = row * gridW
+            for col in 0..<gridW {
+                if colorScoreGrid[rowStart + col] >= Self.horizonScoreThreshold {
+                    skyPixelCount += 1
+                }
+            }
+            let skyFraction = Double(skyPixelCount) / Double(gridW)
+            guard skyFraction >= Self.horizonRowSkyFractionThreshold else { break }
+            horizonRow = row
+            row += 1
+        }
+
+        guard let lastSkyRow = horizonRow else { return Self.fallbackHorizonNorm }
+        return Double(lastSkyRow) / Double(max(gridH - 1, 1))
+    }
+
+    /// 縦位置の事前確率（地平線より上は空、地平線から `horizonFadeBand` 分だけ下向きにフェード）
+    /// - Parameters:
+    ///   - yNorm: 上からの正規化位置 0...1（0=画像の上端、1=画像の下端）
+    ///   - horizonNorm: `detectHorizonNorm` で求めた地平線位置（yNorm 座標）
+    private func positionPrior(yNorm: Double, horizonNorm: Double) -> Double {
+        if yNorm <= horizonNorm {
             return 1.0
         }
-        if yNorm >= Self.positionPriorFadeEnd {
+        let fadeEnd = horizonNorm + Self.horizonFadeBand
+        if yNorm >= fadeEnd {
             return 0.0
         }
-        // fadeStart〜fadeEnd の間は 1.0 から 0.0 へ線形減衰
-        let t = (yNorm - Self.positionPriorFadeStart) / (Self.positionPriorFadeEnd - Self.positionPriorFadeStart)
+        // horizonNorm〜fadeEnd の間は 1.0 から 0.0 へ線形減衰
+        let t = (yNorm - horizonNorm) / Self.horizonFadeBand
         return 1.0 - t
     }
 

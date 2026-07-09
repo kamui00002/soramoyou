@@ -165,6 +165,24 @@ final class SkyMaskProviderTests: XCTestCase {
         }
     }
 
+    /// 空が画像の70%まで広がる場合、適応地平線により下端付近まで高いマスク値になる
+    /// （旧固定priorでは coverage ≈ 0.60 で頭打ちだったのが、適応式では ≈ 0.72 になる）
+    func test_adaptiveHorizon_coversDeepSky() async throws {
+        let topColor = UIColor(red: 0.35, green: 0.55, blue: 0.90, alpha: 1)
+        let bottomColor = UIColor(red: 0.45, green: 0.35, blue: 0.25, alpha: 1)
+        let input = makeTwoBandImage(top: topColor, bottom: bottomColor, topFraction: 0.70)
+        let extent = input.extent
+        let provider = HeuristicSkyMaskProvider()
+
+        let result = try await provider.makeSkyMask(for: input, quality: .export)
+
+        let bottomBand = CGRect(x: 0, y: 0, width: extent.width, height: extent.height * 0.15)
+        let bottomAvg = averageMaskValue(result.mask, in: bottomBand)
+
+        XCTAssertGreaterThan(result.skyCoverage, 0.65, "適応地平線で skyCoverage が想定より低い: \(result.skyCoverage)")
+        XCTAssertLessThan(bottomAvg, 0.15, "地面バンドのマスク平均が高すぎる: \(bottomAvg)")
+    }
+
     /// confidence は常に 0...1 の範囲に収まる
     func test_confidenceIsInUnitRange() async throws {
         let topColor = UIColor(red: 0.35, green: 0.55, blue: 0.90, alpha: 1)
