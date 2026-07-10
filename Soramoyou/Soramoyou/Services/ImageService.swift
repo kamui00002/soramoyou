@@ -240,7 +240,7 @@ final class ImageService: ImageServiceProtocol {
 
     /// 低解像度 CIImage + EditRecipe から同期的にプレビュー生成（リアルタイム用）
     func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage? {
-        let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage)
+        let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage, quality: .interactive)
         // colorSpace を明示して Display P3 タグを確実に付与する（省略すると iOS 差異で色がくすむ恐れ）
         guard let cgImage = context.createCGImage(
             result,

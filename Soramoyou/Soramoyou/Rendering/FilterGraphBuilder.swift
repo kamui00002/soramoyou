@@ -9,6 +9,19 @@
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
+/// レンダリング品質モード。
+///
+/// - `interactive`: スライダードラッグ中の 30〜60fps 追従用（軽いトーンカーブ近似を使う）
+/// - `final`: 確定後プレビュー・書き出し用（`CIHighlightShadowAdjust` による局所適応フィルタを使う）
+///
+/// ハイライト/シャドウ・ブリリアンスは Apple 純正「写真」アプリのような局所適応処理が
+/// 望ましい一方、`CIHighlightShadowAdjust` はマルチスケール解析で GPU 負荷が高く
+/// ドラッグ中の追従性を損なうため、二段構えで使い分ける（詳細は各 apply*Local 関数を参照）。
+enum RenderQuality {
+    case interactive
+    case final
+}
+
 /// EditRecipe を受け取り、CIImage フィルターグラフを構築するクラス
 ///
 /// 設計ポイント:
@@ -30,8 +43,10 @@ final class FilterGraphBuilder {
     /// - Parameters:
     ///   - recipe: 編集レシピ（不変）
     ///   - source: 入力画像（CIImage）
+    ///   - quality: レンダリング品質モード（既定 `.final`）。リアルタイムドラッグ経路
+    ///     （`ImageService.generatePreviewFromCIImage`）のみ `.interactive` を渡す。
     /// - Returns: フィルター適用済みの CIImage グラフ
-    static func buildGraph(recipe: EditRecipe, source: CIImage) -> CIImage {
+    static func buildGraph(recipe: EditRecipe, source: CIImage, quality: RenderQuality = .final) -> CIImage {
         var img = source
 
         // 1. フィルターを適用（プリセットエフェクト）
@@ -75,22 +90,38 @@ final class FilterGraphBuilder {
         }
 
         // 5. ブリリアンス（複合処理）
+        //    interactive = 軽量トーンカーブ近似 / final = 局所適応フィルタ（詳細は各関数参照）
         if let v = recipe.brillianceNorm, v != 0 {
-            img = applyBrilliance(normalized: v, to: img)
+            switch quality {
+            case .interactive:
+                img = applyBrilliance(normalized: v, to: img)
+            case .final:
+                img = applyBrillianceLocal(normalized: v, to: img)
+            }
         }
 
         // 6. ハイライト・シャドウ
         //    Recipe 側は物理スケール (0..2, 中立 1.0) で保持するが、
         //    フィルター側は正規化 (-1..+1) で扱う方が実装が単純なため
         //    ここで `-1.0` を減算して正規化に揃える（M-3: 往復を排除）。
+        //    interactive = 軽量トーンカーブ近似 / final = 局所適応フィルタ（詳細は各関数参照）
         let hlNorm = recipe.highlights   - 1.0
         let shNorm = recipe.shadowAmount - 1.0
         if abs(hlNorm) > 0.001 || abs(shNorm) > 0.001 {
-            img = applyHighlightShadow(
-                highlightsNorm: hlNorm,
-                shadowsNorm:    shNorm,
-                to: img
-            )
+            switch quality {
+            case .interactive:
+                img = applyHighlightShadow(
+                    highlightsNorm: hlNorm,
+                    shadowsNorm:    shNorm,
+                    to: img
+                )
+            case .final:
+                img = applyHighlightShadowLocal(
+                    highlights:    hlNorm,
+                    shadowAmount:  shNorm,
+                    to: img
+                )
+            }
         }
 
         // 7. ブラックポイント
@@ -380,6 +411,44 @@ final class FilterGraphBuilder {
         return cc.outputImage ?? step1
     }
 
+    // ── ブリリアンス（確定後・書き出し用: 局所適応版）──
+    /// P1: iPhone 標準「写真」アプリへの接近対応。
+    ///
+    /// Apple 公式の定性説明「暗部を明るくし、ハイライトを引き込み、コントラストを追加して
+    /// 隠れたディテールを出す」に沿って、`CIHighlightShadowAdjust`（局所適応トーン制御）と
+    /// `CIColorControls`（微コントラスト）で再構成する。上の `applyBrilliance`（ドラッグ中用の
+    /// 軽量近似）とは別経路とし、確定後プレビュー・書き出し時のみこちらを使う
+    /// （`RenderQuality` 参照）。
+    ///
+    /// - `shadowAmount = v * brillianceShadowScale`: 正で暗部を持ち上げ、負で締める
+    ///   （v < 0 のときは自然に「シャドウを下げる」逆方向として機能する）
+    /// - `highlightAmount = 1.0 - v(>0) * brillianceHighlightScale`: 正の v のときのみ
+    ///   ハイライトを引き込む（`CIHighlightShadowAdjust.highlightAmount` は 1.0 が中立で
+    ///   明るくする方向の値を持たないため、負の v では中立のまま据え置く）
+    /// - `contrast = 1.0 + v * brillianceContrastScale`: 隠れたディテールを出すための微増減
+    private static func applyBrillianceLocal(normalized v: Double, to image: CIImage) -> CIImage {
+        guard abs(v) > 0.01 else { return image }
+
+        let hs = CIFilter.highlightShadowAdjust()
+        hs.inputImage      = image
+        hs.shadowAmount     = Float(v * brillianceShadowScale)
+        hs.highlightAmount  = Float(1.0 - brillianceHighlightScale * max(v, 0))
+        hs.radius           = Float(localToneRadius(for: image))
+        guard let step1 = hs.outputImage else { return image }
+
+        let cc = CIFilter.colorControls()
+        cc.inputImage = step1
+        cc.contrast   = Float(1.0 + v * brillianceContrastScale)
+        return cc.outputImage ?? step1
+    }
+
+    /// ブリリアンス局所版のシャドウ係数
+    private static let brillianceShadowScale: Double = 0.6
+    /// ブリリアンス局所版のハイライト係数（v > 0 のみ適用）
+    private static let brillianceHighlightScale: Double = 0.35
+    /// ブリリアンス局所版のコントラスト係数
+    private static let brillianceContrastScale: Double = 0.08
+
     // ── 2D スタイルパッド（iPhone「写真スタイル」風の複合ツール）──
     /// 1 つの 2D 入力 (toneNorm, colorNorm) で「トーン」と「カラー」を同時に変化させる複合フィルタ。
     ///
@@ -498,6 +567,70 @@ final class FilterGraphBuilder {
         curves.point4 = CGPoint(x: 1.0,  y: y4)
         return curves.outputImage ?? image
     }
+
+    // ── ハイライト・シャドウ（確定後・書き出し用: 局所適応版）──
+    /// P1: iPhone 標準「写真」アプリへの接近対応。
+    ///
+    /// なぜ二段構えか:
+    /// - 上の `applyHighlightShadow`（トーンカーブ近似）は 1D LUT 相当の軽量処理で
+    ///   全画面一律にしか効かず、60fps のドラッグ追従には向く一方、Apple 純正「写真」
+    ///   アプリの局所適応的なハイライト/シャドウ制御とは見た目が異なる。
+    /// - `CIHighlightShadowAdjust` はマルチスケール解析による局所適応フィルタで、
+    ///   エッジ周辺のディテールを保ちながらトーンを持ち上げ/下げるため純正アプリの
+    ///   見た目に近い。ただし GPU 負荷が高くドラッグ中には使わない
+    ///   （`RenderQuality.interactive` では上の近似版を使い続ける）。
+    ///
+    /// `radius` は局所適応の処理範囲（`localToneRadius(for:)` で画像サイズに応じて決定）。
+    ///
+    /// 正のハイライト（明部を明るくする）は `CIHighlightShadowAdjust.highlightAmount`
+    /// の定義域（0.0...1.0、ニュートラルは 1.0）では表現できない（明るくする方向の値が
+    /// 存在しない）ため、既存のトーンカーブ近似 `applyHighlightShadow` のハイライト側
+    /// のみを追加適用して補う。
+    private static func applyHighlightShadowLocal(
+        highlights vHighlight: Double,
+        shadowAmount vShadow: Double,
+        to image: CIImage
+    ) -> CIImage {
+        // どちらも中立なら処理スキップ
+        guard abs(vHighlight) > 0.01 || abs(vShadow) > 0.01 else { return image }
+
+        let hs = CIFilter.highlightShadowAdjust()
+        hs.inputImage = image
+        // shadowAmount: -1...1 をそのまま渡す（正=暗部持ち上げ / 負=締める）
+        hs.shadowAmount = Float(vShadow)
+        // highlightAmount: 負のハイライトのみこのフィルタで回復（0.3...1.0）。
+        // 正のハイライトはこのフィルタでは表現できないため中立 1.0 のまま据え置く。
+        hs.highlightAmount = Float(vHighlight < 0 ? 1.0 + vHighlight * localHighlightRecoveryScale : 1.0)
+        hs.radius = Float(localToneRadius(for: image))
+        var result = hs.outputImage ?? image
+
+        // 正のハイライトは CIHighlightShadowAdjust で表現できないため、
+        // トーンカーブ近似のハイライト側だけを追加適用する（シャドウは中立 0 で渡す）。
+        if vHighlight > 0 {
+            result = applyHighlightShadow(highlightsNorm: vHighlight, shadowsNorm: 0, to: result)
+        }
+
+        return result
+    }
+
+    /// 負のハイライトを `CIHighlightShadowAdjust.highlightAmount` で回復する強さの係数
+    private static let localHighlightRecoveryScale: Double = 0.7
+
+    /// `CIHighlightShadowAdjust` の局所適応処理半径を画像サイズから決定する。
+    /// 短辺の 1% を基準にしつつ、極端な小画像・大画像でも破綻しないよう
+    /// `localToneRadiusMin`...`localToneRadiusMax` にクランプする。
+    private static func localToneRadius(for image: CIImage) -> CGFloat {
+        let extent = image.extent
+        let base = min(extent.width, extent.height) * localToneRadiusScale
+        return max(localToneRadiusMin, min(localToneRadiusMax, base))
+    }
+
+    /// 局所適応半径の基準スケール（画像短辺に対する比率）
+    private static let localToneRadiusScale: CGFloat = 0.01
+    /// 局所適応半径の下限
+    private static let localToneRadiusMin: CGFloat = 2.0
+    /// 局所適応半径の上限
+    private static let localToneRadiusMax: CGFloat = 25.0
 
     // ── ブラックポイント ──
     private static func applyBlackPoint(bias: Double, to image: CIImage) -> CIImage {
