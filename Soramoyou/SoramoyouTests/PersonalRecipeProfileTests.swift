@@ -108,4 +108,60 @@ final class PersonalRecipeProfileTests: XCTestCase {
         )
         XCTAssertEqual(result.appliedFilter, .vivid, "最頻フィルタが選ばれる")
     }
+
+    // MARK: - dominantFilter の同率タイブレーク（PR #60 /review-full T1 対応）
+    //
+    // dominantFilter は「重み付き合計が完全に同率のとき、より新しいエントリを含む方を優先する」
+    // というタイブレークを持つ。この分岐（totals の value が完全一致するケース）を実際に踏ませる
+    // 入力を構成できるか検討した:
+    //
+    // 数学的な結論: recencyDecay = 0.8 = 4/5（既約分数）である限り、互いに素な添字集合
+    // （投稿の並び順で決まる 0,1,2,... の重複しない部分集合）が持つ重み 0.8^i の総和が
+    // 完全に一致することはあり得ない。
+    // 証明: 互いに素な非空の添字集合 A, B（A ≠ B）が Σ_{i∈A} 0.8^i = Σ_{i∈B} 0.8^i を満たすと仮定し、
+    // M = max(A ∪ B) とする（M は A, B のどちらか一方だけに属する）。両辺を 5^M 倍すると
+    // Σ_{i∈A} 4^i 5^{M-i} = Σ_{i∈B} 4^i 5^{M-i} という整数の等式になる。添字 i < M の項は
+    // すべて 5^{M-i}（M-i ≥ 1）を因数に持つため 5 の倍数だが、添字 M の項（4^M）は
+    // gcd(4,5)=1 より 5 の倍数ではない。よって mod 5 で左右辺のいずれか一方だけが
+    // 4^M ≡ {1,4}（≠0）を持ち他方は 0 となり矛盾。ゆえに完全一致は不可能。
+    // （念のため、部分和が最大 2^22（約419万）通りとなる範囲を Double 演算で総当たりし、
+    // 浮動小数の丸めによる偶発的な bit 一致も皆無であることを別途確認済み。）
+    //
+    // そのため「Σ完全一致」でタイブレーク分岐を直接踏ませるテストは構成不可能と判断し、
+    // savedAt が完全同一という境界ケース（安定ソートで元の配列順が結果を左右する）で
+    // representative() の結果が呼び出しのたびに変わらない（決定的である）ことの検証に留める。
+    func test_dominantFilter_tieBySavedAt_isDeterministic() throws {
+        let tiedSavedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        func makeEntries() -> [RecipeCorpusEntry] {
+            var vividRecipe = EditRecipe()
+            vividRecipe.appliedFilter = .vivid
+            var dramaRecipe = EditRecipe()
+            dramaRecipe.appliedFilter = .drama
+            var fillerRecipe = EditRecipe()
+            fillerRecipe.appliedFilter = .natural
+            return [
+                // savedAt が完全同一の2件（同率境界ケース）。安定ソートで配列順が保たれる。
+                RecipeCorpusEntry(recipe: vividRecipe, skyType: nil, savedAt: tiedSavedAt),
+                RecipeCorpusEntry(recipe: dramaRecipe, skyType: nil, savedAt: tiedSavedAt),
+                // minimumSamples を満たすための埋め合わせ（より古い＝重みが最小）
+                RecipeCorpusEntry(recipe: fillerRecipe, skyType: nil, savedAt: tiedSavedAt.addingTimeInterval(-3600))
+            ]
+        }
+
+        let first = try XCTUnwrap(
+            PersonalRecipeProfile.representative(for: nil, from: makeEntries(), minimumSamples: 3)
+        ).appliedFilter
+
+        for _ in 0..<20 {
+            let result = try XCTUnwrap(
+                PersonalRecipeProfile.representative(for: nil, from: makeEntries(), minimumSamples: 3)
+            )
+            XCTAssertEqual(
+                result.appliedFilter,
+                first,
+                "savedAt が完全同一という境界ケースでも、呼び出しのたびに結果が変わってはならない（決定性）"
+            )
+        }
+    }
 }

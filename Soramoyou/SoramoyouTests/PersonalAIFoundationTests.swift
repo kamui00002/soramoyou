@@ -258,8 +258,11 @@ final class PersonalAIFoundationTests: XCTestCase {
     }
 
     func test_representative_recencyWeighting_favorsRecent() throws {
-        // 古い5件は exposureEV=0.0、最新1件だけ exposureEV=1.0。
-        // 等重み平均なら 1/6 ≈ 0.167 だが、新しさで重み付けすると最新1件が強く効き 0.25 を明確に超える。
+        // 古い5件は exposureEV=0.0、最新1件だけ exposureEV=1.0、decay=0.8。
+        // 重み(0.8^i, i=新しい順の順位0〜5): 最新1.0, 以降 0.8,0.64,0.512,0.4096,0.32768（古い5件がこの並び）。
+        // exposureEV = (1.0*1.0 + 0.0*(0.8+0.64+0.512+0.4096+0.32768)) / Σ(0.8^k, k=0..5)
+        //            = 1.0 / 3.68928 = 3125/11529 ≈ 0.27105559892445136
+        // 減衰係数の変質（例: 0.75 に変わる等）を確実に検出するため、閾値比較でなく理論値の厳密一致で検証する。
         let entries = [
             personalRecipeEntry(exposure: 1.0, minutesAgo: 0),
             personalRecipeEntry(exposure: 0.0, minutesAgo: 10),
@@ -271,6 +274,6 @@ final class PersonalAIFoundationTests: XCTestCase {
         let result = try XCTUnwrap(
             PersonalRecipeProfile.representative(for: nil, from: entries, minimumSamples: 3)
         )
-        XCTAssertGreaterThan(result.exposureEV, 0.25, "直近の編集が定番へ強く反映される（欠陥3の修正）")
+        XCTAssertEqual(result.exposureEV, 0.27105559892445136, accuracy: 0.0001, "直近の編集が定番へ強く反映される（欠陥3の修正・decay=0.8の理論値で厳密検証）")
     }
 }
