@@ -167,4 +167,110 @@ final class PersonalAIFoundationTests: XCTestCase {
         store.clear(userId: "u1")
         XCTAssertEqual(store.entries(userId: "u1").count, 0)
     }
+
+    // MARK: - PersonalRecipeProfile.representative()（欠陥修正の回帰テスト）
+    //
+    // 実バグ（使ったことのないドラマフィルターが提案される・直近の編集が反映されない）の
+    // 確定原因3件の修正を検証する:
+    // 1. mostCommonFilter が compactMap で「フィルターなし」の多数派票を捨てていた
+    // 2. averageOptional が「一度でも使った項目」を常に提案してしまっていた
+    // 3. savedAt を使った新しさによる重み付けが未実装だった
+
+    /// representative() 検証用エントリ生成。`minutesAgo` が小さいほど新しい（savedAt が現在に近い）。
+    private func personalRecipeEntry(
+        exposure: Double = 0,
+        filter: FilterType? = nil,
+        vignette: Double? = nil,
+        sharpness: Double? = nil,
+        sky: SkyType? = nil,
+        minutesAgo: Double
+    ) -> RecipeCorpusEntry {
+        var r = EditRecipe()
+        r.exposureEV = exposure
+        r.appliedFilter = filter
+        r.vignetteNorm = vignette
+        r.sharpnessNorm = sharpness
+        let savedAt = Date(timeIntervalSince1970: 1_700_000_000).addingTimeInterval(-minutesAgo * 60)
+        return RecipeCorpusEntry(recipe: r, skyType: sky, savedAt: savedAt)
+    }
+
+    func test_representative_majorityNoFilter_returnsNilFilter() throws {
+        // バグ再現: 5件中4件は最近フィルターなしで編集、1件だけ100分前に .drama を使った。
+        // 旧実装は appliedFilter を compactMap してから最頻値を取るため「なし」票が消え、
+        // 1件しかない .drama が最頻扱いになっていた。
+        let entries = [
+            personalRecipeEntry(filter: .drama, minutesAgo: 100),
+            personalRecipeEntry(filter: nil, minutesAgo: 30),
+            personalRecipeEntry(filter: nil, minutesAgo: 20),
+            personalRecipeEntry(filter: nil, minutesAgo: 10),
+            personalRecipeEntry(filter: nil, minutesAgo: 0)
+        ]
+        let result = try XCTUnwrap(
+            PersonalRecipeProfile.representative(for: nil, from: entries, minimumSamples: 3)
+        )
+        XCTAssertNil(result.appliedFilter, "多数派の『フィルターなし』が定番として選ばれるべき（compactMap投票バグの再現テスト）")
+    }
+
+    func test_representative_majorityFilter_wins() throws {
+        // 5件中3件（かつより新しい）が .natural、2件（より古い）がフィルターなし → .natural が定番。
+        let entries = [
+            personalRecipeEntry(filter: .natural, minutesAgo: 20),
+            personalRecipeEntry(filter: .natural, minutesAgo: 10),
+            personalRecipeEntry(filter: .natural, minutesAgo: 0),
+            personalRecipeEntry(filter: nil, minutesAgo: 40),
+            personalRecipeEntry(filter: nil, minutesAgo: 30)
+        ]
+        let result = try XCTUnwrap(
+            PersonalRecipeProfile.representative(for: nil, from: entries, minimumSamples: 3)
+        )
+        XCTAssertEqual(result.appliedFilter, .natural, "多数派のフィルターが定番として選ばれる")
+    }
+
+    func test_representative_rarelyUsedOptional_notAdopted() throws {
+        // 5件中1件だけ vignetteNorm を設定 → 重み付き使用率が閾値(50%)を超えないため nil のまま。
+        let entries = [
+            personalRecipeEntry(vignette: 0.8, minutesAgo: 0),
+            personalRecipeEntry(minutesAgo: 10),
+            personalRecipeEntry(minutesAgo: 20),
+            personalRecipeEntry(minutesAgo: 30),
+            personalRecipeEntry(minutesAgo: 40)
+        ]
+        let result = try XCTUnwrap(
+            PersonalRecipeProfile.representative(for: nil, from: entries, minimumSamples: 3)
+        )
+        XCTAssertNil(result.vignetteNorm, "一度だけ使った項目は使用率不足のため提案しない（欠陥2の再現テスト）")
+    }
+
+    func test_representative_frequentOptional_adopted() throws {
+        // 5件中4件（新しい順）で sharpnessNorm を設定 → 重み付き使用率が閾値を超え採用される。
+        let entries = [
+            personalRecipeEntry(sharpness: 0.2, minutesAgo: 0),
+            personalRecipeEntry(sharpness: 0.4, minutesAgo: 10),
+            personalRecipeEntry(sharpness: 0.6, minutesAgo: 20),
+            personalRecipeEntry(sharpness: 0.8, minutesAgo: 30),
+            personalRecipeEntry(minutesAgo: 40)
+        ]
+        let result = try XCTUnwrap(
+            PersonalRecipeProfile.representative(for: nil, from: entries, minimumSamples: 3)
+        )
+        // 使用率 ≈ 87.8%（重み付き）> 50% → 採用。値は savedAt の重み付き平均 ≈ 0.445。
+        XCTAssertEqual(try XCTUnwrap(result.sharpnessNorm), 0.4449864498644987, accuracy: 0.0001)
+    }
+
+    func test_representative_recencyWeighting_favorsRecent() throws {
+        // 古い5件は exposureEV=0.0、最新1件だけ exposureEV=1.0。
+        // 等重み平均なら 1/6 ≈ 0.167 だが、新しさで重み付けすると最新1件が強く効き 0.25 を明確に超える。
+        let entries = [
+            personalRecipeEntry(exposure: 1.0, minutesAgo: 0),
+            personalRecipeEntry(exposure: 0.0, minutesAgo: 10),
+            personalRecipeEntry(exposure: 0.0, minutesAgo: 20),
+            personalRecipeEntry(exposure: 0.0, minutesAgo: 30),
+            personalRecipeEntry(exposure: 0.0, minutesAgo: 40),
+            personalRecipeEntry(exposure: 0.0, minutesAgo: 50)
+        ]
+        let result = try XCTUnwrap(
+            PersonalRecipeProfile.representative(for: nil, from: entries, minimumSamples: 3)
+        )
+        XCTAssertGreaterThan(result.exposureEV, 0.25, "直近の編集が定番へ強く反映される（欠陥3の修正）")
+    }
 }
