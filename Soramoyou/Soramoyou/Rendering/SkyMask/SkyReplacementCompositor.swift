@@ -61,7 +61,7 @@ enum SkyReplacementError: Error {
 ///
 /// 処理の流れ（`replaceSky` 内のコメントの手順番号と対応）:
 /// 1. 向き正規化（EXIF orientation をピクセルへ焼き込む）
-/// 2. `SkyMaskProviding` で空マスクを生成
+/// 2. `SkyMaskProviderProtocol` で空マスクを生成
 /// 3. 空被覆率が低すぎる場合はガードして throw（誤爆防止）
 /// 4. 新しい空を元写真の extent へ aspect-fill
 /// 5.（任意）新しい空の明るさを元写真の空領域に寄せる簡易トーンマッチ
@@ -69,7 +69,7 @@ enum SkyReplacementError: Error {
 /// 7. `CIBlendWithMask` でマスク合成
 /// 8. レンダリングして `.up` 焼き込み済み UIImage を返す
 ///
-/// なぜ `SkyMaskProviding` を注入式にするか: v1 はヒューリスティック実装（`HeuristicSkyMaskProvider`）だが、
+/// なぜ `SkyMaskProviderProtocol` を注入式にするか: v1 はヒューリスティック実装（`HeuristicSkyMaskProvider`）だが、
 /// 将来 CoreML ベースのセグメンテーションへ差し替える可能性があるため、この合成器はマスクの
 /// 生成方法を意識しない。
 final class SkyReplacementCompositor {
@@ -79,7 +79,7 @@ final class SkyReplacementCompositor {
     /// 画素読み出し・最終レンダリングに使う CIContext（テスト時は差し替え可能にするため注入式）
     private let ciContext: CIContext
     /// 空マスク生成の実装（差し替え可能）
-    private let maskProvider: SkyMaskProviding
+    private let maskProvider: SkyMaskProviderProtocol
 
     // MARK: - 定数（マジックナンバー回避）
 
@@ -116,7 +116,7 @@ final class SkyReplacementCompositor {
     ///   - maskProvider: 空マスク生成の実装。
     init(
         ciContext: CIContext = CIContextPool.shared.ciContext,
-        maskProvider: SkyMaskProviding = HeuristicSkyMaskProvider()
+        maskProvider: SkyMaskProviderProtocol = HeuristicSkyMaskProvider()
     ) {
         self.ciContext = ciContext
         self.maskProvider = maskProvider
@@ -125,6 +125,9 @@ final class SkyReplacementCompositor {
     // MARK: - Public
 
     /// 元写真の空領域を newSky の画像で差し替える。
+    ///
+    /// - Note: 重い処理本体は内部で `Task.detached` にオフロードするため、
+    ///   MainActor から `await` してもメインスレッド・UI をブロックしない。
     /// - Parameters:
     ///   - photo: 元写真（差し替え対象）
     ///   - newSky: 新しい空の画像（元写真の extent へ aspect-fill される）
@@ -134,6 +137,22 @@ final class SkyReplacementCompositor {
         in photo: UIImage,
         with newSky: UIImage,
         options: SkyReplacementOptions = SkyReplacementOptions()
+    ) async throws -> SkyReplacementResult {
+        // 重い処理本体（マスク生成＋CI合成グラフの構築・レンダリング）は Task.detached に
+        // オフロードし、呼び出し元のアクター（多くは MainActor）をブロックしないようにする。
+        // 純関数的な処理（外部状態を変更しない）なので detached 実行は安全。
+        // コードベースの確立慣習（SkyStitchViewModel.runStitch / ImageService.applyEditRecipe）と同じパターン。
+        let workTask = Task.detached(priority: .userInitiated) { () async throws -> SkyReplacementResult in
+            try await self.replaceSkySync(in: photo, with: newSky, options: options)
+        }
+        return try await workTask.value
+    }
+
+    /// `replaceSky` の処理本体（手順1〜9・Task.detached からオフロードして呼ばれる）
+    private func replaceSkySync(
+        in photo: UIImage,
+        with newSky: UIImage,
+        options: SkyReplacementOptions
     ) async throws -> SkyReplacementResult {
 
         // 手順1: 向き正規化
@@ -360,14 +379,15 @@ final class SkyReplacementCompositor {
 
     /// マスクをガウシアンブラーで境界ぼかしする。
     ///
-    /// blur → `clampedToExtent()` → crop の順は、`HeuristicSkyMaskProvider.smoothAndSharpenEdges` /
-    /// `FilterGraphBuilder` のガウシアンブラー箇所と同一の既存流儀（ブラー結果の端を
-    /// `clampedToExtent()` で外側へ引き伸ばしてからクロップすることで、クロップ後に
-    /// 意図しない透明フチが残らないようにする）を踏襲する。
+    /// blur は計算時に extent 外の透明をサンプルするため、事前に入力を clampedToExtent() で
+    /// clamp してエッジ画素を複製しておくのが正しい順序（クランプ → blur → crop）。
+    /// 旧順序（blur 後に clamp）は縁のマスク値を下げ、目視検証（SkyReplacementVisualHarnessTests）で
+    /// 観測されていた「画像の縁の細い帯」の原因だった（SKY-002。`HeuristicSkyMaskProvider.smoothAndSharpenEdges`
+    /// と同じ修正）。
     private func feather(_ mask: CIImage, radius: CGFloat, extent: CGRect) -> CIImage {
         let blur = CIFilter.gaussianBlur()
-        blur.inputImage = mask
+        blur.inputImage = mask.clampedToExtent()
         blur.radius = Float(radius)
-        return blur.outputImage?.clampedToExtent().cropped(to: extent) ?? mask
+        return blur.outputImage?.cropped(to: extent) ?? mask
     }
 }

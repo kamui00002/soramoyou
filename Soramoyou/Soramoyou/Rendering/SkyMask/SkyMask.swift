@@ -57,8 +57,11 @@ enum SkyMaskError: Error {
 /// 将来的に CoreML ベースのセグメンテーションモデルへ差し替える可能性がある。
 /// 呼び出し側をこの protocol にのみ依存させることで、バックエンドの実装を
 /// 意識せずに差し替えられるようにする。
-protocol SkyMaskProviding {
+protocol SkyMaskProviderProtocol {
     /// 入力画像から空マスクを生成する
+    ///
+    /// - Note: 実装（`HeuristicSkyMaskProvider`）は内部で処理本体を `Task.detached` にオフロードするため、
+    ///   MainActor から `await` してもメインスレッド・UI をブロックしない。
     /// - Parameters:
     ///   - image: 向き正規化済み（.up 焼き込み済み）の CIImage を渡すこと（provider は orientation を扱わない）
     ///   - quality: マスク生成の品質モード

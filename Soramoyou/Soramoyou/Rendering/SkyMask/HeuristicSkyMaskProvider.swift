@@ -16,7 +16,7 @@ import CoreImage.CIFilterBuiltins
 /// - 解析は縮小したグリッド（最大 384px 長辺）上で行う CPU ループで完結させる。
 ///   Core Image のフィルタグラフだけで色相判定を表現するのは複雑になりすぎるため、
 ///   縮小後の少画素数（数万画素程度）に限定して Swift ループで判定する。
-final class HeuristicSkyMaskProvider: SkyMaskProviding {
+final class HeuristicSkyMaskProvider: SkyMaskProviderProtocol {
 
     // MARK: - Properties
 
@@ -93,9 +93,23 @@ final class HeuristicSkyMaskProvider: SkyMaskProviding {
         self.ciContext = ciContext
     }
 
-    // MARK: - SkyMaskProviding
+    // MARK: - SkyMaskProviderProtocol
 
     func makeSkyMask(for image: CIImage, quality: SkyMaskQuality) async throws -> SkyMask {
+        // 重い処理本体（縮小・画素読み出し・CPU ループ）は Task.detached にオフロードし、
+        // 呼び出し元のアクター（多くは MainActor）をブロックしないようにする。
+        // 純関数的な処理（外部状態を変更しない）なので detached 実行は安全。
+        // コードベースの確立慣習（SkyStitchViewModel.runStitch / ImageService.applyEditRecipe）と同じパターン。
+        let workTask = Task.detached(priority: .userInitiated) { () throws -> SkyMask in
+            try self.makeSkyMaskSync(for: image, quality: quality)
+        }
+        return try await workTask.value
+    }
+
+    // MARK: - Private: 処理本体（手順a〜i・Task.detached からオフロードして呼ばれる）
+
+    /// `makeSkyMask` の同期処理本体。
+    private func makeSkyMaskSync(for image: CIImage, quality: SkyMaskQuality) throws -> SkyMask {
         let extent = image.extent
 
         // 手順a: 入力検証
@@ -105,6 +119,18 @@ final class HeuristicSkyMaskProvider: SkyMaskProviding {
             throw SkyMaskError.invalidInput
         }
 
+        // 手順a': origin 正規化
+        // `CIImage.oriented()` は `.right` 系の向きで origin が非ゼロの extent を返しうる
+        // （iPhone 縦撮りの標準的な EXIF orientation）。後段の CILanczosScaleTransform は
+        // 画像自身のバウンディングボックス原点ではなく CI 座標系の (0,0) を基準にスケールするため、
+        // origin が非ゼロのまま渡すと縮小後の内容が (0,0) 起点の解析グリッド抽出矩形からずれてしまう
+        // （= 読み出す画素が画像本体からはみ出す）。`SkyReplacementCompositor.aspectFill` には
+        // 同様の正規化が既にあったのに provider 側に無い非対称があったため、ここで揃える。
+        // 最終的なマスクは手順h で `extent.origin` へ translate し戻し、入力 extent と厳密一致させる。
+        let normalizedImage: CIImage = extent.origin == .zero
+            ? image
+            : image.transformed(by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y))
+
         // 手順b: 解析グリッドサイズ決定
         let gridLongSide: CGFloat = quality == .preview ? Self.previewGridLongSide : Self.exportGridLongSide
         let longSide = max(extent.width, extent.height)
@@ -113,8 +139,8 @@ final class HeuristicSkyMaskProvider: SkyMaskProviding {
         let gridW = max(1, Int((extent.width * scale).rounded()))
         let gridH = max(1, Int((extent.height * scale).rounded()))
 
-        // 手順c: 縮小して RGBA8 画素を読む
-        let pixels = try readRGBA8Pixels(image: image, gridW: gridW, gridH: gridH)
+        // 手順c: 縮小して RGBA8 画素を読む（origin 正規化済みの画像を渡す）
+        let pixels = try readRGBA8Pixels(image: normalizedImage, gridW: gridW, gridH: gridH)
 
         // 手順d（1パス目）: 画素ごとの色スコアのみを算出する（縦位置の事前確率はまだ掛けない）。
         // 地平線検出（次段）は写真ごとの実際の色分布に基づくため、先に色スコア全体が必要。
@@ -384,12 +410,14 @@ final class HeuristicSkyMaskProvider: SkyMaskProviding {
     /// ガウシアンブラーによる平滑化 → ソフト閾値によるコントラスト強調 → 0...1 クランプ
     private func smoothAndSharpenEdges(_ image: CIImage, gridExtent: CGRect) -> CIImage {
         // 1. ガウシアンブラーで境界のギザギザを軽減
-        //    gaussianBlur は境界を超えて広がるため clampedToExtent() で端を埋めてから crop する
-        //    （FilterGraphBuilder の applySharpness 負値側と同じパターン）
+        //    blur は計算時に extent 外の透明をサンプルするため、事前に入力を clampedToExtent() で
+        //    clamp してエッジ画素を複製しておくのが正しい順序（クランプ → blur → crop）。
+        //    旧順序（blur 後に clamp）は縁のマスク値を下げ、目視検証（SkyReplacementVisualHarnessTests）で
+        //    観測されていた「画像の縁の細い帯」の原因だった（SKY-002）。
         let blur = CIFilter.gaussianBlur()
-        blur.inputImage = image
+        blur.inputImage = image.clampedToExtent()
         blur.radius = Self.edgeBlurRadius
-        let blurred = blur.outputImage?.clampedToExtent().cropped(to: gridExtent) ?? image
+        let blurred = blur.outputImage?.cropped(to: gridExtent) ?? image
 
         // 2. ソフト閾値（コントラスト強調）: out = scale × v + bias
         let matrix = CIFilter.colorMatrix()

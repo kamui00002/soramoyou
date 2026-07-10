@@ -183,6 +183,36 @@ final class SkyMaskProviderTests: XCTestCase {
         XCTAssertLessThan(bottomAvg, 0.15, "地面バンドのマスク平均が高すぎる: \(bottomAvg)")
     }
 
+    /// origin が非ゼロの extent（`CIImage.oriented()` の `.right` 系など、iPhone 縦撮りで起こりうる形式）でも、
+    /// origin=(0,0) のときと同じマスク判定が出ることを検証する（SKY-001 回帰テスト）
+    func test_nonZeroOriginExtent_producesSameMask() async throws {
+        let topColor = UIColor(red: 0.35, green: 0.55, blue: 0.90, alpha: 1)
+        let bottomColor = UIColor(red: 0.45, green: 0.35, blue: 0.25, alpha: 1)
+        let input = makeTwoBandImage(top: topColor, bottom: bottomColor)
+        let shiftedInput = input.transformed(by: CGAffineTransform(translationX: 100, y: 50))
+        let extent = shiftedInput.extent
+        let provider = HeuristicSkyMaskProvider()
+
+        let result = try await provider.makeSkyMask(for: shiftedInput, quality: .export)
+
+        XCTAssertEqual(result.mask.extent, extent, "origin 非ゼロ入力でマスクの extent が入力と一致しない")
+
+        let topBand = CGRect(
+            x: extent.minX, y: extent.minY + extent.height * 0.75,
+            width: extent.width, height: extent.height * 0.25
+        )
+        let bottomBand = CGRect(
+            x: extent.minX, y: extent.minY,
+            width: extent.width, height: extent.height * 0.25
+        )
+
+        let topAvg = averageMaskValue(result.mask, in: topBand)
+        let bottomAvg = averageMaskValue(result.mask, in: bottomBand)
+
+        XCTAssertGreaterThan(topAvg, 0.6, "origin非ゼロ: 青空バンドのマスク平均が低すぎる: \(topAvg)")
+        XCTAssertLessThan(bottomAvg, 0.15, "origin非ゼロ: 地面バンドのマスク平均が高すぎる: \(bottomAvg)")
+    }
+
     /// confidence は常に 0...1 の範囲に収まる
     func test_confidenceIsInUnitRange() async throws {
         let topColor = UIColor(red: 0.35, green: 0.55, blue: 0.90, alpha: 1)

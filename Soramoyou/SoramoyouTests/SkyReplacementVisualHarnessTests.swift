@@ -2,7 +2,7 @@
 //  SkyReplacementVisualHarnessTests.swift
 //  SoramoyouTests
 //
-//  ⚠️ 一時ハーネス（目視確認用・マージ前に削除予定）
+//  ⭐️ 意図的に残す開発用目視ハーネス（入力フォルダが無ければ自動スキップ・CIに影響なし）
 //
 //  SkyReplacementCompositor の合成結果を人間（レビュアー）が目視確認できるよう、
 //  ビフォー / アフター / マスクの PNG をホスト Mac のファイルシステムへ書き出すだけの

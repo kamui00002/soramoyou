@@ -50,6 +50,29 @@ final class SkyReplacementCompositorTests: XCTestCase {
         }
     }
 
+    /// 左右2色に塗り分けた UIImage を生成する（aspectFill の左右位置ずれ検出用）
+    /// - Parameters:
+    ///   - left: 左半分の色
+    ///   - right: 右半分の色
+    ///   - size: 画像サイズ
+    private func makeLeftRightImage(
+        left: UIColor,
+        right: UIColor,
+        size: CGSize = CGSize(width: 256, height: 256)
+    ) -> UIImage {
+        // makeTwoBandImage と同様、端末倍率に依存させず「指定サイズ＝実ピクセル」にするため 1x に固定する。
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.image { rendererContext in
+            let leftWidth = size.width * 0.5
+            left.setFill()
+            rendererContext.fill(CGRect(x: 0, y: 0, width: leftWidth, height: size.height))
+            right.setFill()
+            rendererContext.fill(CGRect(x: leftWidth, y: 0, width: size.width - leftWidth, height: size.height))
+        }
+    }
+
     /// 単色で塗りつぶした UIImage を生成する
     private func makeSolidImage(color: UIColor, size: CGSize = CGSize(width: 256, height: 256)) -> UIImage {
         // makeTwoBandImage と同様、端末倍率に依存させず「指定サイズ＝実ピクセル」にするため 1x に固定する。
@@ -136,6 +159,39 @@ final class SkyReplacementCompositorTests: XCTestCase {
 
         XCTAssertLessThan(bottomAvg.b, 0.35, "下端バンドの青成分が高すぎる（元の茶色から変化した）: \(bottomAvg)")
         XCTAssertTrue((0.30...0.60).contains(bottomAvg.r), "下端バンドの赤成分が想定範囲外（元の茶色から変化した）: \(bottomAvg)")
+    }
+
+    /// aspectFill が中央クロップの位置をずらして貼っていないかを検証する（G2）。
+    /// newSky を左=赤・右=青に塗り分け、正方形の photo（上=空・下=地面）へ合成し、
+    /// 出力の空領域の左端バンドが赤系・右端バンドが青系になることを確認する
+    /// （aspectFill の左右反転や中央合わせのオフセットずれがあれば検出できる）。
+    func test_replaceSky_aspectFillPreservesLeftRightPosition() async throws {
+        let newSkyRedLeftBlueRight = makeLeftRightImage(
+            left: UIColor(red: 0.90, green: 0.10, blue: 0.10, alpha: 1),
+            right: UIColor(red: 0.05, green: 0.10, blue: 0.90, alpha: 1)
+        )
+        let photo = makeTwoBandImage(top: skyBlue, bottom: groundBrown)
+        let compositor = SkyReplacementCompositor()
+        // トーンマッチを切って決定性を確保する（明るさ補正が入ると期待色から僅かにずれるため）
+        let options = SkyReplacementOptions(matchForegroundTone: false)
+
+        let result = try await compositor.replaceSky(in: photo, with: newSkyRedLeftBlueRight, options: options)
+
+        let size = pixelSize(of: result.image)
+        let leftBand = CGRect(x: 0, y: size.height * 0.80, width: size.width * 0.15, height: size.height * 0.20)
+        let rightBand = CGRect(
+            x: size.width * 0.85, y: size.height * 0.80,
+            width: size.width * 0.15, height: size.height * 0.20
+        )
+
+        let leftAvg = averageColor(of: result.image, in: leftBand)
+        let rightAvg = averageColor(of: result.image, in: rightBand)
+
+        XCTAssertGreaterThan(leftAvg.r, 0.6, "空領域の左端が赤系になっていない（aspectFillの左右位置がずれている）: \(leftAvg)")
+        XCTAssertLessThan(leftAvg.b, 0.35, "空領域の左端の青成分が高すぎる（aspectFillの左右位置がずれている）: \(leftAvg)")
+
+        XCTAssertGreaterThan(rightAvg.b, 0.6, "空領域の右端が青系になっていない（aspectFillの左右位置がずれている）: \(rightAvg)")
+        XCTAssertLessThan(rightAvg.r, 0.35, "空領域の右端の赤成分が高すぎる（aspectFillの左右位置がずれている）: \(rightAvg)")
     }
 
     /// 全面 地面の茶色 → 空がほぼ写っていないため noSkyDetected が throw される
