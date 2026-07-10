@@ -469,62 +469,6 @@ final class FilterGraphBuilderTests: XCTestCase {
 
     // MARK: - ハイライト/シャドウ の新実装が両値同時適用で破綻しないか
 
-    /// `testHighlightAndShadowApplyTogether` 専用の2バンド画像（暗バンド/明バンド）を生成する。
-    /// EditToolsPhotosParityTests の makeTwoBandSource と同型だが、既存ヘルパーは変更禁止のため
-    /// このテスト専用にローカル実装する。
-    /// - Parameters:
-    ///   - darkGray: 上半分（暗バンド）のグレー値
-    ///   - brightGray: 下半分（明バンド）のグレー値
-    private func makeTwoBandSourceForHighlightShadowTest(darkGray: UInt8 = 51, brightGray: UInt8 = 204) -> CIImage {
-        let size = 64
-        var bytes = [UInt8](repeating: 0, count: size * size * 4)
-        for y in 0..<size {
-            for x in 0..<size {
-                let i = (y * size + x) * 4
-                let c: UInt8 = y < size / 2 ? darkGray : brightGray
-                bytes[i]     = c
-                bytes[i + 1] = c
-                bytes[i + 2] = c
-                bytes[i + 3] = 255
-            }
-        }
-        let data = Data(bytes)
-        return CIImage(bitmapData: data,
-                       bytesPerRow: size * 4,
-                       size: CGSize(width: size, height: size),
-                       format: .RGBA8,
-                       colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
-    }
-
-    /// 指定 y 座標を起点とした 4x4 領域の RGBA 平均を取得
-    private func sampleBand(_ image: CIImage, y: Int) -> (r: Double, g: Double, b: Double) {
-        let context = CIContext()
-        let region = CGRect(x: 30, y: y, width: 4, height: 4)
-        guard let cg = context.createCGImage(image.cropped(to: region), from: region) else {
-            XCTFail("CGImage 生成失敗")
-            return (0, 0, 0)
-        }
-        var bytes = [UInt8](repeating: 0, count: 4 * 4 * 4)
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let ctx = CGContext(data: &bytes,
-                            width: 4,
-                            height: 4,
-                            bitsPerComponent: 8,
-                            bytesPerRow: 4 * 4,
-                            space: colorSpace,
-                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-        ctx?.draw(cg, in: CGRect(x: 0, y: 0, width: 4, height: 4))
-
-        var r: Double = 0, g: Double = 0, b: Double = 0
-        let pixelCount = 4 * 4
-        for i in stride(from: 0, to: bytes.count, by: 4) {
-            r += Double(bytes[i])
-            g += Double(bytes[i + 1])
-            b += Double(bytes[i + 2])
-        }
-        return (r / Double(pixelCount), g / Double(pixelCount), b / Double(pixelCount))
-    }
-
     /// P1 で CIHighlightShadowAdjust（局所適応・iPhone標準の写真アプリに近い挙動）に置き換えた後の
     /// ハイライト/シャドウ同時適用の検証。
     ///
@@ -535,17 +479,17 @@ final class FilterGraphBuilderTests: XCTestCase {
     /// ドラッグ中（interactive）経路との見た目差の調整は P2（目視チューニング）で行う。
     func testHighlightAndShadowApplyTogether() {
         // 暗バンド（上半分）/ 明バンド（下半分）の2バンド画像
-        let src = makeTwoBandSourceForHighlightShadowTest()
-        let beforeDark   = sampleBand(src, y: 10) // 暗バンド
-        let beforeBright = sampleBand(src, y: 50) // 明バンド
+        let src = CIImageTestHelpers.makeTwoBandCIImage(darkGray: 51, brightGray: 204)
+        let beforeDark   = CIImageTestHelpers.sampleRegionRGB(src, x: 30, y: 10) // 暗バンド
+        let beforeBright = CIImageTestHelpers.sampleRegionRGB(src, x: 30, y: 50) // 明バンド
 
         // ハイライト +0.5、シャドウ +0.5 を同時適用
         var r = EditRecipe()
         r.highlights   = 1.0 + 0.5
         r.shadowAmount = 1.0 + 0.5
         let out = FilterGraphBuilder.buildGraph(recipe: r, source: src)
-        let afterDark   = sampleBand(out, y: 10)
-        let afterBright = sampleBand(out, y: 50)
+        let afterDark   = CIImageTestHelpers.sampleRegionRGB(out, x: 30, y: 10)
+        let afterBright = CIImageTestHelpers.sampleRegionRGB(out, x: 30, y: 50)
 
         // 暗バンドの平均輝度が上がる（シャドウ持ち上げが効いている）
         XCTAssertGreaterThan(afterDark.r, beforeDark.r + 0.03 * 255,

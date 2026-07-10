@@ -36,6 +36,10 @@ enum RenderQuality {
 /// ```
 final class FilterGraphBuilder {
 
+    /// 「中立（無変化）」とみなす正規化値のしきい値。
+    /// ドラッグ中(interactive)と確定後(final)で有効判定が食い違うサイレント帯を防ぐため、全経路で統一する。
+    private static let neutralValueThreshold: Double = 0.001
+
     // MARK: - グラフ構築（メインエントリーポイント）
 
     /// EditRecipe と入力 CIImage からフィルターグラフを構築する
@@ -91,7 +95,7 @@ final class FilterGraphBuilder {
 
         // 5. ブリリアンス（複合処理）
         //    interactive = 軽量トーンカーブ近似 / final = 局所適応フィルタ（詳細は各関数参照）
-        if let v = recipe.brillianceNorm, v != 0 {
+        if let v = recipe.brillianceNorm, abs(v) > Self.neutralValueThreshold {
             switch quality {
             case .interactive:
                 img = applyBrilliance(normalized: v, to: img)
@@ -432,7 +436,7 @@ final class FilterGraphBuilder {
     ///   ハイライトを引き込む（`CIHighlightShadowAdjust.highlightAmount` は 1.0 が中立で
     ///   明るくする方向の値を持たないため、負の v では中立のまま据え置く）
     private static func applyBrillianceLocal(normalized v: Double, to image: CIImage) -> CIImage {
-        guard abs(v) > 0.01 else { return image }
+        guard abs(v) > Self.neutralValueThreshold else { return image }
 
         let hs = CIFilter.highlightShadowAdjust()
         hs.inputImage      = image
@@ -598,7 +602,7 @@ final class FilterGraphBuilder {
         to image: CIImage
     ) -> CIImage {
         // どちらも中立なら処理スキップ
-        guard abs(vHighlight) > 0.01 || abs(vShadow) > 0.01 else { return image }
+        guard abs(vHighlight) > Self.neutralValueThreshold || abs(vShadow) > Self.neutralValueThreshold else { return image }
 
         let hs = CIFilter.highlightShadowAdjust()
         hs.inputImage = image
