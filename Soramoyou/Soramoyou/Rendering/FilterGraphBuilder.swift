@@ -629,8 +629,10 @@ final class FilterGraphBuilder {
     /// シャドウ局所版の実測整合スケール。
     /// 実測: 写真アプリのシャドウ+50は地面Δ+8.7、素の shadowAmount だとΔ+18.2（約2.1倍）。
     /// ラウンド2で 0.5倍に設定したがラウンド3実測でΔ+5.2と下げすぎと判明したため、
-    /// 0.75倍に引き上げ（目標Δ+8.7に対し約+7.8を想定）。
-    private static let localShadowScale: Double = 0.75
+    /// 0.75倍に引き上げたが、ラウンド4実測でΔ+13.9（目標Δ+8.7の約1.60倍）と効きすぎと判明。
+    /// 実測2点（scale 0.5→Δ+5.2 / scale 0.75→Δ+13.9）を線形内挿し、目標Δ+8.7に
+    /// 最も近づく 0.6 に調整。
+    private static let localShadowScale: Double = 0.6
 
     /// 負のハイライトを `CIHighlightShadowAdjust.highlightAmount` で回復する強さの係数。
     /// 実測（P2）でフィルタ回復のみ（0.7）では写真アプリ(-14.0/50)の半分(-7.0/50)しか
