@@ -444,12 +444,15 @@ final class FilterGraphBuilder {
 
     /// ブリリアンス局所版のシャドウ係数。
     /// 実測（P2）で写真アプリのブリリアンス+50は地面Δ+9.1に対し、
-    /// 旧係数0.6だとΔ+76(概算)と約8倍強すぎたため、目標比率(9/50)に合わせて 0.12 に減衰。
-    private static let brillianceShadowScale: Double = 0.12
+    /// 旧係数0.6だとΔ+76(概算)と約8倍強すぎたため、目標比率(9/50)に合わせて 0.12 に減衰させたが、
+    /// ラウンド3実測でΔ+0.5と下げすぎと判明（CIHighlightShadowAdjust単段は低域で
+    /// 非線形に効きが鈍いため線形換算どおりには効かない）。目標Δ+9.1に近づけるため 0.5 に引き上げ。
+    private static let brillianceShadowScale: Double = 0.5
     /// ブリリアンス局所版のハイライト係数（v > 0 のみ適用）。
-    /// 実測では写真アプリがブリリアンスで空を僅かに引き込む(Δ-0.8)想定だが、
-    /// シャドウ暴れが解消されれば本来の引き込みが出るとみて据え置き。
-    private static let brillianceHighlightScale: Double = 0.35
+    /// 実測では写真アプリがブリリアンスで空を僅かに引き込む(Δ-0.8)想定だったが、
+    /// ラウンド3実測で旧係数0.35だとΔ-3.1と引き込みが強すぎると判明したため、
+    /// 目標Δ-0.8に近づけるよう 0.15 に緩和（想定Δ約-1.3）。
+    private static let brillianceHighlightScale: Double = 0.15
 
     // ── 2D スタイルパッド（iPhone「写真スタイル」風の複合ツール）──
     /// 1 つの 2D 入力 (toneNorm, colorNorm) で「トーン」と「カラー」を同時に変化させる複合フィルタ。
@@ -624,17 +627,20 @@ final class FilterGraphBuilder {
     }
 
     /// シャドウ局所版の実測整合スケール。
-    /// 実測: 写真アプリのシャドウ+50は地面Δ+8.7、素の shadowAmount だとΔ+18.2（約2.1倍）
-    /// → 0.5倍で整合。
-    private static let localShadowScale: Double = 0.5
+    /// 実測: 写真アプリのシャドウ+50は地面Δ+8.7、素の shadowAmount だとΔ+18.2（約2.1倍）。
+    /// ラウンド2で 0.5倍に設定したがラウンド3実測でΔ+5.2と下げすぎと判明したため、
+    /// 0.75倍に引き上げ（目標Δ+8.7に対し約+7.8を想定）。
+    private static let localShadowScale: Double = 0.75
 
     /// 負のハイライトを `CIHighlightShadowAdjust.highlightAmount` で回復する強さの係数。
     /// 実測（P2）でフィルタ回復のみ（0.7）では写真アプリ(-14.0/50)の半分(-7.0/50)しか
     /// 出なかったため 1.0 に引き上げ、不足分は `localHighlightCurveAssist` で補う。
     private static let localHighlightRecoveryScale: Double = 1.0
 
-    /// 負のハイライトに追加適用するトーンカーブ近似の強さ（実測不足分の補正用）
-    private static let localHighlightCurveAssist: Double = 0.35
+    /// 負のハイライトに追加適用するトーンカーブ近似の強さ（実測不足分の補正用）。
+    /// ラウンド3実測で写真アプリのハイライト-50は空Δ-14.0に対し、旧係数0.35だとΔ-17.8とやや強すぎたため、
+    /// 0.20 に微減（想定Δ約-15）。
+    private static let localHighlightCurveAssist: Double = 0.20
 
     /// `CIHighlightShadowAdjust` の局所適応処理半径を画像サイズから決定する。
     /// 短辺の 1% を基準にしつつ、極端な小画像・大画像でも破綻しないよう
