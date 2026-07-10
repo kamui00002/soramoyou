@@ -469,16 +469,34 @@ final class FilterGraphBuilderTests: XCTestCase {
 
     // MARK: - ハイライト/シャドウ の新実装が両値同時適用で破綻しないか
 
+    /// P1 で CIHighlightShadowAdjust（局所適応・iPhone標準の写真アプリに近い挙動）に置き換えた後の
+    /// ハイライト/シャドウ同時適用の検証。
+    ///
+    /// 旧実装（トーンカーブ近似）は中央制御点 (0.5, 0.5) 固定で「中間調不変」を保証していたが、
+    /// P1 で CIHighlightShadowAdjust に置き換えたため中間調も緩やかに動くのが正しい仕様になった。
+    /// 中間調固定のアサーションはそのため撤廃し、代わりに「暗部と明部の両方が同時に持ち上がる」
+    /// （＝ハイライトとシャドウが同時適用されている）ことを2バンド画像で検証する。
+    /// ドラッグ中（interactive）経路との見た目差の調整は P2（目視チューニング）で行う。
     func testHighlightAndShadowApplyTogether() {
+        // 暗バンド（上半分）/ 明バンド（下半分）の2バンド画像
+        let src = CIImageTestHelpers.makeTwoBandCIImage(darkGray: 51, brightGray: 204)
+        let beforeDark   = CIImageTestHelpers.sampleRegionRGB(src, x: 30, y: 10) // 暗バンド
+        let beforeBright = CIImageTestHelpers.sampleRegionRGB(src, x: 30, y: 50) // 明バンド
+
         // ハイライト +0.5、シャドウ +0.5 を同時適用
-        let src = makeGraySource(gray: 128)
         var r = EditRecipe()
         r.highlights   = 1.0 + 0.5
         r.shadowAmount = 1.0 + 0.5
         let out = FilterGraphBuilder.buildGraph(recipe: r, source: src)
-        let after = sampleCenterRGB(out)
+        let afterDark   = CIImageTestHelpers.sampleRegionRGB(out, x: 30, y: 10)
+        let afterBright = CIImageTestHelpers.sampleRegionRGB(out, x: 30, y: 50)
 
-        // 中央 128 は中央制御点 (0.5, 0.5) を通るため、ほぼ不変のはず
-        XCTAssertEqual(after.r, 128, accuracy: 15.0, "中間調が大きくズレた（HL/Shadow カーブ設計の回帰）")
+        // 暗バンドの平均輝度が上がる（シャドウ持ち上げが効いている）
+        XCTAssertGreaterThan(afterDark.r, beforeDark.r + 0.03 * 255,
+            "シャドウ +0.5 で暗バンドが持ち上がっていない（HL/Shadow 同時適用の回帰）")
+
+        // 明バンドの平均輝度が上がる（正のハイライトが効いている）
+        XCTAssertGreaterThan(afterBright.r, beforeBright.r + 0.03 * 255,
+            "ハイライト +0.5 で明バンドが持ち上がっていない（HL/Shadow 同時適用の回帰）")
     }
 }
