@@ -51,6 +51,7 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
    ```bash
    scripts/appstore-release.sh prepare --version 1.9.3 --build 73
    ```
+   - 成功時、`fastlane/.release-manifest`（version/build/リリースノートのSHA-256）をローカルに書き出す。次の `submit` はこの内容と現在の状態を照合する
 5. **GO確認（人間の判断・自動化しない）**
    - App Store Connect 上で `prepare` 後の内容（版番号・新機能欄・選択されたビルド）を目視確認する
    - 「審査提出GOの最終判断は自動化しない」方針のため、この確認は必ず人間（ユーザー）が行う
@@ -62,6 +63,7 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
    # AI（Claude）経由で実行する場合: 事前にユーザーへGO確認を取った上でのみ --yes を付ける
    scripts/appstore-release.sh submit --version 1.9.3 --build 73 --yes
    ```
+   - `submit` は直前の `prepare` が書き出したマニフェストと version/build/リリースノートの SHA-256 を照合し、不一致なら「再度 prepare からやり直して」と表示して停止する（prepare→ASCで内容確認→submit の間に release_notes.txt 等が変わっていないことを保証するため）
 
 ---
 
@@ -106,6 +108,7 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
 | `build_number` 指定でビルドが見つからない／選択に失敗する | Apple 側でビルドが **processing 中**（目安5〜30分） | 少し待って再実行する |
 | 初回 `submit` 実行時に `submission_information`（IDFA等）の入力を要求してエラーになる | deliver が輸出コンプライアンス等の申告情報を要求している | `fastlane/Fastfile` の `release_submit` レーンに `submission_information` オプションを追加する |
 | `prepare` / `submit` が「リリースノートが PLACEHOLDER のまま」で止まる | `fastlane/metadata/ja/release_notes.txt` が未編集（`PLACEHOLDER` 文字列が残ったまま） | ユーザー承認済みのリリースノート草案でファイルを置き換えてから再実行する（§3 手順3） |
+| `submit` がマニフェスト不一致で止まる | `prepare` 後に `release_notes.txt` や version/build が変更された | 再度 `prepare` からやり直す |
 
 ---
 
