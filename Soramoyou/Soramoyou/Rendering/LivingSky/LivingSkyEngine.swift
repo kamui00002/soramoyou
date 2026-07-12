@@ -37,6 +37,9 @@ final class LivingSkyEngine {
     /// プレビュー用に縮小する長辺の上限px（設計書§4: 「長辺1080に事前縮小」）
     private static let previewMaxLongSide: CGFloat = 1080
 
+    /// 書き出し用に縮小する長辺の上限px（設計書§5: 「解像度: 長辺1920上限」。段階4で追加）
+    private static let exportMaxLongSide: CGFloat = 1920
+
     /// マスクのフェザー半径 = 縮小後短辺 × この係数（設計書「④マスクをフェザー: 半径=縮小後短辺の0.5%程度」）
     private static let featherRadiusFraction: CGFloat = 0.005
 
@@ -121,10 +124,14 @@ final class LivingSkyEngine {
     /// - Note: 重い処理本体（向き正規化の再描画・マスク生成）は `Task.detached` にオフロードし、
     ///   呼び出し元のアクター（多くは MainActor）をブロックしないようにする。
     ///   コードベースの確立慣習（`SkyReplacementCompositor.replaceSky` 等）と同じパターン。
-    /// - Parameter image: 編集確定後の写真（EditViewModel の表示用プレビュー、または元画像）
-    func prepare(image: UIImage) async throws {
+    /// - Parameters:
+    ///   - image: 編集確定後の写真（EditViewModel の表示用プレビュー、または元画像）
+    ///   - quality: 段階4で追加。`.preview`（既定・長辺1080）はリアルタイムプレビュー用、
+    ///     `.export`（長辺1920）は動画書き出し用（設計書§5「品質2モード」）。
+    ///     既存呼び出し側（`LivingSkyController`）は既定値のため無変更で動作する。
+    func prepare(image: UIImage, quality: SkyMaskQuality = .preview) async throws {
         let workTask = Task.detached(priority: .userInitiated) { () async throws -> (CIImage, CIImage, Double) in
-            try await self.prepareAsync(image: image)
+            try await self.prepareAsync(image: image, quality: quality)
         }
         let (photo, mask, confidence) = try await workTask.value
         self.preparedPhoto = photo
@@ -136,7 +143,10 @@ final class LivingSkyEngine {
     ///
     /// `maskProvider.makeSkyMask` が async throws のため、この本体も async throws にして
     /// 素直に `await` する（SkyReplacementCompositor.replaceSkySync と同型のパターン）。
-    private func prepareAsync(image: UIImage) async throws -> (photo: CIImage, mask: CIImage, confidence: Double) {
+    private func prepareAsync(
+        image: UIImage,
+        quality: SkyMaskQuality
+    ) async throws -> (photo: CIImage, mask: CIImage, confidence: Double) {
         // 手順①: 向き正規化（EXIF orientation をピクセルへ焼き込む）。
         // `UIImage+NormalizedOrientation` を使用（既存の焼き込み契約に合わせる）。
         let normalized = image.withNormalizedOrientation()
@@ -148,12 +158,14 @@ final class LivingSkyEngine {
             throw LivingSkyEngineError.invalidInput
         }
 
-        // 手順②: 長辺 1080px 以下に縮小（プレビューのカクつき防止。設計書§4）。
-        // 既に 1080px 以下の場合は縮小しない（拡大しない）。
+        // 手順②: 長辺を上限px以下に縮小（プレビューのカクつき防止。設計書§4/§5）。
+        // quality により上限を切り替える（.preview=1080 / .export=1920）。
+        // 既に上限以下の場合は縮小しない（拡大しない）。
+        let maxLongSide = quality == .export ? Self.exportMaxLongSide : Self.previewMaxLongSide
         let longSide = max(rawCIImage.extent.width, rawCIImage.extent.height)
         let photo: CIImage
-        if longSide > Self.previewMaxLongSide {
-            let scale = Self.previewMaxLongSide / longSide
+        if longSide > maxLongSide {
+            let scale = maxLongSide / longSide
             let scaleFilter = CIFilter.lanczosScaleTransform()
             scaleFilter.inputImage = rawCIImage
             scaleFilter.scale = Float(scale)
@@ -170,10 +182,10 @@ final class LivingSkyEngine {
             photo = rawCIImage
         }
 
-        // 手順③: 空マスクを .preview 品質で1回だけ生成する（フレームごとの再生成はしない）。
+        // 手順③: 空マスクを quality 品質で1回だけ生成する（フレームごとの再生成はしない）。
         // `makeSkyMask` は内部で Task.detached を持つが、既に detached 文脈から素直に await
         // しているだけなので害はない（SkyReplacementCompositor.replaceSkySync も同様のネスト構造）。
-        let skyMask = try await maskProvider.makeSkyMask(for: photo, quality: .preview)
+        let skyMask = try await maskProvider.makeSkyMask(for: photo, quality: quality)
 
         // 手順④: マスクをフェザー（クランプ→ブラー→クロップの定石。SkyReplacementCompositor.feather と同順序）。
         // ⚠️ 旧順序（blur 後に clamp）は縁のマスク値を下げ「画像の縁の細い帯」の原因になる（SKY-002 の教訓）。

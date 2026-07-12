@@ -24,6 +24,17 @@ struct LivingSkySheet: View {
     /// 元にする写真（編集済みプレビュー、無ければ元画像）
     let sourceImage: UIImage
 
+    // MARK: - 段階4: mp4 書き出し用の State
+
+    /// 書き出し中フラグ（true の間はボタンを無効化し ProgressView を表示する）
+    @State private var isExporting = false
+    /// 書き出し進捗 0...1（`LivingSkyVideoExporter.renderVideo` の progress コールバックから更新）
+    @State private var exportProgress: Double = 0
+    /// 書き出し結果メッセージ（成功/失敗どちらもこのアラートで表示する）
+    @State private var exportResultMessage: String?
+    /// 書き出し結果アラートの表示フラグ
+    @State private var showExportResultAlert = false
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -47,6 +58,56 @@ struct LivingSkySheet: View {
         .preferredColorScheme(.dark)
         .onAppear {
             controller.start(with: sourceImage)
+        }
+        .alert(exportResultMessage ?? "", isPresented: $showExportResultAlert) {
+            Button("OK") {}
+        }
+    }
+
+    // MARK: - 段階4: mp4 書き出し
+
+    /// 「動画を保存」ボタンのアクション。
+    ///
+    /// プレビュー用の `controller.engine`（`.preview` 品質・長辺1080）とは別に、
+    /// 書き出し専用の新しい `LivingSkyEngine` インスタンスを作り `.export` 品質（長辺1920）で
+    /// `prepare` する（プレビューengineとは別物。パラメータは現在の controller.parameters をコピー）。
+    private func startExport() {
+        guard !isExporting else { return }
+        isExporting = true
+        exportProgress = 0
+
+        Task {
+            defer { isExporting = false }
+            do {
+                let exportEngine = LivingSkyEngine()
+                exportEngine.parameters = controller.parameters
+                try await exportEngine.prepare(image: sourceImage, quality: .export)
+
+                let tempURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension("mp4")
+
+                let exporter = LivingSkyVideoExporter()
+                try await exporter.renderVideo(to: tempURL, engine: exportEngine) { value in
+                    Task { @MainActor in
+                        exportProgress = value
+                    }
+                }
+                try await exporter.saveToPhotos(fileURL: tempURL)
+
+#if DEBUG
+                // 私（レビュアー）の E2E 検証用に一時ファイルのパスをログ出力する。
+                // `LivingSkyVideoExporter.saveToPhotos` は DEBUG ビルドでは保存成功後も
+                // 一時ファイルを削除しない設計のため、このパスから実ファイルを確認できる。
+                print("LivingSkyExport: \(tempURL.path)")
+#endif
+
+                exportResultMessage = "写真に保存したわ"
+                showExportResultAlert = true
+            } catch {
+                exportResultMessage = error.localizedDescription
+                showExportResultAlert = true
+            }
         }
     }
 
@@ -146,10 +207,37 @@ struct LivingSkySheet: View {
                 ),
                 range: 6...10
             )
+
+            exportButton
         }
         .padding(.horizontal)
         .padding(.vertical, 12)
         .background(Color.black)
+    }
+
+    /// 段階4: mp4 書き出しボタン（スライダーの下に配置）。
+    /// 書き出し中は ProgressView（%表示）に切り替え、ボタンを無効化する。プレビューは動かしたままでよい。
+    @ViewBuilder
+    private var exportButton: some View {
+        Button(action: { startExport() }) {
+            if isExporting {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    Text("書き出し中… \(Int(exportProgress * 100))%")
+                        .monospacedDigit()
+                }
+            } else {
+                Text("動画を保存（8秒ループ）")
+            }
+        }
+        .font(.subheadline.weight(.semibold))
+        .foregroundColor(.white)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(Capsule().fill(Color.white.opacity(0.15)))
+        .disabled(isExporting || controller.state != .ready)
+        .padding(.top, 4)
     }
 
     /// スライダー1行分（タイトル・現在値・スライダー本体）
