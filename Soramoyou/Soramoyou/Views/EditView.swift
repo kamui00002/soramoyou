@@ -79,6 +79,27 @@ struct EditView: View {
                 VStack(spacing: 0) {
                     // 画像プレビュー
                     imagePreviewView
+#if DEBUG
+                        // Living Sky（プロトタイプ・段階2）動作確認用ボタン。
+                        // ⚠️ navigationBarTrailing に置くと項目数が5個になり iOS 26 が
+                        // Undo/Redo/設定/風ボタンを「…」オーバーフローメニューに折りたたんでしまい、
+                        // UIオートメーションから開けず動作確認がブロックされるため、
+                        // プレビュー領域右上への floating overlay に変更した。
+                        .overlay(alignment: .topTrailing) {
+                            Button(action: {
+                                showLivingSkySheet = true
+                            }) {
+                                Image(systemName: "wind")
+                                    .font(.body)
+                                    .foregroundColor(.white)
+                                    .padding(12)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                            }
+                            .padding(12)
+                            .accessibilityLabel("Living Sky")
+                        }
+#endif
 
                     // 「あなたの定番」適用ボタン（柱1 v1）— 見つけやすいよう編集コントロール直上に配置
                     if viewModel.hasPersonalDefault {
@@ -131,17 +152,6 @@ struct EditView: View {
                                 .font(.body)
                         }
                         .foregroundColor(.white)
-
-#if DEBUG
-                        // Living Sky（プロトタイプ・段階2）動作確認用ボタン。本番UIは後段階で作り込む。
-                        Button(action: {
-                            showLivingSkySheet = true
-                        }) {
-                            Image(systemName: "wind")
-                                .font(.body)
-                        }
-                        .foregroundColor(.white)
-#endif
 
                         // 次へボタン
                         Button("次へ") {

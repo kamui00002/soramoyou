@@ -64,7 +64,8 @@ static inline float fbm(float2 p) {
 ///   - photo: 編集済み写真（変位先の画素を読むため sampler として受け取る）
 ///   - mask: フェザー済み空マスク（グレースケール・rチャンネルを使用。1.0=空 / 0.0=地上）
 ///   - time01: `frac(経過時間 / ループ長T)` の 0...1 値（ループの位相）
-///   - flowDirPx: 風向き単位ベクトル × 最大変位px（ワーキング座標系。Swift 側で事前計算して渡す）
+///   - flowDirPxX: 風向き単位ベクトル × 最大変位px の X 成分（ワーキング座標系。Swift 側で事前計算）
+///   - flowDirPxY: 風向き単位ベクトル × 最大変位px の Y 成分
 ///   - shimmerAmp: 光のゆらぎ振幅 0...0.1
 ///   - speedJitter: 速度ムラの強さ（既定 0.3）
 ///   - noiseScale: フロー速度ムラ用 fbm の空間スケール（例 0.008）
@@ -72,11 +73,18 @@ static inline float fbm(float2 p) {
 ///   - shimmerRadius: シマーの円周サンプリング半径（例 2.0）
 ///   - dest: 出力先（座標取得に使用）
 /// - Returns: 1画素分の出力色（RGBA）
+///
+/// ⚠️ 段階3 vision レビュー指摘#1: 当初 `float2 flowDirPx` として単一ベクトル引数で受け取っていたが、
+///    Metal general CIKernel の引数マーシャリングで CIVector → float2 が正しく渡らず (0,0) になり
+///    「フロー変位が実質ゼロ（シマーだけが動く）」という不具合が実機/シミュレータ双方で再現した。
+///    time01/shimmerAmp 等のスカラー float 引数は正しくマーシャリングされることが実証済みのため、
+///    float2 引数を避けて2つの float スカラーに分解し、カーネル冒頭で float2 に再構成する。
 extern "C" float4 livingSky(
     coreimage::sampler photo,
     coreimage::sampler mask,
     float time01,
-    float2 flowDirPx,
+    float flowDirPxX,
+    float flowDirPxY,
     float shimmerAmp,
     float speedJitter,
     float noiseScale,
@@ -84,6 +92,9 @@ extern "C" float4 livingSky(
     float shimmerRadius,
     coreimage::destination dest
 ) {
+    // スカラー引数から float2 を再構成（上記の理由により float2 引数を経由しない）
+    float2 flowDirPx = float2(flowDirPxX, flowDirPxY);
+
     // 設計書§2: 現在の出力画素座標（ワーキング座標系）
     float2 p = dest.coord();
 
@@ -91,6 +102,17 @@ extern "C" float4 livingSky(
     // マスクは 1.0=空 / 0.0=地上。ほぼ完全に地上（m<0.001）の画素は変位・ノイズ計算そのものが
     // 無駄になるため、photo をそのまま返す早期returnで「地上は完全静止」を数式レベルより早く保証する。
     float m = mask.sample(mask.transform(p)).r;
+
+    // 段階3 vision レビュー指摘#3: ヒューリスティックマスクの中間値漏れ（樹冠・樹間が0.4〜0.6帯に
+    // 乗る）対策。att=m^2 だけでは中間値が十分に減衰しきらず地上がゆらいでいたため、下限0.45未満を
+    // 完全にゼロへ落とし、コア空域（0.75以上）は1.0のまま、境界のグラデーションは0.45〜0.75帯で
+    // 維持する再マップを追加する（下限0.30では樹冠・樹間の0.4〜0.6帯を通過してしまい、att=m^2でも
+    // 7px程度動くゴースト状スミアが残存したため、指摘#3再発を受けて0.45へ引き上げ）。
+    // 地平線ぎわの晴天域は0.7以上のため上限0.75への引き上げによる影響はない。
+    // 早期return閾値（m<0.001）はこの再マップ後の m で判定する（漏れ値がゼロ側へ落ちてから
+    // 早期returnを効かせるため）。
+    m = smoothstep(0.45, 0.75, m);
+
     if (m < 0.001) {
         return photo.sample(photo.transform(p));
     }

@@ -230,7 +230,12 @@ final class LivingSkyEngine {
 
         // 最大変位px = 画像幅 × 0.015 × speed（LivingSkyParameters.maxDisplacementPx 参照）
         let maxDispPx = parameters.maxDisplacementPx(imageWidth: photo.extent.width)
-        let flowDirPx = CIVector(x: dirX * maxDispPx, y: dirY * maxDispPx)
+        // ⚠️ 段階3 vision レビュー指摘#1: CIVector として float2 を渡すと Metal general CIKernel の
+        // 引数マーシャリングで (0,0) になり「フロー変位が実質ゼロ」になる不具合が実証された。
+        // スカラー float（time01/shimmerAmp 等）は正しくマーシャリングされるため、
+        // flowDirPx を2つの Float スカラーに分解して渡す（LivingSky.metal 側で float2 に再構成）。
+        let flowDirPxX = Float(dirX * maxDispPx)
+        let flowDirPxY = Float(dirY * maxDispPx)
 
         let shimmerAmp = Float(min(max(parameters.shimmerAmount, 0), 0.1))
 
@@ -245,10 +250,15 @@ final class LivingSkyEngine {
             extent: photo.extent,
             roiCallback: { _, rect in rect.insetBy(dx: -pad, dy: -pad) },
             arguments: [
-                photo,
+                // 段階3 vision レビュー指摘#2: 風上側エッジの黒滲み対策（extent外=透明の混入防止）。
+                // 変位サンプリング（p − flow）が extent 外に及ぶと sampler は透明を返すため、
+                // 端の画素を外側へ引き伸ばす clampedToExtent() を適用する（clamp の定石）。
+                // extent: は元の photo.extent のまま（出力範囲は変えない）。
+                photo.clampedToExtent(),
                 mask,
                 time01,
-                flowDirPx,
+                flowDirPxX,
+                flowDirPxY,
                 shimmerAmp,
                 Self.speedJitter,
                 Self.noiseScale,
