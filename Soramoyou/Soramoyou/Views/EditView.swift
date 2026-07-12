@@ -34,6 +34,8 @@ struct EditView: View {
     @State private var isGeneratingFinal = false
     /// 編集ツール設定画面の表示フラグ
     @State private var showEditToolsSettings = false
+    /// Living Sky プロトタイプ用プレビューシートの表示フラグ（#if DEBUG のみ使用）
+    @State private var showLivingSkySheet = false
     /// 回転スライダーの値（リアルタイム用）
     @State private var rotationSliderValue: Double = 0
 
@@ -130,6 +132,17 @@ struct EditView: View {
                         }
                         .foregroundColor(.white)
 
+#if DEBUG
+                        // Living Sky（プロトタイプ・段階2）動作確認用ボタン。本番UIは後段階で作り込む。
+                        Button(action: {
+                            showLivingSkySheet = true
+                        }) {
+                            Image(systemName: "wind")
+                                .font(.body)
+                        }
+                        .foregroundColor(.white)
+#endif
+
                         // 次へボタン
                         Button("次へ") {
                             // 生成中の連打を防ぐ。generateFinalImages は isLoading を立てないため、
@@ -165,6 +178,15 @@ struct EditView: View {
             }) {
                 EditToolsSettingsView()
             }
+#if DEBUG
+            // Living Sky（プロトタイプ・段階2）: 現在の編集済みプレビュー画像を渡す。
+            // 未生成（読み込み中など）の場合は元画像にフォールバックする。
+            .sheet(isPresented: $showLivingSkySheet) {
+                if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
+                    LivingSkySheet(sourceImage: sourceImage)
+                }
+            }
+#endif
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
