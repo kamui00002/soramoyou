@@ -1,0 +1,122 @@
+# Fastfile
+#
+# App Store Connect への「版作成・新機能欄記入・ビルド選択・審査提出」を自動化する。
+# TestFlight へのバイナリアップロードは対象外（既存 ~/.claude/scripts/xcode-testflight-upload.sh が担当）。
+# 本ファイルは直接 `fastlane <lane>` で呼ばず、必ず scripts/appstore-release.sh 経由で呼ぶこと
+# （secret CLI から ASC_KEY_ID / ASC_ISSUER_ID を ENV にセットするラッパーのため）。
+#
+# 重要方針: 「審査提出 GO の最終判断は自動化しない」。
+#   release_prepare は submit_for_review: false で版作成・新機能欄記入・ビルド選択のみ行う。
+#   release_submit は submit_for_review: true を明示指定した時のみ実行される、不可逆な別レーン。
+
+default_platform(:ios)
+
+# アプリの Bundle Identifier（Soramoyou 本体ターゲット）
+APP_IDENTIFIER = "com.yoshidometoru.Soramoyou"
+
+# App Store Connect API キー認証情報を組み立てる共通ヘルパー。
+# ASC_KEY_ID / ASC_ISSUER_ID は ENV 経由（呼び出し元の scripts/appstore-release.sh が
+# secret CLI から取得してセットする）。キーの実値はコードに一切書かない。
+# p8 鍵ファイルは ~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8 に配置済みの前提。
+def asc_api_key
+  key_id = ENV.fetch("ASC_KEY_ID")
+  app_store_connect_api_key(
+    key_id: key_id,
+    issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+    key_filepath: File.expand_path("~/.appstoreconnect/private_keys/AuthKey_#{key_id}.p8")
+  )
+end
+
+# リリースノート草案が PLACEHOLDER のままだと、意図しない文言で新機能欄を
+# 上書きしてしまう恐れがあるため、ここで確実に止める。
+# レーン実行時の CWD は fastlane/ ディレクトリ（実測確認済み: Dir.pwd == "<repo>/fastlane"）
+# のため、Fastfile 基準の相対パス（__dir__）で解決する。"fastlane/metadata/..." のような
+# リポジトリルート基準の相対パスは "<repo>/fastlane/fastlane/metadata/..." を見てしまい誤動作する。
+def ensure_release_notes!
+  notes_path = File.expand_path("metadata/ja/release_notes.txt", __dir__)
+  if !File.exist?(notes_path)
+    UI.user_error!("リリースノートファイルが見つからない: #{notes_path}")
+  end
+  notes = File.read(notes_path)
+  if notes.strip.empty?
+    UI.user_error!("リリースノートが空。fastlane/metadata/ja/release_notes.txt を草案で埋めてから実行して")
+  end
+  if notes.include?("PLACEHOLDER")
+    UI.user_error!("リリースノートが PLACEHOLDER のまま。fastlane/metadata/ja/release_notes.txt を実際の草案で置き換えてから実行して")
+  end
+end
+
+# release_prepare / release_submit 共通の deliver 呼び出し。
+# submit_for_review だけを可変にし、それ以外のオプションを1箇所に集約することで、
+# 「prepare で確認した内容」と「submit が実行する内容」が将来のメンテで乖離しないようにする。
+# 注意: metadata_path: "./fastlane/metadata" はアクション側がプロジェクトルート基準で
+# 解決する（deliver のデフォルト値と同一）ため、ensure_release_notes! の __dir__ 基準パスとは
+# 解決規則が異なる。ここは変更しないこと。
+def deliver_release(version:, build:, submit:)
+  deliver(
+    api_key: asc_api_key,
+    app_identifier: APP_IDENTIFIER,
+    app_version: version,                    # 版が無ければ作成、編集中の版があれば改名
+    build_number: build,                     # processing完了済みビルドのみ選択可能
+    submit_for_review: submit,
+    force: true,                             # HTMLプレビュー確認をスキップ（非対話実行）
+    skip_binary_upload: true,                # バイナリはaltoolで既にアップロード済み
+    skip_screenshots: true,
+    skip_metadata: false,
+    metadata_path: "./fastlane/metadata",    # ja/release_notes.txt しか置かない＝新機能欄以外は触らない
+    run_precheck_before_submit: false,       # precheckはAPIキー認証と相性問題があるため無効
+    automatic_release: true,                 # 承認後自動公開（現行運用と同じ）
+    phased_release: false
+  )
+end
+
+platform :ios do
+  # --- lane :asc_status ---------------------------------------------------
+  # 読み取り専用の認証スモークテスト。App Store Connect API キーが正しく
+  # 疎通できるかを、最新 TestFlight ビルド番号の取得で確認する。
+  desc "App Store Connect API 認証の疎通確認（読み取り専用）"
+  lane :asc_status do
+    build_number = latest_testflight_build_number(
+      api_key: asc_api_key,
+      app_identifier: APP_IDENTIFIER
+    )
+    UI.success("最新TestFlightビルド番号: #{build_number}")
+  end
+
+  # --- lane :release_prepare ----------------------------------------------
+  # App Store 版の作成（または編集中の版のビルド選択）＋新機能欄の記入のみ行う。
+  # submit_for_review: false のため、審査提出は一切行わない。
+  desc "App Store版の作成・新機能欄記入・ビルド選択（審査提出はしない）"
+  lane :release_prepare do |options|
+    version = options[:version]
+    build = options[:build]
+    if version.nil? || build.nil?
+      UI.user_error!("release_prepare には version と build の両方が必要（例: fastlane release_prepare version:1.9.2 build:72）")
+    end
+
+    ensure_release_notes!
+    deliver_release(version: version, build: build, submit: false)
+
+    UI.success("prepare 完了。ASCで内容確認→GO判断へ")
+  end
+
+  # --- lane :release_submit ------------------------------------------------
+  # release_prepare と同一パラメータ・同一 deliver オプションで、
+  # submit_for_review: true のみ変更して審査提出まで行う。不可逆操作。
+  desc "審査提出（不可逆）。事前に release_prepare 相当でASC側の内容確認を済ませておくこと"
+  lane :release_submit do |options|
+    version = options[:version]
+    build = options[:build]
+    if version.nil? || build.nil?
+      UI.user_error!("release_submit には version と build の両方が必要（例: fastlane release_submit version:1.9.2 build:72）")
+    end
+
+    ensure_release_notes!
+
+    UI.important("不可逆操作: 審査提出を実行する")
+
+    deliver_release(version: version, build: build, submit: true)
+
+    UI.success("審査提出完了")
+  end
+end

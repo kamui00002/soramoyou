@@ -1,0 +1,1 @@
+PLACEHOLDER — 提出前にリリースノート草案で置き換えること（scripts/appstore-release.sh prepare がこの行を検知して止まる）

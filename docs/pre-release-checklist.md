@@ -50,6 +50,7 @@
 - [ ] `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` が意図どおりか（CLI override でなく pbxproj に値をコミット＝ドリフト防止）
 - [ ] archive は `ENABLE_USER_SCRIPT_SANDBOXING=YES` のまま通るか（dSYM の inputPaths 修正が有効）
 - [ ] 新機能をユーザーに見せるなら **What's New（`WhatsNewContent`）を更新**したか
+- [ ] App Store 審査提出は `scripts/appstore-release.sh`（prepare→GO確認→submit）で行う。手順は `docs/appstore-release-automation.md` 参照
 
 ---
 
