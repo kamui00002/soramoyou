@@ -94,4 +94,65 @@ final class LivingSkyVideoExporterTests: XCTestCase {
             "progressLast=\(progressValues.last ?? 0)"
         )
     }
+
+    /// `renderVideo` が `writer.startWriting()` 成功後に失敗した場合、書きかけの mp4 ファイルを
+    /// 削除することを検証する（PR レビュー指摘Aの回帰テスト）。
+    ///
+    /// 失敗経路を作る方式の選定理由:
+    /// - Engine を未 prepare のまま呼ぶ方式（`notPrepared`）は `writer.startWriting()` より前で
+    ///   throw するため、defer によるクリーンアップを一切経由せず検証にならない。
+    /// - `makeFrame` を確実に nil にする決定的な入力（kernel はあるが photo/mask だけ壊す等）は
+    ///   `LivingSkyEngine` の公開APIから作れない。
+    /// - そこで「書き出し開始直後に Task をキャンセルする」方式を採る。`renderVideo` は
+    ///   ループの毎回の先頭で `try Task.checkCancellation()` を呼んでおり、これは
+    ///   `writer.startWriting()`（＝ファイル生成済み）より必ず後に実行されるため、
+    ///   Metal カーネルの可否に関わらず必ず「startWriting成功後の失敗」を再現できる
+    ///   （Metal が使えない環境では `engine.makeFrame` が nil を返して `writingFailed` になる
+    ///   が、いずれにせよ startWriting 後の失敗経路を通る点は変わらない）。このため、他のテストと
+    ///   異なり `engine.isAvailable` による XCTSkip は行わない（常に実行されることが本テストの
+    ///   前提のため）。
+    /// - `loopDuration` は既定値（`LivingSkyParameters()` の 8.0 秒＝240フレーム）のまま使う。
+    ///   ループ本体が長いほど「セットアップ完了→ループ先頭のキャンセル検知」までの時間的余裕が
+    ///   確保しやすく、キャンセルが確実にループ内（＝defer 登録後）で検知されるようにするため。
+    ///
+    /// 非自明性の根拠（このテストは fix 前だと失敗する）: `AVAssetWriter` は `startWriting()` の
+    /// 時点で出力 URL にファイルを生成する。修正前のコードは `Task.checkCancellation()` の throw を
+    /// 個別の `writer.cancelWriting()` 呼び出しでカバーしておらず、キャンセル経由の失敗では
+    /// 書きかけファイルが削除されずに残っていた。修正後は defer が全失敗経路を一本化してカバーする。
+    func test_renderVideo_cleansUpFileOnFailure() async throws {
+        let engine = LivingSkyEngine()
+
+        let size = 128
+        let photo = CIImageTestHelpers.makeTwoBandCIImage(size: size)
+        let mask = CIImage(color: CIColor.white).cropped(to: photo.extent)
+        engine.setPreparedStateForTesting(photo: photo, mask: mask)
+        // engine.parameters は既定値（loopDuration=8.0秒）のまま使う（理由は上記コメント参照）。
+
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mp4")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+
+        let exporter = LivingSkyVideoExporter()
+        let renderTask = Task {
+            try await exporter.renderVideo(to: tempURL, engine: engine) { _ in }
+        }
+        renderTask.cancel()
+
+        do {
+            try await renderTask.value
+            XCTFail("キャンセルしたのに renderVideo が成功してしまった")
+        } catch {
+            // どのエラー型で throw されるかは Metal の可否・タイミングに依存する
+            // （CancellationError または LivingSkyVideoExporterError.writingFailed）ため、
+            // 型は問わず「throw されたこと」だけを確認する。
+        }
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: tempURL.path),
+            "キャンセルによる失敗時に書きかけの mp4 ファイルが削除されずに残っている（defer によるクリーンアップの回帰）"
+        )
+    }
 }

@@ -47,8 +47,8 @@ final class LivingSkyEngineTests: XCTestCase {
         }
 
         let extent = CGRect(x: 0, y: 0, width: size, height: size)
-        let pixels0 = try renderRGBA8Pixels(frame0, extent: extent)
-        let pixelsT = try renderRGBA8Pixels(frameT, extent: extent)
+        let pixels0 = try CIImageTestHelpers.renderRGBA8Pixels(frame0, extent: extent)
+        let pixelsT = try CIImageTestHelpers.renderRGBA8Pixels(frameT, extent: extent)
 
         XCTAssertEqual(
             pixels0, pixelsT,
@@ -87,7 +87,7 @@ final class LivingSkyEngineTests: XCTestCase {
         }
 
         let size = 512
-        let photo = makeVerticalEdgeCIImage(size: size)
+        let photo = CIImageTestHelpers.makeVerticalEdgeCIImage(size: size)
         let mask = CIImage(color: CIColor.white).cropped(to: photo.extent)
         engine.setPreparedStateForTesting(photo: photo, mask: mask)
 
@@ -106,8 +106,8 @@ final class LivingSkyEngineTests: XCTestCase {
         }
 
         let extent = CGRect(x: 0, y: 0, width: size, height: size)
-        let pixels0 = try renderRGBA8Pixels(frame0, extent: extent)
-        let pixelsQuarter = try renderRGBA8Pixels(frameQuarter, extent: extent)
+        let pixels0 = try CIImageTestHelpers.renderRGBA8Pixels(frame0, extent: extent)
+        let pixelsQuarter = try CIImageTestHelpers.renderRGBA8Pixels(frameQuarter, extent: extent)
 
         let movedPixelCount = countPixelsExceedingThreshold(pixels0, pixelsQuarter, threshold: 20)
         XCTAssertGreaterThanOrEqual(
@@ -118,29 +118,6 @@ final class LivingSkyEngineTests: XCTestCase {
     }
 
     // MARK: - Private Helpers
-
-    /// 鋭い垂直エッジを持つ CIImage を生成する（左半分=黒0、右半分=白255）。
-    /// 局所的に線形なコンテンツ（グラデーション等）では二相クロスフェードの加重平均位相が
-    /// 定数であるため差分が打ち消し合ってしまうため、鋭いエッジで局所的な変化を作る必要がある。
-    private func makeVerticalEdgeCIImage(size: Int) -> CIImage {
-        var bytes = [UInt8](repeating: 0, count: size * size * 4)
-        for y in 0..<size {
-            for x in 0..<size {
-                let i = (y * size + x) * 4
-                let c: UInt8 = x < size / 2 ? 0 : 255
-                bytes[i]     = c
-                bytes[i + 1] = c
-                bytes[i + 2] = c
-                bytes[i + 3] = 255
-            }
-        }
-        let data = Data(bytes)
-        return CIImage(bitmapData: data,
-                       bytesPerRow: size * 4,
-                       size: CGSize(width: size, height: size),
-                       format: .RGBA8,
-                       colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
-    }
 
     /// 2つの RGBA8 バイト列を比較し、RGB のいずれかのチャンネルの絶対差が `threshold` を超える
     /// 画素数を数える（alpha は常に 255 で不動のため除外）。面平均ではなく画素数基準にすることで、
@@ -159,35 +136,5 @@ final class LivingSkyEngineTests: XCTestCase {
             i += 4
         }
         return count
-    }
-
-    /// CIImage を RGBA8 の生バイト列としてレンダリングする（厳密なピクセル一致比較用）。
-    /// `CIImageTestHelpers.sampleRegionRGB` は 4x4 領域の平均値のため、今回のような
-    /// 「全画素が完全一致するか」の検証には使えず、専用ヘルパーをこのファイル内に持つ。
-    private func renderRGBA8Pixels(_ image: CIImage, extent: CGRect) throws -> [UInt8] {
-        let context = CIContext()
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let cgImage = context.createCGImage(image, from: extent, format: .RGBA8, colorSpace: colorSpace) else {
-            XCTFail("CGImage 生成に失敗した")
-            return []
-        }
-
-        let width = Int(extent.width)
-        let height = Int(extent.height)
-        var bytes = [UInt8](repeating: 0, count: width * height * 4)
-        guard let bitmapContext = CGContext(
-            data: &bytes,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            XCTFail("CGContext 生成に失敗した")
-            return []
-        }
-        bitmapContext.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return bytes
     }
 }

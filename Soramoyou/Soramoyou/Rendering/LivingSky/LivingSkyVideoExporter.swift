@@ -13,7 +13,6 @@
 import AVFoundation
 import CoreImage
 import Photos
-import UIKit
 
 /// `LivingSkyVideoExporter` の処理中に発生しうるエラー
 enum LivingSkyVideoExporterError: Error, LocalizedError {
@@ -129,6 +128,25 @@ final class LivingSkyVideoExporter {
                 writer.error?.localizedDescription ?? "startWriting に失敗しました"
             )
         }
+
+        // レビュー指摘A対応: 失敗経路の cancelWriting/部分ファイル削除を defer に一本化する。
+        // startWriting 成功後に発生しうる全失敗経路（pixelBufferPool取得失敗・outputColorSpace生成失敗・
+        // ループ内の Task.checkCancellation/makeFrame nil/pixelBuffer生成失敗/append失敗・
+        // finishWriting の非completed）で、① writer が .writing のままなら cancelWriting() で
+        // 書き込みを打ち切り、② AVAssetWriter が startWriting 時点で生成済みの書きかけファイルを
+        // 削除する、の両方を保証する。二重 cancelWriting を避けるため status が .writing のときだけ
+        // 呼ぶ（finishWriting 完了後は .completed/.failed/.cancelled のいずれかで対象外）。
+        // 成功時（finishWriting が .completed）は末尾で succeeded = true にしてこの defer をスキップする。
+        var succeeded = false
+        defer {
+            if !succeeded {
+                if writer.status == .writing {
+                    writer.cancelWriting()
+                }
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
         writer.startSession(atSourceTime: .zero)
 
         guard let pixelBufferPool = adaptor.pixelBufferPool else {
@@ -151,14 +169,12 @@ final class LivingSkyVideoExporter {
 
             let elapsed = Double(i) / Double(Self.frameRate)
             guard let frame = engine.makeFrame(elapsed: elapsed) else {
-                writer.cancelWriting()
                 throw LivingSkyVideoExporterError.writingFailed("makeFrame がフレームを生成できませんでした（i=\(i)）")
             }
 
             var pixelBufferOut: CVPixelBuffer?
             let poolStatus = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pixelBufferPool, &pixelBufferOut)
             guard poolStatus == kCVReturnSuccess, let pixelBuffer = pixelBufferOut else {
-                writer.cancelWriting()
                 throw LivingSkyVideoExporterError.pixelBufferCreationFailed
             }
 
@@ -167,7 +183,6 @@ final class LivingSkyVideoExporter {
 
             let presentationTime = CMTime(value: CMTimeValue(i), timescale: Self.frameRate)
             guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
-                writer.cancelWriting()
                 throw LivingSkyVideoExporterError.writingFailed(
                     writer.error?.localizedDescription ?? "append に失敗しました（i=\(i)）"
                 )
@@ -193,6 +208,10 @@ final class LivingSkyVideoExporter {
                 }
             }
         }
+
+        // ここまで到達＝finishWriting が .completed で正常終了。defer の失敗経路クリーンアップを
+        // スキップする（成功したファイルを削除しないようにするためのフラグ切り替え）。
+        succeeded = true
     }
 
     // MARK: - (b) Photos 保存
@@ -201,6 +220,16 @@ final class LivingSkyVideoExporter {
     ///
     /// - Parameter fileURL: `renderVideo(to:engine:progress:)` で書き出した mp4 の URL
     func saveToPhotos(fileURL: URL) async throws {
+        // レビュー指摘B対応: 権限拒否 throw・performChanges 失敗のどちらでも Release ビルドでは
+        // 一時ファイルを削除する（従来は成功後のみ削除しており、失敗経路で一時ファイルが残っていた）。
+        // DEBUG ビルドは現行どおり成功・失敗を問わず削除せず残す
+        // （呼び出し側 `LivingSkyPreviewView` がパスを print してレビュアーが実ファイルを確認できるようにする）。
+        defer {
+#if !DEBUG
+            try? FileManager.default.removeItem(at: fileURL)
+#endif
+        }
+
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else {
             throw LivingSkyVideoExporterError.photosAccessDenied
@@ -209,13 +238,5 @@ final class LivingSkyVideoExporter {
         try await PHPhotoLibrary.shared().performChanges {
             PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: fileURL)
         }
-
-#if DEBUG
-        // DEBUG ビルドでは E2E 検証用に一時ファイルを削除せず残す
-        // （呼び出し側 `LivingSkyPreviewView` がパスを print してレビュアーが実ファイルを確認できるようにする）。
-#else
-        // Release ビルドでは保存成功後に一時ファイルを削除する。
-        try? FileManager.default.removeItem(at: fileURL)
-#endif
     }
 }

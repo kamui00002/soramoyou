@@ -31,6 +31,14 @@ metal-shader-dev skill の統合チェックリスト 2〜4（FilterGraphBuilder
 **編集ツール向けなので今回は適用外**。適用するのは 1（kernel ロード。ただし自前 Engine 内）と
 5（.metal がビルドフェーズに入るか確認）のみ。
 
+⚠️ ただし挙動レベルの例外が1つある: 本機能が pbxproj に追加した
+`MTL_COMPILER_FLAGS`/`MTLLINKER_FLAGS = -fcikernel` はターゲット全体に効くため、既存
+`ExposureContrast.metal` の CIKernel（露出/明るさ/コントラスト/彩度の1パス）が**本ブランチで初めて
+実ロードされる**（従来は同フラグ欠落で常にロード失敗→CIFilterフォールバックで動作していた）。
+回帰確認として FilterGraphBuilderTests / EditToolsPhotosParityTests を実行し、失敗2件
+（clarity/texture）は本変更前のクリーンビルドでも同一値で失敗する既存不具合であることを
+A/B 検証済み（2026-07-12）。
+
 - **入力**は編集確定後の final 画像（既存パイプラインの出力を受け取るだけ）
 - **マスク**は `SkyMaskProviderProtocol.makeSkyMask(for:quality:)` を**画像につき1回**生成してキャッシュ
   （フレームごとに再生成しない。プレビュー=`.preview`／書き出し=`.export`）
