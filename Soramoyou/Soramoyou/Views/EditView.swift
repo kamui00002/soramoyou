@@ -34,6 +34,8 @@ struct EditView: View {
     @State private var isGeneratingFinal = false
     /// 編集ツール設定画面の表示フラグ
     @State private var showEditToolsSettings = false
+    /// Living Sky プロトタイプ用プレビューシートの表示フラグ（#if DEBUG のみ使用）
+    @State private var showLivingSkySheet = false
     /// 回転スライダーの値（リアルタイム用）
     @State private var rotationSliderValue: Double = 0
 
@@ -77,6 +79,27 @@ struct EditView: View {
                 VStack(spacing: 0) {
                     // 画像プレビュー
                     imagePreviewView
+#if DEBUG
+                        // Living Sky（プロトタイプ・段階2）動作確認用ボタン。
+                        // ⚠️ navigationBarTrailing に置くと項目数が5個になり iOS 26 が
+                        // Undo/Redo/設定/風ボタンを「…」オーバーフローメニューに折りたたんでしまい、
+                        // UIオートメーションから開けず動作確認がブロックされるため、
+                        // プレビュー領域右上への floating overlay に変更した。
+                        .overlay(alignment: .topTrailing) {
+                            Button(action: {
+                                showLivingSkySheet = true
+                            }) {
+                                Image(systemName: "wind")
+                                    .font(.body)
+                                    .foregroundColor(.white)
+                                    .padding(12)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                            }
+                            .padding(12)
+                            .accessibilityLabel("Living Sky")
+                        }
+#endif
 
                     // 「あなたの定番」適用ボタン（柱1 v1）— 見つけやすいよう編集コントロール直上に配置
                     if viewModel.hasPersonalDefault {
@@ -165,6 +188,15 @@ struct EditView: View {
             }) {
                 EditToolsSettingsView()
             }
+#if DEBUG
+            // Living Sky（プロトタイプ・段階2）: 現在の編集済みプレビュー画像を渡す。
+            // 未生成（読み込み中など）の場合は元画像にフォールバックする。
+            .sheet(isPresented: $showLivingSkySheet) {
+                if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
+                    LivingSkySheet(sourceImage: sourceImage)
+                }
+            }
+#endif
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
