@@ -125,6 +125,18 @@ final class LivingSkyEngine {
     /// 呼び出し側（View）で機能そのものを非表示にすること（設計書§1）。
     var isAvailable: Bool { kernel != nil }
 
+    /// Metal カーネルが利用可能かどうかを一度だけ判定してキャッシュした static 値。
+    ///
+    /// `EditView` はプレビューボタンの表示可否をこの値で判定するが、SwiftUI の `body` は
+    /// 再描画のたびに再評価されるため、毎回ここで新しい `LivingSkyEngine()` を生成して
+    /// `default.metallib` からの kernel ロードを走らせるのは無駄なコストになる。
+    /// `static let` の初期化クロージャは Swift ランタイムにより初回アクセス時に一度だけ・
+    /// スレッドセーフに評価される（lazy static 相当）ため、これを利用して1回だけエンジンを
+    /// 生成し `isAvailable` を評価した結果をキャッシュする。
+    static let isSupported: Bool = {
+        LivingSkyEngine().isAvailable
+    }()
+
     // MARK: - Public: 準備（画像につき1回）
 
     /// 編集確定後の写真から「縮小済み photo」と「フェザー済み mask」を1回だけ生成してキャッシュする。

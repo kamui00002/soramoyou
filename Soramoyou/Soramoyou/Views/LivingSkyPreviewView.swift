@@ -1,22 +1,22 @@
 // ⭐️ LivingSkyPreviewView.swift
-// Living Sky（空のループアニメーション）のプロトタイプ用プレビュー画面（段階2）
+// Living Sky（空のループアニメーション）のプレビュー＋mp4書き出し画面
 //
 //  LivingSkyPreviewView.swift
 //  Soramoyou
 //
-// 設計書: docs/living-sky-design.md §4（プレビュー・カクつかない）§6（パラメータ）
+// 設計書: docs/living-sky-design.md §4（プレビュー・カクつかない）§6（パラメータ）§10（本番UI）
 //
-// ⚠️ これは「段階2: シェーダ＋Engine＋簡易プレビューのプロトタイプ」用の最小限 UI。
-//    本番 UI（フィルター/編集ツールと並ぶ導線・デザイン調整）は後段階で作り込む前提。
+// 2026-07-16: 本番導線化（EditView のカプセルボタンから提示）に伴い #if DEBUG ゲートを撤去。
+//    動きモデル Picker（うねり/ドリフト比較用）のみ DEBUG ビルド限定で残す（下記 controlsArea 参照）。
 
 import SwiftUI
 import MetalKit
 import CoreImage
 
-// MARK: - LivingSkySheet（プロトタイプ用シート画面）
+// MARK: - LivingSkySheet（プレビュー＋書き出しシート画面）
 
 /// Living Sky のプレビュー＋4スライダー＋閉じるボタンだけの簡素なシート。
-/// `EditView` から `#if DEBUG` ゲートで提示される（本プロンプト仕様のエントリポイント参照）。
+/// `EditView` のプレビュー下部カプセルボタン「空を動かす」から提示される。
 struct LivingSkySheet: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var controller = LivingSkyController()
@@ -34,6 +34,9 @@ struct LivingSkySheet: View {
     @State private var exportResultMessage: String?
     /// 書き出し結果アラートの表示フラグ
     @State private var showExportResultAlert = false
+    /// mp4 書き出しの `Task` 本体。シートが閉じられた（`onDisappear`）ときに `cancel()` して
+    /// 書き出し中の処理を打ち切るために保持する（下記 `.onDisappear` のコメント参照）。
+    @State private var exportTask: Task<Void, Never>?
 
     var body: some View {
         NavigationView {
@@ -43,7 +46,7 @@ struct LivingSkySheet: View {
                 controlsArea
             }
             .background(Color.black)
-            .navigationTitle("Living Sky（プロトタイプ）")
+            .navigationTitle("空を動かす")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Color.black, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
@@ -58,6 +61,18 @@ struct LivingSkySheet: View {
         .preferredColorScheme(.dark)
         .onAppear {
             controller.start(with: sourceImage)
+            LoggingService.shared.logEvent("living_sky_opened", parameters: nil)
+        }
+        .onDisappear {
+            // 書き出し中にシートを閉じると Task が走り続ける申し送り問題への対応。
+            // 効果の範囲（レビュー指摘対応で明記）: フレーム生成ループには
+            // LivingSkyVideoExporter.renderVideo のループ内 Task.checkCancellation ＋ defer
+            // クリーンアップ（部分ファイル削除）が効き、安全に中断・掃除される
+            // （test_renderVideo_cleansUpFileOnFailure で検証済み）。一方、prepare の解析
+            // フェーズ（Task.detached 内・数秒）と、ループ完了後の finishWriting〜Photos保存
+            // にはキャンセルが届かず完走しうるが、完成済み動画が保存されるだけで
+            // 破壊・リークはないため許容する（終盤で止めて完成品を破棄する方が有害）。
+            exportTask?.cancel()
         }
         .alert(exportResultMessage ?? "", isPresented: $showExportResultAlert) {
             Button("OK") {}
@@ -76,7 +91,8 @@ struct LivingSkySheet: View {
         isExporting = true
         exportProgress = 0
 
-        Task {
+        // `.onDisappear` で `cancel()` できるよう Task をフィールドに保持する。
+        exportTask = Task {
             defer { isExporting = false }
             do {
                 let exportEngine = LivingSkyEngine()
@@ -102,9 +118,24 @@ struct LivingSkySheet: View {
                 print("LivingSkyExport: \(tempURL.path)")
 #endif
 
-                exportResultMessage = "写真に保存したわ"
+                // PII なし・数値パラメータのみを送る（プロジェクトの Analytics 5原則）。
+                // レビュー指摘対応: スライダーは書き出し中も操作可能なため、完了時の
+                // controller.parameters を読み直すと実際にエンコードした値とずれうる。
+                // 書き出し開始時にコピー済みの exportEngine.parameters（凍結値）から読む。
+                LoggingService.shared.logEvent("living_sky_video_saved", parameters: [
+                    "loop_duration": Int(exportEngine.parameters.loopDuration.rounded()),
+                    "speed": exportEngine.parameters.speed,
+                    "shimmer": exportEngine.parameters.shimmerAmount
+                ])
+
+                exportResultMessage = "写真に保存しました"
                 showExportResultAlert = true
             } catch {
+                // ユーザーがシートを閉じて `.onDisappear` 経由で Task をキャンセルした場合は
+                // CancellationError が上がってくる。これは正常操作なので、エラーの Analytics
+                // 送信も（表示先シートが既に消えている）アラート用の状態更新も行わない。
+                guard !(error is CancellationError) else { return }
+                LoggingService.shared.logErrorEvent(error, context: "living_sky_export", category: .systemError)
                 exportResultMessage = error.localizedDescription
                 showExportResultAlert = true
             }
@@ -171,8 +202,11 @@ struct LivingSkySheet: View {
 
     private var controlsArea: some View {
         VStack(spacing: 16) {
+#if DEBUG
             // 動きモデル切替（0=v4窓クロスフェード・ドリフト[既定]／1=v3軌道うねり[比較用]）。
             // LivingSkyParameters.motionModel の Int(0/1) をそのままバインドする。
+            // v3（うねり）はユーザー評価「気持ち悪い」のため本番では選ばせない
+            // （既定 motionModel=0 のドリフトのみ提供）が、実機比較用に DEBUG ビルドでは残す。
             Picker(
                 "動き",
                 selection: Binding(
@@ -184,6 +218,7 @@ struct LivingSkySheet: View {
                 Text("ドリフト").tag(0)
             }
             .pickerStyle(.segmented)
+#endif
 
             sliderRow(
                 title: "風向き",
