@@ -47,8 +47,10 @@ final class LivingSkyEngine {
     /// この値未満のときは呼び出し側（View）が警告表示を検討する（設計書§7リスク表）。
     static let lowConfidenceThreshold: Double = 0.3
 
-    /// フロー速度ムラの強さ（設計書§2.1: 既定 0.3）
-    private static let speedJitter: Float = 0.3
+    /// フロー速度ムラの強さ（設計書§2.1: 既定 0.3）。
+    /// v2: 0.3 → 0.5 に強化。速度ムラを強めることで、方向乱流（LivingSky.metal 側）と
+    /// 合わせてクロスフェードコピー間の「モーフ感」を補強し、分身の知覚を下げる狙い。
+    private static let speedJitter: Float = 0.5
 
     /// フロー速度ムラ用 fbm の空間スケール（設計書§3のシェーダ引数コメント: 例 0.008）
     private static let noiseScale: Float = 0.008
@@ -256,6 +258,8 @@ final class LivingSkyEngine {
         // 入力からサンプルする必要がある。ExposureContrast の `{ _, rect in rect }`
         // （ROI=出力矩形そのまま）をそのまま流用すると、変位でずれた分だけ端に未定義画素
         // （黒 or 透明）が出てしまう。`maxDispPx` 分（+ 安全マージン）だけ ROI を外側へ広げる。
+        // v3（軌道うねり）でも変更不要: 軌道半径の最大値は `maxDispPx × kOrbitRadiusRatio(0.5) × 1.0`
+        // （fbm の変動幅が最大の場合）で常に `maxDispPx` 以下のため、既存の pad がそのまま包含する。
         let pad = maxDispPx + Self.roiPaddingMargin
 
         return kernel.apply(
@@ -271,6 +275,9 @@ final class LivingSkyEngine {
                 time01,
                 flowDirPxX,
                 flowDirPxY,
+                // 動きモデル切替（0=v4窓クロスフェード・ドリフト[既定]／1=v3軌道うねり[比較用]）。
+                // LivingSky.metal の引数順（flowDirPxY の直後・shimmerAmp の直前）と厳密一致させる。
+                Float(parameters.motionModel),
                 shimmerAmp,
                 Self.speedJitter,
                 Self.noiseScale,

@@ -58,6 +58,31 @@ static inline float fbm(float2 p) {
 
 // MARK: - Living Sky カーネル本体
 
+// v2/v4: 方向乱流のパラメータ（マジックナンバー回避）。
+// kDirNoiseScale: 方向乱流用 fbm の空間スケール（フロー速度ムラ用 noiseScale 引数より粗い
+//   ＝低周波の緩やかな「うねり」にする）。
+// kMaxTurnRad: 風向きベクトルを回転させる最大角。v2時代は0.44rad(25°)だったが、
+//   v4ではドリフト方向の可読性を優先し0.26rad(15°)へ緩和。
+#define kDirNoiseScale 0.004
+#define kMaxTurnRad 0.26
+
+// v4: 窓クロスフェード＋画素ごと位相オフセットのパラメータ（マジックナンバー回避）。
+// kPhaseOffsetScale: 位相オフセット用 fbm の空間スケール（粗い＝大きなパッチ単位で世代交代）。
+// kXfadeHalfWidth: 三角窓 tri を smoothstep で急峻化するクロスフェード半幅（0.15 ⇒ 全体の約3割の
+//   時間だけ2コピーが重なる。残り約7割は片方のコピーが単独表示される）。
+#define kPhaseOffsetScale 0.003
+#define kXfadeHalfWidth 0.15
+
+// v3: 軌道うねり方式のパラメータ（マジックナンバー回避）。
+// kPhaseNoiseScale: 周回位相 ph(p) を場所ごとにばらつかせる fbm の空間スケール（粗め＝
+//   隣接画素は似た位相を持ちつつ、離れた場所では周回タイミングがずれる）。
+// kRadiusNoiseScale: 軌道半径を場所ごとにばらつかせる fbm の空間スケール。
+// kOrbitRadiusRatio: 軌道半径 = 最大変位px × この係数（0.5 → 約±4%幅・ピーク速度
+//   2πR/T ≈ 23px/s で明確に視認可能）。
+#define kPhaseNoiseScale 0.006
+#define kRadiusNoiseScale 0.01
+#define kOrbitRadiusRatio 0.5
+
 /// 静止画の空領域だけを風向きに沿ってループ変位させ、光のゆらぎを加える general CIKernel。
 ///
 /// - Parameters:
@@ -66,6 +91,9 @@ static inline float fbm(float2 p) {
 ///   - time01: `frac(経過時間 / ループ長T)` の 0...1 値（ループの位相）
 ///   - flowDirPxX: 風向き単位ベクトル × 最大変位px の X 成分（ワーキング座標系。Swift 側で事前計算）
 ///   - flowDirPxY: 風向き単位ベクトル × 最大変位px の Y 成分
+///   - motionModel: 動きモデル切替。0.5未満=v4窓クロスフェード（ドリフト・既定）／
+///     それ以外=v3軌道うねり（比較用）。`LivingSkyParameters.motionModel` の Int(0/1) を
+///     そのまま Float へキャストして渡す
 ///   - shimmerAmp: 光のゆらぎ振幅 0...0.1
 ///   - speedJitter: 速度ムラの強さ（既定 0.3）
 ///   - noiseScale: フロー速度ムラ用 fbm の空間スケール（例 0.008）
@@ -85,6 +113,7 @@ extern "C" float4 livingSky(
     float time01,
     float flowDirPxX,
     float flowDirPxY,
+    float motionModel,
     float shimmerAmp,
     float speedJitter,
     float noiseScale,
@@ -117,26 +146,87 @@ extern "C" float4 livingSky(
         return photo.sample(photo.transform(p));
     }
 
-    // 設計書§2.1「フロー変位＋二相クロスフェード」— 速度ムラ:
-    // 一様な流れだけだと不自然な「ベルトコンベア感」が出るため、fbm で位置ごとに
-    // 流れの速さへ有機的なムラを付与する（F(p) = 風向き × (1 + 0.3・(fbm(p·s) − 0.5)・2)）。
-    float j = fbm(p * noiseScale);
-    float2 flow = flowDirPx * (1.0 + speedJitter * (j - 0.5) * 2.0);
-
     // 設計書§2.1: 変位減衰 m^k（k=2）。境界ほど動きを減衰させることで、
     // マスクの誤判定や境界のにじみがあっても地上を引っ張らないようにする。
     float att = m * m;
 
-    // 設計書§2.1「二相クロスフェード（ループの核）」:
-    // 1つの位相だけをUV変位させ続けると空が伸び切って破綻するため、0.5 位相ずらした
-    // 2つの流れをクロスフェードする。各位相は自身のウェイトが0になる瞬間にだけリセットされる
-    // ため、リセットの継ぎ目が視覚的に不可視になる（詳細は設計書「継ぎ目なしの証明」参照）。
-    float phi1 = time01;
-    float phi2 = fract(time01 + 0.5);
-    float4 c1 = photo.sample(photo.transform(p - flow * phi1 * att));
-    float4 c2 = photo.sample(photo.transform(p - flow * phi2 * att));
-    float w = fabs(2.0 * time01 - 1.0);
-    float4 c = mix(c1, c2, w);
+    // 動きモデルの変遷: v2（三相クロスフェード＋方向乱流）は実機シミュレータで分身を抑制できたが、
+    // T/4差の変化画素が v1 比 9.3%→1.28% に激減し動き自体が知覚困難になった。そこでクロスフェード
+    // を使わない v3「軌道うねり」を追加したが、ユーザー実機評価は「ちょっと気持ち悪い」。一方
+    // v2 系のドリフトは「雲が多重に見えて錯視みたい」との評価だった（三相正規化ブレンドが
+    // 静止時点でも常に3コピーが重なる「多重露光」構造が原因）。ユーザーはドリフト系を支持した
+    // ため、Valve の flow map 定石（窓クロスフェード＋画素ごと位相オフセット）で多重露光を
+    // 解消した v4 を新既定にした。motionModel で v4/v3 を切り替えられるようにしている。
+    float4 c;
+    if (motionModel < 0.5) {
+        // ===== v4: フロー変位＋窓クロスフェード＋画素ごと位相オフセット（ドリフト） =====
+        // v2（三相正規化ブレンド）は静止時点でも常に3コピーが重なって見える「多重露光」に
+        // なる構造的欠陥があり、実機評価で「雲が多重に見えて錯視みたい」と判定された。
+        // v4 は Valve の flow map 定石（Vlachos, SIGGRAPH 2010「Water Flow in Portal 2」等で
+        // 広く使われる手法）に基づく: ①位相2枚のうち大半の時間はどちらか一方だけを単独表示し、
+        // 切替の瞬間だけ短くクロスフェードする「窓クロスフェード」②位相タイミングを画素ごとに
+        // ノイズでオフセットし、全画面が同時にフェードする「脈動」を消す。
+
+        // 設計書§2.1「フロー変位」— 速度ムラ:
+        // 一様な流れだけだと不自然な「ベルトコンベア感」が出るため、fbm で位置ごとに
+        // 流れの速さへ有機的なムラを付与する（F(p) = 風向き × (1 + 0.3・(fbm(p·s) − 0.5)・2)）。
+        float j = fbm(p * noiseScale);
+
+        // 方向の乱流（分身対策）。全画素が同方向に平行移動すると分身がくっきり見えるため、
+        // 場所ごとに風向きを揺らし、コピー同士を非剛体変形（モーフ）の関係にする
+        // （最大回転角 kMaxTurnRad は v4 でドリフト方向の可読性を優先し 0.44→0.26rad へ緩和）。
+        // 方向乱流: 粗いfbm（+37.7は速度ムラのノイズ j と座標をずらして相関を切るオフセット。
+        // 同じ座標系だと速度ムラと回転ムラが同期し乱流としての効果が薄れるため）で回転する。
+        float turn = (fbm(p * kDirNoiseScale + float2(37.7, 37.7)) - 0.5) * 2.0 * kMaxTurnRad;
+        float cs = cos(turn);
+        float sn = sin(turn);
+        // ⚠️ flowDirPx はカーネル冒頭でスカラー引数から再構成済み（float2 引数マーシャリング
+        // 不具合を避けるための既存の仕組み。上記コメント参照）。ここではそれをそのまま回転させる。
+        float2 turnedDir = float2(
+            flowDirPx.x * cs - flowDirPx.y * sn,
+            flowDirPx.x * sn + flowDirPx.y * cs
+        );
+        float2 flow = turnedDir * (1.0 + speedJitter * (j - 0.5) * 2.0);
+
+        // v4 ドリフト（Valve flow map 定石: 窓クロスフェード＋画素ごと位相オフセット）
+        // - 位相2枚。各画素は大半の時間どちらか単独のコピーがスライド表示され、
+        //   三角窓を smoothstep で急峻化した「窓」の間だけ短くクロスフェードする
+        //   （多重像が見えるのは各所で周期の約3割の時間だけ）。
+        // - 位相タイミングを粗いノイズで画素ごとにオフセットすることで、
+        //   全画面が同時にフェードする「脈動」を消し、雲がパッチ状に世代交代する自然な見えにする。
+        // - 全項が time01 の周期関数（オフセットは時不変）なので frame(0)≡frame(T) は維持。
+        float phaseOffset = fbm(p * kPhaseOffsetScale);            // 画素ごとの位相オフセット(0..1近傍)
+        float f1 = fract(time01 + phaseOffset);
+        float f2 = fract(time01 + phaseOffset + 0.5);
+        float tri = 1.0 - fabs(2.0 * f1 - 1.0);                    // f1中間で1・リセット時0の三角波
+        float wA = smoothstep(0.5 - kXfadeHalfWidth, 0.5 + kXfadeHalfWidth, tri); // 窓化: 1=位相1単独/0=位相2単独
+        float2 d1 = flow * f1 * att;
+        float2 d2 = flow * f2 * att;
+        float4 cA = photo.sample(photo.transform(p - d1));
+        float4 cB = photo.sample(photo.transform(p - d2));
+        c = mix(cB, cA, wA);
+    } else {
+        // ===== v3: 軌道うねり（クロスフェードなし・分身原理ゼロ） =====
+        // 各画素のサンプル点が閉軌道（風向きに長軸を向けた楕円）を周回する。
+        // time01 は cos/sin(2π·time01 + 位相(p)) の形でのみ入るため frame(0)≡frame(T) が
+        // 厳密成立（ループ構造保証）。クロスフェードが存在しないため分身（二重像）は原理的にゼロ。
+        // 位相 ph(p) を空間ノイズでばらつかせることで、場所ごとに周回タイミングがずれ、
+        // 剛体的な「全体が同時に揺れる」動きではなく雲が湧き立つような乱流的な動きに見える。
+        float maxDispPx = length(flowDirPx); // Engine が 方向単位ベクトル×最大変位px で渡している
+        if (maxDispPx < 0.001) {
+            // ⚠️ speed 極小（≈0）で maxDispPx≈0 のとき normalize がNaNになり得るためフォールバック。
+            c = photo.sample(photo.transform(p));
+        } else {
+            float2 windDir = normalize(flowDirPx); // 単位ベクトル（長さは下の radius で扱う）
+            float ph = 6.2831853 * time01 + 6.2831853 * fbm(p * kPhaseNoiseScale);
+            float radius = maxDispPx * kOrbitRadiusRatio
+                * (0.5 + 0.5 * fbm(p * kRadiusNoiseScale + float2(11.3, 11.3)));
+            float2 axisMajor = windDir * radius;                                  // 風向きに長軸
+            float2 axisMinor = float2(-windDir.y, windDir.x) * radius * 0.35;     // 直交方向は35%
+            float2 d = (axisMajor * cos(ph) + axisMinor * sin(ph)) * att;
+            c = photo.sample(photo.transform(p - d));
+        }
+    }
 
     // 設計書§2.2「光のゆらぎ — 円周サンプリングによる周期ノイズ」:
     // 時間項をノイズ空間の「円周上」に置くことで周期性を構造的に保証する

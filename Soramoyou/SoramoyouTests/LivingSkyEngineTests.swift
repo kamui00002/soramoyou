@@ -117,6 +117,50 @@ final class LivingSkyEngineTests: XCTestCase {
         )
     }
 
+    /// 複数動きモデル対応（`LivingSkyParameters.motionModel`）に伴う回帰防止テスト。
+    ///
+    /// `test_motion_frame0DiffersFromQuarterLoop` は既定パラメータ（motionModel=0=v4窓クロス
+    /// フェード・ドリフト）で走るため、`motionModel=1`（v3軌道うねり方式）の経路はそのままでは
+    /// カバーされなくなる。同型のアサーション（差>20/255 の画素数 ≥ 200）を motionModel=1 で
+    /// 明示的に指定して1回走らせ、v3 経路の「動くこと」を引き続き検証する。
+    func test_motion_orbitModel() throws {
+        let engine = LivingSkyEngine()
+        guard engine.isAvailable else {
+            throw XCTSkip("この実行環境では Living Sky の Metal カーネルをロードできない")
+        }
+
+        let size = 512
+        let photo = CIImageTestHelpers.makeVerticalEdgeCIImage(size: size)
+        let mask = CIImage(color: CIColor.white).cropped(to: photo.extent)
+        engine.setPreparedStateForTesting(photo: photo, mask: mask)
+
+        engine.parameters = LivingSkyParameters(
+            windAngleDegrees: 0,
+            speed: 1.0,
+            shimmerAmount: 0,
+            loopDuration: 4.0,
+            motionModel: 1
+        )
+
+        let quarterLoopElapsed = engine.parameters.loopDuration / 4
+        guard let frame0 = engine.makeFrame(elapsed: 0),
+              let frameQuarter = engine.makeFrame(elapsed: quarterLoopElapsed) else {
+            XCTFail("makeFrame がフレームを生成できなかった（kernel.apply が nil を返した）")
+            return
+        }
+
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        let pixels0 = try CIImageTestHelpers.renderRGBA8Pixels(frame0, extent: extent)
+        let pixelsQuarter = try CIImageTestHelpers.renderRGBA8Pixels(frameQuarter, extent: extent)
+
+        let movedPixelCount = countPixelsExceedingThreshold(pixels0, pixelsQuarter, threshold: 20)
+        XCTAssertGreaterThanOrEqual(
+            movedPixelCount, 200,
+            "motionModel=1（v3軌道うねり）で elapsed=0 と elapsed=T/4 の差>20/255 の画素数が" +
+            "少なすぎる（\(movedPixelCount)画素）。v4 既定化に伴う v3 経路の回帰の疑いがある"
+        )
+    }
+
     // MARK: - Private Helpers
 
     /// 2つの RGBA8 バイト列を比較し、RGB のいずれかのチャンネルの絶対差が `threshold` を超える
