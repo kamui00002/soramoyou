@@ -111,9 +111,9 @@ final class LivingSkyVideoExporterTests: XCTestCase {
     ///   が、いずれにせよ startWriting 後の失敗経路を通る点は変わらない）。このため、他のテストと
     ///   異なり `engine.isAvailable` による XCTSkip は行わない（常に実行されることが本テストの
     ///   前提のため）。
-    /// - `loopDuration` は既定値（`LivingSkyParameters()` の 8.0 秒＝240フレーム）のまま使う。
-    ///   ループ本体が長いほど「セットアップ完了→ループ先頭のキャンセル検知」までの時間的余裕が
-    ///   確保しやすく、キャンセルが確実にループ内（＝defer 登録後）で検知されるようにするため。
+    /// - `loopDuration` は既定値（`LivingSkyParameters()` の 8.0 秒＝240フレーム）
+    ///   のまま使う。ループ本体が長いほど「セットアップ完了→ループ先頭のキャンセル検知」までの
+    ///   時間的余裕が確保しやすく、キャンセルが確実にループ内（＝defer 登録後）で検知されるようにするため。
     ///
     /// 非自明性の根拠（このテストは fix 前だと失敗する）: `AVAssetWriter` は `startWriting()` の
     /// 時点で出力 URL にファイルを生成する。修正前のコードは `Task.checkCancellation()` の throw を

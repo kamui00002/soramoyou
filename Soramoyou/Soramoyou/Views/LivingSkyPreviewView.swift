@@ -167,10 +167,24 @@ struct LivingSkySheet: View {
             .padding(.horizontal, 32)
     }
 
-    // MARK: - コントロール領域（4スライダー）
+    // MARK: - コントロール領域（動きモデル切替＋4スライダー）
 
     private var controlsArea: some View {
         VStack(spacing: 16) {
+            // 動きモデル切替（0=v4窓クロスフェード・ドリフト[既定]／1=v3軌道うねり[比較用]）。
+            // LivingSkyParameters.motionModel の Int(0/1) をそのままバインドする。
+            Picker(
+                "動き",
+                selection: Binding(
+                    get: { controller.parameters.motionModel },
+                    set: { controller.parameters.motionModel = $0 }
+                )
+            ) {
+                Text("うねり").tag(1)
+                Text("ドリフト").tag(0)
+            }
+            .pickerStyle(.segmented)
+
             sliderRow(
                 title: "風向き",
                 valueText: "\(Int(controller.parameters.windAngleDegrees))°",
@@ -205,7 +219,9 @@ struct LivingSkySheet: View {
                     get: { controller.parameters.loopDuration },
                     set: { controller.parameters.loopDuration = $0 }
                 ),
-                range: 6...10
+                // v4は窓クロスフェードのためTが長いほどフェード頻度が下がり自然（既定8.0秒）。
+                // 比較検証用に短めも試せるよう range は 4...10 に広げてある。
+                range: 4...10
             )
 
             exportButton
@@ -228,7 +244,9 @@ struct LivingSkySheet: View {
                         .monospacedDigit()
                 }
             } else {
-                Text("動画を保存（8秒ループ）")
+                // 前回申し送り対応: ループ長を可変にしたため、文言もハードコード
+                // せず現在のパラメータから動的に組み立てる。
+                Text("動画を保存（\(Int(controller.parameters.loopDuration))秒ループ）")
             }
         }
         .font(.subheadline.weight(.semibold))
