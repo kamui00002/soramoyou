@@ -65,9 +65,13 @@ struct LivingSkySheet: View {
         }
         .onDisappear {
             // 書き出し中にシートを閉じると Task が走り続ける申し送り問題への対応。
-            // LivingSkyVideoExporter.renderVideo はループ内 Task.checkCancellation ＋ defer
-            // クリーンアップ（部分ファイル削除）済みなので cancel だけで安全に中断・掃除される
-            // （test_renderVideo_cleansUpFileOnFailure で検証済み）。
+            // 効果の範囲（レビュー指摘対応で明記）: フレーム生成ループには
+            // LivingSkyVideoExporter.renderVideo のループ内 Task.checkCancellation ＋ defer
+            // クリーンアップ（部分ファイル削除）が効き、安全に中断・掃除される
+            // （test_renderVideo_cleansUpFileOnFailure で検証済み）。一方、prepare の解析
+            // フェーズ（Task.detached 内・数秒）と、ループ完了後の finishWriting〜Photos保存
+            // にはキャンセルが届かず完走しうるが、完成済み動画が保存されるだけで
+            // 破壊・リークはないため許容する（終盤で止めて完成品を破棄する方が有害）。
             exportTask?.cancel()
         }
         .alert(exportResultMessage ?? "", isPresented: $showExportResultAlert) {
@@ -115,21 +119,23 @@ struct LivingSkySheet: View {
 #endif
 
                 // PII なし・数値パラメータのみを送る（プロジェクトの Analytics 5原則）。
+                // レビュー指摘対応: スライダーは書き出し中も操作可能なため、完了時の
+                // controller.parameters を読み直すと実際にエンコードした値とずれうる。
+                // 書き出し開始時にコピー済みの exportEngine.parameters（凍結値）から読む。
                 LoggingService.shared.logEvent("living_sky_video_saved", parameters: [
-                    "loop_duration": Int(controller.parameters.loopDuration.rounded()),
-                    "speed": controller.parameters.speed,
-                    "shimmer": controller.parameters.shimmerAmount
+                    "loop_duration": Int(exportEngine.parameters.loopDuration.rounded()),
+                    "speed": exportEngine.parameters.speed,
+                    "shimmer": exportEngine.parameters.shimmerAmount
                 ])
 
                 exportResultMessage = "写真に保存しました"
                 showExportResultAlert = true
             } catch {
                 // ユーザーがシートを閉じて `.onDisappear` 経由で Task をキャンセルした場合は
-                // CancellationError が上がってくる。これは正常操作であり、エラーとして
-                // Analytics に送るとノイズになるためスキップする。
-                if !(error is CancellationError) {
-                    LoggingService.shared.logErrorEvent(error, context: "living_sky_export", category: .systemError)
-                }
+                // CancellationError が上がってくる。これは正常操作なので、エラーの Analytics
+                // 送信も（表示先シートが既に消えている）アラート用の状態更新も行わない。
+                guard !(error is CancellationError) else { return }
+                LoggingService.shared.logErrorEvent(error, context: "living_sky_export", category: .systemError)
                 exportResultMessage = error.localizedDescription
                 showExportResultAlert = true
             }
