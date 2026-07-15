@@ -95,7 +95,7 @@ static inline float fbm(float2 p) {
 ///     それ以外=v3軌道うねり（比較用）。`LivingSkyParameters.motionModel` の Int(0/1) を
 ///     そのまま Float へキャストして渡す
 ///   - shimmerAmp: 光のゆらぎ振幅 0...0.1
-///   - speedJitter: 速度ムラの強さ（既定 0.3）
+///   - speedJitter: 速度ムラの強さ（既定 0.5）
 ///   - noiseScale: フロー速度ムラ用 fbm の空間スケール（例 0.008）
 ///   - shimmerScale: シマー用 fbm の空間スケール（例 0.004）
 ///   - shimmerRadius: シマーの円周サンプリング半径（例 2.0）
@@ -169,7 +169,8 @@ extern "C" float4 livingSky(
 
         // 設計書§2.1「フロー変位」— 速度ムラ:
         // 一様な流れだけだと不自然な「ベルトコンベア感」が出るため、fbm で位置ごとに
-        // 流れの速さへ有機的なムラを付与する（F(p) = 風向き × (1 + 0.3・(fbm(p·s) − 0.5)・2)）。
+        // 流れの速さへ有機的なムラを付与する（F(p) = 風向き × (1 + speedJitter・(fbm(p·s) − 0.5)・2)、
+        // speedJitter既定0.5）。
         float j = fbm(p * noiseScale);
 
         // 方向の乱流（分身対策）。全画素が同方向に平行移動すると分身がくっきり見えるため、

@@ -161,6 +161,106 @@ final class LivingSkyEngineTests: XCTestCase {
         )
     }
 
+    /// 動きモデル（`motionModel`）が実際に kernel へ渡され、v4/v3 で異なる出力になることを検証する。
+    ///
+    /// 背景: `test_motion_orbitModel`（motionModel=1）は「motionModel=1 で動くこと」しか見ておらず、
+    /// もし Engine が `motionModel` を kernel 引数に渡し忘れて常に v4（既定）側の経路だけで
+    /// レンダリングしていても、v4 自体は既定パラメータで十分に動くため機械的に合格してしまう
+    /// 死角がある。本テストは同一入力・同一経過時間で motionModel=0（v4）と motionModel=1（v3）の
+    /// フレームを実際に比較し、両者が有意に異なる出力になること（＝motionModel が確かに kernel の
+    /// 分岐に効いていること）を検証する。
+    func test_motionModels_produceDifferentOutput() throws {
+        let engine = LivingSkyEngine()
+        guard engine.isAvailable else {
+            throw XCTSkip("この実行環境では Living Sky の Metal カーネルをロードできない")
+        }
+
+        let size = 512
+        let photo = CIImageTestHelpers.makeVerticalEdgeCIImage(size: size)
+        let mask = CIImage(color: CIColor.white).cropped(to: photo.extent)
+
+        engine.setPreparedStateForTesting(photo: photo, mask: mask)
+        engine.parameters = LivingSkyParameters(
+            windAngleDegrees: 0,
+            speed: 1.0,
+            shimmerAmount: 0,
+            loopDuration: 4.0,
+            motionModel: 0
+        )
+        let quarterLoopElapsed = engine.parameters.loopDuration / 4
+        guard let frameModel0 = engine.makeFrame(elapsed: quarterLoopElapsed) else {
+            XCTFail("makeFrame がフレームを生成できなかった（motionModel=0）")
+            return
+        }
+
+        engine.setPreparedStateForTesting(photo: photo, mask: mask)
+        engine.parameters = LivingSkyParameters(
+            windAngleDegrees: 0,
+            speed: 1.0,
+            shimmerAmount: 0,
+            loopDuration: 4.0,
+            motionModel: 1
+        )
+        guard let frameModel1 = engine.makeFrame(elapsed: quarterLoopElapsed) else {
+            XCTFail("makeFrame がフレームを生成できなかった（motionModel=1）")
+            return
+        }
+
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        let pixelsModel0 = try CIImageTestHelpers.renderRGBA8Pixels(frameModel0, extent: extent)
+        let pixelsModel1 = try CIImageTestHelpers.renderRGBA8Pixels(frameModel1, extent: extent)
+
+        let differingPixelCount = countPixelsExceedingThreshold(pixelsModel0, pixelsModel1, threshold: 20)
+        XCTAssertGreaterThanOrEqual(
+            differingPixelCount, 200,
+            "motionModel=0 と motionModel=1 で elapsed=T/4 の差>20/255 の画素数が" +
+            "少なすぎる（\(differingPixelCount)画素）。motionModel が kernel に渡っていない疑いがある"
+        )
+    }
+
+    /// v3（軌道うねり方式）でもループ境界（`frame(0) ≡ frame(T)`）が保証されていることを検証する。
+    ///
+    /// 背景: 既存の `test_loopBoundary_frame0EqualsFrameT` は既定パラメータ（motionModel=0=v4）
+    /// でしか走らないため、v3 側のループ境界保証はコード上テストされていなかった。v3 は
+    /// DEBUG ビルドの Picker から実際に選択可能な経路であり（`LivingSkyPreviewView`）、
+    /// ここが壊れているとユーザーが選んだ瞬間に継ぎ目のあるループになってしまう。
+    func test_loopBoundary_orbitModel() throws {
+        let engine = LivingSkyEngine()
+        guard engine.isAvailable else {
+            throw XCTSkip("この実行環境では Living Sky の Metal カーネルをロードできない")
+        }
+
+        let size = 64
+        let photo = CIImageTestHelpers.makeTwoBandCIImage(size: size)
+        let mask = CIImage(color: CIColor.white).cropped(to: photo.extent)
+        engine.setPreparedStateForTesting(photo: photo, mask: mask)
+
+        // 変位・シマーの効果を十分に出すパラメータ（既定値のままだと差が小さく偽陽性になりうるため）
+        engine.parameters = LivingSkyParameters(
+            windAngleDegrees: 30,
+            speed: 1.0,
+            shimmerAmount: 0.08,
+            loopDuration: 4.0,
+            motionModel: 1
+        )
+
+        guard let frame0 = engine.makeFrame(elapsed: 0),
+              let frameT = engine.makeFrame(elapsed: engine.parameters.loopDuration) else {
+            XCTFail("makeFrame がフレームを生成できなかった（kernel.apply が nil を返した）")
+            return
+        }
+
+        let extent = CGRect(x: 0, y: 0, width: size, height: size)
+        let pixels0 = try CIImageTestHelpers.renderRGBA8Pixels(frame0, extent: extent)
+        let pixelsT = try CIImageTestHelpers.renderRGBA8Pixels(frameT, extent: extent)
+
+        XCTAssertEqual(
+            pixels0, pixelsT,
+            "motionModel=1（v3軌道うねり）で elapsed=0 と elapsed=T のフレームが一致しない" +
+            "（v3経路のループ継ぎ目なし保証が壊れている）"
+        )
+    }
+
     // MARK: - Private Helpers
 
     /// 2つの RGBA8 バイト列を比較し、RGB のいずれかのチャンネルの絶対差が `threshold` を超える

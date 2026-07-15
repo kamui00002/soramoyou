@@ -167,11 +167,11 @@ struct LivingSkySheet: View {
             .padding(.horizontal, 32)
     }
 
-    // MARK: - コントロール領域（4スライダー）
+    // MARK: - コントロール領域（動きモデル切替＋4スライダー）
 
     private var controlsArea: some View {
         VStack(spacing: 16) {
-            // v3: 動きモデル切替（0=v2クロスフェードドリフト／1=v3軌道うねり）。
+            // 動きモデル切替（0=v4窓クロスフェード・ドリフト[既定]／1=v3軌道うねり[比較用]）。
             // LivingSkyParameters.motionModel の Int(0/1) をそのままバインドする。
             Picker(
                 "動き",
@@ -219,8 +219,8 @@ struct LivingSkySheet: View {
                     get: { controller.parameters.loopDuration },
                     set: { controller.parameters.loopDuration = $0 }
                 ),
-                // v2: 既定値を 8.0 → 6.0 に短縮したため、既定が範囲中央寄りになるよう
-                // 下限も 6...10 → 4...10 に広げる（LivingSkyParameters.loopDuration 参照）。
+                // v4は窓クロスフェードのためTが長いほどフェード頻度が下がり自然（既定8.0秒）。
+                // 比較検証用に短めも試せるよう range は 4...10 に広げてある。
                 range: 4...10
             )
 
@@ -244,7 +244,7 @@ struct LivingSkySheet: View {
                         .monospacedDigit()
                 }
             } else {
-                // 前回申し送り対応: ループ長を可変にした（v2で既定8s→6s）ため、文言もハードコード
+                // 前回申し送り対応: ループ長を可変にしたため、文言もハードコード
                 // せず現在のパラメータから動的に組み立てる。
                 Text("動画を保存（\(Int(controller.parameters.loopDuration))秒ループ）")
             }

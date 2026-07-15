@@ -76,8 +76,9 @@ A/B 検証済み（2026-07-12）。
   - `A` = 最大変位（**幅の最大8%/ループ（speed 1.0時）**。段階3 vision レビューで判明した知覚下限
     （約3px/秒）未満は不可視だったため改定した経緯あり（`LivingSkyParameters.maxDisplacementPx` 参照）
   - `m(p)` = フェザー済みマスク値（0=地上, 1=空）。`^k`（k≈2）で**境界ほど動きを減衰**→地上を引っ張らない
-  - `F(p)` = 風向き単位ベクトル × 方向乱流 × 速度ゆらぎ `(1 + 0.5·(fbm(p·s) − 0.5))`
-    （一様な流れに有機的ムラを付与。speedJitter は v2 で 0.3→0.5 に強化・据置）
+  - `F(p)` = 風向き単位ベクトル × 方向乱流 × 速度ゆらぎ `(1 + speedJitter·(fbm(p·s) − 0.5)·2)`
+    （一様な流れに有機的ムラを付与。speedJitter は v2 で 0.3→0.5 に強化・据置。speedJitter=0.5 の場合、
+    fbm の実質上限（3オクターブ fbm ≈0.875）で最大約1.375倍まで変位が伸びる）
 - **方向の乱流**（分身対策）: 風向きベクトルを場所ごとに粗い fbm で回転する
   `turn(p) = (fbm(p·0.004 + (37.7,37.7)) − 0.5) · 2 · kMaxTurnRad`。全画素が同方向に平行移動すると
   分身がくっきり見えるが、場所ごとに向きを揺らすことでコピー同士が非剛体変形（モーフ）の関係になり
@@ -97,10 +98,14 @@ A/B 検証済み（2026-07-12）。
 
 **v3: 軌道うねり方式（比較用・motionModel=1）**: クロスフェードを廃し、各画素のサンプル点が
 風向きに長軸を向けた閉軌道（楕円）を周回する方式。`ph(p) = 2π·t/T + 2π·fbm(p·0.006)`、
-`d(p) = (A·0.5·windDir·cos(ph) + A·0.5·0.35·perp·sin(ph))·m(p)^k`。`time01` は cos/sin の中にのみ
-入るためループ保証は厳密成立し、合成コピーが複数存在しないため分身は原理的にゼロ。位相を空間
-ノイズでばらつかせることで雲が湧き立つような乱流的な動きに見えるが、ユーザー評価は「ちょっと
-気持ち悪い」だったため既定からは外し、`LivingSkyParameters.motionModel = 1` で選べる比較用として残す。
+`d(p) = (radius·windDir·cos(ph) + radius·0.35·perp·sin(ph))·m(p)^k`。軌道半径 `radius` は
+**常に `A·0.5` の定数ではなく**、`radius = A·kOrbitRadiusRatio(0.5)·(0.5+0.5·fbm(p·0.01+(11.3,11.3)))`
+という空間ノイズ変調が掛かる（fbm=1 のとき最大 `A·0.5`、fbm=0 のとき最小 `A·0.25`）。これにより
+軌道半径も場所ごとにばらつき、剛体的な同一半径の周回に見えないようにしている。`time01` は
+cos/sin の中にのみ入るためループ保証は厳密成立し、合成コピーが複数存在しないため分身は原理的に
+ゼロ。位相を空間ノイズでばらつかせることで雲が湧き立つような乱流的な動きに見えるが、ユーザー
+評価は「ちょっと気持ち悪い」だったため既定からは外し、`LivingSkyParameters.motionModel = 1` で
+選べる比較用として残す。
 
 ### 2.2 光のゆらぎ — 円周サンプリングによる周期ノイズ
 
@@ -137,8 +142,12 @@ A/B 検証済み（2026-07-12）。
     Living Sky は変位先の画素を読むため **`coreimage::sampler` を受け取る general kernel**。
     テンプレのコピペ不可。`extern "C" float4 livingSky(coreimage::sampler photo, coreimage::sampler mask, float time01, float2 flowDir, float maxDispPx, float shimmerAmp, float speedJitterScale, coreimage::destination dest)` 形
 - **ROI コールバックが最重要レビューポイント**: 変位サンプリングするため
-  `roiCallback = { _, rect in rect.insetBy(dx: -(maxDispPx+1), dy: -(maxDispPx+1)) }`。
-  ExposureContrast の `{ _, rect in rect }` を流用すると**端に未定義画素が出る**
+  `roiCallback = { _, rect in rect.insetBy(dx: -pad, dy: -pad) }`、
+  `pad = maxDispPx·(1 + speedJitter) + roiPaddingMargin(2px)`。速度ムラ
+  `flow = turnedDir·(1 + speedJitter·(fbm−0.5)·2)` により実変位は最大
+  `(1 + 0.75·speedJitter)·maxDispPx`（speedJitter=0.5 で約1.375倍）まで伸びるため、
+  `maxDispPx` ちょうどではなく `(1 + speedJitter)` 倍（同条件で1.5倍・保守的に上回る）を
+  基準に ROI を広げる。ExposureContrast の `{ _, rect in rect }` を流用すると**端に未定義画素が出る**
 - コンパイル検証: metal-shader-dev skill の `xcrun metal -c -target air64-apple-ios18.0 -fcikernel ...`
 - マスクのフェザー: 生成時に一度だけ CIGaussianBlur（**clamp→blur→crop の定石**・SkyReplacementCompositor
   の feather と同様）でソフト化してから kernel に渡す

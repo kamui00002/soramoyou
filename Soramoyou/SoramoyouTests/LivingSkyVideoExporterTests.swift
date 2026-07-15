@@ -111,7 +111,7 @@ final class LivingSkyVideoExporterTests: XCTestCase {
     ///   が、いずれにせよ startWriting 後の失敗経路を通る点は変わらない）。このため、他のテストと
     ///   異なり `engine.isAvailable` による XCTSkip は行わない（常に実行されることが本テストの
     ///   前提のため）。
-    /// - `loopDuration` は既定値（`LivingSkyParameters()` の 6.0 秒＝180フレーム。v2で8.0→6.0に改定）
+    /// - `loopDuration` は既定値（`LivingSkyParameters()` の 8.0 秒＝240フレーム）
     ///   のまま使う。ループ本体が長いほど「セットアップ完了→ループ先頭のキャンセル検知」までの
     ///   時間的余裕が確保しやすく、キャンセルが確実にループ内（＝defer 登録後）で検知されるようにするため。
     ///
@@ -126,7 +126,7 @@ final class LivingSkyVideoExporterTests: XCTestCase {
         let photo = CIImageTestHelpers.makeTwoBandCIImage(size: size)
         let mask = CIImage(color: CIColor.white).cropped(to: photo.extent)
         engine.setPreparedStateForTesting(photo: photo, mask: mask)
-        // engine.parameters は既定値（loopDuration=6.0秒）のまま使う（理由は上記コメント参照）。
+        // engine.parameters は既定値（loopDuration=8.0秒）のまま使う（理由は上記コメント参照）。
 
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
