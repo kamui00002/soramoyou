@@ -34,8 +34,13 @@ struct EditView: View {
     @State private var isGeneratingFinal = false
     /// 編集ツール設定画面の表示フラグ
     @State private var showEditToolsSettings = false
-    /// Living Sky プロトタイプ用プレビューシートの表示フラグ（#if DEBUG のみ使用）
+    /// Living Sky（空を動かす）プレビューシートの表示フラグ。
+    /// 元々はプロトタイプ確認用に #if DEBUG 限定で使っていたが、本番導線化に伴い常時使用する。
     @State private var showLivingSkySheet = false
+    /// Living Sky 初回コーチマークの既読フラグ。
+    /// `WhatsNewContent` の永続化キー群と同じ流儀で UserDefaults に永続化し、
+    /// 一度タップ or ボタン押下で消したら以後表示しない。
+    @AppStorage(WhatsNewContent.hasSeenLivingSkyCoachMarkKey) private var hasSeenLivingSkyCoachMark = false
     /// 回転スライダーの値（リアルタイム用）
     @State private var rotationSliderValue: Double = 0
 
@@ -79,27 +84,21 @@ struct EditView: View {
                 VStack(spacing: 0) {
                     // 画像プレビュー
                     imagePreviewView
-#if DEBUG
-                        // Living Sky（プロトタイプ・段階2）動作確認用ボタン。
+                        // Living Sky（空を動かす）ボタン＋初回コーチマーク。
+                        // ユーザー決定事項①: プレビュー下部中央のラベル付き半透明カプセルで導線化する。
                         // ⚠️ navigationBarTrailing に置くと項目数が5個になり iOS 26 が
                         // Undo/Redo/設定/風ボタンを「…」オーバーフローメニューに折りたたんでしまい、
-                        // UIオートメーションから開けず動作確認がブロックされるため、
-                        // プレビュー領域右上への floating overlay に変更した。
-                        .overlay(alignment: .topTrailing) {
-                            Button(action: {
-                                showLivingSkySheet = true
-                            }) {
-                                Image(systemName: "wind")
-                                    .font(.body)
-                                    .foregroundColor(.white)
-                                    .padding(12)
-                                    .background(Color.black.opacity(0.5))
-                                    .clipShape(Circle())
-                            }
-                            .padding(12)
-                            .accessibilityLabel("Living Sky")
+                        // UIオートメーションから開けず動作確認がブロックされるため（過去の教訓）、
+                        // toolbar には置かずプレビュー領域下部への floating overlay とする。
+                        //
+                        // 干渉チェック（実コード確認済み）: imagePreviewView 内の既存 overlay は
+                        // ①複数画像時の前後チェブロンボタン（Spacer で中央揃えされ ZStack 内で
+                        //   垂直中央に位置）、②複数画像時のインデックス表示（下部だが
+                        //   .padding(.bottom, 100) で下端から100pt上に位置）の2つのみで、
+                        //   いずれも下端近くに置く本ボタンとは重ならないため、位置調整は不要と判断した。
+                        .overlay(alignment: .bottom) {
+                            livingSkyOverlay
                         }
-#endif
 
                     // 「あなたの定番」適用ボタン（柱1 v1）— 見つけやすいよう編集コントロール直上に配置
                     if viewModel.hasPersonalDefault {
@@ -188,15 +187,13 @@ struct EditView: View {
             }) {
                 EditToolsSettingsView()
             }
-#if DEBUG
-            // Living Sky（プロトタイプ・段階2）: 現在の編集済みプレビュー画像を渡す。
+            // Living Sky（空を動かす）: 現在の編集済みプレビュー画像を渡す。
             // 未生成（読み込み中など）の場合は元画像にフォールバックする。
             .sheet(isPresented: $showLivingSkySheet) {
                 if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
                     LivingSkySheet(sourceImage: sourceImage)
                 }
             }
-#endif
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
@@ -794,6 +791,97 @@ struct EditView: View {
         .frame(minHeight: 180)
     }
 
+    // MARK: - Living Sky Overlay（本番UI）
+
+    /// Living Sky ボタン＋初回コーチマークをまとめたオーバーレイ本体。
+    /// Metal 非対応端末（`LivingSkyEngine.isSupported == false`）ではボタンごと非表示にする
+    /// （設計書§1「Metal 必須: kernel ロード失敗時はフォールバックせず機能を非表示」）。
+    ///
+    /// @ViewBuilder のサブビューに分割しているのは、EditView.body 直下に条件分岐や複雑な
+    /// 修飾子チェーンを増やすと型チェックが爆発する（プロジェクト既知の "unable to type-check" 罠）
+    /// のを避けるため。
+    @ViewBuilder
+    private var livingSkyOverlay: some View {
+        if LivingSkyEngine.isSupported {
+            VStack(spacing: 8) {
+                if !hasSeenLivingSkyCoachMark {
+                    livingSkyCoachMark
+                }
+                livingSkyButton
+            }
+            .padding(.bottom, 20)
+            // 消える/現れるときは控えめなフェードのみ（バウンシーな演出は使わない）。
+            .animation(.easeInOut(duration: 0.3), value: hasSeenLivingSkyCoachMark)
+        }
+    }
+
+    /// Living Sky シートを開くカプセルボタン（風アイコン＋「空を動かす」ラベル）。
+    /// 既存の丸ボタン（旧 DEBUG 版）と同トーンの半透明黒背景を踏襲する。
+    private var livingSkyButton: some View {
+        Button {
+            // コーチマークを表示中にボタンを直接押した場合も「既読」として消す
+            // （吹き出し自身をタップした場合と同じ扱い＝仕様どおり両方が既読条件）。
+            hasSeenLivingSkyCoachMark = true
+            showLivingSkySheet = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "wind")
+                Text("空を動かす")
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.black.opacity(0.5))
+            .clipShape(Capsule())
+            // 横長写真ではプレビュー枠の下部が黒帯（レターボックス）になり、半透明黒の
+            // カプセルが背景に溶けて輪郭が消える（シミュレータ目視で確認）。写真の上でも
+            // 黒帯の上でも成立するよう、白の細枠でカプセルの輪郭を常時確保する。
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+        }
+        .accessibilityLabel("空を動かす")
+    }
+
+    /// Living Sky 初回コーチマーク（吹き出し）。ボタンの直上に表示する。
+    /// 吹き出し自身をタップしても「既読」として消える。
+    private var livingSkyCoachMark: some View {
+        VStack(spacing: 0) {
+            Text("空が動く写真を作れるようになりました！")
+                .font(.caption)
+                .foregroundColor(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.75))
+                .cornerRadius(10)
+                // カプセルボタンと同じ理由（黒帯上で輪郭が消える）で吹き出しにも白の細枠を付ける。
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+
+            // 吹き出しの尻尾（下向き三角）
+            LivingSkyCoachMarkTail()
+                .fill(Color.black.opacity(0.75))
+                .frame(width: 14, height: 7)
+        }
+        .transition(.opacity)
+        .onTapGesture {
+            hasSeenLivingSkyCoachMark = true
+        }
+    }
+
+}
+
+// MARK: - Living Sky Coach Mark Tail（吹き出しの尻尾）
+
+/// Living Sky コーチマークの吹き出し用「尻尾」の下向き三角形。
+/// プロジェクト内に類似シェイプが無かったため、この用途専用の最小限実装として追加する。
+private struct LivingSkyCoachMarkTail: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
 }
 
 // MARK: - HDR Dynamic Range Modifier
