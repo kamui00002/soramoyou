@@ -85,20 +85,17 @@ struct EditView: View {
                     // 画像プレビュー
                     imagePreviewView
                         // Living Sky（空を動かす）ボタン＋初回コーチマーク。
-                        // ユーザー決定事項①: プレビュー下部中央のラベル付き半透明カプセルで導線化する。
+                        // ⚠️ 2026-07-18 一時撤収: 動きモデルを9バージョン検証したが実機の知覚品質が
+                        //    出荷水準に達しなかったため、導線を DEBUG 限定へ再ゲートする
+                        //    （経緯と将来方針=ML版: docs/research/living-sky-research-2026-07-part2-synthesis.md）。
+                        //    エンジン・シェーダ・シート等のコード資産は全て温存（DEBUGで引き続き検証可能）。
                         // ⚠️ navigationBarTrailing に置くと項目数が5個になり iOS 26 が
-                        // Undo/Redo/設定/風ボタンを「…」オーバーフローメニューに折りたたんでしまい、
-                        // UIオートメーションから開けず動作確認がブロックされるため（過去の教訓）、
-                        // toolbar には置かずプレビュー領域下部への floating overlay とする。
-                        //
-                        // 干渉チェック（実コード確認済み）: imagePreviewView 内の既存 overlay は
-                        // ①複数画像時の前後チェブロンボタン（Spacer で中央揃えされ ZStack 内で
-                        //   垂直中央に位置）、②複数画像時のインデックス表示（下部だが
-                        //   .padding(.bottom, 100) で下端から100pt上に位置）の2つのみで、
-                        //   いずれも下端近くに置く本ボタンとは重ならないため、位置調整は不要と判断した。
+                        // オーバーフローメニューに折りたたむため、toolbar には置かない（過去の教訓）。
+#if DEBUG
                         .overlay(alignment: .bottom) {
                             livingSkyOverlay
                         }
+#endif
 
                     // 「あなたの定番」適用ボタン（柱1 v1）— 見つけやすいよう編集コントロール直上に配置
                     if viewModel.hasPersonalDefault {
@@ -189,11 +186,14 @@ struct EditView: View {
             }
             // Living Sky（空を動かす）: 現在の編集済みプレビュー画像を渡す。
             // 未生成（読み込み中など）の場合は元画像にフォールバックする。
+            // ⚠️ 2026-07-18 一時撤収に伴い DEBUG 限定（上の overlay 側コメント参照）。
+#if DEBUG
             .sheet(isPresented: $showLivingSkySheet) {
                 if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
                     LivingSkySheet(sourceImage: sourceImage)
                 }
             }
+#endif
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
