@@ -19,7 +19,10 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    static let currentID = "2026-07-living-sky"
+    // ⚠️ 2026-07-18: Living Sky 一時撤収に伴い "2026-07-living-sky" から差し戻し
+    //    （動きモデルの知覚品質が出荷水準未達のため導線を DEBUG 限定へ再ゲート。
+    //     既存ユーザーの大半は gallery-explore 既読のため What's New は再表示されない）。
+    static let currentID = "2026-07-gallery-explore"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -36,17 +39,37 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（Living Sky）の新機能紹介ページ。
-    /// currentID 切替方式の運用どおり、前回（ギャラリー強化）の3ページは今回のセットでは出さない。
+    /// 今回（ギャラリー強化）の新機能紹介ページ。
+    /// （2026-07-18: Living Sky 一時撤収に伴い、ギャラリー強化の3ページへ差し戻し）
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "wind",
+            icon: "line.3.horizontal.decrease.circle.fill",
             badge: "新機能",
-            title: "空が動き出す",
-            description: "静止画の空がゆったり流れるループ動画に。\n編集画面の「空を動かす」から保存できます",
+            title: "ギャラリーで絞り込み",
+            description: "ギャラリー上部から時間帯や空の種類で\n絞り込み、新着・人気で並び替えできます",
             gradientColors: [
                 Color(red: 0.42, green: 0.68, blue: 0.93),
                 Color(red: 0.62, green: 0.82, blue: 0.98)
+            ]
+        ),
+        WhatsNewPage(
+            icon: "paintpalette.fill",
+            badge: "色で探す",
+            title: "空の色から見つける",
+            description: "カラーパレットをタップすると\nその色の空だけを集めて表示します",
+            gradientColors: [
+                Color(red: 0.62, green: 0.52, blue: 0.92),
+                Color(red: 0.42, green: 0.70, blue: 0.95)
+            ]
+        ),
+        WhatsNewPage(
+            icon: "rectangle.grid.1x2.fill",
+            badge: "新しい見せ方",
+            title: "シャッフル＆モザイク",
+            description: "シャッフルでランダムに、モザイク表示で\n写真の形そのままに空を楽しめます",
+            gradientColors: [
+                Color(red: 0.99, green: 0.72, blue: 0.36),
+                Color(red: 0.96, green: 0.52, blue: 0.42)
             ]
         )
     ]
