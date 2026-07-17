@@ -66,12 +66,25 @@ static inline float fbm(float2 p) {
 #define kDirNoiseScale 0.004
 #define kMaxTurnRad 0.26
 
-// v4: 窓クロスフェード＋画素ごと位相オフセットのパラメータ（マジックナンバー回避）。
-// kPhaseOffsetScale: 位相オフセット用 fbm の空間スケール（粗い＝大きなパッチ単位で世代交代）。
-// kXfadeHalfWidth: 三角窓 tri を smoothstep で急峻化するクロスフェード半幅（0.15 ⇒ 全体の約3割の
-//   時間だけ2コピーが重なる。残り約7割は片方のコピーが単独表示される）。
-#define kPhaseOffsetScale 0.003
-#define kXfadeHalfWidth 0.15
+// v7: 微ドリフト＋周期モーフのパラメータ（マジックナンバー回避）。
+// 出典: docs/research/living-sky-research-2026-07.md「推奨パラメータ」（方式B 周期ノイズに
+// よるUVワープ／方式C+D のハイブリッド）。v4〜v6 が採用していた「色クロスフェード窓」
+// （kPhaseOffsetScale/kXfadeHalfWidth）と「エッジ接線偏向」（kGradSamplePx/kEdgeLo/kEdgeHi/
+// kEdgeAmpReduce/kTangentMax）は v7 で撤去したため、それらのパラメータ定義も削除した
+// （詳細は下の livingSky 本体 v7 ブロックのコメント参照）。
+// kMorphScale1 / kMorphScale2: 周期モーフ用 fbm の空間スケール。低周波(kMorphScale1)=
+//   大きな雲塊のうねり、高周波(kMorphScale2)=微細な輪郭変化という役割分担は、レポートの
+//   lowFreqScale（空幅に1〜2波）/ highFreqScale（空幅に5〜8波）に対応する。1080px
+//   （v7導入時のプレビュー作業解像度の目安）換算の初期値であり、実機目視での較正を
+//   前提とする（2026-07-17 v7導入時点では未検証）。
+// kMorphRadius: 周期モーフの円周サンプリング半径（cyc = (cos, sin) への係数）。値が大きいほど
+//   1ループ中にノイズ場を広く周回して変化が大きくなる。
+// kWarpSafeThreshold: safeSample フォールバックが参照する warpMask の閾値。変位後の参照先
+//   warpMask 値がこの値未満（=侵食済み安全領域の外）なら元画素へフォールバックする。
+#define kMorphScale1 0.004
+#define kMorphScale2 0.011
+#define kMorphRadius 1.5
+#define kWarpSafeThreshold 0.35
 
 // v3: 軌道うねり方式のパラメータ（マジックナンバー回避）。
 // kPhaseNoiseScale: 周回位相 ph(p) を場所ごとにばらつかせる fbm の空間スケール（粗め＝
@@ -87,13 +100,18 @@ static inline float fbm(float2 p) {
 ///
 /// - Parameters:
 ///   - photo: 編集済み写真（変位先の画素を読むため sampler として受け取る）
-///   - mask: フェザー済み空マスク（グレースケール・rチャンネルを使用。1.0=空 / 0.0=地上）
+///   - mask: フェザー済み空マスク＝合成用マスク compositeMask（グレースケール・rチャンネルを
+///     使用。1.0=空 / 0.0=地上）。最終合成 `mix(base, c, m)` の重みに使う
+///   - warpMask: 侵食＋ブラー済みの変形安全マスク（v7 で追加。出典:
+///     docs/research/living-sky-research-2026-07.md「二重マスク構成」）。変位減衰の距離減衰
+///     近似、および safeSample フォールバックの安全判定に使う
 ///   - time01: `frac(経過時間 / ループ長T)` の 0...1 値（ループの位相）
-///   - flowDirPxX: 風向き単位ベクトル × 最大変位px の X 成分（ワーキング座標系。Swift 側で事前計算）
-///   - flowDirPxY: 風向き単位ベクトル × 最大変位px の Y 成分
-///   - motionModel: 動きモデル切替。0.5未満=v4窓クロスフェード（ドリフト・既定）／
-///     それ以外=v3軌道うねり（比較用）。`LivingSkyParameters.motionModel` の Int(0/1) を
-///     そのまま Float へキャストして渡す
+///   - flowDirPxX: 風向き単位ベクトル × ドリフト振幅px の X 成分（ワーキング座標系。Swift 側で事前計算）
+///   - flowDirPxY: 風向き単位ベクトル × ドリフト振幅px の Y 成分
+///   - motionModel: 動きモデル切替。0.5未満=v7微ドリフト＋周期モーフ＋二重マスク
+///     （レポート準拠ハイブリッド・既定）／それ以外=v3軌道うねり（比較用）。
+///     `LivingSkyParameters.motionModel` の Int(0/1) をそのまま Float へキャストして渡す
+///   - microWarpPx: 周期モーフ（雲の輪郭の微小な形状変化）の振幅px（v7 で追加）
 ///   - shimmerAmp: 光のゆらぎ振幅 0...0.1
 ///   - speedJitter: 速度ムラの強さ（既定 0.5）
 ///   - noiseScale: フロー速度ムラ用 fbm の空間スケール（例 0.008）
@@ -106,14 +124,17 @@ static inline float fbm(float2 p) {
 ///    Metal general CIKernel の引数マーシャリングで CIVector → float2 が正しく渡らず (0,0) になり
 ///    「フロー変位が実質ゼロ（シマーだけが動く）」という不具合が実機/シミュレータ双方で再現した。
 ///    time01/shimmerAmp 等のスカラー float 引数は正しくマーシャリングされることが実証済みのため、
-///    float2 引数を避けて2つの float スカラーに分解し、カーネル冒頭で float2 に再構成する。
+///    float2 引数を避けて2つの float スカラーに分解し、カーネル冒頭で float2 に再構成する
+///    （v7 で追加した warpMask/microWarpPx も同じ理由で sampler/float スカラーのみにしている）。
 extern "C" float4 livingSky(
     coreimage::sampler photo,
     coreimage::sampler mask,
+    coreimage::sampler warpMask,
     float time01,
     float flowDirPxX,
     float flowDirPxY,
     float motionModel,
+    float microWarpPx,
     float shimmerAmp,
     float speedJitter,
     float noiseScale,
@@ -157,17 +178,38 @@ extern "C" float4 livingSky(
     // 静止時点でも常に3コピーが重なる「多重露光」構造が原因）。ユーザーはドリフト系を支持した
     // ため、Valve の flow map 定石（窓クロスフェード＋画素ごと位相オフセット）で多重露光を
     // 解消した v4 を新既定にした。motionModel で v4/v3 を切り替えられるようにしている。
+    // その後 v4 は TestFlight 実機評価（2026-07-16）で「輪郭の鋭い雲だと分身が見える」との
+    // 最終NGを受けた。原因は構造的: クロスフェード窓の間（周期の約3割）は2コピーが
+    // flow×0.5 ずれて重なったまま**色をブレンド**するため、鋭いエッジでは二重線として見えてしまう。
+    // そこで色のブレンドをやめ「サンプル位置（変位）のブレンド」に変える v5 へ刷新したが、
+    // v5 は窓の間にサンプル位置が新位相へ滑り戻る「局所的な巻き戻し」（順方向の約2.3倍速）という
+    // 構造的トレードオフを抱えており、ユーザー実機評価（2026-07-17）で「すごい気持ち悪い」との
+    // 最終NGを受けた。そこで v6 は「輪郭を横切る方向」の変位だけが分身に見えるという観察に基づき、
+    // v4 の色クロスフェードを復活させつつ輝度勾配で輪郭の接線方向へフロー方向を曲げる
+    // 「エッジ接線偏向」を追加したが、TestFlight実機提出前の技術調査
+    // （docs/research/living-sky-research-2026-07.md）で振り返った結果、v4〜v6 共通の根本原因は
+    // 「振幅過大」（幅5%/ループ＝レポート推奨0.4%〜1.8%の4〜8倍）で、ドリフトの大振幅だけで
+    // 「生きてる感」を出そうとしていたことだと判明した。
+    // v7（レポート準拠ハイブリッド）は発想を転換する: ドリフトは短辺の0.8%へ縮小し脇役に回す
+    // （分身の見た目の幅も知覚限界=3px相当以下に収まる）。「生きてる感」は主役を
+    // ①円周サンプリングで厳密に周期化された微小モーフ（周期ノイズによるUVワープ＝レポート
+    // 方式B）と②控えめな光のゆらぎに持たせる。振幅そのものを知覚限界以下に縮小したため、
+    // v6 のエッジ接線偏向（勾配サンプル・輪郭検出による偏向）はもはや不要と判断し撤去した。
+    // 電線・電柱等の細い前景構造は warpMask（侵食＋ブラー済み安全領域）と safeSample
+    // フォールバックで保護する（レポート「二重マスク構成」）。motionModel=0=ドリフトの実装
+    // 差し替えであり、新しい motionModel 値は追加していない。
     float4 c;
     if (motionModel < 0.5) {
-        // ===== v4: フロー変位＋窓クロスフェード＋画素ごと位相オフセット（ドリフト） =====
-        // v2（三相正規化ブレンド）は静止時点でも常に3コピーが重なって見える「多重露光」に
-        // なる構造的欠陥があり、実機評価で「雲が多重に見えて錯視みたい」と判定された。
-        // v4 は Valve の flow map 定石（Vlachos, SIGGRAPH 2010「Water Flow in Portal 2」等で
-        // 広く使われる手法）に基づく: ①位相2枚のうち大半の時間はどちらか一方だけを単独表示し、
-        // 切替の瞬間だけ短くクロスフェードする「窓クロスフェード」②位相タイミングを画素ごとに
-        // ノイズでオフセットし、全画面が同時にフェードする「脈動」を消す。
+        // ===== v7: レポート準拠ハイブリッド（微ドリフト＋周期モーフ＋二重マスク） =====
+        // 出典: docs/research/living-sky-research-2026-07.md（方式 C flow map + B 周期ノイズ +
+        // D 複数サンプルの位相差ブレンド、二重マスク・safeSampleフォールバック込み）。
+        // レポートが提案する MTLTexture 直描き構成ではなく、既存の CIKernel 1パス構成の
+        // 中へそのまま移植したもの（distanceTexture の EDT は用意せず、warpMask 自体の
+        // ブラーで距離減衰を近似する簡略版）。
 
-        // 設計書§2.1「フロー変位」— 速度ムラ:
+        // 設計書§2.1「フロー変位」— 速度ムラ・方向乱流（v4〜v6 から不変。下の値そのものは
+        // 一切変更していない。分身対策としての役割はドリフト振幅が小さくなった v7 でも
+        // 引き続き有効）:
         // 一様な流れだけだと不自然な「ベルトコンベア感」が出るため、fbm で位置ごとに
         // 流れの速さへ有機的なムラを付与する（F(p) = 風向き × (1 + speedJitter・(fbm(p·s) − 0.5)・2)、
         // speedJitter既定0.5）。
@@ -189,23 +231,44 @@ extern "C" float4 livingSky(
         );
         float2 flow = turnedDir * (1.0 + speedJitter * (j - 0.5) * 2.0);
 
-        // v4 ドリフト（Valve flow map 定石: 窓クロスフェード＋画素ごと位相オフセット）
-        // - 位相2枚。各画素は大半の時間どちらか単独のコピーがスライド表示され、
-        //   三角窓を smoothstep で急峻化した「窓」の間だけ短くクロスフェードする
-        //   （多重像が見えるのは各所で周期の約3割の時間だけ）。
-        // - 位相タイミングを粗いノイズで画素ごとにオフセットすることで、
-        //   全画面が同時にフェードする「脈動」を消し、雲がパッチ状に世代交代する自然な見えにする。
-        // - 全項が time01 の周期関数（オフセットは時不変）なので frame(0)≡frame(T) は維持。
-        float phaseOffset = fbm(p * kPhaseOffsetScale);            // 画素ごとの位相オフセット(0..1近傍)
-        float f1 = fract(time01 + phaseOffset);
-        float f2 = fract(time01 + phaseOffset + 0.5);
-        float tri = 1.0 - fabs(2.0 * f1 - 1.0);                    // f1中間で1・リセット時0の三角波
-        float wA = smoothstep(0.5 - kXfadeHalfWidth, 0.5 + kXfadeHalfWidth, tri); // 窓化: 1=位相1単独/0=位相2単独
-        float2 d1 = flow * f1 * att;
-        float2 d2 = flow * f2 * att;
-        float4 cA = photo.sample(photo.transform(p - d1));
-        float4 cB = photo.sample(photo.transform(p - d2));
-        c = mix(cB, cA, wA);
+        // v7: 変位減衰は warpMask（侵食＋ブラー済みの変形安全領域）ベースにする。従来の
+        // m^2（合成用マスク mask 由来。上の att 変数）は境界のにじみをそのまま距離減衰の
+        // 近似として使っていたが、warpMask は明示的に erosion 済みのため「この内側なら
+        // 動かしてよい」という安全余白（レポート「二重マスク構成」）をより厳密に表現できる。
+        // ⚠️ この att はこの if ブロック内でのみ有効な局所変数で、外側スコープの
+        //    `att`（m^2・上で宣言済み・v3 が使う）を意図的にシャドウする。v3 分岐は
+        //    不変更のため warpMask を使わず外側の att（m^2）をそのまま使い続ける。
+        float attW = warpMask.sample(warpMask.transform(p)).r;
+        float att = attW * attW;
+
+        // ===== v7: 微ドリフト（二相・中心対称）＋周期モーフ（レポート方式 C+B+D） =====
+        // (1) 周期モーフ（方式B）: 円周サンプリングで厳密周期。両位相に共通加算（共通モード＝分身に寄与しない）
+        float2 cyc = float2(cos(6.28318530718 * time01), sin(6.28318530718 * time01));
+        float n1 = fbm(p * kMorphScale1 + cyc * kMorphRadius) - 0.5;
+        float n2 = fbm((p + float2(17.7, 41.3)) * kMorphScale2 + cyc * kMorphRadius) - 0.5;
+        float2 micro = float2(n1, n2) * microWarpPx * att;
+
+        // (2) 二相・中心対称ドリフト（方式C+D・レポートの (p-0.5) 形式・窓化なしの素の三角重み）
+        float p1 = fract(time01);
+        float p2 = fract(time01 + 0.5);
+        float w1 = 1.0 - fabs(2.0 * p1 - 1.0);
+        float w2 = 1.0 - w1;
+        float2 uv1 = -flow * (p1 - 0.5) * att + micro;
+        float2 uv2 = -flow * (p2 - 0.5) * att + micro;
+
+        // (3) safeSample フォールバック: 変位後の参照先が変形安全領域(warpMask)外なら元画素へ
+        float2 q1 = p + uv1;
+        float4 c1 = (warpMask.sample(warpMask.transform(q1)).r < kWarpSafeThreshold)
+            ? photo.sample(photo.transform(p)) : photo.sample(photo.transform(q1));
+        float2 q2 = p + uv2;
+        float4 c2 = (warpMask.sample(warpMask.transform(q2)).r < kWarpSafeThreshold)
+            ? photo.sample(photo.transform(p)) : photo.sample(photo.transform(q2));
+        c = c1 * w1 + c2 * w2;
+
+        // ループ保証: p1/p2/cyc はすべて time01 の周期関数（fract/cos/sin）で構成され、
+        // micro は cyc 経由で周期、warpMask は時不変（prepare 時に画像1回につき1回だけ生成・
+        // フレームごとの再生成はしない）ため、c 全体が time01 の周期関数のまま
+        // ＝ frame(0)≡frame(T) が数式レベルで保証される（既存のループ境界テストが担保する）。
     } else {
         // ===== v3: 軌道うねり（クロスフェードなし・分身原理ゼロ） =====
         // 各画素のサンプル点が閉軌道（風向きに長軸を向けた楕円）を周回する。

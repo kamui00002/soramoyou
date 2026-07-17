@@ -240,12 +240,16 @@ struct LivingSkySheet: View {
             )
             sliderRow(
                 title: "光のゆらぎ",
-                valueText: String(format: "%.2f", controller.parameters.shimmerAmount),
+                // v7: 既定0.012・上限0.025と小さい値域になったため、%.2fだと丸めで桁が潰れる
+                // （例: 0.025→"0.03"）。%.3fで実際の値が読み取れるようにする。
+                valueText: String(format: "%.3f", controller.parameters.shimmerAmount),
                 value: Binding(
                     get: { controller.parameters.shimmerAmount },
                     set: { controller.parameters.shimmerAmount = $0 }
                 ),
-                range: 0...0.10
+                // v7でレポート推奨range（±0.5%〜±2.5%）に合わせて0...0.10から縮小。
+                // 出典: docs/research/living-sky-research-2026-07.md「推奨パラメータ」lightAmp。
+                range: 0...0.025
             )
             sliderRow(
                 title: "ループ長",

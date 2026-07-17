@@ -43,6 +43,18 @@ final class LivingSkyEngine {
     /// マスクのフェザー半径 = 縮小後短辺 × この係数（設計書「④マスクをフェザー: 半径=縮小後短辺の0.5%程度」）
     private static let featherRadiusFraction: CGFloat = 0.005
 
+    /// v7: warpMask（変形安全マスク）生成の侵食(erosion)半径 = 縮小後短辺 × この係数。
+    /// 出典: docs/research/living-sky-research-2026-07.md「推奨パラメータ」warpErode
+    /// （推奨0.3%〜1.0%・初期値0.5%）。compositeMask（上の featherRadiusFraction 由来）とは
+    /// 別に、「この内側なら動かしてよい」という安全余白を明示的に作る（二重マスク構成）。
+    private static let warpMaskErodeFraction: CGFloat = 0.005
+
+    /// v7: warpMask 生成の侵食後ブラー半径 = 縮小後短辺 × この係数。侵食で作った硬い境界を
+    /// 均し、LivingSky.metal 側で距離減衰の近似として使えるようにする（レポートが提案する
+    /// Euclidean distance transform の簡略版）。driftAmplitudePx の係数(0.8%)と同じ値を使う
+    /// ことで、距離減衰の実効半径をドリフト振幅と同程度に保つ。
+    private static let warpMaskBlurFraction: CGFloat = 0.008
+
     /// マスクの「地上動かし禁止」判定に使う confidence の警告閾値。
     /// この値未満のときは呼び出し側（View）が警告表示を検討する（設計書§7リスク表）。
     static let lowConfidenceThreshold: Double = 0.3
@@ -54,8 +66,8 @@ final class LivingSkyEngine {
     /// ⚠️ kernel 引数として渡すだけでなく、下の ROI パディング計算（`pad`）とも連動している。
     ///    シェーダの速度ムラ `flow = turnedDir * (1.0 + speedJitter * (j - 0.5) * 2.0)` は
     ///    fbm(j) の値域（3オクターブ fbm の実質上限 ≈0.875）により実変位を最大
-    ///    `(1 + 0.75 * speedJitter) × maxDispPx` まで伸ばすため、この値を変更する場合は
-    ///    ROI パディングの計算式も合わせて見直すこと。
+    ///    `(1 + 0.75 * speedJitter) × driftPx`（v7: `driftAmplitudePx` の値。旧 maxDispPx）
+    ///    まで伸ばすため、この値を変更する場合は ROI パディングの計算式も合わせて見直すこと。
     private static let speedJitter: Float = 0.5
 
     /// フロー速度ムラ用 fbm の空間スケール（設計書§3のシェーダ引数コメント: 例 0.008）
@@ -66,6 +78,11 @@ final class LivingSkyEngine {
 
     /// シマーの円周サンプリング半径（例 2.0）
     private static let shimmerRadius: Float = 2.0
+
+    /// v7: 周期モーフ振幅px = 縮小後短辺 × この係数（LivingSky.metal の kMorphScale1/2 と
+    /// 対で使う）。出典: docs/research/living-sky-research-2026-07.md「推奨パラメータ」
+    /// microWarpAmp（推奨0.1%〜0.6%・初期値0.25%）。
+    private static let microWarpFraction: CGFloat = 0.0025
 
     /// ROI コールバックの追加余白px（変位量ちょうどだと補間の境界で画素が欠けるため +2 の安全マージン）
     private static let roiPaddingMargin: CGFloat = 2.0
@@ -81,8 +98,14 @@ final class LivingSkyEngine {
     /// `prepare` 済みの写真（長辺1080以下に縮小済み）。未 prepare なら nil。
     private(set) var preparedPhoto: CIImage?
 
-    /// `prepare` 済みのフェザー済みマスク。未 prepare なら nil。
+    /// `prepare` 済みのフェザー済みマスク（合成用マスク compositeMask）。未 prepare なら nil。
     private(set) var preparedMask: CIImage?
+
+    /// v7: `prepare` 済みの変形安全マスク（侵食＋ブラー済み warpMask）。未 prepare なら nil。
+    /// 出典: docs/research/living-sky-research-2026-07.md「二重マスク構成」。
+    /// `preparedMask`（合成用）とは別に、LivingSky.metal の変位減衰・safeSample フォールバック
+    /// 判定に使う。
+    private(set) var preparedWarpMask: CIImage?
 
     /// 直近の `prepare` で得たマスクの信頼度 0...1（`SkyMask.confidence` をそのまま保持）。
     /// 設計書§7: 低confidence時に呼び出し側が警告表示 or シマー自動減を検討する材料。
@@ -150,12 +173,13 @@ final class LivingSkyEngine {
     ///     `.export`（長辺1920）は動画書き出し用（設計書§5「品質2モード」）。
     ///     既存呼び出し側（`LivingSkyController`）は既定値のため無変更で動作する。
     func prepare(image: UIImage, quality: SkyMaskQuality = .preview) async throws {
-        let workTask = Task.detached(priority: .userInitiated) { () async throws -> (CIImage, CIImage, Double) in
+        let workTask = Task.detached(priority: .userInitiated) { () async throws -> (CIImage, CIImage, CIImage, Double) in
             try await self.prepareAsync(image: image, quality: quality)
         }
-        let (photo, mask, confidence) = try await workTask.value
+        let (photo, mask, warpMask, confidence) = try await workTask.value
         self.preparedPhoto = photo
         self.preparedMask = mask
+        self.preparedWarpMask = warpMask
         self.maskConfidence = confidence
     }
 
@@ -166,7 +190,7 @@ final class LivingSkyEngine {
     private func prepareAsync(
         image: UIImage,
         quality: SkyMaskQuality
-    ) async throws -> (photo: CIImage, mask: CIImage, confidence: Double) {
+    ) async throws -> (photo: CIImage, mask: CIImage, warpMask: CIImage, confidence: Double) {
         // 手順①: 向き正規化（EXIF orientation をピクセルへ焼き込む）。
         // `UIImage+NormalizedOrientation` を使用（既存の焼き込み契約に合わせる）。
         let normalized = image.withNormalizedOrientation()
@@ -216,7 +240,25 @@ final class LivingSkyEngine {
         blur.radius = Float(featherRadius)
         let featheredMask = blur.outputImage?.cropped(to: photo.extent) ?? skyMask.mask
 
-        return (photo, featheredMask, skyMask.confidence)
+        // 手順④': v7 warpMask（変形安全領域）を生成する。
+        // 出典: docs/research/living-sky-research-2026-07.md「二重マスク構成」。
+        // compositeMask（上の featheredMask）は見た目の合成用、warpMask は変形してよい安全
+        // 領域——生マスクをそのまま変形用に使うと、電線・電柱等の細い前景構造の縁で変形後 UV
+        // がマスク外の色を読んでしまう危険がある（レポート「生マスクをそのまま使ってはいけない
+        // 理由」）。侵食(erosion)で安全余白を作ってから軽くブラーする（侵食→clamp→blur→crop
+        // の順。clamp→blur→crop の定石は既存 feather と同じ理由——旧順序は縁のマスク値を下げる。
+        // SKY-002 の教訓）。
+        let erosion = CIFilter.morphologyMinimum()
+        erosion.inputImage = skyMask.mask
+        erosion.radius = Float(max(1.0, shortSide * Self.warpMaskErodeFraction))
+        let erodedMask = erosion.outputImage?.clampedToExtent().cropped(to: photo.extent) ?? skyMask.mask
+
+        let warpBlur = CIFilter.gaussianBlur()
+        warpBlur.inputImage = erodedMask.clampedToExtent()
+        warpBlur.radius = Float(max(1.0, shortSide * Self.warpMaskBlurFraction))
+        let warpMask = warpBlur.outputImage?.cropped(to: photo.extent) ?? erodedMask
+
+        return (photo, featheredMask, warpMask, skyMask.confidence)
     }
 
     // MARK: - テスト用シーム
@@ -229,10 +271,14 @@ final class LivingSkyEngine {
     /// - Parameters:
     ///   - photo: テスト用の写真 CIImage
     ///   - mask: テスト用のマスク CIImage（extent は photo と一致させること）
+    ///   - warpMask: v7 で追加。テスト用の変形安全マスク CIImage（省略時は `mask` と同一を使う
+    ///     後方互換デフォルト——既存テスト呼び出し `setPreparedStateForTesting(photo:mask:)` を
+    ///     壊さない）
     ///   - confidence: `maskConfidence` に設定する値（既定 1.0 = 高信頼扱い）
-    func setPreparedStateForTesting(photo: CIImage, mask: CIImage, confidence: Double = 1.0) {
+    func setPreparedStateForTesting(photo: CIImage, mask: CIImage, warpMask: CIImage? = nil, confidence: Double = 1.0) {
         self.preparedPhoto = photo
         self.preparedMask = mask
+        self.preparedWarpMask = warpMask ?? mask
         self.maskConfidence = confidence
     }
 
@@ -244,7 +290,8 @@ final class LivingSkyEngine {
     /// - Parameter elapsed: プレビュー開始からの経過秒（負値・非有限値は 0 として扱う）
     /// - Returns: 1フレーム分の CIImage。生成不可時は nil。
     func makeFrame(elapsed: TimeInterval) -> CIImage? {
-        guard let kernel = kernel, let photo = preparedPhoto, let mask = preparedMask else {
+        guard let kernel = kernel, let photo = preparedPhoto, let mask = preparedMask,
+              let warpMask = preparedWarpMask else {
             return nil
         }
 
@@ -260,14 +307,21 @@ final class LivingSkyEngine {
         let dirX = CGFloat(cos(angleRad))
         let dirY = CGFloat(sin(angleRad))
 
-        // 最大変位px = 画像幅 × 0.015 × speed（LivingSkyParameters.maxDisplacementPx 参照）
-        let maxDispPx = parameters.maxDisplacementPx(imageWidth: photo.extent.width)
+        // v7: ドリフト振幅px = 縮小後短辺 × 0.008 × (speed / 0.5)（LivingSkyParameters.
+        // driftAmplitudePx 参照）。「短辺」は prepare 済み photo extent の min(width,height)。
+        let shortSide = min(photo.extent.width, photo.extent.height)
+        let driftPx = parameters.driftAmplitudePx(shortSide: shortSide)
         // ⚠️ 段階3 vision レビュー指摘#1: CIVector として float2 を渡すと Metal general CIKernel の
         // 引数マーシャリングで (0,0) になり「フロー変位が実質ゼロ」になる不具合が実証された。
         // スカラー float（time01/shimmerAmp 等）は正しくマーシャリングされるため、
         // flowDirPx を2つの Float スカラーに分解して渡す（LivingSky.metal 側で float2 に再構成）。
-        let flowDirPxX = Float(dirX * maxDispPx)
-        let flowDirPxY = Float(dirY * maxDispPx)
+        let flowDirPxX = Float(dirX * driftPx)
+        let flowDirPxY = Float(dirY * driftPx)
+
+        // v7: 周期モーフ振幅px = 縮小後短辺 × microWarpFraction（LivingSky.metal の
+        // kMorphScale1/2 と対で使う）。
+        let microWarpPxCG = shortSide * Self.microWarpFraction
+        let microWarpPx = Float(microWarpPxCG)
 
         let shimmerAmp = Float(min(max(parameters.shimmerAmount, 0), 0.1))
 
@@ -277,16 +331,19 @@ final class LivingSkyEngine {
         // （ROI=出力矩形そのまま）をそのまま流用すると、変位でずれた分だけ端に未定義画素
         // （黒 or 透明）が出てしまう。
         //
-        // pad は `maxDispPx` そのものではなく `maxDispPx × (1 + speedJitter)` を基準にする:
-        // LivingSky.metal の速度ムラ `flow = turnedDir * (1.0 + speedJitter * (j - 0.5) * 2.0)`
-        // は fbm(j) の実質上限（3オクターブ fbm ≈0.875）により、実変位を最大
-        // `(1 + 0.75 × speedJitter) × maxDispPx`（speedJitter=0.5 なら約1.375倍）まで
-        // 伸ばすため、`maxDispPx` ちょうどを基準にすると ROI が実変位を包含しきれない
-        // （CoreImage の ROI 契約違反になりうる）。`(1 + speedJitter)`（同条件で1.5倍）は
-        // 真の最大倍率 1.375倍を保守的に上回るため安全マージンとして採用する。
-        // v3（軌道うねり）でも変更不要: 軌道半径の最大値は `maxDispPx × kOrbitRadiusRatio(0.5) × 1.0`
-        // （fbm の変動幅が最大の場合）で常に `maxDispPx` 以下のため、この pad がそのまま包含する。
-        let pad = maxDispPx * (1 + CGFloat(Self.speedJitter)) + Self.roiPaddingMargin
+        // v7 で pad の根拠式を変更した: v4〜v6 は `flow * f`（f が 0...1）の形で変位していた
+        // ため最大励起は `driftPx` ちょうどだったが、v7 は `-flow * (p - 0.5)`（p-0.5 が
+        // -0.5...0.5）の中心対称形のため、1コピーの最大励起は `driftPx * 0.5` になる。
+        // 速度ムラ `flow = turnedDir * (1.0 + speedJitter * (j - 0.5) * 2.0)` は fbm(j) の
+        // 実質上限（3オクターブ fbm ≈0.875）により実変位を最大 `(1 + 0.75 × speedJitter) ×
+        // driftPx`（speedJitter=0.5 なら約1.375倍）まで伸ばすため、`driftPx * 0.5` ちょうどを
+        // 基準にすると ROI が実変位を包含しきれない（CoreImage の ROI 契約違反になりうる）。
+        // `driftPx * 0.5 * (1 + speedJitter)`（同条件で1.5倍）は真の最大倍率 1.375倍を保守的に
+        // 上回るため安全マージンとして採用する。さらに周期モーフ（micro）の最大振幅
+        // `microWarpPx`（fbm の値域はおよそ ±0.5 だが安全側に振幅そのものを加算）を加える。
+        // v3（軌道うねり）でも変更不要: 軌道半径の最大値は `driftPx × kOrbitRadiusRatio(0.5) × 1.0`
+        // （fbm の変動幅が最大の場合）で常に `driftPx * 0.5` 以下のため、この pad がそのまま包含する。
+        let pad = driftPx * 0.5 * (1 + CGFloat(Self.speedJitter)) + microWarpPxCG + Self.roiPaddingMargin
 
         return kernel.apply(
             extent: photo.extent,
@@ -298,12 +355,18 @@ final class LivingSkyEngine {
                 // extent: は元の photo.extent のまま（出力範囲は変えない）。
                 photo.clampedToExtent(),
                 mask,
+                // v7: warpMask は clampedToExtent() しない（意図的）。extent 外を変位後 UV が
+                // 参照した場合、CIImage サンプラーは透明（r=0）を返し、それが自動的に
+                // kWarpSafeThreshold 未満と判定されて safeSample フォールバックが働く——
+                // つまり「範囲外は常に安全側（元画素）に倒れる」という望ましい性質になる。
+                warpMask,
                 time01,
                 flowDirPxX,
                 flowDirPxY,
-                // 動きモデル切替（0=v4窓クロスフェード・ドリフト[既定]／1=v3軌道うねり[比較用]）。
-                // LivingSky.metal の引数順（flowDirPxY の直後・shimmerAmp の直前）と厳密一致させる。
+                // 動きモデル切替（0=v7微ドリフト＋周期モーフ＋二重マスク[既定]／1=v3軌道うねり[比較用]）。
+                // LivingSky.metal の引数順（flowDirPxY の直後・microWarpPx の直前）と厳密一致させる。
                 Float(parameters.motionModel),
+                microWarpPx,
                 shimmerAmp,
                 Self.speedJitter,
                 Self.noiseScale,
