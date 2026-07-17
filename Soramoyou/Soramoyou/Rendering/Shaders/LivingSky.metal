@@ -44,7 +44,7 @@ static inline float valueNoise(float2 p) {
 }
 
 /// fbm（fractal Brownian motion）3オクターブ。
-/// フロー用の速度ムラ（§2.1）とシマー用の輝度ゆらぎ（§2.2）の両方で共用する。
+/// v3（軌道うねり）用の位相・半径ノイズと、シマー用の輝度ゆらぎ（§2.2）の両方で共用する。
 static inline float fbm(float2 p) {
     float value = 0.0;
     float amplitude = 0.5;
@@ -56,35 +56,105 @@ static inline float fbm(float2 p) {
     return value;
 }
 
+// MARK: - v8: タイル化ノイズ（雲ベール用）
+//
+// 上の hash21/valueNoise/fbm は非周期（座標をそのままハッシュするため、平行移動すると
+// 別の値になる）。雲ベールのスクロールを「1ループでちょうど整数×周期分だけ進める」ことで
+// 継ぎ目なしループにするには、スクロールする軸（u軸）の格子座標だけを周期 P で折り返す
+// （mod）タイル化版の hash/value noise/fbm が必要（出典:
+// docs/research/living-sky-research-2026-07-part2-synthesis.md「v8（B2案）設計メモ」）。
+//
+// ⚠️ v8.1（2026-07-17 シミュレータ実写QA指摘）: 当初は u軸・v軸の両方を周期 period で
+//    タイル化していたが、これだと格子点の組み合わせが period×period 通り（period=4.0なら
+//    4×4=16通り）しか存在せず、実質1〜数種類の同一ブロブが縦横に格子状に反復して見える
+//    不具合が実写QAで判明した。ループ整合に必要なのはスクロールする u 軸だけ（v 軸は
+//    スクロールしないため周期性は不要）なので、v 軸（＝y格子）は通常の非タイル hash に戻し、
+//    u 軸（＝x格子）だけを period で折り返す非対称タイル化にする。関数名の "U" は
+//    「u軸のみタイル化」を表す。
+
+/// x格子（u軸・スクロール軸）だけを周期 period で折り返し、y格子（v軸）は折り返さない
+/// 非対称タイル化 hash。fmod は負値で符号付き余りを返すため、+period してから再度 fmod して
+/// 0...period に正規化する（x側のみ）。y側は period を無視して i.y をそのまま使う
+/// （＝通常の非タイル hash と同じ挙動）。
+static inline float hashTileableU(float2 i, float period) {
+    float wx = fmod(fmod(i.x, period) + period, period);
+    return hash21(float2(wx, i.y));
+}
+
+/// タイル化 value noise（u軸のみ）: 格子4隅のハッシュを x軸だけ周期 period で折り返してから
+/// 補間する。p.x を period の整数倍だけ平行移動しても同じ場を返す（= u軸方向のみ周期
+/// period の周期関数）。p.y 方向は折り返さないため、通常の非周期ノイズと同様に
+/// 平行移動すると別の値になる（＝縦方向に同一ブロブが格子状反復しない）。
+static inline float tileableValueNoiseU(float2 p, float period) {
+    float2 i = floor(p);
+    float2 f = fract(p);
+
+    float a = hashTileableU(i, period);
+    float b = hashTileableU(i + float2(1.0, 0.0), period);
+    float c = hashTileableU(i + float2(0.0, 1.0), period);
+    float d = hashTileableU(i + float2(1.0, 1.0), period);
+
+    float2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+/// タイル化 fbm 2オクターブ（u軸のみ）。オクターブごとに座標を2倍にする際、周期 period も
+/// 2倍にすることで「p.x を period の整数倍だけ平行移動しても不変」という性質をオクターブ間
+/// で保つ（座標2倍・周期2倍が連動しているため、シフト量も自動的に新しい周期の整数倍になる）。
+/// この period 連動倍増は hashTileableU 内で x軸（u軸）にのみ効くため、周期不変性も
+/// u 軸方向のみに成立する（v 軸は非タイルのまま）。
+static inline float tileableFbm2U(float2 p, float period) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float per = period;
+    for (int i = 0; i < 2; i++) {
+        value += amplitude * tileableValueNoiseU(p, per);
+        p *= 2.0;
+        per *= 2.0;
+        amplitude *= 0.5;
+    }
+    return value;
+}
+
 // MARK: - Living Sky カーネル本体
 
-// v2/v4: 方向乱流のパラメータ（マジックナンバー回避）。
-// kDirNoiseScale: 方向乱流用 fbm の空間スケール（フロー速度ムラ用 noiseScale 引数より粗い
-//   ＝低周波の緩やかな「うねり」にする）。
-// kMaxTurnRad: 風向きベクトルを回転させる最大角。v2時代は0.44rad(25°)だったが、
-//   v4ではドリフト方向の可読性を優先し0.26rad(15°)へ緩和。
-#define kDirNoiseScale 0.004
-#define kMaxTurnRad 0.26
-
-// v7: 微ドリフト＋周期モーフのパラメータ（マジックナンバー回避）。
-// 出典: docs/research/living-sky-research-2026-07.md「推奨パラメータ」（方式B 周期ノイズに
-// よるUVワープ／方式C+D のハイブリッド）。v4〜v6 が採用していた「色クロスフェード窓」
-// （kPhaseOffsetScale/kXfadeHalfWidth）と「エッジ接線偏向」（kGradSamplePx/kEdgeLo/kEdgeHi/
-// kEdgeAmpReduce/kTangentMax）は v7 で撤去したため、それらのパラメータ定義も削除した
-// （詳細は下の livingSky 本体 v7 ブロックのコメント参照）。
-// kMorphScale1 / kMorphScale2: 周期モーフ用 fbm の空間スケール。低周波(kMorphScale1)=
-//   大きな雲塊のうねり、高周波(kMorphScale2)=微細な輪郭変化という役割分担は、レポートの
-//   lowFreqScale（空幅に1〜2波）/ highFreqScale（空幅に5〜8波）に対応する。1080px
-//   （v7導入時のプレビュー作業解像度の目安）換算の初期値であり、実機目視での較正を
-//   前提とする（2026-07-17 v7導入時点では未検証）。
-// kMorphRadius: 周期モーフの円周サンプリング半径（cyc = (cos, sin) への係数）。値が大きいほど
-//   1ループ中にノイズ場を広く周回して変化が大きくなる。
-// kWarpSafeThreshold: safeSample フォールバックが参照する warpMask の閾値。変位後の参照先
-//   warpMask 値がこの値未満（=侵食済み安全領域の外）なら元画素へフォールバックする。
-#define kMorphScale1 0.004
-#define kMorphScale2 0.011
-#define kMorphRadius 1.5
-#define kWarpSafeThreshold 0.35
+// v8: 雲ベールのパラメータ（マジックナンバー回避）。
+// 出典: docs/research/living-sky-research-2026-07-part2-synthesis.md「v8（B2案）設計メモ」。
+// kVeilScale1 / kVeilScale2: 雲ベールの空間スケール（ノイズ空間の1単位あたりの画面px の逆数。
+//   つまり1セルの画面幅px = 1/scale）。層1(kVeilScale1)=大きな雲塊、層2(kVeilScale2・約2倍
+//   細かい)=細かい流れ、の役割分担で2層パララックスを作る。
+//   ⚠️ 速度の関係式: 1ループあたりのドリフト距離(px) = kVeilPeriod / scale（scrollUnitが
+//   ノイズ空間でkVeilPeriod進むのに対し、1ノイズ空間単位=1/scale画面pxのため）。
+//   初期値0.004/0.009だと層1だけで 4.0/0.004=1000px/ループ（T=6s・k=1で毎秒167px）と
+//   速すぎる誤りがあったため、2026-07-17 テスト結果を受けて再較正: kVeilScale1=0.016
+//   （1セル=62.5px・250px/ループ＝毎秒約42px @T=6s,k=1）、kVeilScale2=0.032（1セル=31.25px・
+//   層2はk=2倍速のため毎秒約83px・層1とのパララックス比は維持）。
+// kVeilPeriod / kVeilPeriodB: タイル周期（ノイズ格子のセル数）。スクロール量をこの整数倍に
+//   することでループ境界での場の不連続をゼロにする（下の livingSky 本体 v8 ブロックの
+//   ループ保証コメント参照）。
+//   ⚠️ v8.1（2026-07-17 シミュレータ実写QA指摘）: 単一周期 kVeilPeriod=4.0 だけだと、
+//   空間的な反復周期がそのまま4セル（kVeilScale1=0.016なら4/0.016=250px）になり、
+//   画面内に同じブロブが何度も反復する模様が目視できた。互いに素な2周期
+//   kVeilPeriod(4.0) と kVeilPeriodB(5.0) の場をそれぞれ独立にスクロールして平均する
+//   ことで、実質の空間反復周期を LCM(4,5)=20セル（同条件で20/0.016=1250px）まで
+//   引き伸ばす。プレビュー作業解像度（長辺1080px。設計書§4）を超えるため反復は
+//   視界に収まらず実質不可視になる。副作用として、速度比4:5の2場が独立に動くことで
+//   ベール自身がゆっくり形を変えながら流れる（望ましい副作用）。
+//   ループ整合はスクロールされる場ごとに独立して厳密成立する（下の livingSky 本体
+//   v8 ブロックのループ保証コメント参照）。
+// kVeilLo / kVeilHi: 密度→不透明度変換の smoothstep しきい値。ベタ曇りにせず「雲の塊」感を
+//   出すための閾値帯。2026-07-17 テスト結果を受けて0.45/0.75→0.40/0.70へ緩和（コントラスト
+//   引き伸ばし後の veil 分布に合わせた再較正）。v8.1 の2周期平均化で veil の分散はやや
+//   縮小する（独立に近い2場を平均するとサンプル平均の性質で分散が縮む）が、Monte Carlo
+//   検証（実装レポート参照）では T/4 ループ差分テストの合格マージンが十分大きいまま
+//   だったため、kVeilLo/Hi はこの変更単体では再調整不要と判断した（下の livingSky 本体
+//   v8 ブロックのコメント・実装レポート「迷った点」も参照）。
+#define kVeilScale1 0.016
+#define kVeilScale2 0.032
+#define kVeilPeriod 4.0
+#define kVeilPeriodB 5.0
+#define kVeilLo 0.40
+#define kVeilHi 0.70
 
 // v3: 軌道うねり方式のパラメータ（マジックナンバー回避）。
 // kPhaseNoiseScale: 周回位相 ph(p) を場所ごとにばらつかせる fbm の空間スケール（粗め＝
@@ -96,25 +166,25 @@ static inline float fbm(float2 p) {
 #define kRadiusNoiseScale 0.01
 #define kOrbitRadiusRatio 0.5
 
-/// 静止画の空領域だけを風向きに沿ってループ変位させ、光のゆらぎを加える general CIKernel。
+/// 静止画の空領域はワープせず、上に雲ベール（v8）または軌道うねり変位（v3・比較用）を重ねる
+/// general CIKernel。
 ///
 /// - Parameters:
-///   - photo: 編集済み写真（変位先の画素を読むため sampler として受け取る）
+///   - photo: 編集済み写真（v3 分岐は変位先の画素を読むため sampler として受け取る）
 ///   - mask: フェザー済み空マスク＝合成用マスク compositeMask（グレースケール・rチャンネルを
 ///     使用。1.0=空 / 0.0=地上）。最終合成 `mix(base, c, m)` の重みに使う
-///   - warpMask: 侵食＋ブラー済みの変形安全マスク（v7 で追加。出典:
-///     docs/research/living-sky-research-2026-07.md「二重マスク構成」）。変位減衰の距離減衰
-///     近似、および safeSample フォールバックの安全判定に使う
 ///   - time01: `frac(経過時間 / ループ長T)` の 0...1 値（ループの位相）
-///   - flowDirPxX: 風向き単位ベクトル × ドリフト振幅px の X 成分（ワーキング座標系。Swift 側で事前計算）
+///   - flowDirPxX: 風向き単位ベクトル × ドリフト振幅px の X 成分（ワーキング座標系。Swift 側で事前計算）。
+///     v8 は方向（normalize）だけを使い、v3 は大きさ（length）も使う（下記 v3 ブロック参照）
 ///   - flowDirPxY: 風向き単位ベクトル × ドリフト振幅px の Y 成分
-///   - motionModel: 動きモデル切替。0.5未満=v7微ドリフト＋周期モーフ＋二重マスク
-///     （レポート準拠ハイブリッド・既定）／それ以外=v3軌道うねり（比較用）。
-///     `LivingSkyParameters.motionModel` の Int(0/1) をそのまま Float へキャストして渡す
-///   - microWarpPx: 周期モーフ（雲の輪郭の微小な形状変化）の振幅px（v7 で追加）
+///   - motionModel: 動きモデル切替。0.5未満=v8タイル化ノイズ雲ベール（既定）／それ以外=v3軌道うねり
+///     （比較用）。`LivingSkyParameters.motionModel` の Int(0/1) をそのまま Float へキャストして渡す
+///   - veilIntensity: v8 雲ベールの不透明度係数 0...1（「雲の量」スライダー）
+///   - veilColR / veilColG / veilColB: v8 雲ベールの色（写真の空平均色を明側に寄せた値。Swift
+///     `LivingSkyEngine.prepare` で1回だけ計測）
+///   - speedPeriods: v8 雲ベールのスクロール速度＝1ループあたりのタイル周期数（k）。
+///     **整数値のみ渡される前提**（ループ整合。下記 v8 ブロックのループ保証コメント参照）
 ///   - shimmerAmp: 光のゆらぎ振幅 0...0.1
-///   - speedJitter: 速度ムラの強さ（既定 0.5）
-///   - noiseScale: フロー速度ムラ用 fbm の空間スケール（例 0.008）
 ///   - shimmerScale: シマー用 fbm の空間スケール（例 0.004）
 ///   - shimmerRadius: シマーの円周サンプリング半径（例 2.0）
 ///   - dest: 出力先（座標取得に使用）
@@ -125,19 +195,20 @@ static inline float fbm(float2 p) {
 ///    「フロー変位が実質ゼロ（シマーだけが動く）」という不具合が実機/シミュレータ双方で再現した。
 ///    time01/shimmerAmp 等のスカラー float 引数は正しくマーシャリングされることが実証済みのため、
 ///    float2 引数を避けて2つの float スカラーに分解し、カーネル冒頭で float2 に再構成する
-///    （v7 で追加した warpMask/microWarpPx も同じ理由で sampler/float スカラーのみにしている）。
+///    （引数は sampler/float スカラーのみにする方針は v8 でも踏襲している）。
 extern "C" float4 livingSky(
     coreimage::sampler photo,
     coreimage::sampler mask,
-    coreimage::sampler warpMask,
     float time01,
     float flowDirPxX,
     float flowDirPxY,
     float motionModel,
-    float microWarpPx,
+    float veilIntensity,
+    float veilColR,
+    float veilColG,
+    float veilColB,
+    float speedPeriods,
     float shimmerAmp,
-    float speedJitter,
-    float noiseScale,
     float shimmerScale,
     float shimmerRadius,
     coreimage::destination dest
@@ -189,86 +260,92 @@ extern "C" float4 livingSky(
     // 「エッジ接線偏向」を追加したが、TestFlight実機提出前の技術調査
     // （docs/research/living-sky-research-2026-07.md）で振り返った結果、v4〜v6 共通の根本原因は
     // 「振幅過大」（幅5%/ループ＝レポート推奨0.4%〜1.8%の4〜8倍）で、ドリフトの大振幅だけで
-    // 「生きてる感」を出そうとしていたことだと判明した。
-    // v7（レポート準拠ハイブリッド）は発想を転換する: ドリフトは短辺の0.8%へ縮小し脇役に回す
-    // （分身の見た目の幅も知覚限界=3px相当以下に収まる）。「生きてる感」は主役を
-    // ①円周サンプリングで厳密に周期化された微小モーフ（周期ノイズによるUVワープ＝レポート
-    // 方式B）と②控えめな光のゆらぎに持たせる。振幅そのものを知覚限界以下に縮小したため、
-    // v6 のエッジ接線偏向（勾配サンプル・輪郭検出による偏向）はもはや不要と判断し撤去した。
-    // 電線・電柱等の細い前景構造は warpMask（侵食＋ブラー済み安全領域）と safeSample
-    // フォールバックで保護する（レポート「二重マスク構成」）。motionModel=0=ドリフトの実装
-    // 差し替えであり、新しい motionModel 値は追加していない。
+    // 「生きてる感」を出そうとしていたことだと判明した。v7（レポート準拠ハイブリッド）はドリフトを
+    // 短辺の0.8%へ縮小し、微小モーフ＋光のゆらぎを主役にする方針へ転換したが、TestFlight実機評価
+    // （2026-07-17）で「振動してるようにしか見えない」との最終NGを受けた。第2次 Deep Research
+    // （docs/research/living-sky-research-2026-07-part2-synthesis.md）により
+    // ①ピクセルワープでの可視ドリフトは知覚科学的に不可能（Braddick 1971: 融合限界≈画面3pt。
+    // 「見える速度」と「融合する分身幅」は原理的に両立不可）②商用製品の答えは実写/手続き的な
+    // 雲オーバーレイの重ね合わせ、と確定したため、v8 は方針を根本転換する: **写真は一切ワープ
+    // せず**、上に自前生成の雲ベール（タイル化ノイズ）を風向きへスクロールして重ねる
+    // （詳細は下記 v8 ブロック）。これにより v4〜v7 が抱えていた分身・巻き戻り・振動・
+    // 電線/電柱の破綻は構造的に存在しなくなる。motionModel=0=ドリフト系の実装差し替えであり、
+    // 新しい motionModel 値は追加していない（v3「軌道うねり」は比較用に不変更のまま残る）。
     float4 c;
     if (motionModel < 0.5) {
-        // ===== v7: レポート準拠ハイブリッド（微ドリフト＋周期モーフ＋二重マスク） =====
-        // 出典: docs/research/living-sky-research-2026-07.md（方式 C flow map + B 周期ノイズ +
-        // D 複数サンプルの位相差ブレンド、二重マスク・safeSampleフォールバック込み）。
-        // レポートが提案する MTLTexture 直描き構成ではなく、既存の CIKernel 1パス構成の
-        // 中へそのまま移植したもの（distanceTexture の EDT は用意せず、warpMask 自体の
-        // ブラーで距離減衰を近似する簡略版）。
+        // ===== v8: タイル化ノイズ雲ベールのオーバーレイ（写真は不変・ドリフトはベール側） =====
+        // 出典: docs/research/living-sky-research-2026-07-part2-synthesis.md
+        //   「v8（B2案）設計メモ」（採用方針=B案「雲オーバーレイ」）。
+        // 原理: タイル化ノイズ（u軸格子座標を周期 P で mod）を風向きへ
+        //   offset = fract(time01) * P * speedPeriods * k（k=層ごとの周期数）でスクロールする。
+        //   speedPeriods は整数値のみ渡される前提（Swift 側 speedQuantize 参照）のため、
+        //   1ループの総移動量は常に P の整数倍になる。写真を一切ワープしないため、v4〜v7 が
+        //   抱えていた分身・巻き戻り・振動・電線/電柱の破綻（上記コメント参照）は構造的に
+        //   存在しない。
+        // v8.1（2026-07-17 シミュレータ実写QA指摘）: 単一周期だけだと空間反復が目視できたため、
+        //   互いに素な2周期 kVeilPeriod(4.0)・kVeilPeriodB(5.0) の場を層ごとに独立にスクロール
+        //   して平均する（各層 d1a/d1b、d2a/d2b。定数コメント参照）。
 
-        // 設計書§2.1「フロー変位」— 速度ムラ・方向乱流（v4〜v6 から不変。下の値そのものは
-        // 一切変更していない。分身対策としての役割はドリフト振幅が小さくなった v7 でも
-        // 引き続き有効）:
-        // 一様な流れだけだと不自然な「ベルトコンベア感」が出るため、fbm で位置ごとに
-        // 流れの速さへ有機的なムラを付与する（F(p) = 風向き × (1 + speedJitter・(fbm(p·s) − 0.5)・2)、
-        // speedJitter既定0.5）。
-        float j = fbm(p * noiseScale);
+        float2 windDir = (length(flowDirPx) > 1e-6) ? normalize(flowDirPx) : float2(1.0, 0.0);
+        float2 perpDir = float2(-windDir.y, windDir.x);
 
-        // 方向の乱流（分身対策）。全画素が同方向に平行移動すると分身がくっきり見えるため、
-        // 場所ごとに風向きを揺らし、コピー同士を非剛体変形（モーフ）の関係にする
-        // （最大回転角 kMaxTurnRad は v4 でドリフト方向の可読性を優先し 0.44→0.26rad へ緩和）。
-        // 方向乱流: 粗いfbm（+37.7は速度ムラのノイズ j と座標をずらして相関を切るオフセット。
-        // 同じ座標系だと速度ムラと回転ムラが同期し乱流としての効果が薄れるため）で回転する。
-        float turn = (fbm(p * kDirNoiseScale + float2(37.7, 37.7)) - 0.5) * 2.0 * kMaxTurnRad;
-        float cs = cos(turn);
-        float sn = sin(turn);
-        // ⚠️ flowDirPx はカーネル冒頭でスカラー引数から再構成済み（float2 引数マーシャリング
-        // 不具合を避けるための既存の仕組み。上記コメント参照）。ここではそれをそのまま回転させる。
-        float2 turnedDir = float2(
-            flowDirPx.x * cs - flowDirPx.y * sn,
-            flowDirPx.x * sn + flowDirPx.y * cs
-        );
-        float2 flow = turnedDir * (1.0 + speedJitter * (j - 0.5) * 2.0);
+        // 層1: 大きな雲塊。セル座標系 u=風向き軸・v=直交軸に回転してから u 軸だけをスクロール
+        // する（v はスクロールしない＝風向きに直交する動きは出さない）。u1/v1 自体はスクロール
+        // 量を含まない基準座標（2周期それぞれの scrollUnit を後段で個別に加算するため）。
+        float u1 = dot(p, windDir) * kVeilScale1;
+        float v1 = dot(p, perpDir) * kVeilScale1;
 
-        // v7: 変位減衰は warpMask（侵食＋ブラー済みの変形安全領域）ベースにする。従来の
-        // m^2（合成用マスク mask 由来。上の att 変数）は境界のにじみをそのまま距離減衰の
-        // 近似として使っていたが、warpMask は明示的に erosion 済みのため「この内側なら
-        // 動かしてよい」という安全余白（レポート「二重マスク構成」）をより厳密に表現できる。
-        // ⚠️ この att はこの if ブロック内でのみ有効な局所変数で、外側スコープの
-        //    `att`（m^2・上で宣言済み・v3 が使う）を意図的にシャドウする。v3 分岐は
-        //    不変更のため warpMask を使わず外側の att（m^2）をそのまま使い続ける。
-        float attW = warpMask.sample(warpMask.transform(p)).r;
-        float att = attW * attW;
+        // fract(time01) は t=0/T でともに0（Swift 側の time01 計算で保証済み）。
+        // P・speedPeriods（整数）を掛けた scrollUnit だけスクロールすると、1ループの総移動量が
+        // 常に P の整数倍になる（下のループ保証コメント参照）。層1は k=1（speedPeriods倍速）。
+        float scrollUnit4L1 = fract(time01) * kVeilPeriod * speedPeriods;
+        float scrollUnit5L1 = fract(time01) * kVeilPeriodB * speedPeriods;
+        float d1a = tileableFbm2U(float2(u1 + scrollUnit4L1, v1), kVeilPeriod);
+        float d1b = tileableFbm2U(float2(u1 + scrollUnit5L1, v1), kVeilPeriodB);
+        float d1 = 0.5 * (d1a + d1b);
 
-        // ===== v7: 微ドリフト（二相・中心対称）＋周期モーフ（レポート方式 C+B+D） =====
-        // (1) 周期モーフ（方式B）: 円周サンプリングで厳密周期。両位相に共通加算（共通モード＝分身に寄与しない）
-        float2 cyc = float2(cos(6.28318530718 * time01), sin(6.28318530718 * time01));
-        float n1 = fbm(p * kMorphScale1 + cyc * kMorphRadius) - 0.5;
-        float n2 = fbm((p + float2(17.7, 41.3)) * kMorphScale2 + cyc * kMorphRadius) - 0.5;
-        float2 micro = float2(n1, n2) * microWarpPx * att;
+        // 層2: 細かい流れ（k=2周期/ループ＝層1の2倍速のパララックス）。kVeilScale2 は層1より
+        // 細かいセル。seedオフセット(+37.7等)は時不変の定数のため周期性に影響しない
+        // （固定シフトはループ整合の証明と無関係——制約が要るのは時間項にのみ）。
+        float u2 = dot(p, windDir) * kVeilScale2 + 37.7;
+        float v2 = dot(p, perpDir) * kVeilScale2 + 91.3;
+        float scrollUnit4L2 = fract(time01) * kVeilPeriod * speedPeriods * 2.0;
+        float scrollUnit5L2 = fract(time01) * kVeilPeriodB * speedPeriods * 2.0;
+        float d2a = tileableFbm2U(float2(u2 + scrollUnit4L2, v2), kVeilPeriod);
+        float d2b = tileableFbm2U(float2(u2 + scrollUnit5L2, v2), kVeilPeriodB);
+        float d2 = 0.5 * (d2a + d2b);
 
-        // (2) 二相・中心対称ドリフト（方式C+D・レポートの (p-0.5) 形式・窓化なしの素の三角重み）
-        float p1 = fract(time01);
-        float p2 = fract(time01 + 0.5);
-        float w1 = 1.0 - fabs(2.0 * p1 - 1.0);
-        float w2 = 1.0 - w1;
-        float2 uv1 = -flow * (p1 - 0.5) * att + micro;
-        float2 uv2 = -flow * (p2 - 0.5) * att + micro;
+        float veil = 0.65 * d1 + 0.35 * d2;
 
-        // (3) safeSample フォールバック: 変位後の参照先が変形安全領域(warpMask)外なら元画素へ
-        float2 q1 = p + uv1;
-        float4 c1 = (warpMask.sample(warpMask.transform(q1)).r < kWarpSafeThreshold)
-            ? photo.sample(photo.transform(p)) : photo.sample(photo.transform(q1));
-        float2 q2 = p + uv2;
-        float4 c2 = (warpMask.sample(warpMask.transform(q2)).r < kWarpSafeThreshold)
-            ? photo.sample(photo.transform(p)) : photo.sample(photo.transform(q2));
-        c = c1 * w1 + c2 * w2;
+        // 2026-07-17 テスト結果を受けたコントラスト引き伸ばし: fbm は複数オクターブの加重和
+        // であるため中心極限定理的に 0.5 付近へ値が集中し、分散が圧縮される（=雲塊の濃淡が
+        // 出にくく、smoothstep(0.45,0.75) 帯域ではほぼ常に alpha≈0 になっていた）。
+        // 0.5 を中心に 1.8 倍へ引き伸ばして分散圧縮を補正し、雲塊のコントラストを出す。
+        veil = clamp((veil - 0.5) * 1.8 + 0.5, 0.0, 1.0);
 
-        // ループ保証: p1/p2/cyc はすべて time01 の周期関数（fract/cos/sin）で構成され、
-        // micro は cyc 経由で周期、warpMask は時不変（prepare 時に画像1回につき1回だけ生成・
-        // フレームごとの再生成はしない）ため、c 全体が time01 の周期関数のまま
-        // ＝ frame(0)≡frame(T) が数式レベルで保証される（既存のループ境界テストが担保する）。
+        // 密度→不透明度: しきい値付き smoothstep で「雲の塊」感を出す（ベタ曇りにしない）。
+        // ⚠️ m は掛けない: 下部の最終合成 `mix(base, c, m)`（v3 分岐も共有する既存構造・不変更）
+        //    が既にマスクで補間するため、ここでも m を掛けると境界で m^2 の二重減衰になってしまう。
+        float alpha = smoothstep(kVeilLo, kVeilHi, veil) * veilIntensity;
+
+        // 色: Swift から渡る veilColR/G/B（写真の空平均色を明側に寄せた色）。screen 合成
+        // （元の空・雲は下に透けたまま明るく重なる）。
+        float3 veilRGB = float3(veilColR, veilColG, veilColB);
+        c = photo.sample(photo.transform(p));
+        c.rgb = c.rgb + (1.0 - c.rgb) * veilRGB * alpha;
+
+        // ループ保証: scrollUnit4L1/scrollUnit5L1/scrollUnit4L2/scrollUnit5L2 はいずれも
+        // fract(time01)（t=0/Tでともに0）に「その場自身の周期（kVeilPeriod または
+        // kVeilPeriodB）× speedPeriods（整数）× 層の速度倍率（層1=1・層2=2）」を掛けた値
+        // のため、1ループの総移動量は常にその場自身の周期の整数倍になる——4本の scrollUnit
+        // それぞれが独立にこの性質を満たす。tileableFbm2U は入力座標を period の整数倍だけ
+        // 平行移動しても不変（オクターブごとに座標とperiodを連動して2倍にしているため、
+        // この不変性はオクターブ間で伝播する——tileableFbm2U の定義コメント参照）ため、
+        // d1a/d1b/d2a/d2b の4項それぞれが time01 の周期関数のまま、その加重平均・加算で
+        // 構成される veil、ひいては c 全体も time01 の周期関数のまま＝
+        // frame(0)≡frame(T) が数式レベルで保証される（既存のループ境界テストが担保する）。
+        // 写真自体は一切参照座標をずらしていない（photo.sample は常に p のまま）ため、
+        // この保証は warpMask/safeSample のような補助機構を必要としない。
     } else {
         // ===== v3: 軌道うねり（クロスフェードなし・分身原理ゼロ） =====
         // 各画素のサンプル点が閉軌道（風向きに長軸を向けた楕円）を周回する。

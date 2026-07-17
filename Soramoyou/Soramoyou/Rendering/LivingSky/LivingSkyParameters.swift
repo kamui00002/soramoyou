@@ -30,6 +30,12 @@ struct LivingSkyParameters: Equatable {
     /// （`min(max(shimmerAmount, 0), 0.1)`）はスライダー range より広い安全上限のため据え置き。
     var shimmerAmount: Double = 0.012
 
+    /// v8: 雲ベールの不透明度係数 0...1（「雲の量」スライダー）。0で雲ベール無効＝写真そのまま、
+    /// 1で最大不透明度（LivingSky.metal の `alpha = smoothstep(kVeilLo, kVeilHi, veil) *
+    /// veilIntensity`）。出典: docs/research/living-sky-research-2026-07-part2-synthesis.md
+    /// 「v8（B2案）設計メモ」。既定 0.5 は初期較正値（2026-07-17 v8導入時点では未検証）。
+    var veilIntensity: Double = 0.5
+
     /// ループ長 T（秒）。4〜10 秒を想定。長いほど継ぎ目・クロスフェードの「呼吸」が目立たない
     /// （設計書§2.1「既知のトレードオフ」参照）。
     ///
@@ -75,6 +81,14 @@ struct LivingSkyParameters: Equatable {
     /// - v3（軌道うねり・比較用に残置）: クロスフェードを廃し、各画素のサンプル点が風向きに
     ///   長軸を向けた閉軌道（楕円）を周回する方式。分身は原理的にゼロだがユーザー評価は
     ///   「気持ち悪い」だったため既定からは外した。
+    ///
+    /// v6 の後継 v7（微ドリフト＋周期モーフ＋二重マスク）も TestFlight実機評価（2026-07-17）で
+    /// 「振動してるようにしか見えない」と最終NGを受けた。第2次 Deep Research
+    /// （docs/research/living-sky-research-2026-07-part2-synthesis.md）により、静止画の
+    /// ピクセルワープでの可視ドリフトは知覚科学的に不可能（Braddick 1971 融合限界と「見える
+    /// 速度」の両立不可）と確定したため、**v8（motionModel=0 の実装差し替え）は写真を一切
+    /// ワープしない**方針に転換した。上に自前生成のタイル化ノイズ雲ベールを風向きへスクロール
+    /// して重ねるオーバーレイ方式（LivingSky.metal 参照）。v3（軌道うねり）は比較用に不変更。
     var motionModel: Int = 0
 
     /// 空のドリフト振幅（px）を画像短辺から導出する。
@@ -90,6 +104,15 @@ struct LivingSkyParameters: Equatable {
     /// （レポートの driftAmp 初期値と一致）、range 0.1〜1.0 で短辺の**0.16%〜1.6%**
     /// （レポート安全範囲0.4%〜1.8%にほぼ収まる）。旧係数（v1〜v6: 画像幅の5〜8%相当）から
     /// 大幅に縮小しているため、分身の見た目の幅も知覚限界（概ね3px相当）以下に収まる設計。
+    ///
+    /// ⚠️ v8（写真を一切ワープしない雲ベール方式。出典:
+    /// docs/research/living-sky-research-2026-07-part2-synthesis.md）では、この値の**大きさ
+    /// （magnitude）自体はもはや使われない**——v8 は `LivingSkyEngine.makeFrame` が
+    /// `windDir = normalize(flowDirPx)` で「方向」だけを取り出す。それでもこの関数を削除しない
+    /// 理由: `motionModel=1`（v3「軌道うねり」・比較用に不変更のまま残置）は今も
+    /// `length(flowDirPx)` で軌道半径を計算するため、`flowDirPx` の大きさ（＝この関数の戻り値）
+    /// が必要。削除すると v3 の軌道半径が失われ動作が壊れるため、関数はそのまま残している
+    /// （「削除 or 未使用コメント」のうち後者を選択）。
     /// - Parameter shortSide: ワーキング座標系での画像短辺（px）＝ `min(width, height)`
     /// - Returns: ドリフト振幅（px）
     func driftAmplitudePx(shortSide: CGFloat) -> CGFloat {

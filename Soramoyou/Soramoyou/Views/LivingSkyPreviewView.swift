@@ -238,6 +238,17 @@ struct LivingSkySheet: View {
                 ),
                 range: 0.1...1.0
             )
+            // v8: 雲ベールの不透明度（「雲の量」）。出典:
+            // docs/research/living-sky-research-2026-07-part2-synthesis.md「v8（B2案）設計メモ」。
+            sliderRow(
+                title: "雲の量",
+                valueText: String(format: "%.2f", controller.parameters.veilIntensity),
+                value: Binding(
+                    get: { controller.parameters.veilIntensity },
+                    set: { controller.parameters.veilIntensity = $0 }
+                ),
+                range: 0...1.0
+            )
             sliderRow(
                 title: "光のゆらぎ",
                 // v7: 既定0.012・上限0.025と小さい値域になったため、%.2fだと丸めで桁が潰れる
