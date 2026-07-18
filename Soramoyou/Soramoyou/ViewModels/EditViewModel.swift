@@ -51,12 +51,16 @@ class EditViewModel: ObservableObject {
             // （スタイル調整後に普通編集ツールを触るとスタイルが基準に戻る不具合を防止）
             let existingStyleTone = editRecipe.style2DToneNorm
             let existingStyleColor = editRecipe.style2DColorNorm
+            // 空補正強度も同様に EditSettings に存在しない EditRecipe 専用フィールドのため保全する
+            // （空補正適用後に普通編集ツールを触ると補正が消える不具合を防止）
+            let existingSkyCorrectionIntensity = editRecipe.skyCorrectionIntensity
             var newRecipe = EditRecipe(from: newValue)
             newRecipe.toneCurvePoints = existingPoints
             newRecipe.targetDynamicRange = existingDynamicRange
             newRecipe.cropRectNorm = existingCropRect
             newRecipe.style2DToneNorm = existingStyleTone
             newRecipe.style2DColorNorm = existingStyleColor
+            newRecipe.skyCorrectionIntensity = existingSkyCorrectionIntensity
             editRecipe = newRecipe
         }
     }
@@ -124,6 +128,8 @@ class EditViewModel: ObservableObject {
     private let userId: String?
     /// パーソナルAI編集（柱1 v1）の学習コーパス（端末内）。テスト時に差し替え可能。
     private let recipeCorpusStore: RecipeCorpusStore
+    /// 空マスク生成プロバイダ（ワンタップ空補正機能）。テスト時に差し替え可能。
+    private let skyMaskProvider: SkyMaskProviderProtocol
     private var previewTask: Task<Void, Never>?
     private var fastPreviewTask: Task<Void, Never>?
 
@@ -135,6 +141,32 @@ class EditViewModel: ObservableObject {
     private var cachedImageIndex: Int = -1
     /// キャッシュ時の変換状態キー（回転・反転）
     private var cachedTransformKey: String = ""
+
+    // MARK: - 空マスクキャッシュ（ワンタップ空補正） ⭐️
+
+    /// プレビュー用にキャッシュ済みの空マスク（`.preview` 品質）。
+    /// `currentImageIndex` と変換状態（回転・反転）ごとに1回だけ生成する。
+    private var cachedSkyMask: CIImage?
+    /// キャッシュ済みマスクの空カバレッジ 0...1（「空が見つかりませんでした」判定に使う）
+    private var cachedSkyMaskCoverage: Double?
+    /// キャッシュ済みマスクの信頼度 0...1（同上）
+    private var cachedSkyMaskConfidence: Double?
+    /// キャッシュ対象の画像インデックス
+    private var cachedSkyMaskImageIndex: Int = -1
+    /// キャッシュ時の変換状態キー（回転・反転。`makeTransformKey()` を再利用）
+    private var cachedSkyMaskTransformKey: String = ""
+    /// 空マスク生成中フラグ。「空を整える」ボタンの初回タップ時のみ true になる
+    /// （2回目以降はキャッシュ済みマスクを再利用するため一瞬で完了する）。
+    @Published private(set) var isGeneratingSkyMask = false
+
+    /// 空補正を「適用中」とみなす強度のしきい値（`FilterGraphBuilder.neutralValueThreshold` と同じ運用）
+    private let skyCorrectionActiveThreshold: Double = 0.001
+    /// 「空を整える」ボタンの初回タップで設定する既定強度
+    private static let skyCorrectionDefaultIntensity: Double = 0.7
+    /// 空検出の最低カバレッジ（これ未満は「空が見つかりませんでした」として適用しない）
+    private static let skyCorrectionMinCoverage: Double = 0.05
+    /// 空検出の最低信頼度（同上）
+    private static let skyCorrectionMinConfidence: Double = 0.3
 
     // MARK: - スロットリング ☁️
 
@@ -164,6 +196,7 @@ class EditViewModel: ObservableObject {
         imageService: ImageServiceProtocol = ImageService(),
         firestoreService: FirestoreServiceProtocol = FirestoreService(),
         recipeCorpusStore: RecipeCorpusStore = RecipeCorpusStore(),
+        skyMaskProvider: SkyMaskProviderProtocol = HeuristicSkyMaskProvider(),
         initialRecipe: EditRecipe? = nil
     ) {
         self.originalImages = images
@@ -171,6 +204,7 @@ class EditViewModel: ObservableObject {
         self.imageService = imageService
         self.firestoreService = firestoreService
         self.recipeCorpusStore = recipeCorpusStore
+        self.skyMaskProvider = skyMaskProvider
 
         // 画像ごとの編集状態スロットと履歴を初期化（画像枚数と1:1で対応）
         // レシピ共有から起動された場合は seed（initialRecipe）を全画像の初期レシピにする。
@@ -445,7 +479,129 @@ class EditViewModel: ObservableObject {
             await self?.generatePreview()
         }
     }
-    
+
+    // MARK: - ワンタップ空補正 ⭐️
+
+    /// 「空を整える」ボタンの実行本体。
+    ///
+    /// 初回タップ時（このセッションでこの画像＋変換状態のマスクが未生成のとき）だけ
+    /// `isGeneratingSkyMask` を立てて空マスクを生成し、以後はキャッシュを再利用する。
+    /// 空が十分に検出できない場合は適用せず `errorMessage` を表示する。
+    func applySkyCorrection() async {
+        isGeneratingSkyMask = true
+        defer { isGeneratingSkyMask = false }
+
+        do {
+            try await ensureSkyMaskCached(quality: .preview)
+        } catch {
+            ErrorHandler.logError(error, context: "EditViewModel.applySkyCorrection")
+            errorMessage = error.userFriendlyMessage
+            return
+        }
+
+        guard let coverage = cachedSkyMaskCoverage,
+              let confidence = cachedSkyMaskConfidence,
+              coverage >= Self.skyCorrectionMinCoverage,
+              confidence >= Self.skyCorrectionMinConfidence else {
+            errorMessage = "空が見つかりませんでした。別の写真でお試しください。"
+            return
+        }
+
+        historyManager.push(currentSnapshot)
+        notifyHistoryChange()
+        editRecipe.skyCorrectionIntensity = Self.skyCorrectionDefaultIntensity
+
+        // ワンタップ空補正の利用計装
+        LoggingService.shared.logEvent("sky_correction_applied", parameters: [
+            "sky_coverage": coverage,
+            "confidence": confidence,
+            "intensity": Self.skyCorrectionDefaultIntensity
+        ])
+
+        await generatePreview()
+    }
+
+    /// 空補正強度スライダーのリアルタイム更新（ドラッグ中）。
+    /// トーンカーブ等のカスタム Binding と同じパターン: 呼び出し側が editRecipe を
+    /// 直接更新してから `triggerRealtimePreview()` を呼ぶ。
+    func updateSkyCorrectionIntensityRealtime(_ value: Double) {
+        capturePreDragSnapshot()
+        editRecipe.skyCorrectionIntensity = min(1.0, max(0.0, value))
+        triggerRealtimePreview()
+    }
+
+    /// 空補正強度スライダーのドラッグ終了時（`finalizeRotation()` と同型のパターン）。
+    func finalizeSkyCorrectionIntensity() {
+        if let preDrag = preDragSnapshot {
+            historyManager.push(preDrag)
+            notifyHistoryChange()
+            preDragSnapshot = nil
+        }
+        scheduleFullResPreviewAfterDrag()
+    }
+
+    /// 空補正を解除し、「空を整える」ボタン表示に戻す。
+    func removeSkyCorrection() {
+        historyManager.push(currentSnapshot)
+        notifyHistoryChange()
+        editRecipe.skyCorrectionIntensity = nil
+        Task { [weak self] in
+            await self?.generatePreview()
+        }
+    }
+
+    /// プレビュー用の空マスクを（未生成なら）生成してキャッシュする。
+    /// `currentImageIndex` と変換状態（回転・反転）のどちらかが変わっていれば再生成する。
+    /// 生成した空マスクの extent は呼び出し時点の「向き正規化＋回転反転適用後」の画像と一致する
+    /// （`FilterGraphBuilder` に渡す `source` と同じ基準に揃えるため）。
+    private func ensureSkyMaskCached(quality: SkyMaskQuality) async throws {
+        let transformKey = makeTransformKey()
+        if cachedSkyMask != nil,
+           cachedSkyMaskImageIndex == currentImageIndex,
+           cachedSkyMaskTransformKey == transformKey {
+            return
+        }
+
+        // 再生成前に一旦クリアする。生成失敗時に「別の画像／変換状態の古いマスク」を
+        // 誤って使い回すと、空でない領域を空として合成してしまう恐れがあるため。
+        cachedSkyMask = nil
+        cachedSkyMaskCoverage = nil
+        cachedSkyMaskConfidence = nil
+
+        guard let image = currentImage else { return }
+        let normalized = normalizeImageOrientation(image)
+        let transformed = applyTransform(to: normalized)
+        guard let ciImage = CIImage(image: transformed) else {
+            throw ImageServiceError.invalidImage
+        }
+        let mask = try await skyMaskProvider.makeSkyMask(for: ciImage, quality: quality)
+        cachedSkyMask = mask.mask
+        cachedSkyMaskCoverage = mask.skyCoverage
+        cachedSkyMaskConfidence = mask.confidence
+        cachedSkyMaskImageIndex = currentImageIndex
+        cachedSkyMaskTransformKey = transformKey
+    }
+
+    /// 書き出し用の空マスクを生成する（`.export` 品質・毎回新規生成）。
+    /// プレビュー用キャッシュとは独立させる（複数画像書き出し時に画像ごとに異なる
+    /// マスクが必要なため、キャッシュを使い回すと別画像のマスクを誤用しかねない）。
+    /// 補正が設定されていない、または生成に失敗した場合は nil を返し、
+    /// 呼び出し元は補正なしで書き出しを継続する（グレースフルデグレード）。
+    private func makeExportSkyMask(for image: UIImage, recipe: EditRecipe) async -> CIImage? {
+        guard let intensity = recipe.skyCorrectionIntensity,
+              intensity > skyCorrectionActiveThreshold else {
+            return nil
+        }
+        guard let ciImage = CIImage(image: image) else { return nil }
+        do {
+            let mask = try await skyMaskProvider.makeSkyMask(for: ciImage, quality: .export)
+            return mask.mask
+        } catch {
+            ErrorHandler.logError(error, context: "EditViewModel.makeExportSkyMask")
+            return nil
+        }
+    }
+
     // MARK: - Edit Tool Management
     
     /// 装備ツールを読み込む（全27ツールを順序に従って表示）
@@ -564,7 +720,9 @@ class EditViewModel: ObservableObject {
            cachedImageIndex == currentImageIndex,
            cachedTransformKey == transformKey {
             // キャッシュ有効 → 同期レンダリング（Task overhead なし）
-            fastPreviewImage = imageService.generatePreviewFromCIImage(lowResCIImage, recipe: editRecipe)
+            // skyMask: 同期経路のため新規生成はせず、キャッシュ済みマスクのみを渡す
+            // （未生成なら nil＝空補正なしとして描画される。次の generatePreview() で追いつく）。
+            fastPreviewImage = imageService.generatePreviewFromCIImage(lowResCIImage, recipe: editRecipe, skyMask: cachedSkyMask)
         } else {
             // キャッシュ無効 → 非同期でキャッシュ再構築してからレンダリング
             fastPreviewTask?.cancel()
@@ -1009,8 +1167,16 @@ class EditViewModel: ObservableObject {
             // リクエストIDが変わっていたら結果を破棄
             guard requestId == currentPreviewRequestId else { return }
 
+            // 空補正が設定されているのにマスク未生成（レシピ共有・Undo/Redo等での復元）なら
+            // ここで生成しておく。ベストエフォート: 失敗しても補正なしでプレビューを継続する。
+            if let intensity = editRecipe.skyCorrectionIntensity,
+               intensity > skyCorrectionActiveThreshold {
+                try? await ensureSkyMaskCached(quality: .preview)
+                guard requestId == currentPreviewRequestId else { return }
+            }
+
             // EditRecipe を直接渡す（toneCurvePoints などを保全するため）
-            let preview = try await imageService.generatePreview(processedImage, recipe: editRecipe)
+            let preview = try await imageService.generatePreview(processedImage, recipe: editRecipe, skyMask: cachedSkyMask)
 
             // リクエストIDが変わっていたら結果を破棄
             guard requestId == currentPreviewRequestId else { return }
@@ -1060,7 +1226,8 @@ class EditViewModel: ObservableObject {
         }
 
         // CIImageベースでプレビュー生成
-        let preview = imageService.generatePreviewFromCIImage(lowResCIImage, recipe: editRecipe)
+        // skyMask: 同期経路のため新規生成はせず、キャッシュ済みマスクのみを渡す
+        let preview = imageService.generatePreviewFromCIImage(lowResCIImage, recipe: editRecipe, skyMask: cachedSkyMask)
 
         // リクエストIDが変わっていたら結果を破棄
         guard requestId == currentFastPreviewRequestId else { return }
@@ -1268,9 +1435,13 @@ class EditViewModel: ObservableObject {
                 flipH:    snapshot.isFlippedHorizontal,
                 flipV:    snapshot.isFlippedVertical
             )
+            // 空補正の書き出し用マスクは画像ごとに独立して .export 品質で新規生成する
+            // （プレビュー用キャッシュは currentImageIndex 1枚分しか保持しないため使い回せない）。
+            let exportSkyMask = await makeExportSkyMask(for: transformedImage, recipe: snapshot.recipe)
             let editedImage = try await imageService.applyEditRecipe(
                 snapshot.recipe,
-                to: transformedImage
+                to: transformedImage,
+                skyMask: exportSkyMask
             )
             editedImages.append(editedImage)
         }
@@ -1294,7 +1465,8 @@ class EditViewModel: ObservableObject {
         }
 
         let transformedImage = applyTransform(to: image)
-        return try await imageService.applyEditRecipe(editRecipe, to: transformedImage)
+        let exportSkyMask = await makeExportSkyMask(for: transformedImage, recipe: editRecipe)
+        return try await imageService.applyEditRecipe(editRecipe, to: transformedImage, skyMask: exportSkyMask)
     }
 
     /// 表示用のプレビュー画像を取得
