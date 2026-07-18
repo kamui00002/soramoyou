@@ -13,6 +13,8 @@ final class SkyCollectionViewModel: ObservableObject {
 
     /// 集計結果（あなたが集めた空）
     @Published private(set) var state: CollectionState = CollectionState()
+    /// ストリーク（連続投稿日数）の状態。カレンダー表示と「◯日連続」表示に使う
+    @Published private(set) var streak: SkyStreakState = .empty
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
 
@@ -37,6 +39,10 @@ final class SkyCollectionViewModel: ObservableObject {
                 lastDocument: nil
             )
             state = SkyCollectionAggregator.aggregate(posts: posts)
+
+            // ストリーク（連続投稿日数）を算出し、連続バッジ用に longestStreak を state へ反映
+            streak = SkyStreakCalculator.calculate(posts: posts, today: Date())
+            state.longestStreak = streak.longestStreak
 
             // 図鑑表示の計装（柱2 主要画面）
             LoggingService.shared.logEvent("sky_zukan_viewed", parameters: [

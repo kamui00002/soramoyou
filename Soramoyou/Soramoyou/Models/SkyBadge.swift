@@ -97,6 +97,31 @@ struct SkyBadge: Identifiable {
             iconName: "map.fill",
             isUnlocked: { $0.prefectures.count >= JapanPrefecture.allNames.count },
             progress: { BadgeProgress(current: $0.prefectures.count, total: JapanPrefecture.allNames.count) }
+        ),
+        // 連続投稿バッジ（判定は longestStreak = 過去最長。一度の達成は失われない）
+        SkyBadge(
+            id: "streak_3",
+            title: "三日坊主卒業",
+            description: "3日連続で空を投稿した",
+            iconName: "flame",
+            isUnlocked: { $0.longestStreak >= 3 },
+            progress: { BadgeProgress(current: min($0.longestStreak, 3), total: 3) }
+        ),
+        SkyBadge(
+            id: "streak_7",
+            title: "七日間の空",
+            description: "7日連続で空を投稿した",
+            iconName: "flame.fill",
+            isUnlocked: { $0.longestStreak >= 7 },
+            progress: { BadgeProgress(current: min($0.longestStreak, 7), total: 7) }
+        ),
+        SkyBadge(
+            id: "streak_30",
+            title: "ひと月の空",
+            description: "30日連続で空を投稿した",
+            iconName: "flame.circle.fill",
+            isUnlocked: { $0.longestStreak >= 30 },
+            progress: { BadgeProgress(current: min($0.longestStreak, 30), total: 30) }
         )
     ]
 }

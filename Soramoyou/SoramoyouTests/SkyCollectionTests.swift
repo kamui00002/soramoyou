@@ -135,4 +135,32 @@ final class SkyCollectionTests: XCTestCase {
         XCTAssertEqual(badge.progress(state).current, 2)
         XCTAssertEqual(badge.progress(state).total, 5)
     }
+
+    // MARK: - 連続投稿バッジ（longestStreak ベース）
+
+    func testStreakBadgesUnlockByLongestStreak() throws {
+        // 最長7日 → 3日/7日は解放、30日は未解放
+        var state = CollectionState()
+        state.longestStreak = 7
+
+        let badge3 = try XCTUnwrap(SkyBadge.all.first { $0.id == "streak_3" })
+        let badge7 = try XCTUnwrap(SkyBadge.all.first { $0.id == "streak_7" })
+        let badge30 = try XCTUnwrap(SkyBadge.all.first { $0.id == "streak_30" })
+
+        XCTAssertTrue(badge3.isUnlocked(state))
+        XCTAssertTrue(badge7.isUnlocked(state))
+        XCTAssertFalse(badge30.isUnlocked(state))
+        XCTAssertEqual(badge30.progress(state), BadgeProgress(current: 7, total: 30))
+    }
+
+    func testStreakBadgesLockedWhenNoStreak() throws {
+        // 投稿はあるが連続していない（longestStreak = 1）→ 連続バッジは全て未解放
+        var state = CollectionState()
+        state.longestStreak = 1
+
+        for id in ["streak_3", "streak_7", "streak_30"] {
+            let badge = try XCTUnwrap(SkyBadge.all.first { $0.id == id })
+            XCTAssertFalse(badge.isUnlocked(state), "\(id) は1日では解放されない")
+        }
+    }
 }
