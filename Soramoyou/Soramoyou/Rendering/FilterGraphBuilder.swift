@@ -49,8 +49,17 @@ final class FilterGraphBuilder {
     ///   - source: 入力画像（CIImage）
     ///   - quality: レンダリング品質モード（既定 `.final`）。リアルタイムドラッグ経路
     ///     （`ImageService.generatePreviewFromCIImage`）のみ `.interactive` を渡す。
+    ///   - skyMask: ワンタップ空補正用の空マスク（グレースケール CIImage、1.0=空）。
+    ///     `nil` または `recipe.skyCorrectionIntensity` が中立ならスキップされる。
+    ///     呼び出し側（`EditViewModel`）がキャッシュ済みマスクを渡す想定で、本関数自身は
+    ///     マスクを生成しない（重い解析処理をレンダリングのホットパスに持ち込まないため）。
     /// - Returns: フィルター適用済みの CIImage グラフ
-    static func buildGraph(recipe: EditRecipe, source: CIImage, quality: RenderQuality = .final) -> CIImage {
+    static func buildGraph(
+        recipe: EditRecipe,
+        source: CIImage,
+        quality: RenderQuality = .final,
+        skyMask: CIImage? = nil
+    ) -> CIImage {
         var img = source
 
         // 1. フィルターを適用（プリセットエフェクト）
@@ -241,6 +250,18 @@ final class FilterGraphBuilder {
             img = applyHDRToneMapping(to: img)
         }
 
+        // 24.5. ワンタップ空補正（グラフ最終段、クロップの直前）
+        //
+        // クロップより前に置く理由: crop はキャンバスの extent を変更するが、`skyMask` の extent は
+        // 呼び出し側が `source`（= このグラフの入力）に合わせて用意している。25番のクロップより後段だと
+        // マスクと画像の extent がずれてしまうため、extent が `source` と一致している間（＝ここまでの
+        // 全ステップは extent を保存する設計）に合成する。
+        if let mask = skyMask,
+           let intensity = recipe.skyCorrectionIntensity,
+           intensity > Self.neutralValueThreshold {
+            img = applySkyCorrection(intensity: intensity, mask: mask, to: img, quality: quality)
+        }
+
         // 25. クロップ適用（最終出力に反映）
         if let normRect = recipe.cropRectNorm,
            normRect != CGRect(x: 0, y: 0, width: 1, height: 1) {
@@ -249,6 +270,109 @@ final class FilterGraphBuilder {
 
         return img
     }
+
+    // ── ワンタップ空補正 ──
+
+    /// 空マスク領域だけに露出・かすみの除去・コントラスト・彩度を追加適用する。
+    ///
+    /// 係数の二重実装を避けるため、補正量は「小さな派生 EditRecipe」として組み立て、
+    /// 既存 27 ツールの係数実装をそのまま持つ `buildGraph` 自身に再帰的に通す。
+    /// 派生レシピの `skyMask` は必ず `nil` で渡し、無限再帰を防ぐ。
+    ///
+    /// - Parameters:
+    ///   - intensity: 空補正強度 0.0...1.0（`recipe.skyCorrectionIntensity`）
+    ///   - mask: 空マスク（グレースケール、1.0=空）。extent は `image` と異なっていてもよい
+    ///     （`scaleMask` で `image.extent` に合わせて拡縮する）。
+    ///   - image: ここまでのグラフ適用済み画像（この上に空補正を合成する）
+    ///   - quality: 派生レシピを再帰適用する際の品質モード（呼び出し元と同じものを使う）
+    private static func applySkyCorrection(
+        intensity k: Double,
+        mask: CIImage,
+        to image: CIImage,
+        quality: RenderQuality
+    ) -> CIImage {
+        // 派生レシピ: 露出・かすみの除去は中立 0 起点、コントラスト・彩度は中立 1.0 起点
+        // （EditRecipe のプロパティコメント参照）。中立値を書き違えると空が黒つぶれ／
+        // 無彩色化するため、必ず中立値からの相対量として組み立てること。
+        var derived = EditRecipe()
+        derived.exposureEV   = skyCorrectionExposureScale * k
+        derived.dehazeNorm   = skyCorrectionDehazeScale * k
+        derived.contrastCI   = 1.0 + skyCorrectionContrastScale * k
+        derived.saturationCI = 1.0 + skyCorrectionSaturationScale * k
+
+        // skyMask: nil で再帰呼び出しし、空補正ステップ自体はスキップさせる（無限再帰防止）。
+        let corrected = buildGraph(recipe: derived, source: image, quality: quality, skyMask: nil)
+
+        // マスクを image の extent に合わせてスケール（呼び出し元のキャッシュ済みマスクが
+        // 低解像度プレビュー用など異なる解像度の場合に対応）
+        let scaledMask = scaleMask(mask, toMatch: image.extent)
+
+        // フェザリング: clampedToExtent() → gaussianBlur → cropped(to:) の順（定石）。
+        // 旧順序（blur 後に clamp）は縁のマスク値を下げ「画像の縁の細い帯」の原因になる
+        // （HeuristicSkyMaskProvider.smoothAndSharpenEdges / SkyReplacementCompositor.feather と同型）。
+        let shortSide = min(image.extent.width, image.extent.height)
+        let featherRadius = max(1.0, shortSide * skyCorrectionFeatherFraction)
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = scaledMask.clampedToExtent()
+        blur.radius = Float(featherRadius)
+        let featheredMask = blur.outputImage?.cropped(to: image.extent) ?? scaledMask
+
+        // CIBlendWithMask: マスクが白(1.0)の画素は inputImage、黒(0.0)の画素は backgroundImage。
+        // SkyMask は 1.0=空 なので、inputImage=補正後 / backgroundImage=補正前が正しい
+        // （SkyReplacementCompositor.replaceSkySync と同型のパターン）。
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = corrected
+        blend.backgroundImage = image
+        blend.maskImage = featheredMask
+        return blend.outputImage?.cropped(to: image.extent) ?? image
+    }
+
+    /// 空マスクを `targetExtent` に合わせて拡縮する（`HeuristicSkyMaskProvider.readRGBA8Pixels` と
+    /// 同型の「高さで scale、幅で aspectRatio 補正」の 2 段階 Lanczos スケーリング）。
+    private static func scaleMask(_ mask: CIImage, toMatch targetExtent: CGRect) -> CIImage {
+        let maskExtent = mask.extent
+        guard maskExtent.width > 0, maskExtent.height > 0,
+              targetExtent.width > 0, targetExtent.height > 0 else {
+            return mask
+        }
+
+        // 既にほぼ一致していれば無変換で返す（不要なリサンプリングを避ける）
+        if abs(maskExtent.width - targetExtent.width) < 0.5,
+           abs(maskExtent.height - targetExtent.height) < 0.5,
+           abs(maskExtent.origin.x - targetExtent.origin.x) < 0.5,
+           abs(maskExtent.origin.y - targetExtent.origin.y) < 0.5 {
+            return mask
+        }
+
+        // origin をゼロ基準に正規化してからスケール（非ゼロ origin のまま拡縮すると
+        // 内容がずれる。HeuristicSkyMaskProvider の「origin 正規化」と同じ理由）
+        let normalized = maskExtent.origin == .zero
+            ? mask
+            : mask.transformed(by: CGAffineTransform(translationX: -maskExtent.minX, y: -maskExtent.minY))
+
+        let heightScale = targetExtent.height / maskExtent.height
+        let intermediateWidth = maskExtent.width * heightScale
+        let aspectRatio: CGFloat = intermediateWidth > 0 ? targetExtent.width / intermediateWidth : 1.0
+
+        let scaleFilter = CIFilter.lanczosScaleTransform()
+        scaleFilter.inputImage = normalized
+        scaleFilter.scale = Float(heightScale)
+        scaleFilter.aspectRatio = Float(aspectRatio)
+
+        guard let scaled = scaleFilter.outputImage else { return mask }
+        return scaled.transformed(by: CGAffineTransform(translationX: targetExtent.origin.x, y: targetExtent.origin.y))
+    }
+
+    /// 空補正: 露出（EV）のスケール係数
+    private static let skyCorrectionExposureScale: Double = 0.3
+    /// 空補正: かすみの除去のスケール係数
+    private static let skyCorrectionDehazeScale: Double = 0.4
+    /// 空補正: コントラストのスケール係数（中立 1.0 からの加算量）
+    private static let skyCorrectionContrastScale: Double = 0.15
+    /// 空補正: 彩度のスケール係数（中立 1.0 からの加算量）
+    private static let skyCorrectionSaturationScale: Double = 0.1
+    /// 空補正: フェザー半径（短辺に対する比率）
+    private static let skyCorrectionFeatherFraction: CGFloat = 0.01
 
     // ── クロップ ──
     /// 正規化矩形 (0.0〜1.0, 左上原点) を CIImage の座標系（左下原点）に変換して切り出す
