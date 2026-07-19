@@ -544,12 +544,14 @@ class MockImageService: ImageServiceProtocol {
         return image
     }
 
-    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage {
+    /// - Parameter skyMask: ワンタップ空補正のモックでは未使用（呼び出しの有無のみ確認する既存テストのため）
+    func generatePreview(_ image: UIImage, recipe: EditRecipe, skyMask: CIImage?) async throws -> UIImage {
         generatePreviewCalled = true
         return image
     }
 
-    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage? {
+    /// - Parameter skyMask: ワンタップ空補正のモックでは未使用（呼び出しの有無のみ確認する既存テストのため）
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe, skyMask: CIImage?) -> UIImage? {
         generatePreviewCalled = true
         let context = CIContext()
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
@@ -558,7 +560,8 @@ class MockImageService: ImageServiceProtocol {
         return UIImage(cgImage: cgImage)
     }
 
-    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage {
+    /// - Parameter skyMask: ワンタップ空補正のモックでは未使用（呼び出しの有無のみ確認する既存テストのため）
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage, skyMask: CIImage?) async throws -> UIImage {
         applyEditSettingsCalled = true
         return image
     }
