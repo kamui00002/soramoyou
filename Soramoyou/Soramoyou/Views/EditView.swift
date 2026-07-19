@@ -177,7 +177,10 @@ struct EditView: View {
                                 }
                             }
                         }
-                        .disabled(viewModel.isLoading || isGeneratingFinal)
+                        // ⭐️ レビュー指摘3対応: 空マスク生成中（isGeneratingSkyMask）も
+                        // 無効化する。生成中に「次へ」を押すと、まだ確定していないマスクの
+                        // 状態で書き出しが走ってしまう恐れがあるため。
+                        .disabled(viewModel.isLoading || isGeneratingFinal || viewModel.isGeneratingSkyMask)
                         .foregroundColor(.white)
                     }
                 }
@@ -271,7 +274,9 @@ struct EditView: View {
     /// 適用済みなら強度スライダーを表示する。
     @ViewBuilder
     private var skyCorrectionBar: some View {
-        if (viewModel.editRecipe.skyCorrectionIntensity ?? 0) > 0 {
+        // ⭐️ レビュー指摘5対応: しきい値判定を viewModel.isSkyCorrectionActive に一元化
+        // （FilterGraphBuilder.neutralValueThreshold と同じ運用値を使う単一ソース）。
+        if viewModel.isSkyCorrectionActive {
             skyCorrectionSliderBar
         } else {
             skyCorrectionButtonBar
@@ -319,7 +324,7 @@ struct EditView: View {
 
                 Spacer()
 
-                Text("\(Int((viewModel.editRecipe.skyCorrectionIntensity ?? 0) * 100))%")
+                Text("\(Int(viewModel.skyCorrectionIntensityValue * 100))%")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.6))
                     .monospacedDigit()
@@ -335,7 +340,7 @@ struct EditView: View {
 
             Slider(
                 value: Binding(
-                    get: { viewModel.editRecipe.skyCorrectionIntensity ?? 0 },
+                    get: { viewModel.skyCorrectionIntensityValue },
                     set: { viewModel.updateSkyCorrectionIntensityRealtime($0) }
                 ),
                 in: 0...1,
@@ -424,8 +429,13 @@ struct EditView: View {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
         } else if let displayImage = viewModel.displayPreviewImage {
-            // 空補正 Before/After 比較: 長押し中はオリジナル画像を表示する。
-            let shownImage = (isComparingSkyCorrectionOriginal ? viewModel.currentImage : nil) ?? displayImage
+            // ⭐️ レビュー指摘4対応: 空補正 Before/After 比較の対象は「未編集の元画像」
+            // （viewModel.currentImage）ではなく、「現在のレシピから skyCorrectionIntensity
+            // だけ nil にした状態」（viewModel.skyCorrectionCompareImage、同じ変換・クロップ
+            // 経路でレンダリング済み）にする。長押し開始時に viewModel.prepareSkyCorrectionCompareImage()
+            // が生成する（skyCorrectionCompareOverlay の onChange 参照）。未生成（読み込み中）
+            // の間は現在のプレビューにフォールバックする。
+            let shownImage = (isComparingSkyCorrectionOriginal ? viewModel.skyCorrectionCompareImage : nil) ?? displayImage
             Image(uiImage: shownImage)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -449,12 +459,27 @@ struct EditView: View {
     /// 他のジェスチャー（画像切替ボタン等）との競合を避ける（HomeView.CardButtonStyle と同じ設計判断）。
     @ViewBuilder
     private var skyCorrectionCompareOverlay: some View {
-        if (viewModel.editRecipe.skyCorrectionIntensity ?? 0) > 0 {
+        // ⭐️ レビュー指摘5対応: しきい値判定を viewModel.isSkyCorrectionActive に一元化。
+        if viewModel.isSkyCorrectionActive {
             Button(action: {}) {
                 Color.clear
             }
             .buttonStyle(SkyCorrectionCompareButtonStyle(isComparing: $isComparingSkyCorrectionOriginal))
             .accessibilityLabel("長押しで補正前の画像を表示")
+            // ⭐️ レビュー指摘8対応: 長押しジェスチャーは VoiceOver 利用時に実行しづらいため、
+            // ローターから呼べる明示的なアクションとして同じトグル操作を提供する。
+            .accessibilityAction(named: "補正前と比較") {
+                isComparingSkyCorrectionOriginal.toggle()
+            }
+            // ⭐️ レビュー指摘4対応: 比較 ON への切り替わり（長押し開始 or アクセシビリティ
+            // アクション経由のトグル ON）のたびに 1 回だけ「補正前」画像を生成する。
+            .onChange(of: isComparingSkyCorrectionOriginal) { isComparing in
+                if isComparing {
+                    Task {
+                        await viewModel.prepareSkyCorrectionCompareImage()
+                    }
+                }
+            }
         }
     }
 
