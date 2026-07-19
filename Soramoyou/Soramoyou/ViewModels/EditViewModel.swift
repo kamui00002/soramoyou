@@ -159,6 +159,12 @@ class EditViewModel: ObservableObject {
     /// （2回目以降はキャッシュ済みマスクを再利用するため一瞬で完了する）。
     @Published private(set) var isGeneratingSkyMask = false
 
+    /// 空補正 Before/After 比較用の「補正前」プレビュー画像（⭐️ レビュー指摘4対応）。
+    /// 現在のレシピから `skyCorrectionIntensity` だけ nil にした一時レシピで生成した、
+    /// 「空補正以外の全編集は反映した状態」の画像。`prepareSkyCorrectionCompareImage()` が
+    /// 長押し開始（トグル ON）のたびに 1 回だけ生成してここに書き込む。
+    @Published private(set) var skyCorrectionCompareImage: UIImage?
+
     /// 空補正を「適用中」とみなす強度のしきい値（`FilterGraphBuilder.neutralValueThreshold` と同じ運用）
     private let skyCorrectionActiveThreshold: Double = 0.001
     /// 「空を整える」ボタンの初回タップで設定する既定強度
@@ -550,6 +556,77 @@ class EditViewModel: ObservableObject {
         }
     }
 
+    /// 空補正が「適用中」とみなせるか（⭐️ レビュー指摘5対応: 単一ソース化）。
+    ///
+    /// `EditView` 側で `(editRecipe.skyCorrectionIntensity ?? 0) > 0` を複数箇所に重複させると、
+    /// `FilterGraphBuilder.neutralValueThreshold`（実際に補正が効き始めるしきい値）と
+    /// 食い違うサイレント帯が生まれる。しきい値の定義をここ1箇所に集約し、
+    /// `EditView` はこの computed property だけを参照する。
+    var isSkyCorrectionActive: Bool {
+        (editRecipe.skyCorrectionIntensity ?? 0) > skyCorrectionActiveThreshold
+    }
+
+    /// 空補正強度の表示用値（未設定時は 0）。
+    /// `EditView` 側で `editRecipe.skyCorrectionIntensity ?? 0` を重複させないための単一ソース。
+    var skyCorrectionIntensityValue: Double {
+        editRecipe.skyCorrectionIntensity ?? 0
+    }
+
+    /// 空補正 Before/After 比較用の「補正前」画像を生成してキャッシュする（⭐️ レビュー指摘4対応）。
+    ///
+    /// 比較対象を「未編集の元画像」（`currentImage`）ではなく、「現在のレシピから
+    /// `skyCorrectionIntensity` だけ nil にした状態」にすることで、他の編集ツール（フィルター・
+    /// 露出・クロップ等）の見た目はそのままに、空補正の有無だけを比較できるようにする。
+    /// 通常のプレビューと同じ変換・クロップ経路（`normalizedTransformedImage` →
+    /// `imageService.generatePreview`）を通す。呼び出し側（`EditView`）は Before/After
+    /// 比較の長押し開始（トグル ON）のたびに 1 回だけ呼ぶ想定。
+    func prepareSkyCorrectionCompareImage() async {
+        guard let image = currentImage else {
+            skyCorrectionCompareImage = nil
+            return
+        }
+
+        var recipeWithoutSkyCorrection = editRecipe
+        recipeWithoutSkyCorrection.skyCorrectionIntensity = nil
+
+        let transformed = normalizedTransformedImage(image)
+        do {
+            skyCorrectionCompareImage = try await imageService.generatePreview(
+                transformed,
+                recipe: recipeWithoutSkyCorrection,
+                skyMask: nil
+            )
+        } catch {
+            ErrorHandler.logError(error, context: "EditViewModel.prepareSkyCorrectionCompareImage")
+            // 生成失敗時は nil のままにし、呼び出し側で displayPreviewImage にフォールバックさせる
+            skyCorrectionCompareImage = nil
+        }
+    }
+
+    /// 向き正規化（`.up` 焼き込み）と回転・反転適用をこの順序でまとめて行う共通ヘルパー
+    /// （⭐️ レビュー指摘1対応）。
+    ///
+    /// `applyTransform` 単体は回転 0・反転なしのとき元画像をそのまま返すため、EXIF 向きタグ
+    /// 付き（`.right` 等の縦撮り）画像をそのまま下流の CIImage 化に渡すと、`ensureSkyMaskCached`
+    /// が生成する空マスク（常にこのヘルパー経由で `.up` 焼き込み済み）と extent の縦横が
+    /// 食い違い、マスクが誤った領域に合成されるおそれがある。プレビュー（`generatePreview`）・
+    /// 書き出し（`generateFinalImages` / `generateFinalImage`）・マスク生成
+    /// （`ensureSkyMaskCached` / `prepareSkyCorrectionCompareImage`）の全経路をこのヘルパーに
+    /// 統一することで、常に同一の「向き正規化済み＋変換適用済み」画像を基準にする。
+    private func normalizedTransformedImage(_ image: UIImage) -> UIImage {
+        applyTransform(to: normalizeImageOrientation(image))
+    }
+
+    /// 画像ごとに独立したパラメータ版（`generateFinalImages()` から使用）
+    private func normalizedTransformedImage(
+        _ image: UIImage,
+        rotation: Double,
+        flipH: Bool,
+        flipV: Bool
+    ) -> UIImage {
+        applyTransform(to: normalizeImageOrientation(image), rotation: rotation, flipH: flipH, flipV: flipV)
+    }
+
     /// プレビュー用の空マスクを（未生成なら）生成してキャッシュする。
     /// `currentImageIndex` と変換状態（回転・反転）のどちらかが変わっていれば再生成する。
     /// 生成した空マスクの extent は呼び出し時点の「向き正規化＋回転反転適用後」の画像と一致する
@@ -569,8 +646,13 @@ class EditViewModel: ObservableObject {
         cachedSkyMaskConfidence = nil
 
         guard let image = currentImage else { return }
-        let normalized = normalizeImageOrientation(image)
-        let transformed = applyTransform(to: normalized)
+        // ⭐️ レビュー指摘2対応: await（`skyMaskProvider.makeSkyMask`）前に対象インデックスを
+        // キャプチャする。キャプチャせず `currentImageIndex` を await 後に読み直すと、await 中
+        // （マスク生成中）にユーザーが nextImage()/previousImage() で画像を切り替えた場合、
+        // 「古い画像用に生成したマスク」が「切替後の新しい画像のキャッシュ」として誤って
+        // 紐付いてしまう（`rebuildLowResCacheAsync` の `currentIndex` キャプチャと同じ前例に揃える）。
+        let targetIndex = currentImageIndex
+        let transformed = normalizedTransformedImage(image)
         guard let ciImage = CIImage(image: transformed) else {
             throw ImageServiceError.invalidImage
         }
@@ -578,27 +660,41 @@ class EditViewModel: ObservableObject {
         cachedSkyMask = mask.mask
         cachedSkyMaskCoverage = mask.skyCoverage
         cachedSkyMaskConfidence = mask.confidence
-        cachedSkyMaskImageIndex = currentImageIndex
+        cachedSkyMaskImageIndex = targetIndex
         cachedSkyMaskTransformKey = transformKey
+    }
+
+    /// 書き出し用マスク生成の結果（⭐️ レビュー指摘6対応）。
+    ///
+    /// 呼び出し側が「補正が設定されていない／しきい値未満（そもそも不要）」と
+    /// 「補正ありのはずがマスク生成に失敗した」を区別できるようにする。前者は補正なしで
+    /// 書き出しを継続してよいが、後者は画像に補正が反映されないため、レシピ側の
+    /// `skyCorrectionIntensity` もフォールバックで nil にしないと「画像は補正なし・
+    /// レシピは0.7」という永続的な不一致が Firestore に残ってしまう。
+    private enum ExportSkyMaskResult {
+        /// 補正が設定されていない、またはしきい値未満（マスク生成不要）
+        case notApplicable
+        /// マスク生成に成功
+        case success(CIImage)
+        /// マスク生成を試みたが失敗した
+        case failed
     }
 
     /// 書き出し用の空マスクを生成する（`.export` 品質・毎回新規生成）。
     /// プレビュー用キャッシュとは独立させる（複数画像書き出し時に画像ごとに異なる
     /// マスクが必要なため、キャッシュを使い回すと別画像のマスクを誤用しかねない）。
-    /// 補正が設定されていない、または生成に失敗した場合は nil を返し、
-    /// 呼び出し元は補正なしで書き出しを継続する（グレースフルデグレード）。
-    private func makeExportSkyMask(for image: UIImage, recipe: EditRecipe) async -> CIImage? {
+    private func makeExportSkyMask(for image: UIImage, recipe: EditRecipe) async -> ExportSkyMaskResult {
         guard let intensity = recipe.skyCorrectionIntensity,
               intensity > skyCorrectionActiveThreshold else {
-            return nil
+            return .notApplicable
         }
-        guard let ciImage = CIImage(image: image) else { return nil }
+        guard let ciImage = CIImage(image: image) else { return .failed }
         do {
             let mask = try await skyMaskProvider.makeSkyMask(for: ciImage, quality: .export)
-            return mask.mask
+            return .success(mask.mask)
         } catch {
             ErrorHandler.logError(error, context: "EditViewModel.makeExportSkyMask")
-            return nil
+            return .failed
         }
     }
 
@@ -1156,11 +1252,16 @@ class EditViewModel: ObservableObject {
 
         do {
             // 画像処理をバックグラウンドで実行
+            // ⭐️ レビュー指摘1対応: 向き正規化（.up 焼き込み）→ 回転・反転適用の順で処理する。
+            // 旧実装は applyTransform のみで、回転 0・反転なしのときは EXIF 向きタグ付き
+            // （.right 等の縦撮り）画像がそのまま下流の PreviewRenderer.renderPreview
+            // （CIImage(cgImage:) で raw 生成＝向きを無視）に渡っていたため、常に .up 焼き込み
+            // 済みの空マスク（ensureSkyMaskCached）と extent の縦横が食い違い、空補正が
+            // 誤った領域に合成される恐れがあった。normalizedTransformedImage で経路を揃える。
             let processedImage = await Task.detached(priority: .userInitiated) { [weak self] in
                 guard let self = self else { return image }
-                // 回転・反転を適用した画像を作成
                 return await MainActor.run {
-                    self.applyTransform(to: image)
+                    self.normalizedTransformedImage(image)
                 }
             }.value
 
@@ -1419,7 +1520,7 @@ class EditViewModel: ObservableObject {
         var editedImages: [UIImage] = []
 
         for (index, image) in originalImages.enumerated() {
-            let snapshot: EditorSnapshot = imageStates.indices.contains(index)
+            var snapshot: EditorSnapshot = imageStates.indices.contains(index)
                 ? imageStates[index]
                 : EditorSnapshot(
                     recipe:              EditRecipe(),
@@ -1429,15 +1530,47 @@ class EditViewModel: ObservableObject {
                     cropAspectRatio:     .free
                 )
 
-            let transformedImage = applyTransform(
-                to: image,
+            // ⭐️ レビュー指摘1対応: 向き正規化（.up 焼き込み）→ 回転・反転適用の順で処理する
+            // （normalizedTransformedImage、詳細は同メソッドのコメント参照）。
+            let transformedImage = normalizedTransformedImage(
+                image,
                 rotation: snapshot.rotationDegrees,
                 flipH:    snapshot.isFlippedHorizontal,
                 flipV:    snapshot.isFlippedVertical
             )
             // 空補正の書き出し用マスクは画像ごとに独立して .export 品質で新規生成する
             // （プレビュー用キャッシュは currentImageIndex 1枚分しか保持しないため使い回せない）。
-            let exportSkyMask = await makeExportSkyMask(for: transformedImage, recipe: snapshot.recipe)
+            let exportSkyMask: CIImage?
+            switch await makeExportSkyMask(for: transformedImage, recipe: snapshot.recipe) {
+            case .notApplicable:
+                exportSkyMask = nil
+            case .success(let mask):
+                exportSkyMask = mask
+            case .failed:
+                // ⭐️ レビュー指摘6対応: マスク生成に失敗すると画像には補正が反映されない。
+                // レシピの skyCorrectionIntensity をそのまま残すと「画像は補正なし・レシピは
+                // 0.7」という永続的な不一致が Firestore に保存されてしまうため、この画像の
+                // スナップショットだけ intensity を nil にフォールバックしてから書き出す。
+                exportSkyMask = nil
+                var fallbackRecipe = snapshot.recipe
+                fallbackRecipe.skyCorrectionIntensity = nil
+                snapshot = EditorSnapshot(
+                    recipe:              fallbackRecipe,
+                    rotationDegrees:     snapshot.rotationDegrees,
+                    isFlippedHorizontal: snapshot.isFlippedHorizontal,
+                    isFlippedVertical:   snapshot.isFlippedVertical,
+                    cropAspectRatio:     snapshot.cropAspectRatio
+                )
+                if imageStates.indices.contains(index) {
+                    imageStates[index] = snapshot
+                }
+                // 現在表示中の画像で失敗した場合は、投稿ペイロードに使われるライブの
+                // editRecipe（PostInfoPayload.editRecipe 経由でレシピ共有・学習コーパスに
+                // 渡る）も同期し、同じ不一致が別経路で再発しないようにする。
+                if index == currentImageIndex {
+                    editRecipe.skyCorrectionIntensity = nil
+                }
+            }
             let editedImage = try await imageService.applyEditRecipe(
                 snapshot.recipe,
                 to: transformedImage,
@@ -1464,9 +1597,26 @@ class EditViewModel: ObservableObject {
             throw EditViewModelError.noImage
         }
 
-        let transformedImage = applyTransform(to: image)
-        let exportSkyMask = await makeExportSkyMask(for: transformedImage, recipe: editRecipe)
-        return try await imageService.applyEditRecipe(editRecipe, to: transformedImage, skyMask: exportSkyMask)
+        // ⭐️ レビュー指摘1対応: 向き正規化 → 回転・反転適用の順で処理する（詳細は
+        // normalizedTransformedImage のコメント参照）。
+        let transformedImage = normalizedTransformedImage(image)
+
+        var recipe = editRecipe
+        let exportSkyMask: CIImage?
+        switch await makeExportSkyMask(for: transformedImage, recipe: recipe) {
+        case .notApplicable:
+            exportSkyMask = nil
+        case .success(let mask):
+            exportSkyMask = mask
+        case .failed:
+            // ⭐️ レビュー指摘6対応: 画像には補正が反映されないため、レシピ側の
+            // skyCorrectionIntensity もフォールバックし、「画像は補正なし・レシピは0.7」の
+            // 永続不一致を防ぐ。ライブの editRecipe も同期する。
+            exportSkyMask = nil
+            recipe.skyCorrectionIntensity = nil
+            editRecipe.skyCorrectionIntensity = nil
+        }
+        return try await imageService.applyEditRecipe(recipe, to: transformedImage, skyMask: exportSkyMask)
     }
 
     /// 表示用のプレビュー画像を取得
