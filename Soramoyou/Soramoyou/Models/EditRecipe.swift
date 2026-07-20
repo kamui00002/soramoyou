@@ -128,6 +128,19 @@ struct EditRecipe: Codable, Equatable {
     /// 二重露光風合成（正規化）
     var doubleExposureNorm: Double?
 
+    // MARK: - 空補正（ワンタップ空補正機能）
+
+    /// ワンタップ空補正の強度（0.0...1.0、既定 nil＝未適用）。
+    ///
+    /// ⚠️ `Double = 0` ではなく `Double?` にしている理由: `EditRecipe` の `Codable` 適合は
+    /// コンパイラ合成の `init(from decoder:)` であり、非 Optional プロパティは「デフォルト値が
+    /// あってもキー欠落で `keyNotFound` を throw する」（プロパティ宣言の `= 0` はメンバワイズ
+    /// イニシャライザにのみ効き、デコーダには効かない）。旧下書き JSON にこのキーは存在しないため、
+    /// 非 Optional にすると既存下書きの読み込みが全滅する。`brillianceNorm` 以降の増設フィールドが
+    /// すべて Optional なのはこれが理由で、本フィールドも同じ規約に合わせる。
+    /// nil は「未適用（0 相当）」として扱う。
+    var skyCorrectionIntensity: Double?
+
     // MARK: - 2D スタイルパッド（iPhone 写真スタイル風 複合ツール）
 
     /// 2D スタイルパッド Y 軸: トーン（正規化 -1.0...1.0）
@@ -456,6 +469,7 @@ struct EditRecipe: Codable, Equatable {
         if let v = doubleExposureNorm    { data["doubleExposureNorm"]    = v }
         if let v = style2DToneNorm       { data["style2DToneNorm"]       = v }
         if let v = style2DColorNorm      { data["style2DColorNorm"]      = v }
+        if let v = skyCorrectionIntensity { data["skyCorrectionIntensity"] = v }
         if let f = appliedFilter         { data["appliedFilter"]         = f.rawValue }
         if let tp = toneCurvePoints      { data["toneCurvePoints"]       = tp.toFirestoreData() }
         if let dr = targetDynamicRange   { data["targetDynamicRange"]    = dr.rawValue }
@@ -495,6 +509,14 @@ struct EditRecipe: Codable, Equatable {
     private static func sanitizeNorm(_ value: Double?) -> Double? {
         guard let v = value, v.isFinite else { return nil }
         return Swift.min(1.0, Swift.max(-1.0, v))
+    }
+
+    /// 単方向強度 (0.0...1.0) Optional 値のサニタイズ（空補正強度など、負値を取らない値用）:
+    /// - 値が NaN / Inf → nil（未設定扱い）
+    /// - 範囲外 → クランプ
+    private static func sanitizeIntensity(_ value: Double?) -> Double? {
+        guard let v = value, v.isFinite else { return nil }
+        return Swift.min(1.0, Swift.max(0.0, v))
     }
 
     /// Firestore の `editRecipeV1` フィールドから復元
@@ -539,6 +561,7 @@ struct EditRecipe: Codable, Equatable {
         self.doubleExposureNorm    = Self.sanitizeNorm(firestoreData["doubleExposureNorm"]    as? Double)
         self.style2DToneNorm       = Self.sanitizeNorm(firestoreData["style2DToneNorm"]       as? Double)
         self.style2DColorNorm      = Self.sanitizeNorm(firestoreData["style2DColorNorm"]      as? Double)
+        self.skyCorrectionIntensity = Self.sanitizeIntensity(firestoreData["skyCorrectionIntensity"] as? Double)
 
         if let filterString = firestoreData["appliedFilter"] as? String {
             self.appliedFilter = FilterType(rawValue: filterString)

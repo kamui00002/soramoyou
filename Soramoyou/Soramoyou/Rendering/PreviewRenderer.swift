@@ -78,7 +78,10 @@ final class PreviewRenderer {
     }
 
     /// UIImage からプレビューを生成する（キャッシュ済み画像対応）
-    static func renderPreview(from image: UIImage, recipe: EditRecipe) throws -> UIImage {
+    ///
+    /// - Parameter skyMask: ワンタップ空補正用の空マスク（省略時 nil）。
+    ///   `ImageService.generatePreview(_:recipe:skyMask:)` からのみ渡される。
+    static func renderPreview(from image: UIImage, recipe: EditRecipe, skyMask: CIImage? = nil) throws -> UIImage {
         guard let cgImage = image.cgImage else {
             throw PreviewRendererError.invalidImage
         }
@@ -100,7 +103,7 @@ final class PreviewRenderer {
             scaled = sourceImage
         }
 
-        let graph = applyRecipeForPreview(recipe, to: scaled)
+        let graph = applyRecipeForPreview(recipe, to: scaled, skyMask: skyMask)
 
         // プレビュー表示用は .RGBA8 で十分（メモリ節約・描画速度優先）
         guard let outputCGImage = pool.ciContext.createCGImage(
@@ -168,15 +171,19 @@ final class PreviewRenderer {
     ///
     /// 呼び出し側で `.RGBA8` / `.RGBA16` 等を選んで `createCGImage` する。
     /// Phase0RegressionTests から参照するため internal 公開。
-    static func applyRecipeForPreview(_ recipe: EditRecipe, to image: CIImage) -> CIImage {
-        FilterGraphBuilder.buildGraph(recipe: recipe, source: image)
+    ///
+    /// - Parameter skyMask: ワンタップ空補正用の空マスク（省略時 nil＝空補正なし）。
+    static func applyRecipeForPreview(_ recipe: EditRecipe, to image: CIImage, skyMask: CIImage? = nil) -> CIImage {
+        FilterGraphBuilder.buildGraph(recipe: recipe, source: image, skyMask: skyMask)
     }
 
     /// 書き出し用のレシピ適用（CIImage のまま返す → 二重ラスタライズ回避）
     ///
     /// Phase0RegressionTests から参照するため internal 公開。
-    static func applyRecipeForExport(_ recipe: EditRecipe, to image: CIImage) -> CIImage {
-        FilterGraphBuilder.buildGraph(recipe: recipe, source: image)
+    ///
+    /// - Parameter skyMask: ワンタップ空補正用の空マスク（省略時 nil＝空補正なし）。
+    static func applyRecipeForExport(_ recipe: EditRecipe, to image: CIImage, skyMask: CIImage? = nil) -> CIImage {
+        FilterGraphBuilder.buildGraph(recipe: recipe, source: image, skyMask: skyMask)
     }
 }
 

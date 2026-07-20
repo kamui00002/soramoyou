@@ -416,8 +416,101 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.equippedTools.contains(.brightness))
     }
     
+    // MARK: - ワンタップ空補正: マスクキャッシュのライフサイクル（レビュー keep 対応 #7）
+
+    /// 🔧 レビュー指摘2 回帰テスト:
+    /// `ensureSkyMaskCached` の await 中（`skyMaskProvider.makeSkyMask` の非同期処理中）に
+    /// ユーザーが画像を切り替えると、`currentImageIndex` を await 後に読み直していた旧実装では
+    /// 「画像0向けに生成したマスク」が「切替後の画像1のキャッシュ」として誤って紐付いてしまう。
+    /// この誤紐付けが起きると、`applySkyCorrection()` の末尾で呼ばれる `generatePreview()` が
+    /// 画像1向けにマスクを再生成すべきところを「画像1のキャッシュは既に有効」と誤判定して
+    /// スキップしてしまう（＝ makeSkyMask の呼び出し回数が 1 回のまま増えない）。
+    /// 修正後は await 前にキャプチャした画像インデックス（0）で正しくタグ付けされるため、
+    /// 画像1に対しては cache miss と判定され、`generatePreview()` が画像1向けのマスクを
+    /// 正しく再生成する（＝呼び出し回数が 2 回になる）。
+    func testEnsureSkyMaskCachedTagsCacheWithImageIndexCapturedBeforeAwait() async throws {
+        let images = [createTestImage(), createTestImage()]
+        let slowProvider = MockSkyMaskProvider()
+        slowProvider.delayNanoseconds = 100_000_000 // 100ms: 画像切替を割り込ませるための猶予
+        slowProvider.coverage = 0.5
+        slowProvider.confidence = 0.5
+        let vm = EditViewModel(
+            images: images,
+            userId: nil,
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            skyMaskProvider: slowProvider
+        )
+        await Task.yield()
+
+        // 画像0に対して「空を整える」を開始する（内部の makeSkyMask の await 中に中断される）
+        let correctionTask = Task { @MainActor in
+            await vm.applySkyCorrection()
+        }
+
+        // correctionTask が makeSkyMask の Task.sleep に到達するまで進行させてから、
+        // まだ real-time の sleep（100ms）が完了しないうちに（＝完全に同期的に）画像を切り替える。
+        // 切替自体は await を挟まないため、100ms のスリープが終わるより確実に先に完了する。
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(slowProvider.callCount, 1, "この時点で1回目の makeSkyMask は呼ばれ始めているべき")
+        vm.nextImage()
+        XCTAssertEqual(vm.currentImageIndex, 1, "画像切替がレース発生前に完了しているべき")
+
+        await correctionTask.value
+
+        XCTAssertEqual(
+            slowProvider.callCount, 2,
+            "画像1向けにマスクが再生成されるべき（画像0のマスクを画像1のものと誤認してスキップしていないか＝レース修正の回帰）"
+        )
+    }
+
+    /// 🔧 回帰テスト: 空マスクの skyCoverage / confidence がしきい値未満のとき、
+    /// `applySkyCorrection()` は errorMessage をセットし、skyCorrectionIntensity を
+    /// 変更しない（適用しない）ことを検証する。
+    func testApplySkyCorrectionSetsErrorAndKeepsIntensityUnchangedWhenMaskQualityInsufficient() async throws {
+        // ケース1: coverage 不足（skyCorrectionMinCoverage=0.05 未満）
+        let lowCoverageProvider = MockSkyMaskProvider()
+        lowCoverageProvider.coverage = 0.01
+        lowCoverageProvider.confidence = 0.5
+        let vmLowCoverage = EditViewModel(
+            images: [createTestImage()],
+            userId: nil,
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            skyMaskProvider: lowCoverageProvider
+        )
+        await Task.yield()
+
+        let intensityBeforeLowCoverage = vmLowCoverage.editRecipe.skyCorrectionIntensity
+        await vmLowCoverage.applySkyCorrection()
+
+        XCTAssertEqual(vmLowCoverage.editRecipe.skyCorrectionIntensity, intensityBeforeLowCoverage,
+                       "coverage不足時は intensity を変更してはならない")
+        XCTAssertNotNil(vmLowCoverage.errorMessage, "coverage不足時は errorMessage を表示するべき")
+
+        // ケース2: confidence 不足（skyCorrectionMinConfidence=0.3 未満）
+        let lowConfidenceProvider = MockSkyMaskProvider()
+        lowConfidenceProvider.coverage = 0.5
+        lowConfidenceProvider.confidence = 0.1
+        let vmLowConfidence = EditViewModel(
+            images: [createTestImage()],
+            userId: nil,
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            skyMaskProvider: lowConfidenceProvider
+        )
+        await Task.yield()
+
+        let intensityBeforeLowConfidence = vmLowConfidence.editRecipe.skyCorrectionIntensity
+        await vmLowConfidence.applySkyCorrection()
+
+        XCTAssertEqual(vmLowConfidence.editRecipe.skyCorrectionIntensity, intensityBeforeLowConfidence,
+                       "confidence不足時は intensity を変更してはならない")
+        XCTAssertNotNil(vmLowConfidence.errorMessage, "confidence不足時は errorMessage を表示するべき")
+    }
+
     // MARK: - Helper Methods
-    
+
     // MARK: - パーソナルAI編集「AIで自動編集」（柱1 v1 / G5）
 
     func testApplyPersonalDefaultAppliesRepresentativeAndPreservesPhotoSpecific() async {
@@ -544,12 +637,14 @@ class MockImageService: ImageServiceProtocol {
         return image
     }
 
-    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage {
+    /// - Parameter skyMask: ワンタップ空補正のモックでは未使用（呼び出しの有無のみ確認する既存テストのため）
+    func generatePreview(_ image: UIImage, recipe: EditRecipe, skyMask: CIImage?) async throws -> UIImage {
         generatePreviewCalled = true
         return image
     }
 
-    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage? {
+    /// - Parameter skyMask: ワンタップ空補正のモックでは未使用（呼び出しの有無のみ確認する既存テストのため）
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe, skyMask: CIImage?) -> UIImage? {
         generatePreviewCalled = true
         let context = CIContext()
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
@@ -558,7 +653,8 @@ class MockImageService: ImageServiceProtocol {
         return UIImage(cgImage: cgImage)
     }
 
-    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage {
+    /// - Parameter skyMask: ワンタップ空補正のモックでは未使用（呼び出しの有無のみ確認する既存テストのため）
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage, skyMask: CIImage?) async throws -> UIImage {
         applyEditSettingsCalled = true
         return image
     }
@@ -633,5 +729,28 @@ class MockFirestoreService: FirestoreServiceProtocol {
     ) async throws -> [Post] { return [] }
 }
 
+// MARK: - Mock SkyMaskProvider（ワンタップ空補正: レビュー keep 対応 #7）
+
+/// テスト用の空マスクプロバイダ。`delayNanoseconds` を設定すると `makeSkyMask` 内で
+/// `Task.sleep` してから結果を返す（`ensureSkyMaskCached` のレース条件テスト用）。
+/// `coverage`/`confidence` を個別に差し替えられるようにし、しきい値未満のケースも
+/// 再現できるようにする。
+final class MockSkyMaskProvider: SkyMaskProviderProtocol {
+    var delayNanoseconds: UInt64 = 0
+    var coverage: Double = 0.5
+    var confidence: Double = 0.5
+    /// makeSkyMask が呼ばれた回数（キャッシュ再利用の検証に使う）
+    private(set) var callCount = 0
+
+    func makeSkyMask(for image: CIImage, quality: SkyMaskQuality) async throws -> SkyMask {
+        callCount += 1
+        if delayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+        // このテストではマスクの中身自体は検証対象外のため単色の白マスクで代用する
+        let mask = CIImage(color: CIColor.white).cropped(to: image.extent)
+        return SkyMask(mask: mask, skyCoverage: coverage, confidence: confidence)
+    }
+}
 
 

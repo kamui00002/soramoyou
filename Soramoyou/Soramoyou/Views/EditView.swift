@@ -43,6 +43,8 @@ struct EditView: View {
     @AppStorage(WhatsNewContent.hasSeenLivingSkyCoachMarkKey) private var hasSeenLivingSkyCoachMark = false
     /// 回転スライダーの値（リアルタイム用）
     @State private var rotationSliderValue: Double = 0
+    /// 「空を整える」Before/After 比較: 長押し中は true になり、オリジナル画像を表示する。
+    @State private var isComparingSkyCorrectionOriginal = false
 
     private let userId: String?
     private let originalImages: [UIImage]
@@ -101,6 +103,9 @@ struct EditView: View {
                     if viewModel.hasPersonalDefault {
                         personalDefaultBar
                     }
+
+                    // 「空を整える」ワンタップ空補正バー
+                    skyCorrectionBar
 
                     // 編集コントロール（3タブ構成）
                     editControlsView
@@ -172,7 +177,10 @@ struct EditView: View {
                                 }
                             }
                         }
-                        .disabled(viewModel.isLoading || isGeneratingFinal)
+                        // ⭐️ レビュー指摘3対応: 空マスク生成中（isGeneratingSkyMask）も
+                        // 無効化する。生成中に「次へ」を押すと、まだ確定していないマスクの
+                        // 状態で書き出しが走ってしまう恐れがあるため。
+                        .disabled(viewModel.isLoading || isGeneratingFinal || viewModel.isGeneratingSkyMask)
                         .foregroundColor(.white)
                     }
                 }
@@ -260,6 +268,95 @@ struct EditView: View {
         .accessibilityLabel("AIで自動編集")
     }
 
+    // MARK: - 空を整えるバー（ワンタップ空補正） ⭐️
+
+    /// 空補正が未適用（`skyCorrectionIntensity` が nil/0）なら「空を整える」ボタンを、
+    /// 適用済みなら強度スライダーを表示する。
+    @ViewBuilder
+    private var skyCorrectionBar: some View {
+        // ⭐️ レビュー指摘5対応: しきい値判定を viewModel.isSkyCorrectionActive に一元化
+        // （FilterGraphBuilder.neutralValueThreshold と同じ運用値を使う単一ソース）。
+        if viewModel.isSkyCorrectionActive {
+            skyCorrectionSliderBar
+        } else {
+            skyCorrectionButtonBar
+        }
+    }
+
+    /// 「空を整える」ワンタップボタン。タップすると空マスクを生成し、見つかれば強度 0.7 で適用する。
+    private var skyCorrectionButtonBar: some View {
+        Button {
+            Task {
+                await viewModel.applySkyCorrection()
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if viewModel.isGeneratingSkyMask {
+                    ProgressView()
+                        .tint(.white)
+                } else {
+                    Image(systemName: "cloud.sun")
+                }
+                Text("空を整える")
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(.white)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(Capsule().fill(Color.white.opacity(0.15)))
+        }
+        .disabled(viewModel.isGeneratingSkyMask)
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.top, DesignTokens.Spacing.sm)
+        .accessibilityLabel("空を整える")
+    }
+
+    /// 空補正の強度スライダー（0...1）。長押しで Before/After 比較ができる旨は
+    /// プレビュー画像側（`skyCorrectionCompareOverlay`）で処理する。
+    private var skyCorrectionSliderBar: some View {
+        VStack(spacing: 4) {
+            HStack {
+                Image(systemName: "cloud.sun.fill")
+                    .foregroundColor(.white.opacity(0.8))
+                Text("空を整える")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.8))
+
+                Spacer()
+
+                Text("\(Int(viewModel.skyCorrectionIntensityValue * 100))%")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+                    .monospacedDigit()
+
+                Button {
+                    viewModel.removeSkyCorrection()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                .accessibilityLabel("空補正を解除")
+            }
+
+            Slider(
+                value: Binding(
+                    get: { viewModel.skyCorrectionIntensityValue },
+                    set: { viewModel.updateSkyCorrectionIntensityRealtime($0) }
+                ),
+                in: 0...1,
+                onEditingChanged: { isEditing in
+                    if !isEditing {
+                        viewModel.finalizeSkyCorrectionIntensity()
+                    }
+                }
+            )
+            .tint(.white)
+            .accentColor(.white)
+        }
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.top, DesignTokens.Spacing.sm)
+    }
+
     // MARK: - Image Preview View
 
     private var imagePreviewView: some View {
@@ -332,11 +429,19 @@ struct EditView: View {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
         } else if let displayImage = viewModel.displayPreviewImage {
-            Image(uiImage: displayImage)
+            // ⭐️ レビュー指摘4対応: 空補正 Before/After 比較の対象は「未編集の元画像」
+            // （viewModel.currentImage）ではなく、「現在のレシピから skyCorrectionIntensity
+            // だけ nil にした状態」（viewModel.skyCorrectionCompareImage、同じ変換・クロップ
+            // 経路でレンダリング済み）にする。長押し開始時に viewModel.prepareSkyCorrectionCompareImage()
+            // が生成する（skyCorrectionCompareOverlay の onChange 参照）。未生成（読み込み中）
+            // の間は現在のプレビューにフォールバックする。
+            let shownImage = (isComparingSkyCorrectionOriginal ? viewModel.skyCorrectionCompareImage : nil) ?? displayImage
+            Image(uiImage: shownImage)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .modifier(HDRDynamicRangeModifier())
+                .overlay(skyCorrectionCompareOverlay)
         } else if let currentImage = viewModel.currentImage {
             Image(uiImage: currentImage)
                 .resizable()
@@ -346,6 +451,35 @@ struct EditView: View {
         } else {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
+        }
+    }
+
+    /// 「空を整える」適用中のみ有効な Before/After 比較用の透明ボタン。
+    /// DragGesture/LongPressGesture ではなく ButtonStyle の isPressed で長押しを検知することで、
+    /// 他のジェスチャー（画像切替ボタン等）との競合を避ける（HomeView.CardButtonStyle と同じ設計判断）。
+    @ViewBuilder
+    private var skyCorrectionCompareOverlay: some View {
+        // ⭐️ レビュー指摘5対応: しきい値判定を viewModel.isSkyCorrectionActive に一元化。
+        if viewModel.isSkyCorrectionActive {
+            Button(action: {}) {
+                Color.clear
+            }
+            .buttonStyle(SkyCorrectionCompareButtonStyle(isComparing: $isComparingSkyCorrectionOriginal))
+            .accessibilityLabel("長押しで補正前の画像を表示")
+            // ⭐️ レビュー指摘8対応: 長押しジェスチャーは VoiceOver 利用時に実行しづらいため、
+            // ローターから呼べる明示的なアクションとして同じトグル操作を提供する。
+            .accessibilityAction(named: "補正前と比較") {
+                isComparingSkyCorrectionOriginal.toggle()
+            }
+            // ⭐️ レビュー指摘4対応: 比較 ON への切り替わり（長押し開始 or アクセシビリティ
+            // アクション経由のトグル ON）のたびに 1 回だけ「補正前」画像を生成する。
+            .onChange(of: isComparingSkyCorrectionOriginal) { isComparing in
+                if isComparing {
+                    Task {
+                        await viewModel.prepareSkyCorrectionCompareImage()
+                    }
+                }
+            }
         }
     }
 
@@ -896,6 +1030,26 @@ private struct HDRDynamicRangeModifier: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+// MARK: - Sky Correction Compare Button Style ⭐️
+// DragGesture/LongPressGesture の代わりに ButtonStyle を使用し、他のジェスチャーとの競合を回避
+// （HomeView.CardButtonStyle と同じ設計判断）
+
+/// 「空を整える」の Before/After 比較用ボタンスタイル。
+/// 押している間だけ `isComparing` を true にし、離すと false に戻る（=長押し検知）。
+private struct SkyCorrectionCompareButtonStyle: ButtonStyle {
+    @Binding var isComparing: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            // ⚠️ アプリのデプロイターゲットは iOS 16 のため、iOS 17+ 限定の
+            // 2引数版 onChange ではなく旧来の1引数版を使う（他ファイルの onChange と同じ流儀）。
+            .onChange(of: configuration.isPressed) { pressed in
+                isComparing = pressed
+            }
     }
 }
 

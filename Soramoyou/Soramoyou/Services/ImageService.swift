@@ -30,10 +30,13 @@ protocol ImageServiceProtocol {
     func applyFilter(_ filter: FilterType, to image: UIImage) async throws -> UIImage
 
     /// EditRecipe 直接受け取り版（toneCurvePoints 等の EditSettings にない情報を脱落させない）
-    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage
-    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage?
+    /// - Parameter skyMask: ワンタップ空補正用の空マスク（`nil`＝空補正なし）
+    func generatePreview(_ image: UIImage, recipe: EditRecipe, skyMask: CIImage?) async throws -> UIImage
+    /// - Parameter skyMask: ワンタップ空補正用の空マスク（`nil`＝空補正なし）
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe, skyMask: CIImage?) -> UIImage?
     /// EditRecipe を UIImage に適用（フル解像度・最終書き出し用）
-    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage
+    /// - Parameter skyMask: ワンタップ空補正用の空マスク（`nil`＝空補正なし）
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage, skyMask: CIImage?) async throws -> UIImage
 
     /// CIImageをリサイズ（CIFilter.lanczosScaleTransformを使用）
     func resizeCIImage(_ ciImage: CIImage, maxSize: CGSize) -> CIImage
@@ -47,6 +50,26 @@ protocol ImageServiceProtocol {
     func calculateColorTemperature(_ image: UIImage) async throws -> Int
     func detectSkyType(_ image: UIImage) async throws -> SkyType
     func extractEXIFData(_ image: UIImage) async throws -> EXIFData
+}
+
+// MARK: - skyMask 省略用の互換オーバーロード
+
+/// ワンタップ空補正機能導入前からの呼び出し元（Style2DPadView・各種テスト等）が
+/// `skyMask` を意識せずに呼べるよう、省略版のオーバーロードをプロトコル拡張で提供する。
+/// プロトコルの method requirement 自体にはデフォルト引数を書けない（Swift の制約）ため、
+/// この形で後方互換を確保する。
+extension ImageServiceProtocol {
+    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage {
+        try await generatePreview(image, recipe: recipe, skyMask: nil)
+    }
+
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage? {
+        generatePreviewFromCIImage(ciImage, recipe: recipe, skyMask: nil)
+    }
+
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage {
+        try await applyEditRecipe(recipe, to: image, skyMask: nil)
+    }
 }
 
 /// 🔧 2026-04-24 修正: final を付与して `@Sendable` クロージャ (Task.detached) での
@@ -218,7 +241,8 @@ final class ImageService: ImageServiceProtocol {
     /// EditRecipe を直接受け取ってプレビューを生成。
     /// `EditSettings` への往復では `toneCurvePoints` / `targetDynamicRange` が脱落するため、
     /// トーンカーブ編集時は必ずこちらを呼ぶ。
-    func generatePreview(_ image: UIImage, recipe: EditRecipe) async throws -> UIImage {
+    /// - Parameter skyMask: ワンタップ空補正用の空マスク（`nil`＝空補正なし）
+    func generatePreview(_ image: UIImage, recipe: EditRecipe, skyMask: CIImage?) async throws -> UIImage {
         // 🔧 2026-05-25 修正: 旧実装は 750×750 へ固定縮小していたため、編集画面に入った
         //   瞬間からプレビューがアップスケールでぼやけていた。高解像度パス（2400px）の
         //   PreviewRenderer.renderPreview が用意済みなのに未配線だったため、ここで配線する。
@@ -228,7 +252,7 @@ final class ImageService: ImageServiceProtocol {
 
         let workTask = Task.detached(priority: .userInitiated) { () throws -> UIImage in
             try Task.checkCancellation()
-            return try PreviewRenderer.renderPreview(from: image, recipe: recipe)
+            return try PreviewRenderer.renderPreview(from: image, recipe: recipe, skyMask: skyMask)
         }
 
         return try await withTaskCancellationHandler {
@@ -239,8 +263,9 @@ final class ImageService: ImageServiceProtocol {
     }
 
     /// 低解像度 CIImage + EditRecipe から同期的にプレビュー生成（リアルタイム用）
-    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe) -> UIImage? {
-        let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage, quality: .interactive)
+    /// - Parameter skyMask: ワンタップ空補正用の空マスク（`nil`＝空補正なし）
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe, skyMask: CIImage?) -> UIImage? {
+        let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage, quality: .interactive, skyMask: skyMask)
         // colorSpace を明示して Display P3 タグを確実に付与する（省略すると iOS 差異で色がくすむ恐れ）
         guard let cgImage = context.createCGImage(
             result,
@@ -260,7 +285,8 @@ final class ImageService: ImageServiceProtocol {
     /// 高速に動かしている間に古い計算が GPU / CPU を占有していた。
     /// withTaskCancellationHandler + Task.checkCancellation で
     /// 親 Task のキャンセルを detached task にも伝搬させる。
-    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage) async throws -> UIImage {
+    /// - Parameter skyMask: ワンタップ空補正用の空マスク（`nil`＝空補正なし）
+    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage, skyMask: CIImage?) async throws -> UIImage {
         try Task.checkCancellation()
 
         let workTask = Task.detached(priority: .userInitiated) { () throws -> UIImage in
@@ -268,7 +294,7 @@ final class ImageService: ImageServiceProtocol {
                 throw ImageServiceError.invalidImage
             }
             try Task.checkCancellation()
-            let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage)
+            let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: ciImage, skyMask: skyMask)
             try Task.checkCancellation()
             // colorSpace を明示して Display P3 タグを確実に付与する（省略すると iOS 差異で色がくすむ恐れ）
             guard let cgImage = self.context.createCGImage(
