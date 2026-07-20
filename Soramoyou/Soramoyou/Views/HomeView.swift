@@ -610,6 +610,12 @@ struct PostDetailView: View {
     @State private var commentText = ""
     /// 再編集（投稿済み画像の上書き）起動ペイロード。non-nil で EditView を全画面提示。
     @State private var reEditLaunch: ReEditLaunchPayload?
+    /// 空カード共有パック ⭐️: 書き出し元画像のダウンロード完了後にセットして
+    /// ShareCardExportView を提示する（item: 方式＝画像が確実に揃ってから構築）。
+    @State private var shareCardExportPayload: ShareCardExportPayload?
+    /// 空カード共有パック ⭐️: 書き出し元画像のDL中フラグ（表示用）。
+    /// cf. isPreparingReEdit（isSaving を流用すると「保存中...」の誤表示になるため専用フラグにする）。
+    @State private var isPreparingShareCard = false
     /// 元画像ダウンロード中フラグ（編集準備中の二重起動防止＋表示用）。
     @State private var isPreparingReEdit = false
 
@@ -685,6 +691,10 @@ struct PostDetailView: View {
                 .sheet(isPresented: $showingShareSheet) {
                     ImageShareSheet(images: shareImages)
                 }
+                // 空カード共有パック ⭐️: 透かし付き共有カードの書き出しシート
+                .sheet(item: $shareCardExportPayload) { payload in
+                    ShareCardExportView(post: post, sourceImage: payload.image)
+                }
                 // 再編集: 元画像＋レシピをエディタへ。保存時は既存投稿を上書き更新する。
                 // item: 方式で「画像が確実に揃ってから」EditView を構築する（stale-state 回避）。
                 .fullScreenCover(item: $reEditLaunch) { launch in
@@ -723,12 +733,19 @@ struct PostDetailView: View {
         Button("キャンセル", role: .cancel) { }
     }
 
+    /// savingOverlay に表示するメッセージ（状態に応じて出し分け）
+    private var overlayMessage: String {
+        if isPreparingReEdit { return "編集の準備中..." }
+        if isPreparingShareCard { return "共有カードの準備中..." }
+        return "保存中..."
+    }
+
     @ViewBuilder
     private var savingOverlay: some View {
-        // 保存中だけでなく「再編集の元画像DL中」もオーバーレイを出す。
-        // 再編集ボタンは Menu 内＝タップで即閉じるためボタン上の「準備中…」表記は見えない。
+        // 保存中だけでなく「再編集の元画像DL中」「共有カードの元画像DL中」もオーバーレイを出す。
+        // これらのボタンは Menu 内＝タップで即閉じるためボタン上の「準備中…」表記は見えない。
         // 数秒の DL 中に無反応にならないよう、ここで全画面インジケータを出す（G1 対応）。
-        if isSaving || isPreparingReEdit {
+        if isSaving || isPreparingReEdit || isPreparingShareCard {
             ZStack {
                 Color.black.opacity(0.4)
                     .ignoresSafeArea()
@@ -736,7 +753,7 @@ struct PostDetailView: View {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.2)
-                    Text(isPreparingReEdit ? "編集の準備中..." : "保存中...")
+                    Text(overlayMessage)
                         .font(.subheadline)
                         .foregroundColor(.white)
                 }
@@ -917,6 +934,11 @@ struct PostDetailView: View {
                 } label: {
                     Label("共有", systemImage: "square.and.arrow.up")
                 }
+                Button {
+                    Task { await exportShareCard() }
+                } label: {
+                    Label("共有カードを書き出す", systemImage: "square.and.arrow.up.on.square")
+                }
                 Divider()
                 if viewModel.isOwnPost(post) {
                     // 再編集: 元画像(originalImages)を持つ投稿のみ。
@@ -990,6 +1012,27 @@ struct PostDetailView: View {
             let image = try await downloadService.downloadImage(from: urlString)
             shareImages = [image]
             showingShareSheet = true
+        } catch {
+            saveResultMessage = error.userFriendlyMessage
+            showingSaveResult = true
+        }
+    }
+
+    /// 空カード共有パック ⭐️: 投稿の1枚目をDLし、共有カード書き出しシートを提示する。
+    @MainActor
+    private func exportShareCard() async {
+        guard !isPreparingShareCard else { return }
+        isPreparingShareCard = true
+        defer { isPreparingShareCard = false }
+
+        do {
+            guard let urlString = post.images.first?.url else {
+                saveResultMessage = "共有する画像がありません"
+                showingSaveResult = true
+                return
+            }
+            let image = try await downloadService.downloadImage(from: urlString)
+            shareCardExportPayload = ShareCardExportPayload(image: image)
         } catch {
             saveResultMessage = error.userFriendlyMessage
             showingSaveResult = true
@@ -1163,6 +1206,16 @@ struct HomeView_Previews: PreviewProvider {
 /// 渡すための薄いラッパー。
 struct IdentifiableString: Identifiable {
     let id: String
+}
+
+// MARK: - ShareCardExportPayload ⭐️ 空カード共有パック
+
+/// 共有カード書き出しシート起動ペイロード。
+/// `sheet(item:)` で「画像が確実にDLされてから」ShareCardExportView を構築するための箱
+/// （cf. ReEditLaunchPayload / stale-state 回避の既存パターン）。
+struct ShareCardExportPayload: Identifiable {
+    let id = UUID()
+    let image: UIImage
 }
 
 
