@@ -548,7 +548,7 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertEqual(vm.editRecipe.saturationCI, 1.4, accuracy: 0.0001)
         XCTAssertEqual(vm.editRecipe.cropRectNorm, CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5), "クロップは保持")
         XCTAssertEqual(vm.editRecipe.targetDynamicRange, .hdr, "HDR指定は保持（C1修正の検証）")
-        XCTAssertEqual(vm.editRecipe.skyCorrectionIntensity, 0.6, accuracy: 0.0001,
+        XCTAssertEqual(vm.editRecipe.skyCorrectionIntensity ?? -1, 0.6, accuracy: 0.0001,
                        "空補正の強度は保持（統合レビューで発見した消失バグの回帰防止）")
     }
 
