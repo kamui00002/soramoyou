@@ -19,13 +19,45 @@ final class CalendarDiaryViewModel: ObservableObject {
     private let firestoreService: FirestoreServiceProtocol
     /// 全件取得の上限（SkyCollection / OnThisDay と同様、趣味アプリの1ユーザーを十分カバー）。
     private let fetchLimit = 1000
+    /// 投稿作成通知の購読を保持（ProfileViewModel と同型のパターン）。
+    private var postCreatedObserver: NSObjectProtocol?
+    /// 直近の load(userId:) 呼び出しの userId。通知受信時の再読み込みに使う。
+    private var lastLoadedUserId: String?
 
     init(firestoreService: FirestoreServiceProtocol = FirestoreService()) {
         self.firestoreService = firestoreService
+        setupPostCreatedObserver()
+    }
+
+    deinit {
+        if let observer = postCreatedObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    /// 投稿作成通知を監視し、カレンダーの投稿一覧を自動更新する ☁️
+    ///
+    /// 再編集（投稿済み画像の上書き更新）は同じ postId のドキュメントを新しい画像URLで
+    /// 置き換えるが、`.postCreated` を購読していないと `postsByDay` は古いまま残り、
+    /// カレンダー日記 → 投稿詳細 → 再編集 → 戻る、で削除済みの旧画像を表示し続ける
+    /// （統合レビューで発見）。
+    private func setupPostCreatedObserver() {
+        postCreatedObserver = NotificationCenter.default.addObserver(
+            forName: .postCreated,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                guard let userId = self.lastLoadedUserId else { return }
+                await self.load(userId: userId)
+            }
+        }
     }
 
     /// 指定ユーザーの全投稿を取得し、暦日ごとにグルーピングする。
     func load(userId: String) async {
+        lastLoadedUserId = userId
         isLoading = true
         defer { isLoading = false }
         do {
