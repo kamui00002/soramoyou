@@ -939,18 +939,20 @@ struct PostDetailView: View {
                 } label: {
                     Label("共有カードを書き出す", systemImage: "square.and.arrow.up.on.square")
                 }
+                .disabled(isPreparingShareCard || isPreparingReEdit)
                 Divider()
                 if viewModel.isOwnPost(post) {
                     // 再編集: 元画像(originalImages)を持つ投稿のみ。
                     // 旧投稿(元画像なし)は再編集すると焼き込み済み画像を再び焼く＝二重焼きになるため非表示。
                     if hasOriginalImages {
-                        // Menu はタップで即閉じるためラベル切替/.disabled は見えない。
-                        // 二重起動防止は prepareReEdit() 内の guard に任せ、DL 中の表示は savingOverlay が担う。
+                        // Menu はタップで即閉じるためラベル切替は見えないが、.disabled は
+                        // Menu 項目にも反映される。二重起動防止の本体は各関数内の guard（排他）。
                         Button {
                             Task { await prepareReEdit() }
                         } label: {
                             Label("編集", systemImage: "slider.horizontal.3")
                         }
+                        .disabled(isPreparingShareCard || isPreparingReEdit)
                     }
                     Button(role: .destructive) {
                         showingDeleteConfirmation = true
@@ -1019,9 +1021,11 @@ struct PostDetailView: View {
     }
 
     /// 空カード共有パック ⭐️: 投稿の1枚目をDLし、共有カード書き出しシートを提示する。
+    /// 再編集の元画像DL（isPreparingReEdit）とも排他にする（統合レビューで発見: 別々の guard だと
+    /// DL待ち中に Menu から他方を選べてしまい、二重モーダルが起き得た）。
     @MainActor
     private func exportShareCard() async {
-        guard !isPreparingShareCard else { return }
+        guard !isPreparingShareCard && !isPreparingReEdit else { return }
         isPreparingShareCard = true
         defer { isPreparingShareCard = false }
 
@@ -1041,9 +1045,10 @@ struct PostDetailView: View {
 
     /// 再編集: 元画像(originalImages)を order 順に DL し、元投稿の seed を付けてエディタを起動する。
     /// 失敗・元画像なしのときはエラーを表示して起動しない。
+    /// 共有カード書き出しの元画像DL（isPreparingShareCard）とも排他にする（統合レビューで発見）。
     @MainActor
     private func prepareReEdit() async {
-        guard !isPreparingReEdit, hasOriginalImages else { return }
+        guard !isPreparingReEdit && !isPreparingShareCard, hasOriginalImages else { return }
         isPreparingReEdit = true
         defer { isPreparingReEdit = false }
 
