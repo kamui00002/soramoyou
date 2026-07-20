@@ -22,7 +22,12 @@ struct ShareCardExportView: View {
     /// 投稿の visibility が public のときだけON、followers/private はOFF。
     @State private var showLocation: Bool
     @State private var renderedImage: UIImage?
+    /// カード生成に失敗したか（ImageRenderer/CIContext の失敗時。再試行ボタンを出す）。
+    @State private var renderFailed = false
     @State private var didCopyHashtags = false
+    /// タグコピー後の「コピーしました」表示を戻す Task。再タップ時に前回分を cancel してから
+    /// 新しく生成する（連打で古い Task が後から didCopyHashtags を false に戻す競合を防ぐ）。
+    @State private var hashtagResetTask: Task<Void, Never>?
 
     init(post: Post, sourceImage: UIImage) {
         self.post = post
@@ -155,8 +160,12 @@ struct ShareCardExportView: View {
         let generator = UIImpactFeedbackGenerator(style: .light)
         generator.impactOccurred()
         didCopyHashtags = true
-        Task {
+        // 連打対策: 前回のリセット Task が生きていると、後から発火して今回分の表示を
+        // 消してしまう競合が起きるため、必ず cancel してから作り直す。
+        hashtagResetTask?.cancel()
+        hashtagResetTask = Task {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
             didCopyHashtags = false
         }
     }
@@ -186,13 +195,33 @@ struct ShareCardExportView: View {
                     )
             }
             // ShareLink自体には完了ハンドラがないため、タップ時点（実際の共有アクション発火と同時）で
-            // 計装する。cf. UseRecipeButton の "recipe_share_tapped"（同様にタップ時点で記録する規約）。
+            // 計装する。cf. UseRecipeButton の "recipe_share_tapped"（同様にタップ時点で記録する規約。
+            // イベント名も同じ規約で "_tapped" 接尾辞にし、タップ時点計装であることを正直に示す）。
             .simultaneousGesture(TapGesture().onEnded {
                 LoggingService.shared.logEvent(
-                    "share_card_exported",
-                    parameters: ["watermark_on": includeWatermark]
+                    "share_card_share_tapped",
+                    parameters: ["watermark_on": includeWatermark, "location_on": showLocation]
                 )
             })
+        } else if renderFailed {
+            VStack(spacing: 10) {
+                Text("カードの生成に失敗しました")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.85))
+                Button {
+                    updateRenderedImage()
+                } label: {
+                    Label("再試行", systemImage: "arrow.clockwise")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(10)
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity)
         } else {
             ProgressView()
                 .frame(maxWidth: .infinity)
@@ -204,8 +233,14 @@ struct ShareCardExportView: View {
 
     @MainActor
     private func updateRenderedImage() {
-        renderedImage = ShareCardView.renderedImage(
+        renderedImage = nil
+        renderFailed = false
+        if let image = ShareCardView.renderedImage(
             post: post, image: sourceImage, showWatermark: includeWatermark, showLocation: showLocation
-        )
+        ) {
+            renderedImage = image
+        } else {
+            renderFailed = true
+        }
     }
 }
