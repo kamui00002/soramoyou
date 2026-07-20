@@ -721,7 +721,10 @@ struct PostDetailView: View {
                 // （fullScreenCover の下に隠れていても購読は生き続けるため、再編集→保存→
                 //  カバーが閉じて戻ってきた時点で post は最新化済みになる）。
                 .onReceive(NotificationCenter.default.publisher(for: .postCreated)) { _ in
-                    Task {
+                    // .onReceive の perform クロージャは非 isolated なので、await 後に
+                    // @State へ書き込むには @MainActor を明示する（CalendarDiaryViewModel の
+                    // 通知購読と同じ理由）。
+                    Task { @MainActor in
                         if let refreshed = await viewModel.refreshPost(postId: post.id) {
                             post = refreshed
                         }
