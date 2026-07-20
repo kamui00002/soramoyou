@@ -19,10 +19,8 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    // ⚠️ 2026-07-18: Living Sky 一時撤収に伴い "2026-07-living-sky" から差し戻し
-    //    （動きモデルの知覚品質が出荷水準未達のため導線を DEBUG 限定へ再ゲート。
-    //     既存ユーザーの大半は gallery-explore 既読のため What's New は再表示されない）。
-    static let currentID = "2026-07-gallery-explore"
+    // 2026-07-21: 1.9.4 で4新機能（空を整える／空カレンダー／連続記録／共有カード）を紹介。
+    static let currentID = "2026-07-sky-tools"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -39,37 +37,49 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（ギャラリー強化）の新機能紹介ページ。
-    /// （2026-07-18: Living Sky 一時撤収に伴い、ギャラリー強化の3ページへ差し戻し）
+    /// 今回（1.9.4）の新機能紹介ページ。
+    /// アイコンは各機能の実UIで使われている SF Symbol と揃えている
+    /// （空を整える=EditView の適用ボタン／空カレンダー=SkyCalendarDiaryView／
+    ///   連続記録=SkyStreakChipView・SkyZukanView／共有カード=共有メニューの「共有カードを書き出す」）。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "line.3.horizontal.decrease.circle.fill",
-            badge: "新機能",
-            title: "ギャラリーで絞り込み",
-            description: "ギャラリー上部から時間帯や空の種類で\n絞り込み、新着・人気で並び替えできます",
+            icon: "cloud.sun.fill",
+            badge: "自動補正",
+            title: "空を整える",
+            description: "編集画面で空の部分だけを自動で見つけて\n明るさや色みをワンタップで整えます",
             gradientColors: [
-                Color(red: 0.42, green: 0.68, blue: 0.93),
-                Color(red: 0.62, green: 0.82, blue: 0.98)
+                Color(red: 0.40, green: 0.72, blue: 0.95),
+                Color(red: 0.99, green: 0.75, blue: 0.45)
             ]
         ),
         WhatsNewPage(
-            icon: "paintpalette.fill",
-            badge: "色で探す",
-            title: "空の色から見つける",
-            description: "カラーパレットをタップすると\nその色の空だけを集めて表示します",
+            icon: "calendar",
+            badge: "空図鑑",
+            title: "空カレンダー",
+            description: "プロフィールの「空図鑑」から開くと\nあの日の空をカレンダーで振り返れます",
             gradientColors: [
-                Color(red: 0.62, green: 0.52, blue: 0.92),
-                Color(red: 0.42, green: 0.70, blue: 0.95)
+                Color(red: 0.46, green: 0.44, blue: 0.82),
+                Color(red: 0.64, green: 0.60, blue: 0.92)
             ]
         ),
         WhatsNewPage(
-            icon: "rectangle.grid.1x2.fill",
-            badge: "新しい見せ方",
-            title: "シャッフル＆モザイク",
-            description: "シャッフルでランダムに、モザイク表示で\n写真の形そのままに空を楽しめます",
+            icon: "flame.fill",
+            badge: "毎日の記録",
+            title: "連続記録",
+            description: "毎日空を投稿すると連続日数が記録され\n達成に応じてバッジがもらえます",
             gradientColors: [
-                Color(red: 0.99, green: 0.72, blue: 0.36),
-                Color(red: 0.96, green: 0.52, blue: 0.42)
+                Color(red: 1.00, green: 0.62, blue: 0.32),
+                Color(red: 0.94, green: 0.38, blue: 0.36)
+            ]
+        ),
+        WhatsNewPage(
+            icon: "square.and.arrow.up.on.square",
+            badge: "書き出し",
+            title: "共有カード",
+            description: "共有メニューから日付入りの\nカードをInstagramやXへシェアできます",
+            gradientColors: [
+                Color(red: 0.68, green: 0.55, blue: 0.92),
+                Color(red: 0.95, green: 0.56, blue: 0.76)
             ]
         )
     ]
