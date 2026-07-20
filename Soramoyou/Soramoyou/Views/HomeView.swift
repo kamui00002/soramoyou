@@ -1019,7 +1019,9 @@ struct PostDetailView: View {
     }
 
     /// 空カード共有パック ⭐️: 投稿の1枚目をDLし、共有カード書き出しシートを提示する。
+    @MainActor
     private func exportShareCard() async {
+        guard !isPreparingShareCard else { return }
         isPreparingShareCard = true
         defer { isPreparingShareCard = false }
 
