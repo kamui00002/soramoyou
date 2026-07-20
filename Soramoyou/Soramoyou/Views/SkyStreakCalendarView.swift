@@ -26,7 +26,7 @@ struct SkyStreakCalendarView: View {
     @ViewBuilder
     private func dayCell(day: Int, monthStart: Date, calendar: Calendar) -> some View {
         let posted = isPosted(day: day, monthStart: monthStart, calendar: calendar)
-        let today = isToday(day: day, monthStart: monthStart, calendar: calendar)
+        let today = calendar.isSameDayAsToday(day: day, monthStart: monthStart)
 
         ZStack {
             if posted {
@@ -55,15 +55,6 @@ struct SkyStreakCalendarView: View {
         let comps = calendar.dateComponents([.year, .month], from: monthStart)
         guard let year = comps.year, let month = comps.month else { return false }
         return streak.postedDays.contains(SkyStreakDay(year: year, month: month, day: day))
-    }
-
-    /// 表示中の月の day 日が今日か
-    private func isToday(day: Int, monthStart: Date, calendar: Calendar) -> Bool {
-        let todayComps = calendar.dateComponents([.year, .month, .day], from: Date())
-        let monthComps = calendar.dateComponents([.year, .month], from: monthStart)
-        return todayComps.year == monthComps.year
-            && todayComps.month == monthComps.month
-            && todayComps.day == day
     }
 }
 

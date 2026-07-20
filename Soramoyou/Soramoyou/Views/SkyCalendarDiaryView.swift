@@ -13,11 +13,22 @@
 import SwiftUI
 import Kingfisher
 
+/// 背景グラデーション（アプリ本体・空図鑑と同じ空の配色）。
+/// SkyCalendarDiaryView と DayPostsListView の両方から使う（重複定義しない ⭐️）。
+private let skyGradient = LinearGradient(
+    colors: [
+        Color(red: 0.68, green: 0.85, blue: 0.90),
+        Color(red: 0.53, green: 0.81, blue: 0.98),
+        Color(red: 0.39, green: 0.58, blue: 0.93)
+    ],
+    startPoint: .top,
+    endPoint: .bottom
+)
+
 struct SkyCalendarDiaryView: View {
     let userId: String
 
     @StateObject private var viewModel = CalendarDiaryViewModel()
-    @EnvironmentObject private var likeManager: LikeManager
     @Environment(\.dismiss) private var dismiss
 
     /// いま表示中の月（空状態の判定に使う。MonthCalendarGridView の onMonthChange から更新）
@@ -51,20 +62,6 @@ struct SkyCalendarDiaryView: View {
             LoggingService.shared.logEvent("sky_calendar_viewed")
             await viewModel.load(userId: userId)
         }
-    }
-
-    // MARK: - 背景（アプリ本体・空図鑑と同じ空のグラデーション）
-
-    private var skyGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(red: 0.68, green: 0.85, blue: 0.90),
-                Color(red: 0.53, green: 0.81, blue: 0.98),
-                Color(red: 0.39, green: 0.58, blue: 0.93)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
     }
 
     /// ガラスカードの共通スタイル（SkyZukanView と同じ .ultraThinMaterial）
@@ -148,8 +145,10 @@ struct SkyCalendarDiaryView: View {
     }
 
     /// いま表示中の月に投稿が1件も無いか
+    /// - Note: グリッド描画・グルーピングと同じグレゴリオ暦で年/月を抽出する。`Calendar.current` を
+    ///   使うと和暦端末で年がズレ、投稿があるのに空バナーが出ない矛盾を起こす（バグ修正の回帰防止）。
     private var isDisplayedMonthEmpty: Bool {
-        let comps = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
+        let comps = Calendar.soramoyouGregorian.dateComponents([.year, .month], from: displayedMonth)
         guard let year = comps.year, let month = comps.month else { return true }
         return !viewModel.hasPosts(year: year, month: month)
     }
@@ -163,7 +162,7 @@ struct SkyCalendarDiaryView: View {
         let month = comps.month ?? 0
         let key = SkyStreakDay(year: year, month: month, day: day)
         let postsForDay = viewModel.posts(on: key)
-        let today = isToday(day: day, monthStart: monthStart, calendar: calendar)
+        let today = calendar.isSameDayAsToday(day: day, monthStart: monthStart)
 
         if postsForDay.isEmpty {
             dayCellBody(day: day, postsForDay: postsForDay, today: today)
@@ -235,15 +234,6 @@ struct SkyCalendarDiaryView: View {
         // 「今日」は輪郭リングで示すため、VoiceOver にも明示する（色/形だけに頼らない）
         .accessibilityLabel("\(day)日\(today ? "、今日" : "")\(postsForDay.isEmpty ? "" : "、投稿\(postsForDay.count)件")")
     }
-
-    /// 表示中の月の day 日が今日か
-    private func isToday(day: Int, monthStart: Date, calendar: Calendar) -> Bool {
-        let todayComps = calendar.dateComponents([.year, .month, .day], from: Date())
-        let monthComps = calendar.dateComponents([.year, .month], from: monthStart)
-        return todayComps.year == monthComps.year
-            && todayComps.month == monthComps.month
-            && todayComps.day == day
-    }
 }
 
 // MARK: - その日の投稿一覧（シンプルなリスト）
@@ -281,18 +271,6 @@ private struct DayPostsListView: View {
             PostDetailView(post: post)
                 .environmentObject(likeManager)
         }
-    }
-
-    private var skyGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(red: 0.68, green: 0.85, blue: 0.90),
-                Color(red: 0.53, green: 0.81, blue: 0.98),
-                Color(red: 0.39, green: 0.58, blue: 0.93)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
     }
 
     /// 「2026年7月20日」形式のタイトル（String として組み立ててから渡す。理由は body 内コメント参照）
