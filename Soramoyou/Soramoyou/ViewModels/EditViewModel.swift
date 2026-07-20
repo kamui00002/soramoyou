@@ -468,11 +468,15 @@ class EditViewModel: ObservableObject {
         guard var representative = PersonalRecipeProfile.representative(for: nil, from: entries) else {
             return
         }
-        // 写真固有の編集（クロップ・トーンカーブ・ダイナミックレンジ）は現在値を保持し、
+        // 写真固有の編集（クロップ・トーンカーブ・ダイナミックレンジ・空補正）は現在値を保持し、
         // 定番では上書きしない（HDR指定が SDR に戻る不具合の防止を含む）。
+        // ⚠️ skyCorrectionIntensity を保全し忘れると、`representative()` が返す新規レシピには
+        //    このフィールドが未設定（nil）のため、「あなたの定番」適用のたびに直前の
+        //    ワンタップ空補正が黙って消える回帰が起きる（統合レビューで発見）。
         representative.cropRectNorm      = editRecipe.cropRectNorm
         representative.toneCurvePoints   = editRecipe.toneCurvePoints
         representative.targetDynamicRange = editRecipe.targetDynamicRange
+        representative.skyCorrectionIntensity = editRecipe.skyCorrectionIntensity
 
         historyManager.push(currentSnapshot)
         notifyHistoryChange()

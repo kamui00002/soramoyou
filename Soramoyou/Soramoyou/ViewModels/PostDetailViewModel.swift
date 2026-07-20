@@ -30,6 +30,25 @@ class PostDetailViewModel: ObservableObject {
         self.storageService = storageService
     }
 
+    /// 投稿の最新状態を取り直す。
+    ///
+    /// 再編集（投稿済み画像の上書き更新）は同じ postId のドキュメントを新しい画像URL・
+    /// 公開範囲・レシピで置き換えるが、投稿詳細画面が保持する `post` スナップショットは
+    /// 自動更新されない。放置すると、再編集後に戻ってきた投稿詳細から共有カードを
+    /// 書き出すと削除済みの旧Storage画像をDLしたり、旧 visibility を基準に
+    /// 位置情報の既定表示が決まってしまう（統合レビューで発見）。
+    /// `.postCreated` 通知（再編集の保存完了時にも発火）を受けて呼び出す想定。
+    /// - Parameter postId: 取り直す投稿のID
+    /// - Returns: 取得できた最新の投稿。失敗時は nil（呼び出し側は直前の post を保持し、表示を壊さない）
+    func refreshPost(postId: String) async -> Post? {
+        do {
+            return try await firestoreService.fetchPost(postId: postId)
+        } catch {
+            ErrorHandler.logError(error, context: "PostDetailViewModel.refreshPost")
+            return nil
+        }
+    }
+
     /// 投稿者情報を読み込む
     func loadAuthor(userId: String) async {
         isLoadingAuthor = true

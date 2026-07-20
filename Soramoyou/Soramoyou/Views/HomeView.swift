@@ -591,7 +591,10 @@ struct CardButtonStyle: ButtonStyle {
 // MARK: - Post Detail View
 
 struct PostDetailView: View {
-    let post: Post
+    /// 表示中の投稿。`let` ではなく `@State` にしているのは、再編集（画像URL・公開範囲の
+    /// 上書き更新）後に `.postCreated` 通知を受けて最新の投稿へ差し替えるため（統合レビューで発見）。
+    /// 差し替えないと、共有カード/保存/共有が削除済みの旧Storage画像や旧公開範囲を使い続ける。
+    @State private var post: Post
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var likeManager: LikeManager
     @StateObject private var viewModel = PostDetailViewModel()
@@ -620,6 +623,14 @@ struct PostDetailView: View {
     @State private var isPreparingReEdit = false
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
+
+    // `post` を `@State` にしたことで自動生成の memberwise init が private 化されてしまう
+    // （private プロパティを含む struct の既定挙動）ため、他ファイル（SearchView / ProfileView /
+    // SkyCalendarDiaryView / HomeView 自身）からの `PostDetailView(post:)` 呼び出しを維持するために
+    // 明示的な init を用意する。
+    init(post: Post) {
+        _post = State(initialValue: post)
+    }
 
     private var hasOriginalImages: Bool {
         post.originalImages != nil && !(post.originalImages?.isEmpty ?? true)
@@ -706,6 +717,19 @@ struct PostDetailView: View {
                     )
                 }
                 .overlay { savingOverlay }
+                // 再編集の保存完了時にも発火する通知。自分が表示中の投稿を最新状態に取り直す
+                // （fullScreenCover の下に隠れていても購読は生き続けるため、再編集→保存→
+                //  カバーが閉じて戻ってきた時点で post は最新化済みになる）。
+                .onReceive(NotificationCenter.default.publisher(for: .postCreated)) { _ in
+                    // .onReceive の perform クロージャは非 isolated なので、await 後に
+                    // @State へ書き込むには @MainActor を明示する（CalendarDiaryViewModel の
+                    // 通知購読と同じ理由）。
+                    Task { @MainActor in
+                        if let refreshed = await viewModel.refreshPost(postId: post.id) {
+                            post = refreshed
+                        }
+                    }
+                }
         }
         .navigationViewStyle(.stack)
     }
@@ -939,18 +963,20 @@ struct PostDetailView: View {
                 } label: {
                     Label("共有カードを書き出す", systemImage: "square.and.arrow.up.on.square")
                 }
+                .disabled(isPreparingShareCard || isPreparingReEdit)
                 Divider()
                 if viewModel.isOwnPost(post) {
                     // 再編集: 元画像(originalImages)を持つ投稿のみ。
                     // 旧投稿(元画像なし)は再編集すると焼き込み済み画像を再び焼く＝二重焼きになるため非表示。
                     if hasOriginalImages {
-                        // Menu はタップで即閉じるためラベル切替/.disabled は見えない。
-                        // 二重起動防止は prepareReEdit() 内の guard に任せ、DL 中の表示は savingOverlay が担う。
+                        // Menu はタップで即閉じるためラベル切替は見えないが、.disabled は
+                        // Menu 項目にも反映される。二重起動防止の本体は各関数内の guard（排他）。
                         Button {
                             Task { await prepareReEdit() }
                         } label: {
                             Label("編集", systemImage: "slider.horizontal.3")
                         }
+                        .disabled(isPreparingShareCard || isPreparingReEdit)
                     }
                     Button(role: .destructive) {
                         showingDeleteConfirmation = true
@@ -1019,9 +1045,11 @@ struct PostDetailView: View {
     }
 
     /// 空カード共有パック ⭐️: 投稿の1枚目をDLし、共有カード書き出しシートを提示する。
+    /// 再編集の元画像DL（isPreparingReEdit）とも排他にする（統合レビューで発見: 別々の guard だと
+    /// DL待ち中に Menu から他方を選べてしまい、二重モーダルが起き得た）。
     @MainActor
     private func exportShareCard() async {
-        guard !isPreparingShareCard else { return }
+        guard !isPreparingShareCard && !isPreparingReEdit else { return }
         isPreparingShareCard = true
         defer { isPreparingShareCard = false }
 
@@ -1041,9 +1069,10 @@ struct PostDetailView: View {
 
     /// 再編集: 元画像(originalImages)を order 順に DL し、元投稿の seed を付けてエディタを起動する。
     /// 失敗・元画像なしのときはエラーを表示して起動しない。
+    /// 共有カード書き出しの元画像DL（isPreparingShareCard）とも排他にする（統合レビューで発見）。
     @MainActor
     private func prepareReEdit() async {
-        guard !isPreparingReEdit, hasOriginalImages else { return }
+        guard !isPreparingReEdit && !isPreparingShareCard, hasOriginalImages else { return }
         isPreparingReEdit = true
         defer { isPreparingReEdit = false }
 
