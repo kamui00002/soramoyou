@@ -613,6 +613,9 @@ struct PostDetailView: View {
     /// 空カード共有パック ⭐️: 書き出し元画像のダウンロード完了後にセットして
     /// ShareCardExportView を提示する（item: 方式＝画像が確実に揃ってから構築）。
     @State private var shareCardExportPayload: ShareCardExportPayload?
+    /// 空カード共有パック ⭐️: 書き出し元画像のDL中フラグ（表示用）。
+    /// cf. isPreparingReEdit（isSaving を流用すると「保存中...」の誤表示になるため専用フラグにする）。
+    @State private var isPreparingShareCard = false
     /// 元画像ダウンロード中フラグ（編集準備中の二重起動防止＋表示用）。
     @State private var isPreparingReEdit = false
 
@@ -730,12 +733,19 @@ struct PostDetailView: View {
         Button("キャンセル", role: .cancel) { }
     }
 
+    /// savingOverlay に表示するメッセージ（状態に応じて出し分け）
+    private var overlayMessage: String {
+        if isPreparingReEdit { return "編集の準備中..." }
+        if isPreparingShareCard { return "共有カードの準備中..." }
+        return "保存中..."
+    }
+
     @ViewBuilder
     private var savingOverlay: some View {
-        // 保存中だけでなく「再編集の元画像DL中」もオーバーレイを出す。
-        // 再編集ボタンは Menu 内＝タップで即閉じるためボタン上の「準備中…」表記は見えない。
+        // 保存中だけでなく「再編集の元画像DL中」「共有カードの元画像DL中」もオーバーレイを出す。
+        // これらのボタンは Menu 内＝タップで即閉じるためボタン上の「準備中…」表記は見えない。
         // 数秒の DL 中に無反応にならないよう、ここで全画面インジケータを出す（G1 対応）。
-        if isSaving || isPreparingReEdit {
+        if isSaving || isPreparingReEdit || isPreparingShareCard {
             ZStack {
                 Color.black.opacity(0.4)
                     .ignoresSafeArea()
@@ -743,7 +753,7 @@ struct PostDetailView: View {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.2)
-                    Text(isPreparingReEdit ? "編集の準備中..." : "保存中...")
+                    Text(overlayMessage)
                         .font(.subheadline)
                         .foregroundColor(.white)
                 }
@@ -1010,8 +1020,8 @@ struct PostDetailView: View {
 
     /// 空カード共有パック ⭐️: 投稿の1枚目をDLし、共有カード書き出しシートを提示する。
     private func exportShareCard() async {
-        isSaving = true
-        defer { isSaving = false }
+        isPreparingShareCard = true
+        defer { isPreparingShareCard = false }
 
         do {
             guard let urlString = post.images.first?.url else {
