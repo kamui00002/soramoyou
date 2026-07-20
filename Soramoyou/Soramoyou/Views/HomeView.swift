@@ -591,7 +591,10 @@ struct CardButtonStyle: ButtonStyle {
 // MARK: - Post Detail View
 
 struct PostDetailView: View {
-    let post: Post
+    /// 表示中の投稿。`let` ではなく `@State` にしているのは、再編集（画像URL・公開範囲の
+    /// 上書き更新）後に `.postCreated` 通知を受けて最新の投稿へ差し替えるため（統合レビューで発見）。
+    /// 差し替えないと、共有カード/保存/共有が削除済みの旧Storage画像や旧公開範囲を使い続ける。
+    @State private var post: Post
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var likeManager: LikeManager
     @StateObject private var viewModel = PostDetailViewModel()
@@ -620,6 +623,14 @@ struct PostDetailView: View {
     @State private var isPreparingReEdit = false
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
+
+    // `post` を `@State` にしたことで自動生成の memberwise init が private 化されてしまう
+    // （private プロパティを含む struct の既定挙動）ため、他ファイル（SearchView / ProfileView /
+    // SkyCalendarDiaryView / HomeView 自身）からの `PostDetailView(post:)` 呼び出しを維持するために
+    // 明示的な init を用意する。
+    init(post: Post) {
+        _post = State(initialValue: post)
+    }
 
     private var hasOriginalImages: Bool {
         post.originalImages != nil && !(post.originalImages?.isEmpty ?? true)
@@ -706,6 +717,16 @@ struct PostDetailView: View {
                     )
                 }
                 .overlay { savingOverlay }
+                // 再編集の保存完了時にも発火する通知。自分が表示中の投稿を最新状態に取り直す
+                // （fullScreenCover の下に隠れていても購読は生き続けるため、再編集→保存→
+                //  カバーが閉じて戻ってきた時点で post は最新化済みになる）。
+                .onReceive(NotificationCenter.default.publisher(for: .postCreated)) { _ in
+                    Task {
+                        if let refreshed = await viewModel.refreshPost(postId: post.id) {
+                            post = refreshed
+                        }
+                    }
+                }
         }
         .navigationViewStyle(.stack)
     }
