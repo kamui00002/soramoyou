@@ -657,11 +657,29 @@ class EditViewModel: ObservableObject {
             throw ImageServiceError.invalidImage
         }
         let mask = try await skyMaskProvider.makeSkyMask(for: ciImage, quality: quality)
-        cachedSkyMask = mask.mask
+        // ⭐️ 青染み軽減（空色適応ゲート）: マスクが壁など非空領域を誤って含んでいても、
+        // 実際に空らしい色の画素にしか補正が効かないようにする。マスク生成と同じタイミングで
+        // 一度だけ計算してキャッシュに焼き込む（詳細は SkyColorGate.swift 参照）。
+        let refined = await refinedSkyMask(rawMask: mask.mask, sourceImage: ciImage)
+        cachedSkyMask = refined
         cachedSkyMaskCoverage = mask.skyCoverage
         cachedSkyMaskConfidence = mask.confidence
         cachedSkyMaskImageIndex = targetIndex
         cachedSkyMaskTransformKey = transformKey
+    }
+
+    /// 空マスクに色ゲート（青染み軽減）を適用する共通ヘルパー。
+    /// プレビュー（`ensureSkyMaskCached`）・書き出し（`makeExportSkyMask`）の両方から呼ぶ。
+    /// パレット抽出（CPU 画素読み出し）は重い処理のため `Task.detached` でオフロードする
+    /// （`HeuristicSkyMaskProvider.makeSkyMask` 自身が内部でオフロードしているのと同じ理由）。
+    /// パレットが抽出できない（サンプル不足）場合は `rawMask` をそのまま返す（旧挙動＝ゲート無効）。
+    private func refinedSkyMask(rawMask: CIImage, sourceImage: CIImage) async -> CIImage {
+        let ciContext = CIContextPool.shared.ciContext
+        let gateData = await Task.detached(priority: .userInitiated) {
+            SkyColorGate.buildGateData(image: sourceImage, mask: rawMask, ciContext: ciContext)
+        }.value
+        guard let gateData else { return rawMask }
+        return SkyColorGate.applyGate(to: rawMask, sampling: sourceImage, gateData: gateData)
     }
 
     /// 書き出し用マスク生成の結果（⭐️ レビュー指摘6対応）。
@@ -691,7 +709,10 @@ class EditViewModel: ObservableObject {
         guard let ciImage = CIImage(image: image) else { return .failed }
         do {
             let mask = try await skyMaskProvider.makeSkyMask(for: ciImage, quality: .export)
-            return .success(mask.mask)
+            // ⭐️ 青染み軽減（空色適応ゲート）: プレビュー経路（ensureSkyMaskCached）と同じ
+            // ゲートを書き出し経路にも適用し、書き出し結果にも壁等の誤染色が残らないようにする。
+            let refined = await refinedSkyMask(rawMask: mask.mask, sourceImage: ciImage)
+            return .success(refined)
         } catch {
             ErrorHandler.logError(error, context: "EditViewModel.makeExportSkyMask")
             return .failed
