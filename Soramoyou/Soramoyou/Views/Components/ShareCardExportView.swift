@@ -18,8 +18,17 @@ struct ShareCardExportView: View {
     @Environment(\.dismiss) private var dismiss
     /// ロゴ（透かし）を入れるか。既定ON（毎回リセットされ、永続化はしない仕様）。
     @State private var includeWatermark = true
+    /// 位置情報（撮影地）を入れるか。既定値はプライバシー安全側:
+    /// 投稿の visibility が public のときだけON、followers/private はOFF。
+    @State private var showLocation: Bool
     @State private var renderedImage: UIImage?
     @State private var didCopyHashtags = false
+
+    init(post: Post, sourceImage: UIImage) {
+        self.post = post
+        self.sourceImage = sourceImage
+        _showLocation = State(initialValue: post.visibility == .public)
+    }
 
     private var suggestedHashtags: [String] {
         ShareHashtagSuggester.suggest(skyType: post.skyType, timeOfDay: post.timeOfDay, mood: post.mood)
@@ -35,6 +44,9 @@ struct ShareCardExportView: View {
                 VStack(spacing: 24) {
                     cardPreview
                     watermarkToggle
+                    if post.location != nil {
+                        locationToggle
+                    }
                     hashtagSection
                     shareButton
                 }
@@ -55,13 +67,14 @@ struct ShareCardExportView: View {
         .navigationViewStyle(.stack)
         .onAppear { updateRenderedImage() }
         .onChange(of: includeWatermark) { _ in updateRenderedImage() }
+        .onChange(of: showLocation) { _ in updateRenderedImage() }
     }
 
     // MARK: - Preview
 
     private var cardPreview: some View {
         let side: CGFloat = 300
-        return ShareCardView(post: post, image: sourceImage, showWatermark: includeWatermark)
+        return ShareCardView(post: post, image: sourceImage, showWatermark: includeWatermark, showLocation: showLocation)
             .frame(width: ShareCardView.cardSize, height: ShareCardView.cardSize)
             .scaleEffect(side / ShareCardView.cardSize)
             .frame(width: side, height: side)
@@ -74,6 +87,19 @@ struct ShareCardExportView: View {
     private var watermarkToggle: some View {
         Toggle(isOn: $includeWatermark) {
             Label("ロゴを入れる", systemImage: "seal")
+                .foregroundColor(.white)
+        }
+        .tint(DesignTokens.Colors.skyBlue)
+        .padding()
+        .background(DesignTokens.Colors.detailCardBackground)
+        .cornerRadius(12)
+    }
+
+    // MARK: - Location Toggle
+
+    private var locationToggle: some View {
+        Toggle(isOn: $showLocation) {
+            Label("場所を表示", systemImage: "mappin.and.ellipse")
                 .foregroundColor(.white)
         }
         .tint(DesignTokens.Colors.skyBlue)
@@ -178,6 +204,8 @@ struct ShareCardExportView: View {
 
     @MainActor
     private func updateRenderedImage() {
-        renderedImage = ShareCardView.renderedImage(post: post, image: sourceImage, showWatermark: includeWatermark)
+        renderedImage = ShareCardView.renderedImage(
+            post: post, image: sourceImage, showWatermark: includeWatermark, showLocation: showLocation
+        )
     }
 }
