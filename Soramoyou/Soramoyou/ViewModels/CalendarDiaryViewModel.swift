@@ -34,8 +34,17 @@ final class CalendarDiaryViewModel: ObservableObject {
                 limit: fetchLimit,
                 lastDocument: nil
             )
-            postsByDay = CalendarDiaryService.groupByDay(posts: posts)
+            // グリッド描画・空月判定と暦日キーがズレないよう、グレゴリオ暦を明示的に渡す
+            // （和暦ユーザーが全セル空白になるバグの回帰防止。Calendar+Soramoyou.swift 参照）。
+            postsByDay = CalendarDiaryService.groupByDay(posts: posts, calendar: .soramoyouGregorian)
+
+            #if DEBUG
+            if posts.count >= fetchLimit {
+                print("⚠️ CalendarDiary: 取得が上限(\(fetchLimit))に達しました。古い投稿が欠落する可能性があります。")
+            }
+            #endif
         } catch {
+            ErrorHandler.logError(error, context: "CalendarDiaryViewModel.load", userId: userId)
             errorMessage = error.localizedDescription
         }
     }

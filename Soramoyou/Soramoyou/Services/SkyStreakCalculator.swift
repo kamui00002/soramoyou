@@ -58,11 +58,13 @@ enum SkyStreakCalculator {
     ///   - posts: ユーザー自身の投稿（順不同でよい）
     ///   - today: 基準日（テストで固定可能）
     ///   - calendar: 暦日の丸めに使うカレンダー。`today` の判定と投稿日の丸めに
-    ///     **同じインスタンス**を使うこと（タイムゾーン差の off-by-one 防止）
+    ///     **同じインスタンス**を使うこと（タイムゾーン差の off-by-one 防止）。
+    ///     既定はグレゴリオ暦（和暦等の端末設定で `postedDays` の年がズレ、カレンダー描画と
+    ///     一致しなくなるのを防ぐ。Calendar+Soramoyou.swift 参照）。
     static func calculate(
         posts: [Post],
         today: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .soramoyouGregorian
     ) -> SkyStreakState {
         // 投稿日（createdAt）を暦日の先頭（startOfDay）に丸めてユニーク化
         let dayStarts = Set(posts.map { calendar.startOfDay(for: $0.createdAt) })

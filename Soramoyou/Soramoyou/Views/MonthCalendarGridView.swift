@@ -32,7 +32,7 @@ struct MonthCalendarGridView<DayCell: View>: View {
     /// firstWeekday をそのまま使うと、ヘッダー（日曜始まり固定）と先頭空白セルの
     /// 計算（firstWeekday 依存）がずれて日付が誤った曜日列に並ぶため。
     private let calendar: Calendar = {
-        var calendar = Calendar(identifier: .gregorian)
+        var calendar = Calendar.soramoyouGregorian
         calendar.firstWeekday = 1 // 日曜始まり（weekdaySymbols と一致させる）
         return calendar
     }()

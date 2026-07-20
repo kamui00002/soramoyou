@@ -41,7 +41,9 @@ final class SkyCollectionViewModel: ObservableObject {
             state = SkyCollectionAggregator.aggregate(posts: posts)
 
             // ストリーク（連続投稿日数）を算出し、連続バッジ用に longestStreak を state へ反映
-            streak = SkyStreakCalculator.calculate(posts: posts, today: Date())
+            // グレゴリオ暦を明示的に渡す（和暦ユーザーで postedDays の年がカレンダー描画とズレる
+            // バグの回帰防止。CalendarDiaryViewModel.load / Calendar+Soramoyou.swift 参照）。
+            streak = SkyStreakCalculator.calculate(posts: posts, today: Date(), calendar: .soramoyouGregorian)
             state.longestStreak = streak.longestStreak
 
             // 図鑑表示の計装（柱2 主要画面）

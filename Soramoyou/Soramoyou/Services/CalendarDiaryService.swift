@@ -11,6 +11,9 @@
 //  日付キーには SkyStreakCalculator.swift の SkyStreakDay（年/月/日の値型）をそのまま再利用する。
 //  カレンダー機能内で「年/月/日キー」を重複定義しないための意図的な選択 ⭐️。
 //
+//  日付は閲覧デバイスのローカルタイムゾーン基準で暦日に丸める（撮影地のタイムゾーンは考慮しない）
+//  ＝製品判断（SkyStreakCalculator.swift のタイムゾーン方針と同じ考え方）。
+//
 
 import Foundation
 
@@ -21,11 +24,12 @@ enum CalendarDiaryService {
     /// 同じ日に複数投稿がある場合は、新しい投稿から順（createdAt 降順）に並べる。
     /// - Parameters:
     ///   - posts: ユーザー自身の投稿（順不同でよい）。
-    ///   - calendar: 暦日の丸めに使うカレンダー（既定は端末ローカル）。
+    ///   - calendar: 暦日の丸めに使うカレンダー（既定はグレゴリオ暦。和暦等の端末設定の影響を受けず、
+    ///     グリッド描画・空月判定と同じ年/月/日キーになるよう固定している。Calendar+Soramoyou.swift 参照）。
     /// - Returns: 暦日キー（SkyStreakDay）→ その日の投稿配列。投稿が無い日はキー自体が存在しない。
     static func groupByDay(
         posts: [Post],
-        calendar: Calendar = .current
+        calendar: Calendar = .soramoyouGregorian
     ) -> [SkyStreakDay: [Post]] {
         var grouped: [SkyStreakDay: [Post]] = [:]
 
