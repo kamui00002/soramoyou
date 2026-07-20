@@ -18,6 +18,7 @@ struct ProfileView: View {
     @State private var showingEditTools = false
     @State private var showingSettings = false
     @State private var showingZukan = false
+    @State private var showingCalendarDiary = false
     @State private var displayMode: DisplayMode = .grid
     @State private var postToDelete: Post?
     @State private var showDeleteConfirmation = false
@@ -212,6 +213,12 @@ struct ProfileView: View {
                     SkyZukanView(userId: uid)
                 }
             }
+            .sheet(isPresented: $showingCalendarDiary) {
+                if let uid = viewModel.user?.id {
+                    SkyCalendarDiaryView(userId: uid)
+                        .environmentObject(likeManager)
+                }
+            }
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
                     .environmentObject(likeManager)
@@ -326,6 +333,26 @@ struct ProfileView: View {
                 HStack {
                     Image(systemName: "books.vertical.fill")
                     Text("空図鑑を見る")
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption)
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+                .padding(DesignTokens.Spacing.md)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                        .fill(.ultraThinMaterial)
+                )
+            }
+
+            // 空カレンダー日記への導線 ⭐️
+            Button {
+                showingCalendarDiary = true
+            } label: {
+                HStack {
+                    Image(systemName: "calendar")
+                    Text("空カレンダーを見る")
                     Spacer()
                     Image(systemName: "chevron.right").font(.caption)
                 }
