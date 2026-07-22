@@ -149,5 +149,18 @@ service firebase.storage {
       // Only the owner can upload private original images
       allow write: if isOwner(userId) && isImageFile() && isValidSize();
     }
+
+    // Living Sky job assets (source photo + masks uploaded by client,
+    // output.mp4 written server-side by Cloud Functions via Admin SDK).
+    // DEBUG-only E2E feature; client only ever writes the 3 input images.
+    match /livingSky/{userId}/{jobId}/{fileName} {
+      // Only the owner can read (input images + the finished output.mp4)
+      allow read: if isOwner(userId);
+
+      // Only the owner can upload input images (source.jpg / sky_mask.png / ground_mask.png)
+      // NOTE: output.mp4 is written by Cloud Functions via the Admin SDK, which
+      // bypasses these rules, so it is not reachable through this client write path.
+      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+    }
   }
 }

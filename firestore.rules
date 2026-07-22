@@ -388,5 +388,43 @@ service cloud.firestore {
       // アイテムの更新は不可
       allow update: if false;
     }
+
+    // ============================================
+    // LivingSkyJobs collection (空を動かすβ・非同期ジョブ) ⭐️
+    // DEBUG限定E2E検証用。クライアントは pending 状態での作成のみ可能。
+    // status遷移（submitted/completed/failed）や falRequestId/videoURL の
+    // 書き込みは Cloud Functions（Admin SDK）専用のため、client からの
+    // update/delete は一律禁止する（Admin SDK は rules をバイパスするため
+    // 実害はない）。
+    // ============================================
+    match /livingSkyJobs/{jobId} {
+      // 読み取り: 所有者のみ
+      allow read: if isAuthenticated()
+                  && resource.data.userId == request.auth.uid;
+
+      // 作成: 認証済みユーザーが自分のIDで、status=pending の初期状態のみ
+      // サーバー専用フィールド（falRequestId/videoURL）は初期作成時に含めさせない
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && !request.resource.data.keys().hasAny(['falRequestId', 'videoURL']);
+
+      // 更新・削除は不可（状態遷移は Cloud Functions 専用）
+      allow update, delete: if false;
+    }
+
+    // ============================================
+    // LivingSkyUsage collection (空を動かすβ・1日あたりの利用回数カウンタ)
+    // ドキュメントID: {uid}
+    // 予約（reserve-on-create）・返金（refund-on-failure）は Cloud Functions
+    // （Admin SDK）専用のため、client からの write は一律禁止する。
+    // ============================================
+    match /livingSkyUsage/{uid} {
+      // 読み取り: 所有者のみ
+      allow read: if isOwner(uid);
+
+      // 書き込みは不可（予約・返金は Cloud Functions 専用）
+      allow write: if false;
+    }
   }
 }

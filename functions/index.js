@@ -341,3 +341,6 @@ exports.notifyFeedbackToDiscord = onDocumentCreated(
     }
   }
 );
+
+// MARK: - 「空を動かす」β（フェーズ1a・DEBUG限定E2E検証用。詳細は functions/skyMotion.js）
+Object.assign(exports, require("./skyMotion"));

@@ -7,7 +7,8 @@
     "node": "20"
   },
   "scripts": {
-    "lint": "node --check index.js",
+    "lint": "node --check index.js && node --check skyMotion.js && node --check skyMotionCore.js",
+    "test": "node --test skyMotionCore.test.js",
     "deploy": "firebase deploy --only functions --project soramoyou-ios",
     "logs": "firebase functions:log --project soramoyou-ios"
   },

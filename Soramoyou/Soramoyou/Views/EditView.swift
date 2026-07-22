@@ -37,6 +37,9 @@ struct EditView: View {
     /// Living Sky（空を動かす）プレビューシートの表示フラグ。
     /// 元々はプロトタイプ確認用に #if DEBUG 限定で使っていたが、本番導線化に伴い常時使用する。
     @State private var showLivingSkySheet = false
+    /// 「空を動かす（Kling版）」フェーズ2 UI導線の表示フラグ。
+    /// DEBUG限定のE2E検証用（本番導線化はしない。設計書: docs/sky-motion-design.md §7）。
+    @State private var showSkyMotionSheet = false
     /// Living Sky 初回コーチマークの既読フラグ。
     /// `WhatsNewContent` の永続化キー群と同じ流儀で UserDefaults に永続化し、
     /// 一度タップ or ボタン押下で消したら以後表示しない。
@@ -96,6 +99,13 @@ struct EditView: View {
 #if DEBUG
                         .overlay(alignment: .bottom) {
                             livingSkyOverlay
+                        }
+                        // 「空を動かす（Kling版）」フェーズ2 UI導線。既存 Living Sky（Metal版）の
+                        // ボタンは下部中央にあるため、被らないよう右上に配置する。
+                        .overlay(alignment: .topTrailing) {
+                            skyMotionDebugButton
+                                .padding(.top, 12)
+                                .padding(.trailing, 12)
                         }
 #endif
 
@@ -199,6 +209,15 @@ struct EditView: View {
             .sheet(isPresented: $showLivingSkySheet) {
                 if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
                     LivingSkySheet(sourceImage: sourceImage)
+                }
+            }
+#endif
+            // 「空を動かす（Kling版）」フェーズ2 UI導線。DEBUG限定のE2E検証用
+            // （本番導線化はしない。設計書: docs/sky-motion-design.md §7）。
+#if DEBUG
+            .sheet(isPresented: $showSkyMotionSheet) {
+                if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
+                    SkyMotionSheet(sourceImage: sourceImage)
                 }
             }
 #endif
@@ -999,6 +1018,31 @@ struct EditView: View {
         .onTapGesture {
             hasSeenLivingSkyCoachMark = true
         }
+    }
+
+    // MARK: - 「空を動かす（Kling版）」フェーズ2 UI導線（DEBUG限定）
+
+    /// `SkyMotionSheet` を開くボタン。既存 Living Sky（Metal版・`livingSkyButton`）とは別機能・
+    /// 別ボタンとして画面右上に配置する（同トーンの半透明黒カプセルだが、混同しないよう
+    /// アイコン・ラベルを変える）。DEBUG限定のE2E検証用のため本番導線化はしない
+    /// （設計書: docs/sky-motion-design.md §7）。
+    private var skyMotionDebugButton: some View {
+        Button {
+            showSkyMotionSheet = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "icloud.and.arrow.up")
+                Text("空を動かす（Kling版）")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.black.opacity(0.5))
+            .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+        }
+        .accessibilityLabel("空を動かす（Kling版・DEBUG検証用）")
     }
 
 }
