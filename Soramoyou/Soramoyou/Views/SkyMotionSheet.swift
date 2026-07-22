@@ -6,7 +6,7 @@
 //
 // 設計書: docs/sky-motion-design.md（唯一のデータ契約の土台）
 //   §0 アーキテクチャ概要: 画像3枚アップロード → livingSkyJobs 作成 → snapshot listener で
-//      status 変化を待つ（pending → submitted → completed/failed）
+//      status 変化を待つ（pending → submitting → submitted → completed/failed）
 //   §5 回数・コスト方針: 3回/日/ユーザー。quota_exceeded 時は fal.ai を一切呼び出さない
 //
 // ⚠️ 命名・見た目が近い既存の Metal ローカル版 Living Sky（`LivingSkySheet`・`LivingSkyPreviewView.swift`）
@@ -43,7 +43,7 @@ enum SkyMotionSheetError: Error, LocalizedError {
 
 /// 「空を動かす」（Kling版）の状態機械。
 /// クライアント側の処理段階（準備/アップロード）と、Cloud Functions 側のジョブ状態
-/// （pending/submitted → completed/failed）を1つの enum にまとめている。
+/// （pending/submitting/submitted → completed/failed）を1つの enum にまとめている。
 enum SkyMotionSheetState: Equatable {
     /// 初期表示（まだ何もしていない）
     case idle
@@ -51,12 +51,17 @@ enum SkyMotionSheetState: Equatable {
     case preparing
     /// Storage への3ファイルアップロード + Firestore ジョブ作成中
     case uploading
-    /// ジョブ作成後、Cloud Functions 側の処理（pending → submitted → completed/failed）を待機中
+    /// ジョブ作成後、Cloud Functions 側の処理（pending → submitting → submitted → completed/failed）を待機中
     case waiting
     /// 完成。ローカルにDL済みの mp4 の URL を保持する
     case completed(localVideoURL: URL)
     /// カメラロールへ保存済み（`completed` の動画はそのまま保持し続ける。プレビューは消さない）
     case saved(localVideoURL: URL)
+    /// サーバー側では `completed`（＝回数消費済み）に達したが、端末への動画ダウンロードに
+    /// 失敗した状態。`failed` とはあえて区別する（`failed` の既定文言「回数は消費されていない」が
+    /// この経路では事実と異なるため）。新規ジョブを作り直させず、同じ `videoURLString` からの
+    /// 再ダウンロードのみを許可する（3回/日の枠を再消費させない）。
+    case downloadFailed(videoURLString: String)
     /// 失敗。`errorCode` はジョブ側の失敗理由（設計書§1: quota_exceeded 等）。
     /// クライアント側の失敗（準備/アップロード/未ログイン等）では nil になる。
     case failed(errorCode: String?)
@@ -85,6 +90,8 @@ struct SkyMotionSheet: View {
     @State private var playerLooper: AVPlayerLooper?
     /// カメラロール保存中フラグ（`completed`/`saved` どちらの状態でも保存ボタンから遷移しうる）
     @State private var isSaving = false
+    /// `downloadFailed` からの再ダウンロード中フラグ
+    @State private var isRetryingDownload = false
     /// 保存アクション（`completed` → `saved`）が失敗したときのアラートメッセージ。
     ///
     /// ジョブ生成そのものの失敗（`state = .failed`、errorCode で文言分岐する経路）とは
@@ -121,6 +128,13 @@ struct SkyMotionSheet: View {
             // 自動 remove される）。ループ再生も止めて余計な CPU/バッテリー消費を防ぐ。
             pipelineTask?.cancel()
             queuePlayer.pause()
+            // player/looper を解放してから、保持しているローカル一時mp4を削除する（G6/codex-10）。
+            // 本機能は DEBUG限定到達のため `LivingSkyVideoExporter.saveToPhotos` の
+            // `#if !DEBUG` 削除分岐が走らず、ここで明示的に消さない限り残り続けてしまう。
+            playerLooper = nil
+            if let url = currentLocalVideoURL {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
         .alert("保存に失敗しました", isPresented: Binding(
             get: { saveErrorMessage != nil },
@@ -147,8 +161,20 @@ struct SkyMotionSheet: View {
             progressStateView
         case .completed(let url), .saved(let url):
             resultView(localVideoURL: url)
+        case .downloadFailed(let videoURLString):
+            downloadFailedView(videoURLString: videoURLString)
         case .failed(let errorCode):
             failedView(errorCode: errorCode)
+        }
+    }
+
+    /// `.onDisappear` での一時ファイル削除用。`completed`/`saved` のときだけローカルURLを持つ。
+    private var currentLocalVideoURL: URL? {
+        switch state {
+        case .completed(let url), .saved(let url):
+            return url
+        default:
+            return nil
         }
     }
 
@@ -265,6 +291,47 @@ struct SkyMotionSheet: View {
         }
     }
 
+    // MARK: - 完成済みだが端末DL失敗（downloadFailed）
+
+    /// サーバー側では完成済み（回数消費済み）だが、端末への動画ダウンロードに失敗した状態のビュー。
+    /// `failedView` とは文言・導線を分ける（G5対応）。「もう一度試す」ではなく、同じ
+    /// `videoURLString` からの再ダウンロードのみを促す（新規ジョブを作らせない＝回数を再消費させない）。
+    private func downloadFailedView(videoURLString: String) -> some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Image(systemName: "arrow.down.circle.trianglebadge.exclamationmark")
+                .font(.system(size: 40))
+                .foregroundColor(.white.opacity(0.8))
+            Text("動画はできたけど受信に失敗したの。通信環境を確認してもう一度受信してね")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.85))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Spacer()
+            Button {
+                retryDownload(videoURLString: videoURLString)
+            } label: {
+                if isRetryingDownload {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        Text("受信しています…")
+                    }
+                } else {
+                    Text("もう一度受信する")
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(.white)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(Capsule().fill(Color.white.opacity(0.15)))
+            .disabled(isRetryingDownload)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
+        }
+    }
+
     // MARK: - 失敗
 
     private func failedView(errorCode: String?) -> some View {
@@ -337,11 +404,13 @@ struct SkyMotionSheet: View {
                 state = .waiting
                 LoggingService.shared.logEvent("sky_motion_job_created", parameters: ["job_id": jobId])
 
-                for await job in jobService.observeJob(jobId: jobId) {
+                // `observeJob` は AsyncThrowingStream。listener がエラーを受けたら throwing で
+                // 終端するため（codex-9対応）、`for try await` で受けて下の catch に落とす。
+                for try await job in jobService.observeJob(jobId: jobId) {
                     try Task.checkCancellation()
 
                     switch job.status {
-                    case .pending, .submitted:
+                    case .pending, .submitting, .submitted:
                         continue // waiting のまま様子見
 
                     case .completed:
@@ -349,9 +418,22 @@ struct SkyMotionSheet: View {
                             state = .failed(errorCode: nil)
                             return
                         }
-                        let localURL = try await downloadVideo(from: videoURLString)
-                        state = .completed(localVideoURL: localURL)
-                        LoggingService.shared.logEvent("sky_motion_video_ready", parameters: nil)
+                        do {
+                            let localURL = try await downloadVideo(from: videoURLString)
+                            state = .completed(localVideoURL: localURL)
+                            LoggingService.shared.logEvent("sky_motion_video_ready", parameters: nil)
+                        } catch {
+                            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                                return
+                            }
+                            // サーバー側は既に completed（＝回数消費済み）のため、この失敗を
+                            // 通常の `.failed`（「回数は消費されていない」の文言）にすると
+                            // 事実と異なる（G5対応）。専用状態で「もう一度受信」導線を出す。
+                            LoggingService.shared.logErrorEvent(
+                                error, context: "sky_motion_download_after_completed", category: .systemError
+                            )
+                            state = .downloadFailed(videoURLString: videoURLString)
+                        }
                         return
 
                     case .failed:
@@ -396,6 +478,25 @@ struct SkyMotionSheet: View {
         return destinationURL
     }
 
+    /// `downloadFailed` 状態からの再ダウンロード。新規ジョブは作らず、同じ `videoURLString` から
+    /// 再取得するだけ（3回/日の枠を再消費させないため）。失敗しても `.downloadFailed` のまま留まり、
+    /// ボタンから再試行し続けられる。
+    private func retryDownload(videoURLString: String) {
+        guard !isRetryingDownload else { return }
+        isRetryingDownload = true
+
+        Task {
+            defer { isRetryingDownload = false }
+            do {
+                let localURL = try await downloadVideo(from: videoURLString)
+                state = .completed(localVideoURL: localURL)
+                LoggingService.shared.logEvent("sky_motion_video_ready", parameters: nil)
+            } catch {
+                LoggingService.shared.logErrorEvent(error, context: "sky_motion_download_retry", category: .systemError)
+            }
+        }
+    }
+
     /// `AVQueuePlayer` + `AVPlayerLooper` でシームレスループ再生を開始する。
     /// `completed` → `saved` の状態遷移で `resultView` が再度 `.onAppear` を呼んでも
     /// 二重セットアップしないよう `playerLooper` の有無で判定する。
@@ -407,8 +508,12 @@ struct SkyMotionSheet: View {
     }
 
     /// 「カメラロールに保存」ボタンのアクション。
-    /// `LivingSkyVideoExporter.saveToPhotos` をそのまま再利用する（DEBUGビルドでは保存成功後も
-    /// 一時ファイルを削除しない設計を踏襲。Releaseビルドでのみ削除される）。
+    /// `LivingSkyVideoExporter.saveToPhotos` をそのまま再利用するが、本機能は DEBUG限定到達のため
+    /// そちらの `#if !DEBUG` 削除分岐は走らない。一時ファイルの明示削除は `.onDisappear`（player/looper
+    /// 解放後）にまとめている（G6/codex-10対応）。保存直後にここで消さない理由: `.saved` 状態でも
+    /// プレビューはループ再生を継続する仕様（`state` の doc comment・`saveErrorMessage` の doc comment
+    /// 参照）で、`AVPlayerLooper` が内部でループ用に URL を再オープンする可能性を否定できない以上、
+    /// 再生中のファイルを削除するのは避ける。`onDisappear` まで待てば再生終了後の削除になり安全。
     private func saveToPhotos(localVideoURL: URL) {
         guard !isSaving else { return }
         isSaving = true

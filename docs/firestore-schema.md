@@ -118,6 +118,43 @@
 - email・表示名などの PII は保存しない（userId のみ）。
 - 副作用: ドキュメント作成で Cloud Functions `notifyFeedbackToDiscord`（`functions/index.js`）が発火し、開発者の Discord へ Webhook 通知する。Webhook URL は Secret Manager `DISCORD_WEBHOOK_URL`（コードに実値なし）。デプロイには Blaze ＋ `firebase functions:secrets:set DISCORD_WEBHOOK_URL` が必要。
 
+## livingSkyJobs コレクション（「空を動かす」β・Kling版・DEBUG限定E2E検証用）
+```json
+{
+  "id": "string (ドキュメントID)",      // doc ID と一致（rules で強制）
+  "userId": "string",                    // 所有者（request.auth.uid）
+  "status": "string",                    // pending → submitting → submitted → completed/failed
+  "sourcePath": "string",                // livingSky/{uid}/{jobId}/source.jpg（rules で厳密一致必須）
+  "skyMaskPath": "string",               // livingSky/{uid}/{jobId}/sky_mask.png（rules で厳密一致必須）
+  "groundMaskPath": "string",            // livingSky/{uid}/{jobId}/ground_mask.png（rules で厳密一致必須）
+  "aspectRatio": "string",               // "16:9" | "9:16" | "1:1"（近似選択済み）
+  "trajectory": [{ "x": "number", "y": "number" }], // sky_mask重心 → +40px水平の2点
+  "falRequestId": "string",              // function専用。submit成功後に設定
+  "videoURL": "string",                  // function専用。完成後のStorageダウンロードURL
+  "submittedAt": "timestamp",            // function専用。fal.aiへのsubmit成功時刻。pollタイムアウト判定の基準
+  "pollAttempts": "number",              // function専用。ポーラーの試行回数
+  "errorCode": "string",                 // forbidden/quota_exceeded/submit_failed/downstream_unavailable/timeout 等
+  "error": "string",                     // エラーの人間可読メッセージ
+  "createdAt": "timestamp",              // client設定（serverTimestamp()。rulesでrequest.timeと一致必須）
+  "updatedAt": "timestamp"               // functionが状態遷移のたびに更新
+}
+```
+- クライアントが書けるのは **画像3枚のアップロード**（Storage）と **status="pending" の初期ドキュメント作成のみ**。以降の状態遷移は Cloud Functions（Admin SDK）専用（`update`/`delete` は client から一律禁止）。
+- **アクセス制御**: custom claim `skyMotionBeta == true`（allowlist）が create に必須。Cloud Functions側でも Admin SDK 経由で再検証する（多層防御）。
+- 詳細な契約・rules条件・状態遷移図は `docs/sky-motion-design.md` 参照。
+
+## livingSkyUsage コレクション（「空を動かす」β・1日あたりの利用回数カウンタ）
+```json
+{
+  "uid": "string (ドキュメントID)",
+  "day": "string",              // JST "YYYY-MM-DD"（lazy reset。日次cronは使わない）
+  "reservedCount": "number",    // 当日の予約済み回数（上限3・reserve-on-create + refund-on-failure）
+  "updatedAt": "timestamp"
+}
+```
+- 読み取りは所有者のみ、書き込みは一律不可（予約・返金は Cloud Functions 専用）。
+- 詳細は `docs/sky-motion-design.md` §2 参照。
+
 ---
 
 ## Firebase使用時の重要事項

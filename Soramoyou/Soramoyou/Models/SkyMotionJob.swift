@@ -17,11 +17,16 @@
 
 import FirebaseFirestore
 import Foundation
+import os
 
 /// `livingSkyJobs/{jobId}.status` の値（設計書§1）。
-/// client が書けるのは `.pending` のみ。以降は Cloud Functions が遷移させる。
+/// client が書けるのは `.pending` のみ。以降は Cloud Functions が
+/// `pending → submitting → submitted → completed/failed` の順に遷移させる。
 enum SkyMotionJobStatus: String, CaseIterable {
     case pending
+    /// fal.ai への submit 処理中（Cloud Functions が pending から遷移させる中間状態）。
+    /// UI 側は `.submitted` と同様「生成中」の待機表示として扱う。
+    case submitting
     case submitted
     case completed
     case failed
@@ -59,6 +64,11 @@ struct SkyMotionTrajectoryPoint: Equatable {
 
 /// 「空を動かす」（Kling版）ジョブ1件（`livingSkyJobs/{jobId}`）。
 struct SkyMotionJob: Identifiable {
+    private static let logger = Logger(
+        subsystem: "com.soramoyou.photo-editor",
+        category: "SkyMotionJob"
+    )
+
     let id: String
     let userId: String
     let status: SkyMotionJobStatus
@@ -71,8 +81,6 @@ struct SkyMotionJob: Identifiable {
     let falRequestId: String?
     /// 完成後の Storage ダウンロードURL。Cloud Functions が設定する（client からは常に nil）
     let videoURL: String?
-    /// submit段階のリトライ回数。Cloud Functions が管理する
-    let retryCount: Int
     /// ポーラーの試行回数。Cloud Functions が管理する
     let pollAttempts: Int
     /// `"quota_exceeded"` | `"submit_failed"` | `"downstream_unavailable"` | `"timeout"` 等
@@ -89,7 +97,7 @@ struct SkyMotionJob: Identifiable {
     ///
     /// `firestore.rules` の create 条件（`status == 'pending'` かつ
     /// `!hasAny(['falRequestId', 'videoURL'])`）を必ず満たす形に固定する。
-    /// function 専用フィールド（falRequestId/videoURL/retryCount/pollAttempts/errorCode/error）は
+    /// function 専用フィールド（falRequestId/videoURL/pollAttempts/errorCode/error）は
     /// ここでは意味を持たないため既定値（nil/0）で保持するのみで、`toFirestoreData()` にも含めない。
     init(
         id: String,
@@ -110,7 +118,6 @@ struct SkyMotionJob: Identifiable {
         self.trajectory = trajectory
         self.falRequestId = nil
         self.videoURL = nil
-        self.retryCount = 0
         self.pollAttempts = 0
         self.errorCode = nil
         self.error = nil
@@ -162,14 +169,22 @@ struct SkyMotionJob: Identifiable {
         self.aspectRatio = documentData["aspectRatio"] as? String ?? "1:1"
 
         if let trajectoryData = documentData["trajectory"] as? [[String: Any]] {
-            self.trajectory = trajectoryData.compactMap { SkyMotionTrajectoryPoint(from: $0) }
+            let decodedPoints = trajectoryData.compactMap { SkyMotionTrajectoryPoint(from: $0) }
+            // tech-spec.md: 壊れたドキュメントの無言スキップ禁止。一部の点だけデコードに
+            // 失敗した場合（想定外のサーバー側フォーマット変更等）はログに残し、
+            // クラッシュはさせず成功した点だけで継続する。
+            if decodedPoints.count != trajectoryData.count {
+                Self.logger.error(
+                    "空を動かす: trajectory の一部デコードに失敗 jobId=\(id, privacy: .public) expected=\(trajectoryData.count) actual=\(decodedPoints.count)"
+                )
+            }
+            self.trajectory = decodedPoints
         } else {
             self.trajectory = []
         }
 
         self.falRequestId = documentData["falRequestId"] as? String
         self.videoURL = documentData["videoURL"] as? String
-        self.retryCount = documentData["retryCount"] as? Int ?? 0
         self.pollAttempts = documentData["pollAttempts"] as? Int ?? 0
         self.errorCode = documentData["errorCode"] as? String
         self.error = documentData["error"] as? String

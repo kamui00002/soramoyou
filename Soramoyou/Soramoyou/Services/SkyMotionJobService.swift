@@ -53,7 +53,10 @@ protocol SkyMotionJobServiceProtocol {
     /// `completed` で `videoURL` を、`failed` で `errorCode`/`error` を持つ `SkyMotionJob` が流れる。
     /// `completed`/`failed`（終端状態）に達すると自動的にストリームを終了し listener を remove する。
     /// 呼び出し側が Task をキャンセルした場合も `onTermination` 経由で listener を remove する。
-    func observeJob(jobId: String) -> AsyncStream<SkyMotionJob>
+    /// listener が error を受け取った場合はストリームを `throwing` で終端する（呼び出し側は
+    /// `for try await` で受け、失敗として扱えるようにする。エラー時に何も終端しないと
+    /// `for await` が永久に待機し続け、呼び出し元の UI が固まってしまうため）。
+    func observeJob(jobId: String) -> AsyncThrowingStream<SkyMotionJob, Error>
 }
 
 final class SkyMotionJobService: SkyMotionJobServiceProtocol {
@@ -149,23 +152,36 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
 
     // MARK: - Public: 状態監視
 
-    func observeJob(jobId: String) -> AsyncStream<SkyMotionJob> {
-        AsyncStream { continuation in
+    func observeJob(jobId: String) -> AsyncThrowingStream<SkyMotionJob, Error> {
+        AsyncThrowingStream { continuation in
             let listener = jobsCollection.document(jobId).addSnapshotListener { snapshot, error in
                 if let error = error {
                     Self.logger.error(
                         "空を動かす: livingSkyJobs リスナーエラー jobId=\(jobId, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
                     )
+                    // エラーを無視して return するだけだと、呼び出し側の `for await` が
+                    // 永久に次のイベントを待ち続け UI が固まる（codex-9）。
+                    // throwing で終端し、呼び出し側が `.failed` 表示へ遷移できるようにする。
+                    continuation.finish(throwing: error)
                     return
                 }
-                guard let snapshot = snapshot, let job = SkyMotionJob(from: snapshot) else {
+                guard let snapshot = snapshot else {
+                    return
+                }
+                guard let job = SkyMotionJob(from: snapshot) else {
+                    // ドキュメントは取得できたがデコードに失敗（必須フィールド欠落等）。
+                    // 無言スキップせずログに残す（tech-spec.md「壊れたドキュメントを無言で
+                    // 落とすの禁止」準拠）。listener 自体は継続し、次の更新を待つ。
+                    Self.logger.error(
+                        "空を動かす: livingSkyJobs デコード失敗 jobId=\(jobId, privacy: .public)"
+                    )
                     return
                 }
 
                 continuation.yield(job)
 
                 // 終端状態（completed/failed）に達したらストリームを終了する。
-                // 設計書§0: 状態遷移は pending→submitted→completed/failed で完結するため、
+                // 設計書§0: 状態遷移は pending→submitting→submitted→completed/failed で完結するため、
                 // それ以降 Cloud Functions がドキュメントを更新することはない
                 // （listener を張り続ける意味がない＝リソースリークになる）。
                 if job.status == .completed || job.status == .failed {

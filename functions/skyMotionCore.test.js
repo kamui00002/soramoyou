@@ -203,3 +203,23 @@ test("isPollTimedOut: timeoutMsを明示指定できる", () => {
   assert.equal(core.isPollTimedOut(0, 500, 1000), false);
   assert.equal(core.isPollTimedOut(0, 1000, 1000), true);
 });
+
+// ============================================================
+// isClaimableJob（at-least-once 再配信対策）
+// ============================================================
+
+test("isClaimableJob: status=pending なら claim してよい（初回配信）", () => {
+  assert.equal(core.isClaimableJob({ status: "pending" }), true);
+});
+
+test("isClaimableJob: status=submitting/submitted/completed/failed は claim不可（処理済み・処理中）", () => {
+  assert.equal(core.isClaimableJob({ status: "submitting" }), false);
+  assert.equal(core.isClaimableJob({ status: "submitted" }), false);
+  assert.equal(core.isClaimableJob({ status: "completed" }), false);
+  assert.equal(core.isClaimableJob({ status: "failed" }), false);
+});
+
+test("isClaimableJob: jobDataがnull/undefined（ドキュメント消失等）は claim不可", () => {
+  assert.equal(core.isClaimableJob(null), false);
+  assert.equal(core.isClaimableJob(undefined), false);
+});

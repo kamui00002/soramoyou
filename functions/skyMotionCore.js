@@ -190,15 +190,34 @@ function extractVideoUrl(resultPayload) {
 }
 
 /**
- * ジョブ作成からの経過時間がポーリングタイムアウトを超えたか。
- * @param {number} createdAtMillis job.createdAt のミリ秒
+ * submit（fal.aiへのキュー投入）成功からの経過時間がポーリングタイムアウトを超えたか。
+ * ⚠️ 基準は job.submittedAt（Cloud Functionsがsubmit成功時に serverTimestamp() で記録）。
+ *    job.createdAt（クライアントが作成時に設定）は偽装可能なため使わない。
+ * @param {number} startMillis job.submittedAt のミリ秒
  * @param {number} nowMillis 現在時刻のミリ秒
  * @param {number} [timeoutMs] 既定 POLL_TIMEOUT_MS
  * @returns {boolean}
  */
-function isPollTimedOut(createdAtMillis, nowMillis, timeoutMs) {
+function isPollTimedOut(startMillis, nowMillis, timeoutMs) {
   const limit = typeof timeoutMs === "number" ? timeoutMs : POLL_TIMEOUT_MS;
-  return nowMillis - createdAtMillis >= limit;
+  return nowMillis - startMillis >= limit;
+}
+
+// ============================================================
+// at-least-once 再配信対策（ジョブのclaim可否判定）
+// ============================================================
+
+/**
+ * onDocumentCreated の at-least-once 再配信で、このジョブをまだ処理してよいか
+ * （＝初回配信で、まだ誰も予約・submitを開始していないか）を判定する。
+ * status が pending のときだけ claim してよい。呼び出し側（reserveAndClaimJob）は
+ * この判定をトランザクション内のライブ読み取りに対して行うことで、固定スナップショット
+ * 判定（再配信で無効化される）ではない排他性を保証する。
+ * @param {{status?: string}|null|undefined} jobData トランザクション内で読んだ最新の job データ
+ * @returns {boolean} true なら claim して処理を進めてよい
+ */
+function isClaimableJob(jobData) {
+  return !!jobData && jobData.status === "pending";
 }
 
 module.exports = {
@@ -220,4 +239,5 @@ module.exports = {
   normalizeFalStatusPayload,
   extractVideoUrl,
   isPollTimedOut,
+  isClaimableJob,
 };

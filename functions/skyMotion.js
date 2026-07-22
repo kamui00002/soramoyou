@@ -3,15 +3,21 @@
 //
 // トリガー:
 //   - onSkyMotionJobCreated  livingSkyJobs/{jobId} (onDocumentCreated)
-//       → livingSkyUsage/{uid} を予約 → fal.ai Kling へ submit → status="submitted"
-//   - pollSkyMotionJobs      onSchedule（1分毎）
+//       → allowlist(custom claim skyMotionBeta)再検証 → livingSkyUsage/{uid} を予約
+//         （+ status="submitting" claim。同一トランザクション） → fal.ai Kling へ submit
+//         → status="submitted"（submittedAt記録）
+//   - pollSkyMotionJobs      onSchedule（1分毎・maxInstances=1）
 //       → status="submitted" のジョブを fal.ai に問い合わせ、完了/失敗を反映
+//         （タイムアウト判定は submittedAt 基準）
 //
 // 契約の一次情報: docs/sky-motion-design.md（フィールド名・Storageパス・マスク極性・
 // 回数方針はすべてそちらが正）。純粋関数（予約/返金判定・fal応答パース等）は
 // skyMotionCore.js に分離し、単体テスト可能にしている（node --test）。
 //
-// DEBUG限定E2E検証用機能。本番導線化はしない（design doc §7）。
+// アクセス制御: この機能はDEBUG限定E2E検証用だが、rules/Functions自体は本番デプロイされ
+// 全認証ユーザー（匿名認証・セルフサインアップ含む）に開く。そのため custom claim
+// `skyMotionBeta==true` の allowlist で締める（firestore.rules/storage.rules で一次防御、
+// このファイルの isBetaAllowed() で Admin SDK 経由の多層防御）。本番導線化はしない（design doc §7）。
 //
 // ⚠️ デプロイ前提:
 //   1. `firebase functions:secrets:set FAL_KEY`（対話で fal.ai の API Key を入力）
@@ -28,6 +34,7 @@ const logger = require("firebase-functions/logger");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
 const { getMessaging } = require("firebase-admin/messaging");
+const { getAuth } = require("firebase-admin/auth");
 
 const core = require("./skyMotionCore");
 
@@ -35,6 +42,7 @@ const core = require("./skyMotionCore");
 const db = getFirestore();
 const storage = getStorage();
 const messaging = getMessaging();
+const auth = getAuth();
 
 const FAL_KEY = defineSecret("FAL_KEY");
 
@@ -104,24 +112,90 @@ function toMillis(value) {
 }
 
 /**
- * livingSkyUsage/{uid} をトランザクションで予約する（reserve-on-create）。
- * @returns {Promise<boolean>} 予約できたら true、上限到達で予約できなければ false
+ * uid が「空を動かす」βの allowlist（custom claim `skyMotionBeta==true`）に
+ * 入っているかを Admin SDK 経由で最新の状態から確認する（多層防御）。
+ * firestore.rules は client がジョブを *作成* した時点のトークンしか見ないため、
+ * ここでも独立に確認する（トークンrefresh前のrevoke等をすり抜けさせないため）。
+ * 取得自体に失敗した場合は安全側（拒否）に倒す。
+ * @param {string} uid
+ * @returns {Promise<boolean>}
  */
-async function reserveUsage(uid) {
+async function isBetaAllowed(uid) {
+  try {
+    const userRecord = await auth.getUser(uid);
+    return !!(userRecord.customClaims && userRecord.customClaims.skyMotionBeta === true);
+  } catch (err) {
+    logger.error("空を動かす: allowlist確認（Admin SDK）に失敗しました", { uid, error: err.message });
+    return false;
+  }
+}
+
+/**
+ * livingSkyUsage/{uid} の予約と、ジョブの status claim（pending→submitting）を
+ * 単一トランザクションで行う。at-least-once 再配信対策を兼ねる: job の最新状態を
+ * トランザクション内でライブに読み、pending でなければ何もしない（＝「1ジョブ＝1予約＝
+ * 1submit」を保証する。固定スナップショット判定だと再配信時に予約が二重発生しうる）。
+ * @param {string} uid
+ * @param {FirebaseFirestore.DocumentReference} jobRef
+ * @returns {Promise<{claimed: boolean, reserved: boolean}>}
+ *   claimed=false             : 既に pending 以外だった（再配信・処理不要。何もしていない）
+ *   claimed=true, reserved=false: 上限到達。トランザクション内で status="failed"/
+ *                                 errorCode="quota_exceeded" まで書き込み済み（fal.ai未呼び出し=非課金）
+ *   claimed=true, reserved=true : 予約成功。status="submitting" まで書き込み済み
+ *                                 （呼び出し側は fal.ai へ進んでよい）
+ */
+async function reserveAndClaimJob(uid, jobRef) {
   const usageRef = db.collection("livingSkyUsage").doc(uid);
   const today = core.jstDateString();
   return db.runTransaction(async (tx) => {
-    const snap = await tx.get(usageRef);
-    const current = snap.exists ? snap.data() : null;
-    const decision = core.decideReservation(current, today);
-    if (!decision.allowed) return false;
+    // Firestoreトランザクションは読み取りが書き込みより先である必要がある。
+    // job/usageは独立ドキュメントなので並列に読んでよい。
+    const [jobSnap, usageSnap] = await Promise.all([tx.get(jobRef), tx.get(usageRef)]);
+    const jobData = jobSnap.exists ? jobSnap.data() : null;
+    if (!core.isClaimableJob(jobData)) {
+      return { claimed: false, reserved: false };
+    }
+
+    const usageData = usageSnap.exists ? usageSnap.data() : null;
+    const decision = core.decideReservation(usageData, today);
+    if (!decision.allowed) {
+      tx.update(jobRef, {
+        status: "failed",
+        errorCode: "quota_exceeded",
+        error: "本日の生成回数の上限に達しました",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return { claimed: true, reserved: false };
+    }
+
+    tx.update(jobRef, { status: "submitting", updatedAt: FieldValue.serverTimestamp() });
     tx.set(
       usageRef,
       { day: decision.day, reservedCount: decision.reservedCount, updatedAt: FieldValue.serverTimestamp() },
       { merge: true }
     );
-    return true;
+    return { claimed: true, reserved: true };
   });
+}
+
+/**
+ * ジョブの入力3ファイル（source.jpg/sky_mask.png/ground_mask.png）を削除する
+ * （best-effort。個々の削除失敗はログのみでスローしない）。
+ * 全ての失敗・quota_exceeded経路（allowlist外・予約失敗・submit失敗・timeout・
+ * downstream不可）で呼ぶ。完了経路では completed 確定後に別途呼ぶ（output.mp4は残す）。
+ * @param {string} uid
+ * @param {string} jobId
+ */
+async function deleteJobInputFiles(uid, jobId) {
+  await Promise.all(
+    ["source.jpg", "sky_mask.png", "ground_mask.png"].map((name) =>
+      storage
+        .bucket()
+        .file(`livingSky/${uid}/${jobId}/${name}`)
+        .delete()
+        .catch((e) => logger.warn("空を動かす: 入力ファイル削除失敗", { jobId, name, error: e.message }))
+    )
+  );
 }
 
 /** livingSkyUsage/{uid} をトランザクションで返金する（refund-on-failure）。 */
@@ -191,9 +265,12 @@ exports.onSkyMotionJobCreated = onDocumentCreated(
     const jobRef = snapshot.ref;
     const job = snapshot.data() || {};
 
-    // at-least-once 再配信対策: pending 以外（既に処理済み）なら何もしない。
+    // 高速パス: 固定スナップショットで明らかに処理済み（再配信）なら、allowlist確認や
+    // トランザクション開始前にスキップする（無駄なAPI呼び出しを避ける最適化）。
+    // ⚠️ これは非厳密なチェック。実際の排他性保証は reserveAndClaimJob() 内の
+    //    トランザクション（ライブ読み取り）で行う。
     if (job.status !== "pending") {
-      logger.info("空を動かす: 既に処理済みのためスキップ", { jobId, status: job.status });
+      logger.info("空を動かす: 既に処理済みのためスキップ（再配信・高速パス）", { jobId, status: job.status });
       return;
     }
 
@@ -203,15 +280,31 @@ exports.onSkyMotionJobCreated = onDocumentCreated(
       return;
     }
 
-    // --- 1. 予約（トランザクション）。上限到達なら fal.ai を一切呼ばない（非課金） ---
-    const reserved = await reserveUsage(uid);
-    if (!reserved) {
+    // --- 0. allowlist再検証（多層防御。firestore.rules は create 時点のトークンしか
+    //     見ないため、Admin SDK で最新の custom claims を取り直して確認する） ---
+    const allowed = await isBetaAllowed(uid);
+    if (!allowed) {
       await jobRef.update({
         status: "failed",
-        errorCode: "quota_exceeded",
-        error: "本日の生成回数の上限に達しました",
+        errorCode: "forbidden",
+        error: "この機能は許可されたユーザーのみ利用できます",
         updatedAt: FieldValue.serverTimestamp(),
       });
+      await deleteJobInputFiles(uid, jobId);
+      logger.warn("空を動かす: allowlist外のためスキップ（非課金）", { jobId, uid });
+      return;
+    }
+
+    // --- 1. 予約 + status claim（pending→submitting）を単一トランザクションで実施。
+    //     上限到達なら fal.ai を一切呼ばない（非課金）。既に処理済み（再配信）なら
+    //     トランザクション内で何もしない。 ---
+    const claim = await reserveAndClaimJob(uid, jobRef);
+    if (!claim.claimed) {
+      logger.info("空を動かす: 既に処理済みのためスキップ（再配信・トランザクション判定）", { jobId, uid });
+      return;
+    }
+    if (!claim.reserved) {
+      await deleteJobInputFiles(uid, jobId);
       logger.info("空を動かす: 上限到達のためスキップ（非課金）", { jobId, uid });
       return;
     }
@@ -239,20 +332,15 @@ exports.onSkyMotionJobCreated = onDocumentCreated(
       await jobRef.update({
         status: "submitted",
         falRequestId,
+        submittedAt: FieldValue.serverTimestamp(),
         pollAttempts: 0,
         updatedAt: FieldValue.serverTimestamp(),
       });
       logger.info("空を動かす: submit成功", { jobId, uid, falRequestId });
     } catch (err) {
-      // --- 4b. submit失敗（リトライも失敗）→ 予約を返金してfailedに ---
+      // --- 4b. submit失敗（リトライも失敗）→ 予約返金・入力ファイル削除・失敗通知 ---
       logger.error("空を動かす: submit失敗（リトライも失敗）", { jobId, uid, error: err.message });
-      await refundUsage(uid);
-      await jobRef.update({
-        status: "failed",
-        errorCode: "submit_failed",
-        error: err.message,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      await failJob(jobRef, uid, "submit_failed", err.message);
     }
   }
 );
@@ -262,7 +350,8 @@ exports.onSkyMotionJobCreated = onDocumentCreated(
 // ============================================================
 
 exports.pollSkyMotionJobs = onSchedule(
-  { schedule: "every 1 minutes", secrets: [FAL_KEY] },
+  // maxInstances: 1 で周期跨ぎの多重起動を防ぐ（簡易排他。完全な per-job lease は公開β送り）。
+  { schedule: "every 1 minutes", secrets: [FAL_KEY], maxInstances: 1 },
   async () => {
     const snap = await db
       .collection("livingSkyJobs")
@@ -300,8 +389,10 @@ async function pollOneJob(doc, now, falKeyValue) {
     return;
   }
 
-  const createdAtMillis = toMillis(job.createdAt);
-  const timedOut = createdAtMillis > 0 && core.isPollTimedOut(createdAtMillis, now);
+  // ⚠️ タイムアウト判定は submittedAt（Cloud Functionsがsubmit成功時に記録）基準。
+  //    createdAt（client設定・偽装可能）は使わない。
+  const submittedAtMillis = toMillis(job.submittedAt);
+  const timedOut = submittedAtMillis > 0 && core.isPollTimedOut(submittedAtMillis, now);
 
   let statusPayload;
   try {
@@ -351,7 +442,12 @@ async function pollOneJob(doc, now, falKeyValue) {
     return;
   }
 
-  // normalized.state === "READY" → 結果を取得してStorageへ書き込む
+  // normalized.state === "READY" → 結果を取得してStorageへ書き込む。
+  // ⚠️ completed巻き戻し防止: ここではまだ status="completed" を確定していないため、
+  //    結果取得・mp4ダウンロード・Storage保存のいずれかが失敗しても、タイムアウト超過で
+  //    なければ submitted のまま次周期に再試行させる（failedにしない。一時的異常として扱う。
+  //    fal側は既にCOMPLETEDなので、再試行時も同じ結果を取得できる想定）。
+  let downloadUrl;
   try {
     const resultRes = await fetch(
       `${core.FAL_QUEUE_BASE_URL}/${core.FAL_APP_ID}/requests/${falRequestId}`,
@@ -372,41 +468,51 @@ async function pollOneJob(doc, now, falKeyValue) {
     const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
     const file = storage.bucket().file(outputPath);
     await file.save(videoBuffer, { contentType: "video/mp4" });
-    const [downloadUrl] = await file.getSignedUrl({
+    const [url] = await file.getSignedUrl({
       action: "read",
       expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7日間
     });
+    downloadUrl = url;
+  } catch (err) {
+    logger.error("空を動かす: 結果取得/保存に失敗（一時的異常として扱う）", { jobId, uid, error: err.message });
+    if (timedOut) {
+      await failJob(jobRef, uid, "downstream_unavailable", err.message);
+    } else {
+      await jobRef.update({ pollAttempts: FieldValue.increment(1) }).catch(() => {});
+    }
+    return;
+  }
 
-    await jobRef.update({
-      status: "completed",
-      videoURL: downloadUrl,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+  // --- ここから先で status="completed" を確定する。以降（入力ファイル削除・完了通知）が
+  //     失敗しても job を failed に巻き戻さない（terminal状態からの再遷移をしない）。 ---
+  await jobRef.update({
+    status: "completed",
+    videoURL: downloadUrl,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  logger.info("空を動かす: 完了", { jobId, uid, falRequestId });
 
-    // 入力3ファイル（source/sky_mask/ground_mask）を削除（output.mp4は残す）。
-    await Promise.all(
-      ["source.jpg", "sky_mask.png", "ground_mask.png"].map((name) =>
-        storage
-          .bucket()
-          .file(`livingSky/${uid}/${jobId}/${name}`)
-          .delete()
-          .catch((e) => logger.warn("空を動かす: 一時ファイル削除失敗", { jobId, name, error: e.message }))
-      )
-    );
+  // 入力3ファイル（source/sky_mask/ground_mask）を削除（output.mp4は残す）。best-effort。
+  await deleteJobInputFiles(uid, jobId);
 
+  // 完了プッシュ通知もbest-effort（失敗してもjob状態には影響させない）。
+  try {
     await sendSkyMotionNotification(
       uid,
       { title: "そらもよう", body: "空を動かす動画が完成しました" },
       { type: "livingSkyCompleted", jobId }
     );
-    logger.info("空を動かす: 完了", { jobId, uid, falRequestId });
   } catch (err) {
-    logger.error("空を動かす: 結果取得/保存に失敗", { jobId, uid, error: err.message });
-    await failJob(jobRef, uid, "downstream_unavailable", err.message);
+    logger.warn("空を動かす: 完了通知の送信に失敗しました（job状態には影響しません）", { jobId, uid, error: err.message });
   }
 }
 
-/** ジョブを失敗にし、予約を返金し、失敗プッシュ通知を送る。 */
+/**
+ * ジョブを失敗にし、予約を返金し、入力ファイルを削除し、失敗プッシュ通知を送る。
+ * このヘルパーが呼ばれる時点で reserveAndClaimJob() による予約は必ず成立している
+ * （submit_failed/timeout/downstream_unavailable はいずれも予約成立後にしか起こらない経路）。
+ * 通知はbest-effort（失敗してもjob状態の更新自体には影響させない）。
+ */
 async function failJob(jobRef, uid, errorCode, errorMessage) {
   await refundUsage(uid);
   await jobRef.update({
@@ -415,9 +521,14 @@ async function failJob(jobRef, uid, errorCode, errorMessage) {
     error: errorMessage,
     updatedAt: FieldValue.serverTimestamp(),
   });
-  await sendSkyMotionNotification(
-    uid,
-    { title: "そらもよう", body: "空を動かす動画の生成に失敗しました" },
-    { type: "livingSkyFailed", errorCode }
-  );
+  await deleteJobInputFiles(uid, jobRef.id);
+  try {
+    await sendSkyMotionNotification(
+      uid,
+      { title: "そらもよう", body: "空を動かす動画の生成に失敗しました" },
+      { type: "livingSkyFailed", errorCode }
+    );
+  } catch (err) {
+    logger.warn("空を動かす: 失敗通知の送信に失敗しました", { uid, errorCode, error: err.message });
+  }
 }

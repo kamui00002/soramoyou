@@ -19,17 +19,27 @@
 
 [Cloud Functions（別担当）]
   4. onDocumentCreated(livingSkyJobs/{jobId}) トリガーで受信
-  5. livingSkyUsage/{uid} をトランザクションで reserve（予約）
-  6. fal.ai Kling API へ submit → falRequestId を保存 → status="submitted"
-  7. ポーリングで完了を待つ → mp4 を Storage の
+  5. allowlist（custom claim `skyMotionBeta==true`）を Admin SDK 経由で再検証
+     （多層防御。firestore.rules は create 時点のトークンしか見ないため）
+  6. livingSkyUsage/{uid} の reserve（予約）と job の status="pending"→"submitting" claim を
+     単一トランザクションで実施（at-least-once 再配信対策も兼ねる）
+  7. fal.ai Kling API へ submit → falRequestId・submittedAt を保存 → status="submitted"
+  8. ポーリング（submittedAt 基準でタイムアウト判定）で完了を待つ → mp4 を Storage の
      livingSky/{uid}/{jobId}/output.mp4 に書き込み
-  8. status="completed"（videoURL設定）または status="failed"（error設定・reservedCountをrefund）
+  9. status="completed"（videoURL設定。以降は巻き戻さない）または
+     status="failed"（error設定・reservedCountをrefund・入力ファイル削除）
 ```
 
 - クライアントが書けるのは **画像3枚のアップロード** と **status="pending" の初期ドキュメント作成のみ**。
-  以降の状態遷移（submitted/completed/failed・falRequestId・videoURL 等）は **Cloud Functions（Admin SDK）専用**。
+  以降の状態遷移（submitting/submitted/completed/failed・falRequestId・videoURL 等）は
+  **Cloud Functions（Admin SDK）専用**。
   Admin SDK は Firestore/Storage セキュリティルールをバイパスするため、client からの
   `update`/`write` を一律 `false` にしても実装上の障害にはならない（`firestore.rules` / `storage.rules` 参照）。
+- **allowlist（custom claim `skyMotionBeta==true`）**: この機能はDEBUG限定E2E検証用だが、
+  rules/Functions自体は本番デプロイされ全認証ユーザー（匿名認証・セルフサインアップ含む）に
+  開いてしまうため、開発者 allowlist で締めるのが根本対策。`firestore.rules`（job create）・
+  `storage.rules`（入力3ファイルの write）の両方で claim を要求し、Cloud Functions側でも
+  `isBetaAllowed()`（Admin SDK `auth.getUser(uid).customClaims`）で再検証する（多層防御）。
 
 ---
 
@@ -37,25 +47,31 @@
 
 | フィールド | 型 | 設定者 | 説明 |
 |---|---|---|---|
-| `id` | string | client | doc ID と一致 |
+| `id` | string | client | doc ID と一致（rules で強制） |
 | `userId` | string | client | 所有者（`request.auth.uid`） |
-| `status` | string | 両方 | `pending` → `submitted` → `completed` / `failed`（client が書けるのは初期 `pending` のみ） |
-| `sourcePath` | string | client | Storage パス（`livingSky/{uid}/{jobId}/source.jpg`） |
-| `skyMaskPath` | string | client | Storage パス（`livingSky/{uid}/{jobId}/sky_mask.png`） |
-| `groundMaskPath` | string | client | Storage パス（`livingSky/{uid}/{jobId}/ground_mask.png`） |
+| `status` | string | 両方 | `pending` → `submitting` → `submitted` → `completed` / `failed`（client が書けるのは初期 `pending` のみ。`submitting` は予約成立と同一トランザクションで claim される中間状態） |
+| `sourcePath` | string | client | Storage パス（`livingSky/{uid}/{jobId}/source.jpg`。rules で厳密一致を強制） |
+| `skyMaskPath` | string | client | Storage パス（`livingSky/{uid}/{jobId}/sky_mask.png`。rules で厳密一致を強制） |
+| `groundMaskPath` | string | client | Storage パス（`livingSky/{uid}/{jobId}/ground_mask.png`。rules で厳密一致を強制） |
 | `aspectRatio` | string | client | `"16:9"` \| `"9:16"` \| `"1:1"`（近似選択済み。実寸は §4 参照） |
 | `trajectory` | array&lt;{x:int, y:int}&gt; | client | sky_mask 重心 → +40px 水平の2点（ピクセル座標） |
 | `falRequestId` | string? | function | submit 成功後に設定 |
 | `videoURL` | string? | function | 完成後の Storage ダウンロードURL |
-| `retryCount` | int | function | submit 段階のリトライ回数 |
+| `submittedAt` | Timestamp? | function | fal.ai へのsubmit成功時に `serverTimestamp()` で記録。**pollのタイムアウト判定はこれを基準にする**（`createdAt` はclientが設定するため偽装可能。基準にしない） |
 | `pollAttempts` | int | function | ポーラーの試行回数 |
-| `errorCode` | string? | function | `quota_exceeded` \| `submit_failed` \| `downstream_unavailable` \| `timeout` 等 |
+| `errorCode` | string? | function | `forbidden` \| `quota_exceeded` \| `submit_failed` \| `downstream_unavailable` \| `timeout` 等 |
 | `error` | string? | function | エラーの人間可読メッセージ |
-| `createdAt` | Timestamp | 両方 | client が作成時に設定（`serverTimestamp()`） |
+| `createdAt` | Timestamp | 両方 | client が作成時に設定（`serverTimestamp()`。rules で `request.time` と一致必須＝偽装防止） |
 | `updatedAt` | Timestamp | 両方 | function が状態遷移のたびに更新 |
 
+> ⚠️ `retryCount` フィールドは廃止（未実装のため削除。Cloud Functions は書いておらず常に0の死にフィールドだった）。submit段階のリトライ回数を確認したい場合はログ（`fal submit失敗`）を参照する。
+
 **セキュリティルール（`firestore.rules` に実装済み）**:
-- `create`: 認証済み・`userId == request.auth.uid`・`status == 'pending'`・`falRequestId`/`videoURL` を含まない
+- `create`: 認証済み・**custom claim `skyMotionBeta == true`（allowlist）**・
+  `userId == request.auth.uid`・`status == 'pending'`・`id == jobId`（doc ID一致）・
+  `createdAt == request.time`（serverTimestamp偽装防止）・
+  `sourcePath`/`skyMaskPath`/`groundMaskPath` が `livingSky/{uid}/{jobId}/{既定ファイル名}` と厳密一致・
+  `falRequestId`/`videoURL` を含まない
 - `read`: `resource.data.userId == request.auth.uid`（owner のみ）
 - `update`, `delete`: 一律 `false`
 
@@ -74,10 +90,16 @@
 （ドキュメントが存在しない・`day` が古い、いずれも「未予約」として扱う）。
 
 **reserve-on-create + refund-on-failure**:
-1. ジョブ作成トリガー受信時、トランザクションで `reservedCount` を読み、
-   `reservedCount >= 上限(3)` なら `status="failed"` / `errorCode="quota_exceeded"` にして **fal.ai を呼び出さない**（非課金）
-   予約可能なら `reservedCount += 1` を書き込んでから fal.ai を呼ぶ
-2. fal.ai 呼び出しが失敗（submit失敗・downstream不可・timeout）した場合、
+1. ジョブ作成トリガー受信時、まず allowlist（custom claim `skyMotionBeta`）を
+   Admin SDK 経由で再検証する（不許可なら `status="failed"` / `errorCode="forbidden"` にして
+   **fal.ai を呼び出さない**。予約も行わない）
+2. 許可されていれば、`livingSkyUsage/{uid}` の予約とジョブの `status`
+   （`pending`→`submitting`）の claim を**単一トランザクション**で行う。トランザクション内で
+   job の最新状態をライブ読み取りし、`pending` でなければ何もしない（at-least-once 再配信対策）。
+   `reservedCount >= 上限(3)` なら `status="failed"` / `errorCode="quota_exceeded"` にして
+   **fal.ai を呼び出さない**（非課金）。予約可能なら `reservedCount += 1` を書き込み、
+   job を `status="submitting"` にしてから fal.ai を呼ぶ
+3. fal.ai 呼び出しが失敗（submit失敗・downstream不可・timeout）した場合、
    同トランザクション方式で `reservedCount -= 1` して返金する（成功時は返金しない）
 
 **セキュリティルール（`firestore.rules` に実装済み）**:
@@ -100,8 +122,11 @@
 
 **セキュリティルール（`storage.rules` に実装済み）**:
 - `read`: owner のみ（画像3枚＋完成後の `output.mp4` すべて）
-- `write`: owner ＋ `isImageFile()` ＋ `isValidSize()`（既存の 5MB 上限ヘルパーを流用。mp4 は
-  `isImageFile()` を満たさないため client 経由では原理的に書けない＝Functions 専用パスと一致）
+- `write`: owner ＋ **custom claim `skyMotionBeta == true`（allowlist）** ＋
+  `fileName in ['source.jpg', 'sky_mask.png', 'ground_mask.png']`（ホワイトリスト）＋
+  `isImageFile()` ＋ `isValidSize()`（既存の 5MB 上限ヘルパーを流用）。
+  `fileName` ホワイトリストにより `output.mp4` の client write は rules 上でも原理的に
+  到達不能（Cloud Functions が Admin SDK で rules をバイパスして書く専用パスと一致）
 
 ---
 
@@ -135,15 +160,26 @@ Cloud Functions 実装担当が **1箇所（設定ファイル or 定数モジ�
 |---|---|---|
 | 1日の上限 | 3 | `livingSkyUsage.reservedCount` の上限 |
 | ドリフト | +40px | trajectory の水平移動量 |
-| poll のタイムアウト | 20分 | ポーリングを打ち切って `status="failed"` / `errorCode="timeout"` にするまでの時間 |
+| poll のタイムアウト | 20分 | `submittedAt` からの経過時間がこれを超えたらポーリングを打ち切って `status="failed"` / `errorCode="timeout"` にする（`createdAt` は基準にしない） |
 | submit のリトライ回数 | 1回 | fal.ai submit 失敗時の再試行回数 |
 
 ---
 
 ## 7. 本ドキュメントのスコープ外（別担当）
 
-- Cloud Functions 本体（`functions/skyMotion.js` 相当）: トリガー実装・fal.ai 連携・ポーリング・
-  トランザクション予約/返金ロジック
+- Cloud Functions 本体（`functions/skyMotion.js` 相当）: トリガー実装・allowlist再検証・fal.ai 連携・
+  ポーリング・トランザクション予約/返金ロジック
 - Swift クライアント本体: マスク2値化・アップロード・snapshot listener・UI
 - DEBUG限定導線（本番導線化はしない。既存 Metal版 Living Sky が本番導線→撤収した経緯があるため、
   本機能も検証が済むまで DEBUG ゲート必須）
+
+### 既知の制限（公開β送り・今は許容）
+
+- **`submitting` で止まったジョブは自動タイムアウトしない**: `pollSkyMotionJobs` は
+  `status == "submitted"` のみをクエリするため、Cloud Functions が
+  `reserveAndClaimJob()` のトランザクションをコミットした直後（`status="submitting"`）
+  〜 fal.ai への submit 完了前にクラッシュ/再起動すると、そのジョブは `submitted` に
+  到達せず poll 対象にも入らず、無期限に `submitting` のまま残る（client の
+  snapshot listener も終端状態を待ち続けタイムアウトしない）。低頻度の DEBUG限定機能
+  としては許容し、完全な per-job lease／`submitting` の直接タイムアウト監視は
+  公開β送り（本ドキュメント冒頭の「修正項目」⚪スコープ外を参照）。

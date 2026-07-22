@@ -162,9 +162,10 @@ final class SkyMotionAssetPreparer {
         // 空が1画素も検出できない場合（例: 完全な地上写真）は画像中心へフォールバックする。
         // trajectory を欠落させて Functions 側の処理を止めるより、中心を使って
         // 「ほぼ動かない」動画になる方が DEBUG 検証としては実用的なため。
-        let centroid = Self.centroidPixel(binaryBytes: skyBytes, width: width, height: height)
-            ?? CGPoint(x: CGFloat(width) / 2, y: CGFloat(height) / 2)
-        if Self.centroidPixel(binaryBytes: skyBytes, width: width, height: height) == nil {
+        // ⚠️ O(width*height) の走査なので、フォールバック判定用に2回呼ばず1回の結果を使い回す。
+        let detectedCentroid = Self.centroidPixel(binaryBytes: skyBytes, width: width, height: height)
+        let centroid = detectedCentroid ?? CGPoint(x: CGFloat(width) / 2, y: CGFloat(height) / 2)
+        if detectedCentroid == nil {
             Self.logger.warning("空マスクが空（0画素）のため画像中心へフォールバックした")
         }
         let trajectory = [centroid, CGPoint(x: centroid.x + Self.driftPixelsRight, y: centroid.y)]

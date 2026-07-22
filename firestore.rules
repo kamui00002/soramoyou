@@ -391,8 +391,12 @@ service cloud.firestore {
 
     // ============================================
     // LivingSkyJobs collection (空を動かすβ・非同期ジョブ) ⭐️
-    // DEBUG限定E2E検証用。クライアントは pending 状態での作成のみ可能。
-    // status遷移（submitted/completed/failed）や falRequestId/videoURL の
+    // DEBUG限定E2E検証用。ただし rules/Functions 自体は本番デプロイされ全認証ユーザーに
+    // 開くため、匿名認証・セルフサインアップ経由の悪用を防ぐ根本対策として
+    // custom claim `skyMotionBeta==true` の allowlist で create を締める
+    // （Cloud Functions 側でも Admin SDK 経由で多層防御として再検証する。functions/skyMotion.js 参照）。
+    // クライアントは pending 状態での作成のみ可能。
+    // status遷移（submitting/submitted/completed/failed）や falRequestId/videoURL の
     // 書き込みは Cloud Functions（Admin SDK）専用のため、client からの
     // update/delete は一律禁止する（Admin SDK は rules をバイパスするため
     // 実害はない）。
@@ -402,11 +406,24 @@ service cloud.firestore {
       allow read: if isAuthenticated()
                   && resource.data.userId == request.auth.uid;
 
-      // 作成: 認証済みユーザーが自分のIDで、status=pending の初期状態のみ
-      // サーバー専用フィールド（falRequestId/videoURL）は初期作成時に含めさせない
+      // 作成: allowlistされた認証済みユーザーが自分のIDで、status=pending の初期状態のみ。
+      // サーバー専用フィールド（falRequestId/videoURL）は初期作成時に含めさせない。
+      // id はドキュメントID（jobId）と一致必須、createdAt は serverTimestamp() 必須（偽装防止）。
+      // sourcePath/skyMaskPath/groundMaskPath は Storage 側のパス規約
+      // （livingSky/{uid}/{jobId}/{fileName}）と厳密一致させ、他ユーザー/他ジョブの
+      // Storageオブジェクトを誤って（あるいは意図的に）参照させない。
       allow create: if isAuthenticated()
+                    && request.auth.token.skyMotionBeta == true
                     && request.resource.data.userId == request.auth.uid
                     && request.resource.data.status == 'pending'
+                    && request.resource.data.id == jobId
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.sourcePath
+                       == 'livingSky/' + request.auth.uid + '/' + jobId + '/source.jpg'
+                    && request.resource.data.skyMaskPath
+                       == 'livingSky/' + request.auth.uid + '/' + jobId + '/sky_mask.png'
+                    && request.resource.data.groundMaskPath
+                       == 'livingSky/' + request.auth.uid + '/' + jobId + '/ground_mask.png'
                     && !request.resource.data.keys().hasAny(['falRequestId', 'videoURL']);
 
       // 更新・削除は不可（状態遷移は Cloud Functions 専用）
