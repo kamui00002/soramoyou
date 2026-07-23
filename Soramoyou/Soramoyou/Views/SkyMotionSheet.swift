@@ -15,7 +15,8 @@
 //
 // スコープ: DEBUG限定のE2E検証（フェーズ2 UI導線）。本番導線化はしない
 //   （呼び出し元 `EditView` 側で `#if DEBUG` ゲート必須。設計書§7）。
-//   同意画面は今回スコープ外（DEBUG・自分の写真のみで検証するため）。
+//   フェーズB第一歩として「初回の写真送信同意ゲート」を実装済み（下記 Consent 節）。
+//   allowlist ゲート（DEBUG or skyMotionBeta claim）自体は変更なし・公開ゲート解除はフェーズC。
 //   スライダー等のパラメータUIも持たない（PoC固定レシピ。マスク・軌跡・aspect比は
 //   `SkyMotionAssetPreparer` が自動算出する）。
 
@@ -80,6 +81,15 @@ struct SkyMotionSheet: View {
     // MARK: - State
 
     @State private var state: SkyMotionSheetState = .idle
+    /// 初回の写真送信同意シートの表示フラグ。
+    /// `hasConsentedSkyMotionUpload` が false のまま「動かす」が押されたときに true にする
+    /// （`WhatsNewContent` 等の永続化フラグ＋一時的な表示フラグの組み合わせと同じ流儀）。
+    @State private var showingConsentSheet = false
+    /// 「写真を海外AIサービス(fal.ai)へ送信する」ことへの同意済みフラグ。
+    /// 一度同意すれば以後は確認なしで即 `startPipeline()` する（App Store 提出向けの
+    /// 公開β運用を見据え、UserDefaults に永続化して端末をまたいでは再確認する設計）。
+    /// キー命名は `WhatsNewContent` の `hasSeenLivingSkyCoachMarkKey` 等に倣う。
+    @AppStorage("hasConsentedSkyMotionUpload") private var hasConsentedSkyMotionUpload = false
     /// パイプライン全体（準備 → アップロード → 待機 → DL）を持つ Task。
     /// シートを閉じたら `.onDisappear` で `cancel()` する（`LivingSkySheet.exportTask` と同じ流儀）。
     @State private var pipelineTask: Task<Void, Never>?
@@ -148,6 +158,24 @@ struct SkyMotionSheet: View {
                 Text(saveErrorMessage)
             }
         }
+        // 初回の写真送信同意シート。「動かす」タップ時に `hasConsentedSkyMotionUpload == false`
+        // なら生成を始めずここを先に出す（`requestConsentThenStartPipeline()` 参照）。
+        .sheet(isPresented: $showingConsentSheet) {
+            SkyMotionConsentView(
+                onAgree: {
+                    hasConsentedSkyMotionUpload = true
+                    LoggingService.shared.logEvent("sky_motion_consent_agreed", parameters: nil)
+                    showingConsentSheet = false
+                    startPipeline()
+                },
+                onCancel: {
+                    showingConsentSheet = false
+                }
+            )
+            .onAppear {
+                LoggingService.shared.logEvent("sky_motion_consent_shown", parameters: nil)
+            }
+        }
     }
 
     // MARK: - Content（状態ごとの分岐）
@@ -196,7 +224,7 @@ struct SkyMotionSheet: View {
                 .padding(.horizontal, 32)
             Spacer()
             Button {
-                startPipeline()
+                requestConsentThenStartPipeline()
             } label: {
                 Text("動かす")
                     .font(.subheadline.weight(.semibold))
@@ -374,6 +402,19 @@ struct SkyMotionSheet: View {
         }
     }
 
+    // MARK: - 同意ゲート
+
+    /// 「動かす」タップの入口。初回（`hasConsentedSkyMotionUpload == false`）は生成を始めず、
+    /// 先に `SkyMotionConsentView` を表示して明示同意を取る。同意済みなら従来どおり即座に
+    /// `startPipeline()` する（毎回確認すると UX を損なうため、同意は端末に永続化）。
+    private func requestConsentThenStartPipeline() {
+        guard hasConsentedSkyMotionUpload else {
+            showingConsentSheet = true
+            return
+        }
+        startPipeline()
+    }
+
     // MARK: - パイプライン本体
 
     /// 「動かす」タップから、準備 → アップロード → ジョブ作成 → 完了待機 → 動画DL までを1つの
@@ -541,6 +582,112 @@ struct SkyMotionSheet: View {
                 LoggingService.shared.logErrorEvent(error, context: "sky_motion_save", category: .systemError)
                 saveErrorMessage = error.userFriendlyMessage
             }
+        }
+    }
+}
+
+// MARK: - Consent View（初回の写真送信同意）☀️
+
+/// 「空を動かす（Kling版）」で写真を海外AIサービス（fal.ai）へ送信することへの、初回同意画面。
+///
+/// - `SkyMotionSheet` から `hasConsentedSkyMotionUpload == false` のときだけ `.sheet` で提示される。
+///   同意すると `SkyMotionSheet` 側で `hasConsentedSkyMotionUpload = true` を永続化するため、
+///   このビュー自身は状態を持たず、同意/キャンセルのアクションを親に委譲するだけの純粋な表示。
+/// - デザインは `SettingsView.swift` の `PrivacyPolicyView`／`TermsOfServiceView`（黒背景+白文字の
+///   ダーク基調・"閉じる" ボタン）と `SkyMotionSheet` 自身のトーン（Capsule ボタン）を踏襲する。
+struct SkyMotionConsentView: View {
+    /// 「同意して続ける」タップ時に呼ばれる（フラグ永続化・計装・シート閉じる・生成開始は呼び出し元の責務）。
+    let onAgree: () -> Void
+    /// 「キャンセル」タップ時に呼ばれる（生成は開始しない）。
+    let onCancel: () -> Void
+
+    /// プライバシーポリシー全文シート（`SettingsView.swift` の `PrivacyPolicyView` を再利用）の表示フラグ。
+    @State private var showingPrivacyPolicy = false
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        Image(systemName: "paperplane.circle.fill")
+                            .font(.system(size: 40))
+                            .foregroundColor(.white.opacity(0.85))
+                            .frame(maxWidth: .infinity, alignment: .center)
+
+                        Text(
+                            "この機能は、あなたが選んだ空の写真を海外のAIサービス"
+                            + "（fal.ai／米国）に送信して、空が動く動画を生成します。"
+                            + "生成された動画はあなたの端末に保存されます。"
+                            + "生成には数分かかることがあります"
+                            + "（現在ベータ・1日3回まで）。"
+                        )
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                        // プライバシーポリシーへの導線。
+                        // 現状のプライバシーポリシー本文（SettingsView.swift）は「空を動かす」の
+                        // fal.ai 送信に未対応（メインが Phase B で更新予定）だが、導線自体は
+                        // 既存の在り処（アプリ内 PrivacyPolicyView）へ張っておく。
+                        Button {
+                            showingPrivacyPolicy = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text("プライバシーポリシーを見る")
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                            }
+                            .font(.subheadline.weight(.medium))
+                            .foregroundColor(.white.opacity(0.85))
+                            .underline()
+                        }
+                    }
+                    .padding(24)
+                }
+
+                VStack {
+                    Spacer()
+                    VStack(spacing: 12) {
+                        Button {
+                            onAgree()
+                        } label: {
+                            Text("同意して続ける")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.white)
+                                .padding(.vertical, 12)
+                                .frame(maxWidth: .infinity)
+                                .background(Capsule().fill(Color.white.opacity(0.2)))
+                        }
+
+                        Button {
+                            onCancel()
+                        } label: {
+                            Text("キャンセル")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 24)
+                }
+            }
+            .navigationTitle("写真の送信について")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color.black, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("閉じる") { onCancel() }
+                        .foregroundColor(.white)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+        .preferredColorScheme(.dark)
+        .sheet(isPresented: $showingPrivacyPolicy) {
+            PrivacyPolicyView()
         }
     }
 }
