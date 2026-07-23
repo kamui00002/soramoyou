@@ -75,7 +75,10 @@ const FAL_PROMPT =
   "perfectly fixed. Fixed camera, photorealistic, smooth continuous gentle " +
   "motion.";
 const FAL_NEGATIVE_PROMPT = "blur, distort, low quality, camera shake, ground movement, warping";
-const FAL_DURATION = "10"; // 秒（APIの型は string enum "5"/"10"）。10秒でループの繰り返し感を減らし"流れる"尺に。
+// ⚠️ 必ず "5"。kling-v1.5-pro の Motion Control（static_mask_url + dynamic_masks）は
+//    duration="10" だと fal が 422 feature_not_supported を返す（マスクは5秒専用）。
+//    2026-07-23 に "10" を試して2件失敗させた実績あり。地上固定に静止マスクを使う限り5秒固定。
+const FAL_DURATION = "5"; // 秒（APIの型は string enum "5"/"10"。マスク併用時は "5" のみ）
 const FAL_CFG_SCALE = 0.5;
 
 // ============================================================
@@ -238,6 +241,20 @@ function isPollTimedOut(startMillis, nowMillis, timeoutMs) {
   return nowMillis - startMillis >= limit;
 }
 
+/**
+ * HTTPステータスが「恒久的な失敗」（リトライしても無意味）かを判定する。
+ * 4xx（クライアントエラー）は基本恒久として即失敗させる。ただし 408(Request Timeout) /
+ * 429(Too Many Requests) は一時的なのでリトライ対象に残す。5xx・ネットワーク断は
+ * 呼び出し側で別途「一時的異常（タイムアウトまでリトライ）」として扱うため、ここでは false。
+ * 例: 422 feature_not_supported（duration=10 でマスク非対応）はこの関数で true になり、
+ *     20分リトライせず即 failJob される（2026-07-23 の20分待たせ事故の再発防止）。
+ * @param {number} status
+ * @returns {boolean}
+ */
+function isPermanentHttpStatus(status) {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
 // ============================================================
 // at-least-once 再配信対策（ジョブのclaim可否判定）
 // ============================================================
@@ -278,5 +295,6 @@ module.exports = {
   normalizeFalStatusPayload,
   extractVideoUrl,
   isPollTimedOut,
+  isPermanentHttpStatus,
   isClaimableJob,
 };

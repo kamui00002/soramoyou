@@ -242,6 +242,22 @@ test("buildFalResultUrl: 短いアプリ名前空間を使う（/status は付�
 });
 
 // ============================================================
+// isPermanentHttpStatus（恒久エラーは即失敗・2026-07-23 の20分待たせ事故の再発防止）
+// ============================================================
+
+test("isPermanentHttpStatus: 4xxは恒久(true)、408/429と5xx/2xxは一時(false)", () => {
+  assert.equal(core.isPermanentHttpStatus(422), true, "422 feature_not_supported は恒久");
+  assert.equal(core.isPermanentHttpStatus(400), true);
+  assert.equal(core.isPermanentHttpStatus(404), true);
+  assert.equal(core.isPermanentHttpStatus(403), true);
+  assert.equal(core.isPermanentHttpStatus(408), false, "408 Request Timeout は一時");
+  assert.equal(core.isPermanentHttpStatus(429), false, "429 Too Many Requests は一時");
+  assert.equal(core.isPermanentHttpStatus(500), false, "5xx は一時");
+  assert.equal(core.isPermanentHttpStatus(503), false);
+  assert.equal(core.isPermanentHttpStatus(200), false);
+});
+
+// ============================================================
 // fetchWithTimeout（ヘッダー到達後の body スタールも中断できるか）
 // 旧実装（手動 controller+clearTimeout）は fetch() 解決＝ヘッダー到達でタイマーを消し、
 // その後の body 読み取り（arrayBuffer/json）が無防備で永久ハングしていた（レビュー A）。

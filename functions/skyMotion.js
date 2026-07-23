@@ -428,9 +428,12 @@ async function pollOneJob(doc, now, falKeyValue) {
       FAL_API_TIMEOUT_MS
     );
     if (!res.ok) {
-      // 5xx等の一時的なdownstream不調。ここでは判定を進めず、タイムアウト経由の
-      // 回復（次回周期でのリトライ）に委ねる。ただしタイムアウト超過なら打ち切る。
-      if (timedOut) {
+      // 4xx（恒久エラー: 400/422/不正リクエスト等）はリトライしても無意味なので即失敗させる
+      // （2026-07-23 の「20分待たせて失敗」事故の再発防止）。
+      // 5xx等の一時的なdownstream不調はタイムアウト経由の回復（次回周期リトライ）に委ねる。
+      if (core.isPermanentHttpStatus(res.status)) {
+        await failJob(jobRef, uid, "downstream_unavailable", `poll status 恒久HTTPエラー: ${res.status}`);
+      } else if (timedOut) {
         await failJob(jobRef, uid, "timeout", `poll status HTTPエラー: ${res.status}`);
       } else {
         await jobRef.update({ pollAttempts: FieldValue.increment(1) }).catch(() => {});
@@ -483,6 +486,16 @@ async function pollOneJob(doc, now, falKeyValue) {
     );
     if (!resultRes.ok) {
       const body = await resultRes.text().catch(() => "");
+      // 4xx（例: 422 feature_not_supported = duration=10でマスク非対応）は恒久エラー。
+      // 20分リトライせず即失敗＋返金する（一時的異常の throw 経路には乗せない）。
+      if (core.isPermanentHttpStatus(resultRes.status)) {
+        await failJob(
+          jobRef, uid, "downstream_unavailable",
+          `fal result 恒久エラー: status=${resultRes.status} body=${body.slice(0, 300)}`
+        );
+        return;
+      }
+      // 5xx等は一時的異常として throw → 下の catch でリトライ/タイムアウト処理に委ねる。
       throw new Error(`fal result取得失敗: status=${resultRes.status} body=${body.slice(0, 300)}`);
     }
     const resultJson = await resultRes.json();
