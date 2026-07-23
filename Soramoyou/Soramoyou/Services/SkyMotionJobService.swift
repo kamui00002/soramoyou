@@ -96,20 +96,19 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
         let skyMaskPath = "\(basePath)/sky_mask.png"
         let groundMaskPath = "\(basePath)/ground_mask.png"
 
-        // 3ファイルを直列アップロード。戻り値のダウンロードURLは使わない
+        // 3ファイルを並列アップロード。戻り値のダウンロードURLは使わない
         // （Cloud Functions は Storage パスを直接参照して署名URLを発行するため。
         //   functions/skyMotion.js の getReadSignedUrl(job.sourcePath) 参照）。
-        // ⚠️ 並列 putDataAsync は GTMSessionFetcher 競合で
-        //    "Upload has already been finalized" 400 になるため直列化している。
-        try await uploadData(
+        async let sourceUpload: Void = uploadData(
             assets.sourceData, path: sourcePath, contentType: "image/jpeg", fileName: "source.jpg"
         )
-        try await uploadData(
+        async let skyMaskUpload: Void = uploadData(
             assets.skyMaskData, path: skyMaskPath, contentType: "image/png", fileName: "sky_mask.png"
         )
-        try await uploadData(
+        async let groundMaskUpload: Void = uploadData(
             assets.groundMaskData, path: groundMaskPath, contentType: "image/png", fileName: "ground_mask.png"
         )
+        _ = try await (sourceUpload, skyMaskUpload, groundMaskUpload)
 
         let trajectory = assets.trajectory.map { SkyMotionTrajectoryPoint(rounding: $0) }
         let job = SkyMotionJob(
@@ -144,31 +143,16 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
         let metadata = StorageMetadata()
         metadata.contentType = contentType
 
-        // putData（メモリ Data を直接送る方式）は GTMSessionFetcher が
-        // 「1回目のアップロードはサーバー側で finalize 成功したが、レスポンス遅延によって
-        //  リトライが発生し、2回目が already finalized で 400 になる」という既知の競合を
-        // 起こすことがある（シミュレータの遅延回線で誘発されやすい）。
-        // putFile（一時ファイル経由のアップロード）は内部のフェッチャ経路が異なり、
-        // この問題を回避できる見込みのため、Data を一時ファイルへ書き出してから送る。
-        let fileExtension = (fileName as NSString).pathExtension
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(fileExtension.isEmpty ? "tmp" : fileExtension)
-
-        defer {
-            try? FileManager.default.removeItem(at: tempURL)
-        }
-
+        // メモリ上の Data を直接アップロードする（putData）。
+        // ※ 以前は「並列 putData は GTMSessionFetcher 競合で 400 "already finalized" になる」
+        //   という仮説で putFile＋一時ファイル＋already-finalized フォールバック＋直列化を
+        //   入れていたが、実際の失敗の真因は custom claim(skyMotionBeta) の付与漏れ(403)で、
+        //   これらは赤いニシンだった（/review-full 指摘 E）。claim 修正後に putData＋並列へ戻した。
+        //   万一 400 "already finalized" が実機で再発したら putFile 版に戻す。
         do {
-            try data.write(to: tempURL)
-            _ = try await storageRef.putFileAsync(from: tempURL, metadata: metadata)
+            _ = try await storageRef.putDataAsync(data, metadata: metadata)
         } catch {
-            // アップロード失敗は握り潰さず必ず throw する。
-            // 以前は "Upload has already been finalized"(400) を成功扱いする分岐があったが、
-            // 実際の403の真因は custom claim(skyMotionBeta) の付与漏れで、E2E成功run では
-            // この分岐は一度も発火せず dead だった。code==400 全般を成功扱いにすると
-            // 壊れた/未アップロードのファイルを見逃し、下流の fal 404 として原因不明の失敗に
-            // 化けるため削除した（レビュー指摘: general / codex / simplifier）。
+            // アップロード失敗は握り潰さず必ず throw する（原因不明の下流 fal 404 化を防ぐ）。
             throw SkyMotionJobServiceError.uploadFailed(error)
         }
     }
