@@ -69,11 +69,13 @@ function fetchWithTimeout(url, options, timeoutMs) {
   return fetch(url, { ...(options || {}), signal: AbortSignal.timeout(timeoutMs) });
 }
 const FAL_PROMPT =
-  "Clouds drift slowly and naturally across the sky. The ground, buildings " +
-  "and horizon remain completely still. Fixed camera, photorealistic, " +
-  "gentle motion.";
+  "Clouds drift slowly and continuously across the sky in one steady " +
+  "direction, flowing smoothly and naturally like a calm river. The ground, " +
+  "buildings, utility poles and power lines remain completely still and " +
+  "perfectly fixed. Fixed camera, photorealistic, smooth continuous gentle " +
+  "motion.";
 const FAL_NEGATIVE_PROMPT = "blur, distort, low quality, camera shake, ground movement, warping";
-const FAL_DURATION = "5"; // 秒（APIの型は string enum "5"/"10"）
+const FAL_DURATION = "10"; // 秒（APIの型は string enum "5"/"10"）。10秒でループの繰り返し感を減らし"流れる"尺に。
 const FAL_CFG_SCALE = 0.5;
 
 // ============================================================
