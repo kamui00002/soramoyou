@@ -428,11 +428,14 @@ async function makeSeamlessLoop(inputBuffer, jobId) {
   try {
     await fsp.writeFile(inPath, inputBuffer);
 
-    // 1) スロー + 補間（30fps）。minterpolate が重いので子プロセスタイムアウトで守る。
+    // 1) スロー + 補間（30fps）。
+    //    ⚠️ mi_mode=mci(動き補償) は Cloud Function の弱いCPUで ~0.035x と激遅→90秒で
+    //       タイムアウトした（2026-07-23 実測）。mi_mode=blend(フレームブレンド・動き推定なし)は
+    //       ~17倍速く、ゆるい雲では十分滑らか。サーバー実行可能なのは blend。
     await runFfmpeg([
       "-y", "-i", inPath,
       "-filter:v",
-      `setpts=${LOOP_SLOW_FACTOR}*PTS,minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc:vsbmc=1`,
+      `setpts=${LOOP_SLOW_FACTOR}*PTS,minterpolate=fps=30:mi_mode=blend`,
       "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", slowPath,
     ]);
 
