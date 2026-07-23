@@ -223,3 +223,20 @@ test("isClaimableJob: jobDataがnull/undefined（ドキュメント消失等）�
   assert.equal(core.isClaimableJob(null), false);
   assert.equal(core.isClaimableJob(undefined), false);
 });
+
+// ============================================================
+// fal status/result URL（2026-07-22 B62B197C 事故の再発防止）
+// ============================================================
+
+test("buildFalStatusUrl: 短いアプリ名前空間を使う（フルパスだと405になる）", () => {
+  const url = core.buildFalStatusUrl("abc-123");
+  // submit のフルパス（.../v1.5/pro/image-to-video）ではなく owner/app まで。
+  assert.equal(url, "https://queue.fal.run/fal-ai/kling-video/requests/abc-123/status");
+  assert.ok(!url.includes("image-to-video"), "status URL にフルパスが混入してはいけない");
+});
+
+test("buildFalResultUrl: 短いアプリ名前空間を使う（/status は付かない）", () => {
+  const url = core.buildFalResultUrl("abc-123");
+  assert.equal(url, "https://queue.fal.run/fal-ai/kling-video/requests/abc-123");
+  assert.ok(!url.includes("image-to-video"), "result URL にフルパスが混入してはいけない");
+});

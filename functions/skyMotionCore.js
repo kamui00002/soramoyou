@@ -35,6 +35,22 @@ const SUBMIT_MAX_RETRIES = 1;
 
 const FAL_APP_ID = "fal-ai/kling-video/v1.5/pro/image-to-video";
 const FAL_QUEUE_BASE_URL = "https://queue.fal.run";
+// ⚠️ fal.ai キューAPIの仕様: submit はモデルのフルパス（FAL_APP_ID）へ POST するが、
+//    status/result（GET /requests/{id}/status ・ GET /requests/{id}）は
+//    「owner/app」までの短いアプリ名前空間に対して叩かなければならない。
+//    フルパスで status/result を叩くと 405 Method Not Allowed になり、fal の完了状態を
+//    一度も読めず全ジョブが偽タイムアウトする（2026-07-22 の B62B197C 事故の真因）。
+const FAL_STATUS_APP_ID = "fal-ai/kling-video";
+
+/** fal キューの status 問い合わせURL（短いアプリ名前空間を使う）。 */
+function buildFalStatusUrl(requestId) {
+  return `${FAL_QUEUE_BASE_URL}/${FAL_STATUS_APP_ID}/requests/${requestId}/status`;
+}
+
+/** fal キューの result 取得URL（短いアプリ名前空間を使う）。 */
+function buildFalResultUrl(requestId) {
+  return `${FAL_QUEUE_BASE_URL}/${FAL_STATUS_APP_ID}/requests/${requestId}`;
+}
 const FAL_PROMPT =
   "Clouds drift slowly and naturally across the sky. The ground, buildings " +
   "and horizon remain completely still. Fixed camera, photorealistic, " +
@@ -227,6 +243,9 @@ module.exports = {
   SUBMIT_MAX_RETRIES,
   FAL_APP_ID,
   FAL_QUEUE_BASE_URL,
+  FAL_STATUS_APP_ID,
+  buildFalStatusUrl,
+  buildFalResultUrl,
   FAL_PROMPT,
   FAL_NEGATIVE_PROMPT,
   FAL_DURATION,

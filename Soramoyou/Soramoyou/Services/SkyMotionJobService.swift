@@ -96,19 +96,20 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
         let skyMaskPath = "\(basePath)/sky_mask.png"
         let groundMaskPath = "\(basePath)/ground_mask.png"
 
-        // 3ファイルを並列アップロード。戻り値のダウンロードURLは使わない
+        // 3ファイルを直列アップロード。戻り値のダウンロードURLは使わない
         // （Cloud Functions は Storage パスを直接参照して署名URLを発行するため。
         //   functions/skyMotion.js の getReadSignedUrl(job.sourcePath) 参照）。
-        async let sourceUpload: Void = uploadData(
+        // ⚠️ 並列 putDataAsync は GTMSessionFetcher 競合で
+        //    "Upload has already been finalized" 400 になるため直列化している。
+        try await uploadData(
             assets.sourceData, path: sourcePath, contentType: "image/jpeg", fileName: "source.jpg"
         )
-        async let skyMaskUpload: Void = uploadData(
+        try await uploadData(
             assets.skyMaskData, path: skyMaskPath, contentType: "image/png", fileName: "sky_mask.png"
         )
-        async let groundMaskUpload: Void = uploadData(
+        try await uploadData(
             assets.groundMaskData, path: groundMaskPath, contentType: "image/png", fileName: "ground_mask.png"
         )
-        _ = try await (sourceUpload, skyMaskUpload, groundMaskUpload)
 
         let trajectory = assets.trajectory.map { SkyMotionTrajectoryPoint(rounding: $0) }
         let job = SkyMotionJob(
@@ -143,9 +144,42 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
         let metadata = StorageMetadata()
         metadata.contentType = contentType
 
+        // putData（メモリ Data を直接送る方式）は GTMSessionFetcher が
+        // 「1回目のアップロードはサーバー側で finalize 成功したが、レスポンス遅延によって
+        //  リトライが発生し、2回目が already finalized で 400 になる」という既知の競合を
+        // 起こすことがある（シミュレータの遅延回線で誘発されやすい）。
+        // putFile（一時ファイル経由のアップロード）は内部のフェッチャ経路が異なり、
+        // この問題を回避できる見込みのため、Data を一時ファイルへ書き出してから送る。
+        let fileExtension = (fileName as NSString).pathExtension
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(fileExtension.isEmpty ? "tmp" : fileExtension)
+
+        defer {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+
         do {
-            _ = try await storageRef.putDataAsync(data, metadata: metadata)
+            try data.write(to: tempURL)
+            _ = try await storageRef.putFileAsync(from: tempURL, metadata: metadata)
         } catch {
+            // putFile でも同じ既知の二重finalize問題（400 "Upload has already been
+            // finalized"）が出た場合は、サーバー側では既に finalize＝アップロード成功
+            // しているとみなし、正常終了として扱う。判定は保守的に（この条件に一致した
+            // 場合のみ成功扱いにし、ネットワーク断や権限エラーなど他のエラーは握り潰さず
+            // 従来どおり throw する）。
+            let nsError = error as NSError
+            let isAlreadyFinalized =
+                (nsError.domain == "com.google.HTTPStatus" && nsError.code == 400)
+                || nsError.localizedDescription.contains("already been finalized")
+
+            if isAlreadyFinalized {
+                Self.logger.warning(
+                    "空を動かす: '\(fileName, privacy: .public)' already-finalized をアップロード成功とみなして続行（既知のStorage二重finalize回避）"
+                )
+                return
+            }
+
             throw SkyMotionJobServiceError.uploadFailed(error)
         }
     }

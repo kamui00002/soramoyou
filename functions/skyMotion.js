@@ -49,6 +49,26 @@ const FAL_KEY = defineSecret("FAL_KEY");
 // 署名付きURLの有効期限（fal.ai がダウンロードし終えるまで十分な余裕を持たせる）。
 const SIGNED_URL_EXPIRES_MS = 60 * 60 * 1000; // 1時間
 
+// fal.ai への各 fetch のタイムアウト（ms）。Node20 のグローバル fetch は既定タイムアウトが
+// 無く、相手がハングすると無限に待つ。maxInstances:1 のポーラーでは1回のハングが
+// インスタンスを占有し続け、以降の周期起動が一切走らなくなる恐れがあるため必ず付ける。
+const FAL_API_TIMEOUT_MS = 25 * 1000; // submit / status / result（軽いJSON）
+const FAL_VIDEO_TIMEOUT_MS = 50 * 1000; // mp4 ダウンロード（数MB）
+
+/**
+ * タイムアウト付き fetch。timeoutMs を過ぎたら AbortError で reject する。
+ * 外部API（fal.ai）のハングで関数インスタンスが無限占有されるのを防ぐ。
+ */
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...(options || {}), signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ============================================================
 // 共通ヘルパー
 // ============================================================
@@ -216,14 +236,18 @@ async function refundUsage(uid) {
 
 /** fal.ai へ submit する（成功したら request_id を返す。失敗したら throw する）。 */
 async function submitToFal(payload, falKeyValue) {
-  const res = await fetch(`${core.FAL_QUEUE_BASE_URL}/${core.FAL_APP_ID}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Key ${falKeyValue}`,
-      "Content-Type": "application/json",
+  const res = await fetchWithTimeout(
+    `${core.FAL_QUEUE_BASE_URL}/${core.FAL_APP_ID}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Key ${falKeyValue}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  });
+    FAL_API_TIMEOUT_MS
+  );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`fal submit failed: status=${res.status} body=${body.slice(0, 300)}`);
@@ -396,9 +420,10 @@ async function pollOneJob(doc, now, falKeyValue) {
 
   let statusPayload;
   try {
-    const res = await fetch(
-      `${core.FAL_QUEUE_BASE_URL}/${core.FAL_APP_ID}/requests/${falRequestId}/status`,
-      { headers: { Authorization: `Key ${falKeyValue}` } }
+    const res = await fetchWithTimeout(
+      core.buildFalStatusUrl(falRequestId),
+      { headers: { Authorization: `Key ${falKeyValue}` } },
+      FAL_API_TIMEOUT_MS
     );
     if (!res.ok) {
       // 5xx等の一時的なdownstream不調。ここでは判定を進めず、タイムアウト経由の
@@ -449,9 +474,10 @@ async function pollOneJob(doc, now, falKeyValue) {
   //    fal側は既にCOMPLETEDなので、再試行時も同じ結果を取得できる想定）。
   let downloadUrl;
   try {
-    const resultRes = await fetch(
-      `${core.FAL_QUEUE_BASE_URL}/${core.FAL_APP_ID}/requests/${falRequestId}`,
-      { headers: { Authorization: `Key ${falKeyValue}` } }
+    const resultRes = await fetchWithTimeout(
+      core.buildFalResultUrl(falRequestId),
+      { headers: { Authorization: `Key ${falKeyValue}` } },
+      FAL_API_TIMEOUT_MS
     );
     if (!resultRes.ok) {
       const body = await resultRes.text().catch(() => "");
@@ -461,7 +487,7 @@ async function pollOneJob(doc, now, falKeyValue) {
     const videoUrl = core.extractVideoUrl(resultJson);
 
     const outputPath = `livingSky/${uid}/${jobId}/output.mp4`;
-    const videoRes = await fetch(videoUrl);
+    const videoRes = await fetchWithTimeout(videoUrl, {}, FAL_VIDEO_TIMEOUT_MS);
     if (!videoRes.ok) {
       throw new Error(`mp4ダウンロード失敗: status=${videoRes.status}`);
     }
