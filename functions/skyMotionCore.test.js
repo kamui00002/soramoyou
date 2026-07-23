@@ -240,3 +240,52 @@ test("buildFalResultUrl: 短いアプリ名前空間を使う（/status は付�
   assert.equal(url, "https://queue.fal.run/fal-ai/kling-video/requests/abc-123");
   assert.ok(!url.includes("image-to-video"), "result URL にフルパスが混入してはいけない");
 });
+
+// ============================================================
+// fetchWithTimeout（ヘッダー到達後の body スタールも中断できるか）
+// 旧実装（手動 controller+clearTimeout）は fetch() 解決＝ヘッダー到達でタイマーを消し、
+// その後の body 読み取り（arrayBuffer/json）が無防備で永久ハングしていた（レビュー A）。
+// この回帰テストは AbortSignal.timeout 版が body 段でも中断することを検証する。
+// ============================================================
+
+const http = require("node:http");
+
+test("fetchWithTimeout: ヘッダー到達後に body が止まっても timeoutMs で中断する", async () => {
+  // ヘッダーだけ返して body を送らない（res.end しない）＝body 転送スタールを再現。
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/octet-stream" });
+    // 意図的に body を書かず放置。
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+
+  // fetchWithTimeout(300ms) → arrayBuffer() を watchdog(2s) と race。
+  // 正しく中断されれば ~300ms で reject、旧実装なら arrayBuffer が無限ハングし watchdog が先着。
+  const bodyRead = (async () => {
+    const res = await core.fetchWithTimeout(url, {}, 300);
+    await res.arrayBuffer();
+  })();
+  bodyRead.catch(() => {}); // race で負けた側の遅延 reject を unhandled にしない
+
+  let watchdogTimer;
+  const watchdog = new Promise((_, reject) => {
+    watchdogTimer = setTimeout(() => reject(new Error("WATCHDOG")), 2000);
+  });
+
+  let abortedInTime = false;
+  try {
+    await Promise.race([bodyRead, watchdog]);
+  } catch (err) {
+    // fetchWithTimeout による中断なら WATCHDOG 以外のエラー（TimeoutError 等）になる。
+    abortedInTime = err.message !== "WATCHDOG";
+  } finally {
+    clearTimeout(watchdogTimer);
+    server.closeAllConnections?.();
+    server.close();
+  }
+
+  assert.ok(
+    abortedInTime,
+    "body スタール時は timeoutMs で reject されるべき（watchdog 先着＝ハング＝A の欠陥が再発）"
+  );
+});

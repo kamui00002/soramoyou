@@ -49,25 +49,13 @@ const FAL_KEY = defineSecret("FAL_KEY");
 // 署名付きURLの有効期限（fal.ai がダウンロードし終えるまで十分な余裕を持たせる）。
 const SIGNED_URL_EXPIRES_MS = 60 * 60 * 1000; // 1時間
 
-// fal.ai への各 fetch のタイムアウト（ms）。Node20 のグローバル fetch は既定タイムアウトが
-// 無く、相手がハングすると無限に待つ。maxInstances:1 のポーラーでは1回のハングが
-// インスタンスを占有し続け、以降の周期起動が一切走らなくなる恐れがあるため必ず付ける。
+// fal.ai への各 fetch のタイムアウト（ms）。core.fetchWithTimeout に渡す。
+// Node20 の global fetch は既定タイムアウトが無く、相手がハングすると無限に待つ。
+// maxInstances:1 のポーラーでは1回のハングがインスタンスを占有し続け、以降の周期起動が
+// 一切走らなくなる恐れがあるため必ず付ける。合計予算（status+result+動画DL）が関数の
+// timeoutSeconds を超えないように pollSkyMotionJobs 側で timeoutSeconds を明示している。
 const FAL_API_TIMEOUT_MS = 25 * 1000; // submit / status / result（軽いJSON）
 const FAL_VIDEO_TIMEOUT_MS = 50 * 1000; // mp4 ダウンロード（数MB）
-
-/**
- * タイムアウト付き fetch。timeoutMs を過ぎたら AbortError で reject する。
- * 外部API（fal.ai）のハングで関数インスタンスが無限占有されるのを防ぐ。
- */
-async function fetchWithTimeout(url, options, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...(options || {}), signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 // ============================================================
 // 共通ヘルパー
@@ -236,7 +224,7 @@ async function refundUsage(uid) {
 
 /** fal.ai へ submit する（成功したら request_id を返す。失敗したら throw する）。 */
 async function submitToFal(payload, falKeyValue) {
-  const res = await fetchWithTimeout(
+  const res = await core.fetchWithTimeout(
     `${core.FAL_QUEUE_BASE_URL}/${core.FAL_APP_ID}`,
     {
       method: "POST",
@@ -250,7 +238,11 @@ async function submitToFal(payload, falKeyValue) {
   );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`fal submit failed: status=${res.status} body=${body.slice(0, 300)}`);
+    // HTTPエラー応答＝fal はこのリクエストをキュー投入していない（サーバー生成は始まっていない）。
+    // この場合に限り再送は安全なので retryableSubmit を立てる（下の submitToFalWithRetry が参照）。
+    const err = new Error(`fal submit failed: status=${res.status} body=${body.slice(0, 300)}`);
+    err.retryableSubmit = true;
+    throw err;
   }
   const json = await res.json();
   if (!json || typeof json.request_id !== "string") {
@@ -267,7 +259,12 @@ async function submitToFalWithRetry(payload, falKeyValue) {
       return await submitToFal(payload, falKeyValue);
     } catch (err) {
       lastError = err;
-      logger.warn("fal submit失敗", { attempt, error: err.message });
+      logger.warn("fal submit失敗", { attempt, error: err.message, retryable: !!err.retryableSubmit });
+      // タイムアウト/ネットワーク断など「fal が受理したか不明」な失敗は再送しない。
+      // fal はクライアント中断後もサーバー側の生成を継続しうるため、再POST すると二重投入＝
+      // 二重課金になる（codex D-2）。再送してよいのは HTTPエラー応答（!res.ok・retryableSubmit）で
+      // fal が明確に受理していない場合のみ。
+      if (!err.retryableSubmit) throw err;
     }
   }
   throw lastError;
@@ -278,7 +275,9 @@ async function submitToFalWithRetry(payload, falKeyValue) {
 // ============================================================
 
 exports.onSkyMotionJobCreated = onDocumentCreated(
-  { document: "livingSkyJobs/{jobId}", secrets: [FAL_KEY] },
+  // timeoutSeconds は既定60sだと署名URL発行＋submit(最大25s)で余裕が乏しいため明示的に広げる。
+  // submit の fetch タイムアウト(FAL_API_TIMEOUT_MS=25s)が必ず関数タイムアウトより内側に収まる。
+  { document: "livingSkyJobs/{jobId}", secrets: [FAL_KEY], timeoutSeconds: 180 },
   async (event) => {
     const snapshot = event.data;
     if (!snapshot) {
@@ -375,7 +374,10 @@ exports.onSkyMotionJobCreated = onDocumentCreated(
 
 exports.pollSkyMotionJobs = onSchedule(
   // maxInstances: 1 で周期跨ぎの多重起動を防ぐ（簡易排他。完全な per-job lease は公開β送り）。
-  { schedule: "every 1 minutes", secrets: [FAL_KEY], maxInstances: 1 },
+  // timeoutSeconds は既定60sだと1件のREADYジョブで status(25s)+result(25s)+動画DL(50s)+Storage保存が
+  // 60sを超えて途中でSIGKILLされ得る（catch/failJob未到達→submittedのまま詰まる）ため広げる。
+  // 各fetchのタイムアウト(FAL_API_TIMEOUT_MS/FAL_VIDEO_TIMEOUT_MS)は必ずこの内側に収まる。
+  { schedule: "every 1 minutes", secrets: [FAL_KEY], maxInstances: 1, timeoutSeconds: 180 },
   async () => {
     const snap = await db
       .collection("livingSkyJobs")
@@ -420,7 +422,7 @@ async function pollOneJob(doc, now, falKeyValue) {
 
   let statusPayload;
   try {
-    const res = await fetchWithTimeout(
+    const res = await core.fetchWithTimeout(
       core.buildFalStatusUrl(falRequestId),
       { headers: { Authorization: `Key ${falKeyValue}` } },
       FAL_API_TIMEOUT_MS
@@ -474,7 +476,7 @@ async function pollOneJob(doc, now, falKeyValue) {
   //    fal側は既にCOMPLETEDなので、再試行時も同じ結果を取得できる想定）。
   let downloadUrl;
   try {
-    const resultRes = await fetchWithTimeout(
+    const resultRes = await core.fetchWithTimeout(
       core.buildFalResultUrl(falRequestId),
       { headers: { Authorization: `Key ${falKeyValue}` } },
       FAL_API_TIMEOUT_MS
@@ -487,7 +489,7 @@ async function pollOneJob(doc, now, falKeyValue) {
     const videoUrl = core.extractVideoUrl(resultJson);
 
     const outputPath = `livingSky/${uid}/${jobId}/output.mp4`;
-    const videoRes = await fetchWithTimeout(videoUrl, {}, FAL_VIDEO_TIMEOUT_MS);
+    const videoRes = await core.fetchWithTimeout(videoUrl, {}, FAL_VIDEO_TIMEOUT_MS);
     if (!videoRes.ok) {
       throw new Error(`mp4ダウンロード失敗: status=${videoRes.status}`);
     }

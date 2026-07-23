@@ -396,7 +396,15 @@ struct SkyMotionSheet: View {
                 // custom claim(skyMotionBeta) を付与直後のトークンに反映させるため強制リフレッシュする。
                 // 付与前に取得済みのトークンには claim が乗っておらず、Storage/Firestore rules の
                 // allowlist で 403 Permission denied になるため（E2E検証用の確実策）。
-                _ = try? await Auth.auth().currentUser?.getIDToken(forcingRefresh: true)
+                // 失敗しても致命的ではない（後続の upload が 403 で失敗し .failed にフォールバックする）が、
+                // 無言握り潰しにはせず理由をログに残す（403 の切り分けを可能にするため）。
+                do {
+                    _ = try await Auth.auth().currentUser?.getIDToken(forcingRefresh: true)
+                } catch {
+                    LoggingService.shared.logErrorEvent(
+                        error, context: "sky_motion_token_refresh", category: .systemError
+                    )
+                }
 
                 let assets = try await SkyMotionAssetPreparer().prepare(image: sourceImage)
                 try Task.checkCancellation()

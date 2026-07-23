@@ -163,23 +163,12 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
             try data.write(to: tempURL)
             _ = try await storageRef.putFileAsync(from: tempURL, metadata: metadata)
         } catch {
-            // putFile でも同じ既知の二重finalize問題（400 "Upload has already been
-            // finalized"）が出た場合は、サーバー側では既に finalize＝アップロード成功
-            // しているとみなし、正常終了として扱う。判定は保守的に（この条件に一致した
-            // 場合のみ成功扱いにし、ネットワーク断や権限エラーなど他のエラーは握り潰さず
-            // 従来どおり throw する）。
-            let nsError = error as NSError
-            let isAlreadyFinalized =
-                (nsError.domain == "com.google.HTTPStatus" && nsError.code == 400)
-                || nsError.localizedDescription.contains("already been finalized")
-
-            if isAlreadyFinalized {
-                Self.logger.warning(
-                    "空を動かす: '\(fileName, privacy: .public)' already-finalized をアップロード成功とみなして続行（既知のStorage二重finalize回避）"
-                )
-                return
-            }
-
+            // アップロード失敗は握り潰さず必ず throw する。
+            // 以前は "Upload has already been finalized"(400) を成功扱いする分岐があったが、
+            // 実際の403の真因は custom claim(skyMotionBeta) の付与漏れで、E2E成功run では
+            // この分岐は一度も発火せず dead だった。code==400 全般を成功扱いにすると
+            // 壊れた/未アップロードのファイルを見逃し、下流の fal 404 として原因不明の失敗に
+            // 化けるため削除した（レビュー指摘: general / codex / simplifier）。
             throw SkyMotionJobServiceError.uploadFailed(error)
         }
     }

@@ -51,6 +51,23 @@ function buildFalStatusUrl(requestId) {
 function buildFalResultUrl(requestId) {
   return `${FAL_QUEUE_BASE_URL}/${FAL_STATUS_APP_ID}/requests/${requestId}`;
 }
+
+/**
+ * タイムアウト付き fetch。timeoutMs を過ぎると TimeoutError で reject する。
+ * ⚠️ AbortSignal.timeout を使うのが要点。手動の AbortController+clearTimeout 方式だと
+ *    fetch() の解決（＝レスポンスヘッダー到達）時点でタイマーを消してしまい、その後の
+ *    body 読み取り（res.json()/res.arrayBuffer()）フェーズが無防備になる
+ *    （相手がヘッダーだけ返して body 転送をスタールさせると無限に待つ）。
+ *    AbortSignal.timeout はシグナルがレスポンスの生存期間中ずっと有効なため、
+ *    body 読み取り中にタイムアウトしても中断できる。Node20 の global 実装を使う。
+ * @param {string} url
+ * @param {object} [options] fetch のオプション（signal は上書きされる）
+ * @param {number} timeoutMs
+ * @returns {Promise<Response>}
+ */
+function fetchWithTimeout(url, options, timeoutMs) {
+  return fetch(url, { ...(options || {}), signal: AbortSignal.timeout(timeoutMs) });
+}
 const FAL_PROMPT =
   "Clouds drift slowly and naturally across the sky. The ground, buildings " +
   "and horizon remain completely still. Fixed camera, photorealistic, " +
@@ -246,6 +263,7 @@ module.exports = {
   FAL_STATUS_APP_ID,
   buildFalStatusUrl,
   buildFalResultUrl,
+  fetchWithTimeout,
   FAL_PROMPT,
   FAL_NEGATIVE_PROMPT,
   FAL_DURATION,
