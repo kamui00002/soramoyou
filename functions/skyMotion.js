@@ -38,6 +38,13 @@ const { getAuth } = require("firebase-admin/auth");
 
 const core = require("./skyMotionCore");
 
+const { execFile } = require("node:child_process");
+const os = require("node:os");
+const path = require("node:path");
+const fsp = require("node:fs/promises");
+const ffmpegPath = require("ffmpeg-static");
+const ffprobePath = require("ffprobe-static").path;
+
 // initializeApp() は index.js 側で1回だけ実行される（Admin SDK はアプリ単位でシングルトン）。
 const db = getFirestore();
 const storage = getStorage();
@@ -56,6 +63,14 @@ const SIGNED_URL_EXPIRES_MS = 60 * 60 * 1000; // 1時間
 // timeoutSeconds を超えないように pollSkyMotionJobs 側で timeoutSeconds を明示している。
 const FAL_API_TIMEOUT_MS = 25 * 1000; // submit / status / result（軽いJSON）
 const FAL_VIDEO_TIMEOUT_MS = 50 * 1000; // mp4 ダウンロード（数MB）
+
+// 「約10秒・一方向・継ぎ目なしループ」への変換パラメータ（ローカル実写検証で確定）。
+// 2.3倍スロー + minterpolate(補間で滑らかな30fps) → 一方向クロスフェードループ。
+const LOOP_SLOW_FACTOR = 2.3; // setpts 係数（5秒素材→約11.5秒スロー）
+const LOOP_XFADE_DURATION = 1; // クロスフェード秒数
+// ⚠️ minterpolate は重い。子プロセスに独自タイムアウトを設け、超過/失敗時は元の5秒mp4に
+//    フォールバックする（関数ごと SIGKILL される「詰まり」を防ぐ＝fetch と同じ設計思想）。
+const FFMPEG_TIMEOUT_MS = 90 * 1000;
 
 // ============================================================
 // 共通ヘルパー
@@ -369,15 +384,100 @@ exports.onSkyMotionJobCreated = onDocumentCreated(
 );
 
 // ============================================================
+// シームレスループ変換（ffmpeg / ffprobe を子プロセスで実行）
+// ============================================================
+
+/** ffprobe で動画の尺（秒）を返す。 */
+function probeDuration(file) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      ffprobePath,
+      ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file],
+      { timeout: 15000 },
+      (err, stdout) => (err ? reject(err) : resolve(parseFloat(String(stdout).trim())))
+    );
+  });
+}
+
+/** ffmpeg を子プロセスで実行する（FFMPEG_TIMEOUT_MS 超過で kill＝reject＝呼び出し側でフォールバック）。 */
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      ffmpegPath,
+      args,
+      { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
+}
+
+/**
+ * Kling の5秒mp4を「約10秒・一方向・継ぎ目なしループ」に変換して返す。
+ *  1) setpts で 2.3倍スロー + minterpolate で滑らかな30fpsに
+ *  2) 一方向クロスフェードループ（末尾を先頭に溶け込ませる。xfade offset は実尺から動的計算）
+ * ⚠️ 失敗/タイムアウト時は throw する（呼び出し側が元の5秒mp4で続行＝graceful degrade）。
+ * @param {Buffer} inputBuffer 元の mp4
+ * @param {string} jobId 一時ファイル名の衝突回避用
+ * @returns {Promise<Buffer>} 変換後の mp4
+ */
+async function makeSeamlessLoop(inputBuffer, jobId) {
+  const dir = os.tmpdir();
+  const inPath = path.join(dir, `sky_${jobId}_in.mp4`);
+  const slowPath = path.join(dir, `sky_${jobId}_slow.mp4`);
+  const outPath = path.join(dir, `sky_${jobId}_out.mp4`);
+  try {
+    await fsp.writeFile(inPath, inputBuffer);
+
+    // 1) スロー + 補間（30fps）。minterpolate が重いので子プロセスタイムアウトで守る。
+    await runFfmpeg([
+      "-y", "-i", inPath,
+      "-filter:v",
+      `setpts=${LOOP_SLOW_FACTOR}*PTS,minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc:vsbmc=1`,
+      "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", slowPath,
+    ]);
+
+    // 2) 一方向クロスフェードループ。main=先頭1秒を落とした本体、fade=先頭1秒。
+    //    末尾で fade をクロスフェードして先頭へ繋ぐ。xfade offset は「main尺 - D - マージン」で
+    //    動的計算（実測: マージン0.067は "Invalid argument"・0.6+で安定）。
+    const slowedDur = await probeDuration(slowPath);
+    const mainDur = slowedDur - LOOP_XFADE_DURATION; // trim=start=1 後の尺
+    const offset = Math.max(0, mainDur - LOOP_XFADE_DURATION - 0.6);
+    await runFfmpeg([
+      "-y", "-i", slowPath,
+      "-filter_complex",
+      `[0]trim=start=${LOOP_XFADE_DURATION},setpts=PTS-STARTPTS[main];` +
+      `[0]trim=end=${LOOP_XFADE_DURATION},setpts=PTS-STARTPTS[fade];` +
+      `[main][fade]xfade=transition=fade:duration=${LOOP_XFADE_DURATION}:offset=${offset.toFixed(2)}[v]`,
+      "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", outPath,
+    ]);
+
+    return await fsp.readFile(outPath);
+  } finally {
+    // 一時ファイルは best-effort で削除（/tmp は tmpfs＝メモリなので放置しない）。
+    await Promise.all(
+      [inPath, slowPath, outPath].map((p) => fsp.unlink(p).catch(() => {}))
+    );
+  }
+}
+
+// ============================================================
 // B. pollSkyMotionJobs — 1分毎に submitted ジョブを確認
 // ============================================================
 
 exports.pollSkyMotionJobs = onSchedule(
   // maxInstances: 1 で周期跨ぎの多重起動を防ぐ（簡易排他。完全な per-job lease は公開β送り）。
-  // timeoutSeconds は既定60sだと1件のREADYジョブで status(25s)+result(25s)+動画DL(50s)+Storage保存が
-  // 60sを超えて途中でSIGKILLされ得る（catch/failJob未到達→submittedのまま詰まる）ため広げる。
-  // 各fetchのタイムアウト(FAL_API_TIMEOUT_MS/FAL_VIDEO_TIMEOUT_MS)は必ずこの内側に収まる。
-  { schedule: "every 1 minutes", secrets: [FAL_KEY], maxInstances: 1, timeoutSeconds: 180 },
+  // timeoutSeconds/memory は「シームレスループ化(ffmpeg minterpolate)」を賄うため広げる:
+  //   - status(25s)+result(25s)+動画DL(50s)+ffmpeg(子プロセス最大90s)+Storage保存 が既定60sを超える。
+  //   - minterpolate は ~1GB メモリ + CPU を要するため 4GiB（gen2 は memory 増で vCPU も増える）。
+  //   - 各 fetch/ffmpeg の個別タイムアウトは必ずこの関数 timeoutSeconds の内側に収まる。
+  //   - maxInstances:1 のため ffmpeg 実行中は次周期が待つが、3回/日 のβ規模では許容。
+  {
+    schedule: "every 1 minutes",
+    secrets: [FAL_KEY],
+    maxInstances: 1,
+    timeoutSeconds: 300,
+    memory: "4GiB",
+  },
   async () => {
     const snap = await db
       .collection("livingSkyJobs")
@@ -506,7 +606,17 @@ async function pollOneJob(doc, now, falKeyValue) {
     if (!videoRes.ok) {
       throw new Error(`mp4ダウンロード失敗: status=${videoRes.status}`);
     }
-    const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+    let videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+    // Kling の5秒素材を「約10秒・一方向・継ぎ目なしループ」に変換する。
+    // ⚠️ ffmpeg 失敗/タイムアウト時は詰まらせず、元の5秒mp4で続行する（graceful degrade）。
+    try {
+      videoBuffer = await makeSeamlessLoop(videoBuffer, jobId);
+    } catch (loopErr) {
+      logger.warn("空を動かす: シームレスループ化に失敗、元の5秒mp4で続行", {
+        jobId,
+        error: loopErr.message,
+      });
+    }
     const file = storage.bucket().file(outputPath);
     await file.save(videoBuffer, { contentType: "video/mp4" });
     const [url] = await file.getSignedUrl({

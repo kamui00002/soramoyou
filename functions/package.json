@@ -13,6 +13,8 @@
     "logs": "firebase functions:log --project soramoyou-ios"
   },
   "dependencies": {
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
     "firebase-admin": "^12.6.0",
     "firebase-functions": "^6.0.1"
   }
