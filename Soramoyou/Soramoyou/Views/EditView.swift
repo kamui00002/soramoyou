@@ -37,9 +37,17 @@ struct EditView: View {
     /// Living Sky（空を動かす）プレビューシートの表示フラグ。
     /// 元々はプロトタイプ確認用に #if DEBUG 限定で使っていたが、本番導線化に伴い常時使用する。
     @State private var showLivingSkySheet = false
-    /// 「空を動かす（Kling版）」フェーズ2 UI導線の表示フラグ。
-    /// DEBUG限定のE2E検証用（本番導線化はしない。設計書: docs/sky-motion-design.md §7）。
+    /// 「空を動かす（Kling版）」フェーズ2 UI導線のシート表示フラグ。
     @State private var showSkyMotionSheet = false
+    /// 「空を動かす（Kling版）」導線を表示してよいか（allowlistゲート）。
+    /// DEBUG は常に true、Release/TestFlight は custom claim `skyMotionBeta` 保有者のみ true
+    /// （`.task` で `SkyMotionAccess.isEnabled()` を反映）。設計書: docs/sky-motion-design.md §7。
+    /// ＝ TestFlight 内部テストで許可済みアカウントだけが使える状態にする（公開はしない）。
+#if DEBUG
+    @State private var skyMotionEnabled = true
+#else
+    @State private var skyMotionEnabled = false
+#endif
     /// Living Sky 初回コーチマークの既読フラグ。
     /// `WhatsNewContent` の永続化キー群と同じ流儀で UserDefaults に永続化し、
     /// 一度タップ or ボタン押下で消したら以後表示しない。
@@ -100,14 +108,17 @@ struct EditView: View {
                         .overlay(alignment: .bottom) {
                             livingSkyOverlay
                         }
+#endif
                         // 「空を動かす（Kling版）」フェーズ2 UI導線。既存 Living Sky（Metal版）の
                         // ボタンは下部中央にあるため、被らないよう右上に配置する。
+                        // allowlist ゲート: DEBUG または skyMotionBeta claim 保有者のみ表示（TestFlight内部テスト用）。
                         .overlay(alignment: .topTrailing) {
-                            skyMotionDebugButton
-                                .padding(.top, 12)
-                                .padding(.trailing, 12)
+                            if skyMotionEnabled {
+                                skyMotionDebugButton
+                                    .padding(.top, 12)
+                                    .padding(.trailing, 12)
+                            }
                         }
-#endif
 
                     // 「あなたの定番」適用ボタン（柱1 v1）— 見つけやすいよう編集コントロール直上に配置
                     if viewModel.hasPersonalDefault {
@@ -212,15 +223,18 @@ struct EditView: View {
                 }
             }
 #endif
-            // 「空を動かす（Kling版）」フェーズ2 UI導線。DEBUG限定のE2E検証用
-            // （本番導線化はしない。設計書: docs/sky-motion-design.md §7）。
-#if DEBUG
+            // 「空を動かす（Kling版）」フェーズ2 UI導線。表示は allowlist ゲート（skyMotionEnabled）で
+            // 制御するため、シート修飾子自体は Release にも含める（showSkyMotionSheet はゲート済みの
+            // ボタンからしか true にならないので、未許可ユーザーに提示されることはない）。
             .sheet(isPresented: $showSkyMotionSheet) {
                 if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
                     SkyMotionSheet(sourceImage: sourceImage)
                 }
             }
-#endif
+            .task {
+                // Release/TestFlight では allowlist(claim skyMotionBeta) 保有者のみ導線を表示する。
+                skyMotionEnabled = await SkyMotionAccess.isEnabled()
+            }
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
                     viewModel.errorMessage = nil
@@ -1024,8 +1038,9 @@ struct EditView: View {
 
     /// `SkyMotionSheet` を開くボタン。既存 Living Sky（Metal版・`livingSkyButton`）とは別機能・
     /// 別ボタンとして画面右上に配置する（同トーンの半透明黒カプセルだが、混同しないよう
-    /// アイコン・ラベルを変える）。DEBUG限定のE2E検証用のため本番導線化はしない
-    /// （設計書: docs/sky-motion-design.md §7）。
+    /// アイコン・ラベルを変える）。表示は `skyMotionEnabled`（DEBUG or allowlist claim）で
+    /// ゲートする＝TestFlight内部テストで許可済みアカウントのみ。一般公開はしない
+    /// （プライバシー文言/同意UI/App Privacy label は公開β時の宿題。設計書: docs/sky-motion-design.md §7）。
     private var skyMotionDebugButton: some View {
         Button {
             showSkyMotionSheet = true
@@ -1042,7 +1057,7 @@ struct EditView: View {
             .clipShape(Capsule())
             .overlay(Capsule().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
         }
-        .accessibilityLabel("空を動かす（Kling版・DEBUG検証用）")
+        .accessibilityLabel("空を動かす（Kling版・β）")
     }
 
 }
