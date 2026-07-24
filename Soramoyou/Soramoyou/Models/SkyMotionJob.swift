@@ -32,6 +32,27 @@ enum SkyMotionJobStatus: String, CaseIterable {
     case failed
 }
 
+/// ループ動画の速さ（＝サーバー `skyMotion.js` の setpts スロー係数）。
+/// ⚠️ 1枚5秒素材のため「速さ」と「尺」は同じレバーの裏表: 速い=短い / ゆっくり=長い。
+///    そのため UI ではラベルに結果の尺を併記して結合を透明化する（独立2軸には見せない）。
+///    rawValue はそのまま `livingSkyJobs.loopSpeed` に書き、サーバーが係数へ写像する。
+enum SkyMotionSpeed: String, CaseIterable, Identifiable {
+    case fast
+    case normal
+    case slow
+
+    var id: String { rawValue }
+
+    /// ピッカー用ラベル（結果の尺を併記）。
+    var label: String {
+        switch self {
+        case .fast: return "速い（約6秒）"
+        case .normal: return "標準（約8秒）"
+        case .slow: return "ゆっくり（約11秒）"
+        }
+    }
+}
+
 /// trajectory 配列の1点（ピクセル座標・整数）。
 /// 設計書§4: sky_mask の重心 → 水平方向に +40px の2点。原点は画像左上・y下向き。
 struct SkyMotionTrajectoryPoint: Equatable {
@@ -77,6 +98,9 @@ struct SkyMotionJob: Identifiable {
     let groundMaskPath: String
     let aspectRatio: String
     let trajectory: [SkyMotionTrajectoryPoint]
+    /// ループ動画の速さ（`SkyMotionSpeed` の rawValue）。client が選んで書き、サーバーが係数へ写像する。
+    /// 旧ジョブ（欠落）はサーバー側で標準(2.0)にフォールバックするため読み込みは "normal" 既定。
+    let loopSpeed: String
     /// fal.ai へのsubmit成功後に Cloud Functions が設定する（client からは常に nil）
     let falRequestId: String?
     /// 完成後の Storage ダウンロードURL。Cloud Functions が設定する（client からは常に nil）
@@ -106,7 +130,8 @@ struct SkyMotionJob: Identifiable {
         skyMaskPath: String,
         groundMaskPath: String,
         aspectRatio: String,
-        trajectory: [SkyMotionTrajectoryPoint]
+        trajectory: [SkyMotionTrajectoryPoint],
+        loopSpeed: String = SkyMotionSpeed.normal.rawValue
     ) {
         self.id = id
         self.userId = userId
@@ -116,6 +141,7 @@ struct SkyMotionJob: Identifiable {
         self.groundMaskPath = groundMaskPath
         self.aspectRatio = aspectRatio
         self.trajectory = trajectory
+        self.loopSpeed = loopSpeed
         self.falRequestId = nil
         self.videoURL = nil
         self.pollAttempts = 0
@@ -142,6 +168,7 @@ struct SkyMotionJob: Identifiable {
             "groundMaskPath": groundMaskPath,
             "aspectRatio": aspectRatio,
             "trajectory": trajectory.map { $0.toFirestoreData() },
+            "loopSpeed": loopSpeed,
             "createdAt": FieldValue.serverTimestamp(),
             "updatedAt": FieldValue.serverTimestamp()
         ]
@@ -167,6 +194,7 @@ struct SkyMotionJob: Identifiable {
         self.skyMaskPath = documentData["skyMaskPath"] as? String ?? ""
         self.groundMaskPath = documentData["groundMaskPath"] as? String ?? ""
         self.aspectRatio = documentData["aspectRatio"] as? String ?? "1:1"
+        self.loopSpeed = documentData["loopSpeed"] as? String ?? SkyMotionSpeed.normal.rawValue
 
         if let trajectoryData = documentData["trajectory"] as? [[String: Any]] {
             let decodedPoints = trajectoryData.compactMap { SkyMotionTrajectoryPoint(from: $0) }

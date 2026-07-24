@@ -81,6 +81,15 @@ struct SkyMotionSheet: View {
     // MARK: - State
 
     @State private var state: SkyMotionSheetState = .idle
+    /// ユーザーが選んだループ動画の速さ（＝尺）。生成時に `createJob(loopSpeed:)` へ渡す。
+    /// ⚠️ 1枚5秒素材のため速さと尺は連動する（速い=短い / ゆっくり=長い・`SkyMotionSpeed` 参照）。既定は標準。
+    @State private var selectedSpeed: SkyMotionSpeed = .normal
+    /// 進行中/完成未保存のジョブID（UserDefaults 永続）。シートを閉じてもサーバーは生成を
+    /// 続けるため、これを残しておき、次にシートを開いた時 `resumeActiveJobIfNeeded()` で
+    /// 監視を張り直して結果を取り戻す（＝「閉じてもOK・完成後に開けば表示」の担保）。
+    /// ⚠️ シートを閉じた時にはクリアしない（再開の生命線）。クリアは `.saved`/`.failed`
+    /// 到達時のみ（`.onChange(of: state)` で一元化）。
+    @AppStorage("skyMotionActiveJobId") private var activeJobId = ""
     /// 初回の写真送信同意シートの表示フラグ。
     /// `hasConsentedSkyMotionUpload` が false のまま「動かす」が押されたときに true にする
     /// （`WhatsNewContent` 等の永続化フラグ＋一時的な表示フラグの組み合わせと同じ流儀）。
@@ -132,6 +141,21 @@ struct SkyMotionSheet: View {
         .preferredColorScheme(.dark)
         .onAppear {
             LoggingService.shared.logEvent("sky_motion_opened", parameters: nil)
+        }
+        .task {
+            // シートを開いた時、進行中/完成未保存のジョブが残っていれば監視を張り直す（再開）。
+            // これで「閉じてもOK・完成後に開けば結果を表示」が成立する。
+            resumeActiveJobIfNeeded()
+        }
+        .onChange(of: state) { newState in
+            // 保存完了/失敗に達したジョブは再開対象から外す（waiting/completed/downloadFailed は
+            // 再開可能なので保持）。⚠️ dismiss（シートを閉じる）では絶対にクリアしない＝再開の生命線。
+            switch newState {
+            case .saved, .failed:
+                activeJobId = ""
+            default:
+                break
+            }
         }
         .onDisappear {
             // パイプラインTaskをキャンセル（Firestore listener は observeJob の onTermination 経由で
@@ -223,6 +247,20 @@ struct SkyMotionSheet: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
             Spacer()
+            // 速さ（＝尺）の選択。1枚5秒素材のため速さと尺は連動する（ラベルに結果の尺を併記）。
+            VStack(spacing: 8) {
+                Text("動きの速さ")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+                Picker("動きの速さ", selection: $selectedSpeed) {
+                    ForEach(SkyMotionSpeed.allCases) { speed in
+                        Text(speed.label).tag(speed)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 4)
             Button {
                 requestConsentThenStartPipeline()
             } label: {
@@ -261,7 +299,11 @@ struct SkyMotionSheet: View {
         case .uploading:
             return "アップロードしています…"
         case .waiting:
-            return "空を動かしています…（数分かかることがあります）"
+            // ⚠️ この安心文言は `.waiting`（＝サーバーがジョブを所有した後）だけに出す。
+            //    preparing/uploading 中はクライアントのアップロードが走っており、閉じると
+            //    onDisappear で cancel され「続かない」ため、ここに出すと嘘になる。
+            return "空を動かしています…（数分かかることがあります）\n"
+                + "この画面を閉じても生成は続きます。完成後にもう一度開くと結果を表示します（通知でもお知らせします）。"
         default:
             return ""
         }
@@ -452,52 +494,20 @@ struct SkyMotionSheet: View {
 
                 state = .uploading
                 let jobService = SkyMotionJobService()
-                let jobId = try await jobService.createJob(assets: assets, userId: userId)
+                let jobId = try await jobService.createJob(
+                    assets: assets, userId: userId, loopSpeed: selectedSpeed.rawValue
+                )
                 try Task.checkCancellation()
 
+                // 以降サーバーがジョブを所有する。シートを閉じても生成は続くため、再開できるよう
+                // ID を永続化する（クリアは .saved/.failed 到達時のみ・onChange で一元化）。
+                activeJobId = jobId
                 state = .waiting
-                LoggingService.shared.logEvent("sky_motion_job_created", parameters: ["job_id": jobId])
+                LoggingService.shared.logEvent("sky_motion_job_created", parameters: [
+                    "job_id": jobId, "loop_speed": selectedSpeed.rawValue
+                ])
 
-                // `observeJob` は AsyncThrowingStream。listener がエラーを受けたら throwing で
-                // 終端するため（codex-9対応）、`for try await` で受けて下の catch に落とす。
-                for try await job in jobService.observeJob(jobId: jobId) {
-                    try Task.checkCancellation()
-
-                    switch job.status {
-                    case .pending, .submitting, .submitted:
-                        continue // waiting のまま様子見
-
-                    case .completed:
-                        guard let videoURLString = job.videoURL else {
-                            state = .failed(errorCode: nil)
-                            return
-                        }
-                        do {
-                            let localURL = try await downloadVideo(from: videoURLString)
-                            state = .completed(localVideoURL: localURL)
-                            LoggingService.shared.logEvent("sky_motion_video_ready", parameters: nil)
-                        } catch {
-                            if error is CancellationError || (error as? URLError)?.code == .cancelled {
-                                return
-                            }
-                            // サーバー側は既に completed（＝回数消費済み）のため、この失敗を
-                            // 通常の `.failed`（「回数は消費されていない」の文言）にすると
-                            // 事実と異なる（G5対応）。専用状態で「もう一度受信」導線を出す。
-                            LoggingService.shared.logErrorEvent(
-                                error, context: "sky_motion_download_after_completed", category: .systemError
-                            )
-                            state = .downloadFailed(videoURLString: videoURLString)
-                        }
-                        return
-
-                    case .failed:
-                        state = .failed(errorCode: job.errorCode)
-                        LoggingService.shared.logEvent("sky_motion_job_failed", parameters: [
-                            "error_code": job.errorCode ?? "unknown"
-                        ])
-                        return
-                    }
-                }
+                try await observeJobUntilTerminal(jobId: jobId, using: jobService)
             } catch {
                 // シートを閉じた（.onDisappear → pipelineTask.cancel()）ことによる中断は
                 // 正常操作なのでエラー表示しない。URLSession の非同期APIはキャンセル時に
@@ -506,6 +516,73 @@ struct SkyMotionSheet: View {
                     return
                 }
                 LoggingService.shared.logErrorEvent(error, context: "sky_motion_pipeline", category: .systemError)
+                state = .failed(errorCode: nil)
+            }
+        }
+    }
+
+    /// 既存ジョブ（進行中/完成）の監視を張り、完了/失敗/DL失敗のいずれかに達したら状態を確定する。
+    /// `startPipeline`（新規作成後）と `resumeActiveJobIfNeeded`（再開）で共有する。
+    /// `observeJob` は AsyncThrowingStream。listener がエラーを受けたら throwing で終端するため
+    /// （codex-9対応）、`for try await` で受けて呼び出し元の catch に落とす。
+    private func observeJobUntilTerminal(jobId: String, using jobService: SkyMotionJobService) async throws {
+        for try await job in jobService.observeJob(jobId: jobId) {
+            try Task.checkCancellation()
+
+            switch job.status {
+            case .pending, .submitting, .submitted:
+                continue // waiting のまま様子見
+
+            case .completed:
+                guard let videoURLString = job.videoURL else {
+                    state = .failed(errorCode: nil)
+                    return
+                }
+                do {
+                    let localURL = try await downloadVideo(from: videoURLString)
+                    state = .completed(localVideoURL: localURL)
+                    LoggingService.shared.logEvent("sky_motion_video_ready", parameters: nil)
+                } catch {
+                    if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                        return
+                    }
+                    // サーバー側は既に completed（＝回数消費済み）のため、この失敗を
+                    // 通常の `.failed`（「回数は消費されていない」の文言）にすると
+                    // 事実と異なる（G5対応）。専用状態で「もう一度受信」導線を出す。
+                    LoggingService.shared.logErrorEvent(
+                        error, context: "sky_motion_download_after_completed", category: .systemError
+                    )
+                    state = .downloadFailed(videoURLString: videoURLString)
+                }
+                return
+
+            case .failed:
+                state = .failed(errorCode: job.errorCode)
+                LoggingService.shared.logEvent("sky_motion_job_failed", parameters: [
+                    "error_code": job.errorCode ?? "unknown"
+                ])
+                return
+            }
+        }
+    }
+
+    /// シートを開いた時、`activeJobId` に進行中/完成未保存のジョブが残っていれば監視を張り直す。
+    /// 「閉じてもOK・完成後に開けば表示」の担保。`.idle` かつ pipelineTask 不在のときだけ動く
+    /// （生成中の再表示での二重監視や、既に表示中の状態の破壊を防ぐ）。
+    private func resumeActiveJobIfNeeded() {
+        guard case .idle = state, pipelineTask == nil, !activeJobId.isEmpty else { return }
+        let jobId = activeJobId
+        state = .waiting
+        LoggingService.shared.logEvent("sky_motion_job_resumed", parameters: ["job_id": jobId])
+        pipelineTask = Task {
+            defer { pipelineTask = nil }
+            do {
+                try await observeJobUntilTerminal(jobId: jobId, using: SkyMotionJobService())
+            } catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                    return
+                }
+                LoggingService.shared.logErrorEvent(error, context: "sky_motion_resume", category: .systemError)
                 state = .failed(errorCode: nil)
             }
         }
