@@ -69,13 +69,19 @@ const FAL_VIDEO_TIMEOUT_MS = 50 * 1000; // mp4 ダウンロード（数MB）
 const LOOP_SLOW_FACTOR = 2.0; // setpts 係数（5秒素材→約10秒スロー・最終約8.4秒）。2.3は実機で「遅すぎ」FB→2.0へ
 const LOOP_XFADE_DURATION = 1; // クロスフェード秒数
 
-// client がジョブに書く loopSpeed（"fast"/"normal"/"slow"）→ setpts スロー係数。
-// ⚠️ 1枚5秒素材のため「速さ」と「尺」は同じレバーの裏表: 速い=短い / ゆっくり=長い。
-//    最終尺 ≈ 5×係数 − 1.6秒（fast≒6秒 / normal≒8.4秒 / slow≒10.9秒）。
-//    未知・未指定は LOOP_SLOW_FACTOR（標準2.0）にフォールバック（旧ジョブ・後方互換）。
-const LOOP_SPEED_FACTORS = { fast: 1.5, normal: 2.0, slow: 2.5 };
-function loopSpeedToFactor(loopSpeed) {
-  return LOOP_SPEED_FACTORS[loopSpeed] || LOOP_SLOW_FACTOR;
+// setpts スロー係数の決定。最終尺 ≈ 5×係数 − 1.6秒。
+// ⭐️ 速さと尺を独立させた(2026-07-24)。この係数は「尺」だけを担う:
+//    client の loopDuration("short"≒5秒=1.3 / "long"≒10秒=2.3)。
+//    「速さ」は trajectory（雲の移動量）側で決まる（client が SkyMotionAssetPreparer で
+//    driftPixels を変えて生成に反映するため、サーバーはここに関与しない）。
+// 後方互換: 旧 build(79以前) は loopSpeed("fast"/"normal"/"slow") を書くのでそれも受ける。
+//           どちらも無い・未知なら LOOP_SLOW_FACTOR（2.0）にフォールバック。
+const LOOP_DURATION_FACTORS = { short: 1.3, long: 2.3 };
+const LOOP_SPEED_FACTORS = { fast: 1.5, normal: 2.0, slow: 2.5 }; // 旧build後方互換
+function slowFactorForJob(job) {
+  return LOOP_DURATION_FACTORS[job.loopDuration]
+    || LOOP_SPEED_FACTORS[job.loopSpeed]
+    || LOOP_SLOW_FACTOR;
 }
 // ⚠️ minterpolate は重い。子プロセスに独自タイムアウトを設け、超過/失敗時は元の5秒mp4に
 //    フォールバックする（関数ごと SIGKILL される「詰まり」を防ぐ＝fetch と同じ設計思想）。
@@ -622,7 +628,7 @@ async function pollOneJob(doc, now, falKeyValue) {
     // Kling の5秒素材を「約10秒・一方向・継ぎ目なしループ」に変換する。
     // ⚠️ ffmpeg 失敗/タイムアウト時は詰まらせず、元の5秒mp4で続行する（graceful degrade）。
     try {
-      videoBuffer = await makeSeamlessLoop(videoBuffer, jobId, loopSpeedToFactor(job.loopSpeed));
+      videoBuffer = await makeSeamlessLoop(videoBuffer, jobId, slowFactorForJob(job));
     } catch (loopErr) {
       logger.warn("空を動かす: シームレスループ化に失敗、元の5秒mp4で続行", {
         jobId,
