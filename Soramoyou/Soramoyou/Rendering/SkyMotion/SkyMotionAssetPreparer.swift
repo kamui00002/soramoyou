@@ -81,7 +81,10 @@ final class SkyMotionAssetPreparer {
     /// trajectory の水平ドリフト量(px)。設計書§6 の既定値であり、
     /// Cloud Functions 側（`functions/skyMotionCore.js` の `DRIFT_PIXELS_RIGHT`）と
     /// 値を一致させること（クライアント側で計算済みの trajectory をそのまま Functions が使うため）。
-    private static let driftPixelsRight: CGFloat = 40
+    /// 既定（フォールバック）の水平ドリフト量。実際の生成時は速さ×尺から `skyMotionDriftPixels`
+    /// が算出した値を `prepare(image:driftPixels:)` に渡す。internal なのはデフォルト引数と
+    /// テスト（`SkyMotionAssetPreparerTests`）から参照するため。
+    static let driftPixelsRight: CGFloat = 40
 
     /// source.jpg の JPEG 品質
     private static let jpegQuality: CGFloat = 0.9
@@ -125,16 +128,21 @@ final class SkyMotionAssetPreparer {
     ///
     /// - Note: 重い処理本体は `Task.detached` にオフロードし、呼び出し元のアクター
     ///   （多くは MainActor）をブロックしないようにする（`LivingSkyEngine.prepare` と同じ流儀）。
-    func prepare(image: UIImage) async throws -> PreparedSkyMotionAssets {
+    /// - Parameter driftPixels: trajectory の水平ドリフト量(px)＝雲の移動量。速さ×尺から
+    ///   `skyMotionDriftPixels(speed:duration:)` が算出した値を渡す。既定は実証済み安全値(40)。
+    func prepare(
+        image: UIImage,
+        driftPixels: CGFloat = SkyMotionAssetPreparer.driftPixelsRight
+    ) async throws -> PreparedSkyMotionAssets {
         let workTask = Task.detached(priority: .userInitiated) { () async throws -> PreparedSkyMotionAssets in
-            try await self.prepareAsync(image: image)
+            try await self.prepareAsync(image: image, driftPixels: driftPixels)
         }
         return try await workTask.value
     }
 
     // MARK: - Private: 処理本体（Task.detached からオフロードして呼ばれる）
 
-    private func prepareAsync(image: UIImage) async throws -> PreparedSkyMotionAssets {
+    private func prepareAsync(image: UIImage, driftPixels: CGFloat) async throws -> PreparedSkyMotionAssets {
         // 手順①②: 向き正規化 + 長辺1920縮小（LivingSkyEngine.prepareAsync の①②を移植）
         let photo = try Self.normalizeAndScale(image: image, maxLongSide: Self.maxLongSide)
 
@@ -168,7 +176,7 @@ final class SkyMotionAssetPreparer {
         if detectedCentroid == nil {
             Self.logger.warning("空マスクが空（0画素）のため画像中心へフォールバックした")
         }
-        let trajectory = [centroid, CGPoint(x: centroid.x + Self.driftPixelsRight, y: centroid.y)]
+        let trajectory = [centroid, CGPoint(x: centroid.x + driftPixels, y: centroid.y)]
 
         // 手順⑥: aspect比の近似（純関数）
         let aspectRatio = Self.nearestAspectRatio(width: photo.extent.width, height: photo.extent.height)

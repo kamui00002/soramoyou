@@ -32,24 +32,50 @@ enum SkyMotionJobStatus: String, CaseIterable {
     case failed
 }
 
-/// ループ動画の速さ（＝サーバー `skyMotion.js` の setpts スロー係数）。
-/// ⚠️ 1枚5秒素材のため「速さ」と「尺」は同じレバーの裏表: 速い=短い / ゆっくり=長い。
-///    そのため UI ではラベルに結果の尺を併記して結合を透明化する（独立2軸には見せない）。
-///    rawValue はそのまま `livingSkyJobs.loopSpeed` に書き、サーバーが係数へ写像する。
+/// 雲の動きの速さ（＝画面上の見かけ速度）。独立2軸(2026-07-24)の1軸目。
+/// ⭐️ サーバーの setpts ではなく **trajectory（雲の移動量）** で決まる（`SkyMotionAssetPreparer` が
+///    `driftPixels` を変えて fal 生成に反映する）。速いほど雲を大きく動かす＝ゴーストのリスクは上がる。
 enum SkyMotionSpeed: String, CaseIterable, Identifiable {
     case fast
-    case normal
     case slow
 
     var id: String { rawValue }
 
-    /// ピッカー用ラベル（結果の尺を併記）。
     var label: String {
         switch self {
-        case .fast: return "速い（約6秒）"
-        case .normal: return "標準（約8秒）"
-        case .slow: return "ゆっくり（約11秒）"
+        case .fast: return "速い"
+        case .slow: return "ゆっくり"
         }
+    }
+}
+
+/// ループ動画の尺（長さ）。独立2軸の2軸目。`livingSkyJobs.loopDuration` に rawValue を書き、
+/// サーバー `slowFactorForJob` が setpts 係数へ写像する（short≒5秒 / long≒10秒）。
+enum SkyMotionDuration: String, CaseIterable, Identifiable {
+    case short
+    case long
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .short: return "5秒"
+        case .long: return "10秒"
+        }
+    }
+}
+
+/// 速さ×尺 → trajectory の水平ドリフト量(px)。画面上の見かけ速度 = drift ÷ 出力尺 なので、
+/// 速さを尺に依らず一定に見せるには drift を尺に比例させる（∴ fast×long が最大ドリフト）。
+/// 実証済み安全値 40px 近傍に収めつつ fast/slow で約2倍差をつけ知覚差を確保する。
+/// ⚠️ fast×long(68px≒1.7倍) はゴーストの最警戒セル＝実機で要確認（アドバイザー指摘の2失敗モード:
+///    過剰drift=ゴースト / 過少drift=速い遅いの差が見えない、の両方を実機で判定すること）。
+func skyMotionDriftPixels(speed: SkyMotionSpeed, duration: SkyMotionDuration) -> CGFloat {
+    switch (speed, duration) {
+    case (.fast, .short): return 34
+    case (.fast, .long):  return 68
+    case (.slow, .short): return 16
+    case (.slow, .long):  return 32
     }
 }
 
@@ -98,9 +124,10 @@ struct SkyMotionJob: Identifiable {
     let groundMaskPath: String
     let aspectRatio: String
     let trajectory: [SkyMotionTrajectoryPoint]
-    /// ループ動画の速さ（`SkyMotionSpeed` の rawValue）。client が選んで書き、サーバーが係数へ写像する。
-    /// 旧ジョブ（欠落）はサーバー側で標準(2.0)にフォールバックするため読み込みは "normal" 既定。
-    let loopSpeed: String
+    /// ループ動画の尺（`SkyMotionDuration` の rawValue: "short"/"long"）。client が選んで書き、
+    /// サーバー `slowFactorForJob` が setpts 係数へ写像する（速さは trajectory 側で決まるので
+    /// この値は尺だけを担う）。旧ジョブ（欠落）はサーバー側で標準(2.0)にフォールバックする。
+    let loopDuration: String
     /// fal.ai へのsubmit成功後に Cloud Functions が設定する（client からは常に nil）
     let falRequestId: String?
     /// 完成後の Storage ダウンロードURL。Cloud Functions が設定する（client からは常に nil）
@@ -131,7 +158,7 @@ struct SkyMotionJob: Identifiable {
         groundMaskPath: String,
         aspectRatio: String,
         trajectory: [SkyMotionTrajectoryPoint],
-        loopSpeed: String = SkyMotionSpeed.normal.rawValue
+        loopDuration: String = SkyMotionDuration.long.rawValue
     ) {
         self.id = id
         self.userId = userId
@@ -141,7 +168,7 @@ struct SkyMotionJob: Identifiable {
         self.groundMaskPath = groundMaskPath
         self.aspectRatio = aspectRatio
         self.trajectory = trajectory
-        self.loopSpeed = loopSpeed
+        self.loopDuration = loopDuration
         self.falRequestId = nil
         self.videoURL = nil
         self.pollAttempts = 0
@@ -168,7 +195,7 @@ struct SkyMotionJob: Identifiable {
             "groundMaskPath": groundMaskPath,
             "aspectRatio": aspectRatio,
             "trajectory": trajectory.map { $0.toFirestoreData() },
-            "loopSpeed": loopSpeed,
+            "loopDuration": loopDuration,
             "createdAt": FieldValue.serverTimestamp(),
             "updatedAt": FieldValue.serverTimestamp()
         ]
@@ -194,7 +221,7 @@ struct SkyMotionJob: Identifiable {
         self.skyMaskPath = documentData["skyMaskPath"] as? String ?? ""
         self.groundMaskPath = documentData["groundMaskPath"] as? String ?? ""
         self.aspectRatio = documentData["aspectRatio"] as? String ?? "1:1"
-        self.loopSpeed = documentData["loopSpeed"] as? String ?? SkyMotionSpeed.normal.rawValue
+        self.loopDuration = documentData["loopDuration"] as? String ?? SkyMotionDuration.long.rawValue
 
         if let trajectoryData = documentData["trajectory"] as? [[String: Any]] {
             let decodedPoints = trajectoryData.compactMap { SkyMotionTrajectoryPoint(from: $0) }

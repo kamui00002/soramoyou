@@ -81,9 +81,12 @@ struct SkyMotionSheet: View {
     // MARK: - State
 
     @State private var state: SkyMotionSheetState = .idle
-    /// ユーザーが選んだループ動画の速さ（＝尺）。生成時に `createJob(loopSpeed:)` へ渡す。
-    /// ⚠️ 1枚5秒素材のため速さと尺は連動する（速い=短い / ゆっくり=長い・`SkyMotionSpeed` 参照）。既定は標準。
-    @State private var selectedSpeed: SkyMotionSpeed = .normal
+    /// ユーザーが選んだ雲の速さ（独立2軸の1軸目）。trajectory の driftPixels に写像して生成に反映。
+    /// 既定は .slow（従来の落ち着いた見た目に近い側）。
+    @State private var selectedSpeed: SkyMotionSpeed = .slow
+    /// ユーザーが選んだ尺（独立2軸の2軸目）。`createJob(loopDuration:)` でサーバーの setpts に写像。
+    /// 既定は .long（≒10秒・従来の blessed な見た目に近い側）。
+    @State private var selectedDuration: SkyMotionDuration = .long
     /// 進行中/完成未保存のジョブID（UserDefaults 永続）。シートを閉じてもサーバーは生成を
     /// 続けるため、これを残しておき、次にシートを開いた時 `resumeActiveJobIfNeeded()` で
     /// 監視を張り直して結果を取り戻す（＝「閉じてもOK・完成後に開けば表示」の担保）。
@@ -247,17 +250,30 @@ struct SkyMotionSheet: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
             Spacer()
-            // 速さ（＝尺）の選択。1枚5秒素材のため速さと尺は連動する（ラベルに結果の尺を併記）。
-            VStack(spacing: 8) {
-                Text("動きの速さ")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
-                Picker("動きの速さ", selection: $selectedSpeed) {
-                    ForEach(SkyMotionSpeed.allCases) { speed in
-                        Text(speed.label).tag(speed)
+            // 速さと尺を独立に選ぶ（2軸）。速さ=雲の移動量(trajectory)、尺=setpts。
+            VStack(spacing: 12) {
+                VStack(spacing: 6) {
+                    Text("雲の速さ")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                    Picker("雲の速さ", selection: $selectedSpeed) {
+                        ForEach(SkyMotionSpeed.allCases) { speed in
+                            Text(speed.label).tag(speed)
+                        }
                     }
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
+                VStack(spacing: 6) {
+                    Text("長さ")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                    Picker("長さ", selection: $selectedDuration) {
+                        ForEach(SkyMotionDuration.allCases) { duration in
+                            Text(duration.label).tag(duration)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 4)
@@ -489,13 +505,17 @@ struct SkyMotionSheet: View {
                     )
                 }
 
-                let assets = try await SkyMotionAssetPreparer().prepare(image: sourceImage)
+                // 速さ×尺 → 雲の移動量(driftPixels)。速さは trajectory 側、尺は setpts 側で効く。
+                let driftPixels = skyMotionDriftPixels(speed: selectedSpeed, duration: selectedDuration)
+                let assets = try await SkyMotionAssetPreparer().prepare(
+                    image: sourceImage, driftPixels: driftPixels
+                )
                 try Task.checkCancellation()
 
                 state = .uploading
                 let jobService = SkyMotionJobService()
                 let jobId = try await jobService.createJob(
-                    assets: assets, userId: userId, loopSpeed: selectedSpeed.rawValue
+                    assets: assets, userId: userId, loopDuration: selectedDuration.rawValue
                 )
                 try Task.checkCancellation()
 
@@ -504,7 +524,9 @@ struct SkyMotionSheet: View {
                 activeJobId = jobId
                 state = .waiting
                 LoggingService.shared.logEvent("sky_motion_job_created", parameters: [
-                    "job_id": jobId, "loop_speed": selectedSpeed.rawValue
+                    "job_id": jobId,
+                    "loop_speed": selectedSpeed.rawValue,
+                    "loop_duration": selectedDuration.rawValue
                 ])
 
                 try await observeJobUntilTerminal(jobId: jobId, using: jobService)

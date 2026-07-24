@@ -46,10 +46,10 @@ enum SkyMotionJobServiceError: LocalizedError {
 protocol SkyMotionJobServiceProtocol {
     /// `SkyMotionAssetPreparer.prepare` の出力を Storage へアップロードし、
     /// Firestore に `status="pending"` の初期ジョブドキュメントを作成する。
-    /// - Parameter loopSpeed: ループ動画の速さ（`SkyMotionSpeed` の rawValue。既定 "normal"）。
+    /// - Parameter loopDuration: ループ動画の尺（`SkyMotionDuration` の rawValue: "short"/"long"）。
     /// - Returns: 作成された jobId（Storage パス・Firestore ドキュメントIDと共通）
     func createJob(
-        assets: PreparedSkyMotionAssets, userId: String, loopSpeed: String
+        assets: PreparedSkyMotionAssets, userId: String, loopDuration: String
     ) async throws -> String
 
     /// jobId の状態変化を配信する。
@@ -95,7 +95,7 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
     func createJob(
         assets: PreparedSkyMotionAssets,
         userId: String,
-        loopSpeed: String = SkyMotionSpeed.normal.rawValue
+        loopDuration: String = SkyMotionDuration.long.rawValue
     ) async throws -> String {
         let jobId = UUID().uuidString
         let basePath = "livingSky/\(userId)/\(jobId)"
@@ -126,7 +126,7 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
             groundMaskPath: groundMaskPath,
             aspectRatio: assets.aspectRatio,
             trajectory: trajectory,
-            loopSpeed: loopSpeed
+            loopDuration: loopDuration
         )
 
         do {
