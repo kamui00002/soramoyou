@@ -65,8 +65,8 @@ const FAL_API_TIMEOUT_MS = 25 * 1000; // submit / status / result（軽いJSON�
 const FAL_VIDEO_TIMEOUT_MS = 50 * 1000; // mp4 ダウンロード（数MB）
 
 // 「約10秒・一方向・継ぎ目なしループ」への変換パラメータ（ローカル実写検証で確定）。
-// 2.3倍スロー + minterpolate(補間で滑らかな30fps) → 一方向クロスフェードループ。
-const LOOP_SLOW_FACTOR = 2.3; // setpts 係数（5秒素材→約11.5秒スロー）
+// 2.0倍スロー + minterpolate(補間で滑らかな30fps) → 一方向クロスフェードループ。
+const LOOP_SLOW_FACTOR = 2.0; // setpts 係数（5秒素材→約10秒スロー・最終約8.4秒）。2.3は実機で「遅すぎ」FB→2.0へ
 const LOOP_XFADE_DURATION = 1; // クロスフェード秒数
 // ⚠️ minterpolate は重い。子プロセスに独自タイムアウトを設け、超過/失敗時は元の5秒mp4に
 //    フォールバックする（関数ごと SIGKILL される「詰まり」を防ぐ＝fetch と同じ設計思想）。
@@ -413,7 +413,7 @@ function runFfmpeg(args) {
 
 /**
  * Kling の5秒mp4を「約10秒・一方向・継ぎ目なしループ」に変換して返す。
- *  1) setpts で 2.3倍スロー + minterpolate で滑らかな30fpsに
+ *  1) setpts で 2.0倍スロー + minterpolate で滑らかな30fpsに
  *  2) 一方向クロスフェードループ（末尾を先頭に溶け込ませる。xfade offset は実尺から動的計算）
  * ⚠️ 失敗/タイムアウト時は throw する（呼び出し側が元の5秒mp4で続行＝graceful degrade）。
  * @param {Buffer} inputBuffer 元の mp4
