@@ -71,12 +71,12 @@ const LOOP_XFADE_DURATION = 1; // クロスフェード秒数
 
 // setpts スロー係数の決定。最終尺 ≈ 5×係数 − 1.6秒。
 // ⭐️ 速さと尺を独立させた(2026-07-24)。この係数は「尺」だけを担う:
-//    client の loopDuration("short"≒5秒=1.3 / "long"≒10秒=2.3)。
+//    client の loopDuration("short"≒5秒=1.3 / "medium"≒7.5秒=1.8 / "long"≒10秒=2.3)。
 //    「速さ」は trajectory（雲の移動量）側で決まる（client が SkyMotionAssetPreparer で
 //    driftPixels を変えて生成に反映するため、サーバーはここに関与しない）。
 // 後方互換: 旧 build(79以前) は loopSpeed("fast"/"normal"/"slow") を書くのでそれも受ける。
 //           どちらも無い・未知なら LOOP_SLOW_FACTOR（2.0）にフォールバック。
-const LOOP_DURATION_FACTORS = { short: 1.3, long: 2.3 };
+const LOOP_DURATION_FACTORS = { short: 1.3, medium: 1.8, long: 2.3 };
 const LOOP_SPEED_FACTORS = { fast: 1.5, normal: 2.0, slow: 2.5 }; // 旧build後方互換
 function slowFactorForJob(job) {
   return LOOP_DURATION_FACTORS[job.loopDuration]
