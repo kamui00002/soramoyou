@@ -32,50 +32,46 @@ enum SkyMotionJobStatus: String, CaseIterable {
     case failed
 }
 
-/// 雲の動きの速さ（＝画面上の見かけ速度）。独立2軸(2026-07-24)の1軸目。
-/// ⭐️ サーバーの setpts ではなく **trajectory（雲の移動量）** で決まる（`SkyMotionAssetPreparer` が
-///    `driftPixels` を変えて fal 生成に反映する）。速いほど雲を大きく動かす＝ゴーストのリスクは上がる。
-enum SkyMotionSpeed: String, CaseIterable, Identifiable {
-    case fast
-    case slow
+/// ループ動画のプリセット（単一3択・2026-07-26確定）。速さと尺が「対角線」でセットになる:
+/// 速い=短い / ゆっくり=長い。ユーザー検証で fast_5s(quick) と slow_10s(calm) を採用、間に standard を追加。
+/// - `driftPixels`（雲の移動量 → trajectory・fal生成に反映）で「速さ」が決まり、
+/// - `loopDurationKey`（→ `livingSkyJobs.loopDuration` → サーバー `slowFactorForJob` の setpts）で「尺」が決まる。
+/// 画面上の見かけ速度 ≈ driftPixels ÷ 出力尺: quick≈6.9 / standard≈5.3 / calm≈3.2 px/s。
+/// 実測値(ユーザーの電柱+積乱雲写真): この drift 域はゴースト無し・電柱固定OK（実機検証済み）。
+enum SkyMotionPreset: String, CaseIterable, Identifiable {
+    /// 速い・約5秒（= 検証済み fast_5s: drift34 / setpts1.3）
+    case quick
+    /// 標準・約7.5秒（= 検証済み middle_a: drift40 / setpts1.8）
+    case standard
+    /// ゆっくり・約10秒（= 検証済み slow_10s: drift32 / setpts2.3）
+    case calm
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .fast: return "速い"
-        case .slow: return "ゆっくり"
+        case .quick: "速い（約5秒）"
+        case .standard: "標準（約7.5秒）"
+        case .calm: "ゆっくり（約10秒）"
         }
     }
-}
 
-/// ループ動画の尺（長さ）。独立2軸の2軸目。`livingSkyJobs.loopDuration` に rawValue を書き、
-/// サーバー `slowFactorForJob` が setpts 係数へ写像する（short≒5秒 / long≒10秒）。
-enum SkyMotionDuration: String, CaseIterable, Identifiable {
-    case short
-    case long
-
-    var id: String { rawValue }
-
-    var label: String {
+    /// 雲の移動量(px)。速さを決める（`SkyMotionAssetPreparer` の trajectory ドリフトに渡す）。
+    var driftPixels: CGFloat {
         switch self {
-        case .short: return "5秒"
-        case .long: return "10秒"
+        case .quick: 34
+        case .standard: 40
+        case .calm: 32
         }
     }
-}
 
-/// 速さ×尺 → trajectory の水平ドリフト量(px)。画面上の見かけ速度 = drift ÷ 出力尺 なので、
-/// 速さを尺に依らず一定に見せるには drift を尺に比例させる（∴ fast×long が最大ドリフト）。
-/// 実証済み安全値 40px 近傍に収めつつ fast/slow で約2倍差をつけ知覚差を確保する。
-/// ⚠️ fast×long(68px≒1.7倍) はゴーストの最警戒セル＝実機で要確認（アドバイザー指摘の2失敗モード:
-///    過剰drift=ゴースト / 過少drift=速い遅いの差が見えない、の両方を実機で判定すること）。
-func skyMotionDriftPixels(speed: SkyMotionSpeed, duration: SkyMotionDuration) -> CGFloat {
-    switch (speed, duration) {
-    case (.fast, .short): return 34
-    case (.fast, .long):  return 68
-    case (.slow, .short): return 16
-    case (.slow, .long):  return 32
+    /// `livingSkyJobs.loopDuration` に書く値。サーバー `slowFactorForJob` が setpts 係数へ写像する。
+    var loopDurationKey: String {
+        switch self {
+        case .quick: "short"
+        case .standard: "medium"
+        case .calm: "long"
+        }
     }
 }
 
@@ -92,8 +88,8 @@ struct SkyMotionTrajectoryPoint: Equatable {
 
     /// `CGPoint`（`SkyMotionAssetPreparer` の出力・サブピクセル精度）から Firestore 用に丸めて生成する。
     init(rounding point: CGPoint) {
-        self.x = Int(point.x.rounded())
-        self.y = Int(point.y.rounded())
+        x = Int(point.x.rounded())
+        y = Int(point.y.rounded())
     }
 
     func toFirestoreData() -> [String: Any] {
@@ -124,7 +120,7 @@ struct SkyMotionJob: Identifiable {
     let groundMaskPath: String
     let aspectRatio: String
     let trajectory: [SkyMotionTrajectoryPoint]
-    /// ループ動画の尺（`SkyMotionDuration` の rawValue: "short"/"long"）。client が選んで書き、
+    /// ループ動画の尺（`SkyMotionPreset.loopDurationKey`: "short"/"medium"/"long"）。client が選んで書き、
     /// サーバー `slowFactorForJob` が setpts 係数へ写像する（速さは trajectory 側で決まるので
     /// この値は尺だけを担う）。旧ジョブ（欠落）はサーバー側で標準(2.0)にフォールバックする。
     let loopDuration: String
@@ -158,26 +154,26 @@ struct SkyMotionJob: Identifiable {
         groundMaskPath: String,
         aspectRatio: String,
         trajectory: [SkyMotionTrajectoryPoint],
-        loopDuration: String = SkyMotionDuration.long.rawValue
+        loopDuration: String = SkyMotionPreset.calm.loopDurationKey
     ) {
         self.id = id
         self.userId = userId
-        self.status = .pending
+        status = .pending
         self.sourcePath = sourcePath
         self.skyMaskPath = skyMaskPath
         self.groundMaskPath = groundMaskPath
         self.aspectRatio = aspectRatio
         self.trajectory = trajectory
         self.loopDuration = loopDuration
-        self.falRequestId = nil
-        self.videoURL = nil
-        self.pollAttempts = 0
-        self.errorCode = nil
-        self.error = nil
+        falRequestId = nil
+        videoURL = nil
+        pollAttempts = 0
+        errorCode = nil
+        error = nil
         // サーバー時刻は toFirestoreData() が FieldValue.serverTimestamp() で設定するため、
         // クライアント生成時点ではまだ確定しない（Feedback.swift と同方針）。
-        self.createdAt = nil
-        self.updatedAt = nil
+        createdAt = nil
+        updatedAt = nil
     }
 
     // MARK: - Firestore Mapping（作成用）
@@ -197,7 +193,7 @@ struct SkyMotionJob: Identifiable {
             "trajectory": trajectory.map { $0.toFirestoreData() },
             "loopDuration": loopDuration,
             "createdAt": FieldValue.serverTimestamp(),
-            "updatedAt": FieldValue.serverTimestamp()
+            "updatedAt": FieldValue.serverTimestamp(),
         ]
     }
 
@@ -208,7 +204,8 @@ struct SkyMotionJob: Identifiable {
     /// それ以外の欠落フィールドは安全な既定値にフォールバックする（Draft/Post と同方針）。
     init?(from documentData: [String: Any], id: String) {
         guard let userId = documentData["userId"] as? String,
-              let statusRaw = documentData["status"] as? String else {
+              let statusRaw = documentData["status"] as? String
+        else {
             return nil
         }
 
@@ -216,12 +213,12 @@ struct SkyMotionJob: Identifiable {
         self.userId = userId
         // 未知の status 文字列（想定外のサーバー側変更）は .pending へフォールバックする
         // （Visibility(rawValue:) ?? .public と同じ「クラッシュより安全側フォールバック」方針）。
-        self.status = SkyMotionJobStatus(rawValue: statusRaw) ?? .pending
-        self.sourcePath = documentData["sourcePath"] as? String ?? ""
-        self.skyMaskPath = documentData["skyMaskPath"] as? String ?? ""
-        self.groundMaskPath = documentData["groundMaskPath"] as? String ?? ""
-        self.aspectRatio = documentData["aspectRatio"] as? String ?? "1:1"
-        self.loopDuration = documentData["loopDuration"] as? String ?? SkyMotionDuration.long.rawValue
+        status = SkyMotionJobStatus(rawValue: statusRaw) ?? .pending
+        sourcePath = documentData["sourcePath"] as? String ?? ""
+        skyMaskPath = documentData["skyMaskPath"] as? String ?? ""
+        groundMaskPath = documentData["groundMaskPath"] as? String ?? ""
+        aspectRatio = documentData["aspectRatio"] as? String ?? "1:1"
+        loopDuration = documentData["loopDuration"] as? String ?? SkyMotionPreset.calm.loopDurationKey
 
         if let trajectoryData = documentData["trajectory"] as? [[String: Any]] {
             let decodedPoints = trajectoryData.compactMap { SkyMotionTrajectoryPoint(from: $0) }
@@ -233,18 +230,18 @@ struct SkyMotionJob: Identifiable {
                     "空を動かす: trajectory の一部デコードに失敗 jobId=\(id, privacy: .public) expected=\(trajectoryData.count) actual=\(decodedPoints.count)"
                 )
             }
-            self.trajectory = decodedPoints
+            trajectory = decodedPoints
         } else {
-            self.trajectory = []
+            trajectory = []
         }
 
-        self.falRequestId = documentData["falRequestId"] as? String
-        self.videoURL = documentData["videoURL"] as? String
-        self.pollAttempts = documentData["pollAttempts"] as? Int ?? 0
-        self.errorCode = documentData["errorCode"] as? String
-        self.error = documentData["error"] as? String
-        self.createdAt = (documentData["createdAt"] as? Timestamp)?.dateValue()
-        self.updatedAt = (documentData["updatedAt"] as? Timestamp)?.dateValue()
+        falRequestId = documentData["falRequestId"] as? String
+        videoURL = documentData["videoURL"] as? String
+        pollAttempts = documentData["pollAttempts"] as? Int ?? 0
+        errorCode = documentData["errorCode"] as? String
+        error = documentData["error"] as? String
+        createdAt = (documentData["createdAt"] as? Timestamp)?.dateValue()
+        updatedAt = (documentData["updatedAt"] as? Timestamp)?.dateValue()
     }
 
     /// Firestore DocumentSnapshot から初期化。

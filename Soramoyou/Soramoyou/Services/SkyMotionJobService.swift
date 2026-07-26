@@ -33,12 +33,12 @@ enum SkyMotionJobServiceError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .fileTooLarge(let fileName):
-            return "\(fileName) のサイズが大きすぎます（最大5MB）"
-        case .uploadFailed(let error):
-            return "画像のアップロードに失敗しました: \(error.localizedDescription)"
-        case .jobCreationFailed(let error):
-            return "ジョブの作成に失敗しました: \(error.localizedDescription)"
+        case let .fileTooLarge(fileName):
+            "\(fileName) のサイズが大きすぎます（最大5MB）"
+        case let .uploadFailed(error):
+            "画像のアップロードに失敗しました: \(error.localizedDescription)"
+        case let .jobCreationFailed(error):
+            "ジョブの作成に失敗しました: \(error.localizedDescription)"
         }
     }
 }
@@ -46,7 +46,7 @@ enum SkyMotionJobServiceError: LocalizedError {
 protocol SkyMotionJobServiceProtocol {
     /// `SkyMotionAssetPreparer.prepare` の出力を Storage へアップロードし、
     /// Firestore に `status="pending"` の初期ジョブドキュメントを作成する。
-    /// - Parameter loopDuration: ループ動画の尺（`SkyMotionDuration` の rawValue: "short"/"long"）。
+    /// - Parameter loopDuration: ループ動画の尺（`SkyMotionPreset.loopDurationKey`: "short"/"medium"/"long"）。
     /// - Returns: 作成された jobId（Storage パス・Firestore ドキュメントIDと共通）
     func createJob(
         assets: PreparedSkyMotionAssets, userId: String, loopDuration: String
@@ -63,7 +63,6 @@ protocol SkyMotionJobServiceProtocol {
 }
 
 final class SkyMotionJobService: SkyMotionJobServiceProtocol {
-
     // MARK: - 定数
 
     /// Storage 側の 5MB 上限（`storage.rules` の `isValidSize()` と一致させる）
@@ -95,7 +94,7 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
     func createJob(
         assets: PreparedSkyMotionAssets,
         userId: String,
-        loopDuration: String = SkyMotionDuration.long.rawValue
+        loopDuration: String = SkyMotionPreset.calm.loopDurationKey
     ) async throws -> String {
         let jobId = UUID().uuidString
         let basePath = "livingSky/\(userId)/\(jobId)"
@@ -170,7 +169,7 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
     func observeJob(jobId: String) -> AsyncThrowingStream<SkyMotionJob, Error> {
         AsyncThrowingStream { continuation in
             let listener = jobsCollection.document(jobId).addSnapshotListener { snapshot, error in
-                if let error = error {
+                if let error {
                     Self.logger.error(
                         "空を動かす: livingSkyJobs リスナーエラー jobId=\(jobId, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
                     )
@@ -180,7 +179,7 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
                     continuation.finish(throwing: error)
                     return
                 }
-                guard let snapshot = snapshot else {
+                guard let snapshot else {
                     return
                 }
                 guard let job = SkyMotionJob(from: snapshot) else {

@@ -20,10 +20,10 @@
 //   スライダー等のパラメータUIも持たない（PoC固定レシピ。マスク・軌跡・aspect比は
 //   `SkyMotionAssetPreparer` が自動算出する）。
 
-import SwiftUI
-import AVKit
 import AVFoundation
+import AVKit
 import FirebaseAuth
+import SwiftUI
 
 /// `SkyMotionSheet` の処理中に発生しうるエラー（クライアント側のみ）。
 enum SkyMotionSheetError: Error, LocalizedError {
@@ -35,9 +35,9 @@ enum SkyMotionSheetError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidVideoURL:
-            return "動画のURLが不正です"
+            "動画のURLが不正です"
         case .downloadFailed:
-            return "動画のダウンロードに失敗しました"
+            "動画のダウンロードに失敗しました"
         }
     }
 }
@@ -81,12 +81,9 @@ struct SkyMotionSheet: View {
     // MARK: - State
 
     @State private var state: SkyMotionSheetState = .idle
-    /// ユーザーが選んだ雲の速さ（独立2軸の1軸目）。trajectory の driftPixels に写像して生成に反映。
-    /// 既定は .slow（従来の落ち着いた見た目に近い側）。
-    @State private var selectedSpeed: SkyMotionSpeed = .slow
-    /// ユーザーが選んだ尺（独立2軸の2軸目）。`createJob(loopDuration:)` でサーバーの setpts に写像。
-    /// 既定は .long（≒10秒・従来の blessed な見た目に近い側）。
-    @State private var selectedDuration: SkyMotionDuration = .long
+    /// ユーザーが選んだプリセット（単一3択・速さと尺がセット）。driftPixels(速さ) と
+    /// loopDurationKey(尺) の両方を持つ。既定は .calm（≒10秒・落ち着いた見た目）。
+    @State private var selectedPreset: SkyMotionPreset = .calm
     /// 進行中/完成未保存のジョブID（UserDefaults 永続）。シートを閉じてもサーバーは生成を
     /// 続けるため、これを残しておき、次にシートを開いた時 `resumeActiveJobIfNeeded()` で
     /// 監視を張り直して結果を取り戻す（＝「閉じてもOK・完成後に開けば表示」の担保）。
@@ -214,11 +211,11 @@ struct SkyMotionSheet: View {
             idleView
         case .preparing, .uploading, .waiting:
             progressStateView
-        case .completed(let url), .saved(let url):
+        case let .completed(url), let .saved(url):
             resultView(localVideoURL: url)
-        case .downloadFailed(let videoURLString):
+        case let .downloadFailed(videoURLString):
             downloadFailedView(videoURLString: videoURLString)
-        case .failed(let errorCode):
+        case let .failed(errorCode):
             failedView(errorCode: errorCode)
         }
     }
@@ -226,10 +223,10 @@ struct SkyMotionSheet: View {
     /// `.onDisappear` での一時ファイル削除用。`completed`/`saved` のときだけローカルURLを持つ。
     private var currentLocalVideoURL: URL? {
         switch state {
-        case .completed(let url), .saved(let url):
-            return url
+        case let .completed(url), let .saved(url):
+            url
         default:
-            return nil
+            nil
         }
     }
 
@@ -250,30 +247,17 @@ struct SkyMotionSheet: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
             Spacer()
-            // 速さと尺を独立に選ぶ（2軸）。速さ=雲の移動量(trajectory)、尺=setpts。
-            VStack(spacing: 12) {
-                VStack(spacing: 6) {
-                    Text("雲の速さ")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                    Picker("雲の速さ", selection: $selectedSpeed) {
-                        ForEach(SkyMotionSpeed.allCases) { speed in
-                            Text(speed.label).tag(speed)
-                        }
+            // 速さと尺がセットの単一3択（速い/標準/ゆっくり）。速さ=雲の移動量(trajectory)、尺=setpts。
+            VStack(spacing: 6) {
+                Text("動きの速さ・長さ")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+                Picker("動きの速さ・長さ", selection: $selectedPreset) {
+                    ForEach(SkyMotionPreset.allCases) { preset in
+                        Text(preset.label).tag(preset)
                     }
-                    .pickerStyle(.segmented)
                 }
-                VStack(spacing: 6) {
-                    Text("長さ")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                    Picker("長さ", selection: $selectedDuration) {
-                        ForEach(SkyMotionDuration.allCases) { duration in
-                            Text(duration.label).tag(duration)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
+                .pickerStyle(.segmented)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 4)
@@ -311,17 +295,17 @@ struct SkyMotionSheet: View {
     private var progressMessage: String {
         switch state {
         case .preparing:
-            return "空を解析しています…"
+            "空を解析しています…"
         case .uploading:
-            return "アップロードしています…"
+            "アップロードしています…"
         case .waiting:
             // ⚠️ この安心文言は `.waiting`（＝サーバーがジョブを所有した後）だけに出す。
             //    preparing/uploading 中はクライアントのアップロードが走っており、閉じると
             //    onDisappear で cancel され「続かない」ため、ここに出すと嘘になる。
-            return "空を動かしています…（数分かかることがあります）\n"
+            "空を動かしています…（数分かかることがあります）\n"
                 + "この画面を閉じても生成は続きます。完成後にもう一度開くと結果を表示します（通知でもお知らせします）。"
         default:
-            return ""
+            ""
         }
     }
 
@@ -454,9 +438,9 @@ struct SkyMotionSheet: View {
     private func failureMessage(for errorCode: String?) -> String {
         switch errorCode {
         case "quota_exceeded":
-            return "今日の無料回数（3回）を使い切ったみたい。また明日試してね"
+            "今日の無料回数（3回）を使い切ったみたい。また明日試してね"
         default:
-            return "生成に失敗したの。もう一度試してみて（回数は消費されていないわ）"
+            "生成に失敗したの。もう一度試してみて（回数は消費されていないわ）"
         }
     }
 
@@ -505,17 +489,16 @@ struct SkyMotionSheet: View {
                     )
                 }
 
-                // 速さ×尺 → 雲の移動量(driftPixels)。速さは trajectory 側、尺は setpts 側で効く。
-                let driftPixels = skyMotionDriftPixels(speed: selectedSpeed, duration: selectedDuration)
+                // プリセット → 雲の移動量(driftPixels=速さ) と loopDurationKey(尺)。
                 let assets = try await SkyMotionAssetPreparer().prepare(
-                    image: sourceImage, driftPixels: driftPixels
+                    image: sourceImage, driftPixels: selectedPreset.driftPixels
                 )
                 try Task.checkCancellation()
 
                 state = .uploading
                 let jobService = SkyMotionJobService()
                 let jobId = try await jobService.createJob(
-                    assets: assets, userId: userId, loopDuration: selectedDuration.rawValue
+                    assets: assets, userId: userId, loopDuration: selectedPreset.loopDurationKey
                 )
                 try Task.checkCancellation()
 
@@ -525,8 +508,7 @@ struct SkyMotionSheet: View {
                 state = .waiting
                 LoggingService.shared.logEvent("sky_motion_job_created", parameters: [
                     "job_id": jobId,
-                    "loop_speed": selectedSpeed.rawValue,
-                    "loop_duration": selectedDuration.rawValue
+                    "loop_preset": selectedPreset.rawValue,
                 ])
 
                 try await observeJobUntilTerminal(jobId: jobId, using: jobService)
@@ -581,7 +563,7 @@ struct SkyMotionSheet: View {
             case .failed:
                 state = .failed(errorCode: job.errorCode)
                 LoggingService.shared.logEvent("sky_motion_job_failed", parameters: [
-                    "error_code": job.errorCode ?? "unknown"
+                    "error_code": job.errorCode ?? "unknown",
                 ])
                 return
             }
@@ -620,7 +602,8 @@ struct SkyMotionSheet: View {
 
         let (tempURL, response) = try await URLSession.shared.download(from: remoteURL)
         guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode) else {
+              (200 ..< 300).contains(httpResponse.statusCode)
+        else {
             throw SkyMotionSheetError.downloadFailed
         }
 
@@ -717,10 +700,10 @@ struct SkyMotionConsentView: View {
 
                         Text(
                             "この機能は、あなたが選んだ空の写真を海外のAIサービス"
-                            + "（fal.ai／米国）に送信して、空が動く動画を生成します。"
-                            + "生成された動画はあなたの端末に保存されます。"
-                            + "生成には数分かかることがあります"
-                            + "（現在ベータ・1日3回まで）。"
+                                + "（fal.ai／米国）に送信して、空が動く動画を生成します。"
+                                + "生成された動画はあなたの端末に保存されます。"
+                                + "生成には数分かかることがあります"
+                                + "（現在ベータ・1日3回まで）。"
                         )
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.9))

@@ -26,12 +26,12 @@
 // - source(JPEG)/sky_mask(PNG)/ground_mask(PNG) の Data を返す（Storage アップロードは
 //   `SkyMotionJobService` の責務。本クラスはアップロードを行わない）
 
+import CoreGraphics
 import CoreImage
 import CoreImage.CIFilterBuiltins
-import CoreGraphics
 import Foundation
-import UIKit
 import os
+import UIKit
 
 /// `SkyMotionAssetPreparer` の処理中に発生しうるエラー
 enum SkyMotionAssetPreparerError: Error {
@@ -67,7 +67,6 @@ struct PreparedSkyMotionAssets {
 /// `LivingSkyEngine` と同様、Metal カーネルは使わない（本クラスは CIImage フィルタと
 /// CPU ラスタライズのみで完結する。動画生成そのものは fal.ai 側が行うため）。
 final class SkyMotionAssetPreparer {
-
     // MARK: - 定数（マジックナンバー回避）
 
     /// 長辺の縮小上限px。`LivingSkyEngine.exportMaxLongSide` と同じ値を採用する
@@ -81,8 +80,8 @@ final class SkyMotionAssetPreparer {
     /// trajectory の水平ドリフト量(px)。設計書§6 の既定値であり、
     /// Cloud Functions 側（`functions/skyMotionCore.js` の `DRIFT_PIXELS_RIGHT`）と
     /// 値を一致させること（クライアント側で計算済みの trajectory をそのまま Functions が使うため）。
-    /// 既定（フォールバック）の水平ドリフト量。実際の生成時は速さ×尺から `skyMotionDriftPixels`
-    /// が算出した値を `prepare(image:driftPixels:)` に渡す。internal なのはデフォルト引数と
+    /// 既定（フォールバック）の水平ドリフト量。実際の生成時は `SkyMotionPreset.driftPixels`
+    /// の値を `prepare(image:driftPixels:)` に渡す。internal なのはデフォルト引数と
     /// テスト（`SkyMotionAssetPreparerTests`）から参照するため。
     static let driftPixelsRight: CGFloat = 40
 
@@ -93,7 +92,7 @@ final class SkyMotionAssetPreparer {
     private static let aspectRatioCandidates: [(label: String, ratio: Double)] = [
         ("16:9", 16.0 / 9.0),
         ("9:16", 9.0 / 16.0),
-        ("1:1", 1.0)
+        ("1:1", 1.0),
     ]
 
     private static let logger = Logger(
@@ -128,8 +127,8 @@ final class SkyMotionAssetPreparer {
     ///
     /// - Note: 重い処理本体は `Task.detached` にオフロードし、呼び出し元のアクター
     ///   （多くは MainActor）をブロックしないようにする（`LivingSkyEngine.prepare` と同じ流儀）。
-    /// - Parameter driftPixels: trajectory の水平ドリフト量(px)＝雲の移動量。速さ×尺から
-    ///   `skyMotionDriftPixels(speed:duration:)` が算出した値を渡す。既定は実証済み安全値(40)。
+    /// - Parameter driftPixels: trajectory の水平ドリフト量(px)＝雲の移動量。
+    ///   `SkyMotionPreset.driftPixels` の値を渡す。既定は実証済み安全値(40)。
     func prepare(
         image: UIImage,
         driftPixels: CGFloat = SkyMotionAssetPreparer.driftPixelsRight
@@ -224,9 +223,9 @@ final class SkyMotionAssetPreparer {
         var sumY: Double = 0
         var count: Double = 0
 
-        for row in 0..<height {
+        for row in 0 ..< height {
             let rowStart = row * width
-            for col in 0..<width {
+            for col in 0 ..< width {
                 if binaryBytes[rowStart + col] >= 128 {
                     sumX += Double(col)
                     sumY += Double(row)
@@ -301,7 +300,8 @@ final class SkyMotionAssetPreparer {
         ciContext: CIContext
     ) throws -> (bytes: [UInt8], width: Int, height: Int) {
         guard !extent.isEmpty, !extent.isInfinite,
-              extent.width >= 1, extent.height >= 1 else {
+              extent.width >= 1, extent.height >= 1
+        else {
             throw SkyMotionAssetPreparerError.maskRasterizationFailed
         }
 
@@ -337,7 +337,7 @@ final class SkyMotionAssetPreparer {
         bitmapContext.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
 
         var gray = [UInt8](repeating: 0, count: width * height)
-        for i in 0..<(width * height) {
+        for i in 0 ..< (width * height) {
             gray[i] = rgba[i * 4]
         }
         return (gray, width, height)
@@ -352,7 +352,7 @@ final class SkyMotionAssetPreparer {
             throw SkyMotionAssetPreparerError.encodingFailed
         }
         let options: [CIImageRepresentationOption: Any] = [
-            CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): quality
+            CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): quality,
         ]
         guard let data = ciContext.jpegRepresentation(of: image, colorSpace: colorSpace, options: options) else {
             throw SkyMotionAssetPreparerError.encodingFailed
