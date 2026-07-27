@@ -84,12 +84,14 @@ struct SkyMotionSheet: View {
     /// ユーザーが選んだプリセット（単一3択・速さと尺がセット）。driftPixels(速さ) と
     /// loopDurationKey(尺) の両方を持つ。既定は .calm（≒10秒・落ち着いた見た目）。
     @State private var selectedPreset: SkyMotionPreset = .calm
-    /// 進行中/完成未保存のジョブID（UserDefaults 永続）。シートを閉じてもサーバーは生成を
-    /// 続けるため、これを残しておき、次にシートを開いた時 `resumeActiveJobIfNeeded()` で
-    /// 監視を張り直して結果を取り戻す（＝「閉じてもOK・完成後に開けば表示」の担保）。
-    /// ⚠️ シートを閉じた時にはクリアしない（再開の生命線）。クリアは `.saved`/`.failed`
-    /// 到達時のみ（`.onChange(of: state)` で一元化）。
-    @AppStorage("skyMotionActiveJobId") private var activeJobId = ""
+    /// 進行中ジョブID（UserDefaults 永続）。シートを閉じてもサーバーは生成を続けるため、これを
+    /// 残しておき、次にシートを開いた時 `resumeActiveJobIfNeeded()` で監視を張り直して結果を
+    /// 取り戻す（＝「閉じてもOK・完成後に開けば1回だけ表示」の担保）。
+    /// ⚠️ シートを閉じた時にはクリアしない（再開の生命線）。クリアは **終端状態すべて**
+    /// （completed/saved/downloadFailed/failed）到達時（`.onChange(of: state)` で一元化）。
+    /// → 完成済みジョブが毎回復活して新規生成を塞ぐ事故を防ぐ（1回表示したら次回は idle）。
+    /// キーは _v2: 旧 build(79/80) の未保存ジョブ（別プリセット/別drift）が復活する事故を断つため改名。
+    @AppStorage("skyMotionActiveJobId_v2") private var activeJobId = ""
     /// 初回の写真送信同意シートの表示フラグ。
     /// `hasConsentedSkyMotionUpload` が false のまま「動かす」が押されたときに true にする
     /// （`WhatsNewContent` 等の永続化フラグ＋一時的な表示フラグの組み合わせと同じ流儀）。
@@ -148,12 +150,13 @@ struct SkyMotionSheet: View {
             resumeActiveJobIfNeeded()
         }
         .onChange(of: state) { newState in
-            // 保存完了/失敗に達したジョブは再開対象から外す（waiting/completed/downloadFailed は
-            // 再開可能なので保持）。⚠️ dismiss（シートを閉じる）では絶対にクリアしない＝再開の生命線。
+            // 終端状態（完成/保存/DL失敗/失敗）に達したら再開対象から外す。これで完成済みジョブが
+            // 毎回復活して新規生成を塞ぐ事故を防ぐ（1回表示→次回 idle）。in-flight（preparing/
+            // uploading/waiting）中はクリアしない＝閉じても再開できる生命線。dismiss でもクリアしない。
             switch newState {
-            case .saved, .failed:
+            case .completed, .saved, .downloadFailed, .failed:
                 activeJobId = ""
-            default:
+            case .idle, .preparing, .uploading, .waiting:
                 break
             }
         }
@@ -317,13 +320,38 @@ struct SkyMotionSheet: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.black)
 
-            saveButton(localVideoURL: localVideoURL)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 16)
+            VStack(spacing: 12) {
+                saveButton(localVideoURL: localVideoURL)
+                // 別プリセットで作り直す導線。保存しなくても idle に戻って再生成できる
+                // （完成結果が居座って次の生成を塞ぐ事故を防ぐ・実機FB 2026-07-26）。
+                Button {
+                    regenerate()
+                } label: {
+                    Text("もう一度作る")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.8))
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
         }
         .onAppear {
             setUpLoopingPlayerIfNeeded(with: localVideoURL)
         }
+    }
+
+    /// 完成/保存後に「もう一度作る」で呼ぶ。現在のプレビューを片付けて idle に戻し、別プリセットで
+    /// 再生成できるようにする。activeJobId は onChange(.completed 等) で既にクリア済みだが念のため空に。
+    private func regenerate() {
+        pipelineTask?.cancel()
+        queuePlayer.pause()
+        playerLooper = nil
+        if let url = currentLocalVideoURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        activeJobId = ""
+        LoggingService.shared.logEvent("sky_motion_regenerate_tapped", parameters: nil)
+        state = .idle
     }
 
     @ViewBuilder
