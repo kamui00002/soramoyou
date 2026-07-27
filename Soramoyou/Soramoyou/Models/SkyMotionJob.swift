@@ -32,18 +32,26 @@ enum SkyMotionJobStatus: String, CaseIterable {
     case failed
 }
 
-/// ループ動画のプリセット（単一3択・2026-07-26確定）。速さと尺が「対角線」でセットになる:
-/// 速い=短い / ゆっくり=長い。ユーザー検証で fast_5s(quick) と slow_10s(calm) を採用、間に standard を追加。
-/// - `driftPixels`（雲の移動量 → trajectory・fal生成に反映）で「速さ」が決まり、
+/// ループ動画のプリセット（単一3択・2026-07-26確定 / 2026-07-28に速度較正）。
+/// 速さと尺が「対角線」でセットになる: 速い=短い / ゆっくり=長い。
+/// - `driftWidthRatio`（雲の移動量 → trajectory・fal生成に反映）で「速さ」が決まり、
 /// - `loopDurationKey`（→ `livingSkyJobs.loopDuration` → サーバー `slowFactorForJob` の setpts）で「尺」が決まる。
-/// 画面上の見かけ速度 ≈ driftPixels ÷ 出力尺: quick≈6.9 / standard≈5.3 / calm≈3.2 px/s。
-/// 実測値(ユーザーの電柱+積乱雲写真): この drift 域はゴースト無し・電柱固定OK（実機検証済み）。
+///
+/// ⚠️ ドリフト量は **画像幅に対する比率** で持つ（絶対pxではない）。
+///    写真は長辺1920に縮小されるため、同じ絶対pxでも横写真(幅1920)は縦写真(幅1440)より
+///    相対移動量が1.33倍小さくなり、「横写真だけ動いて見えない」不具合になっていた（2026-07-28実機FB）。
+///
+/// 較正の根拠（同一写真・同一サーバー経路での実測。動き量=隣接フレーム平均絶対差×fps）:
+///   - 旧quick  幅1.77% ÷ 5.64s = 0.314%/秒 → 実測12.4「とても良かった」
+///   - 旧calm   幅1.67% ÷10.64s = 0.157%/秒 → 実測 6.4「動いていない」
+///   見かけの動きは (幅比 ÷ 出力尺) にほぼ完全比例する（予測と実測の誤差3%）ため、
+///   下限6.4を大きく上回り、かつ速さの序列を保つ値として quick 12.4 / standard 11.7 / calm 11.2 を狙う。
 enum SkyMotionPreset: String, CaseIterable, Identifiable {
-    /// 速い・約5秒（= 検証済み fast_5s: drift34 / setpts1.3）
+    /// 速い・約5.6秒（実機で「とても良かった」判定の速度を維持 / setpts1.3）
     case quick
-    /// 標準・約7.5秒（= 検証済み middle_a: drift40 / setpts1.8）
+    /// 標準・約8秒（setpts1.8）
     case standard
-    /// ゆっくり・約10秒（= 検証済み slow_10s: drift32 / setpts2.3）
+    /// ゆっくり・約10.6秒（setpts2.3）
     case calm
 
     var id: String { rawValue }
@@ -56,12 +64,14 @@ enum SkyMotionPreset: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 雲の移動量(px)。速さを決める（`SkyMotionAssetPreparer` の trajectory ドリフトに渡す）。
-    var driftPixels: CGFloat {
+    /// 雲の水平移動量（**画像幅に対する比率**）。速さを決める。
+    /// `SkyMotionAssetPreparer` が縮小後の実幅に掛けて trajectory のpx量にする。
+    /// 上限の安全域: 幅の4.7%まではゴースト無し・地上固定OKを実証済み（旧 fast_10s 検証）。
+    var driftWidthRatio: CGFloat {
         switch self {
-        case .quick: 34
-        case .standard: 40
-        case .calm: 32
+        case .quick: 0.018
+        case .standard: 0.024
+        case .calm: 0.030
         }
     }
 

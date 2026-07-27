@@ -12,12 +12,11 @@
 //  （既存 LivingSkyEngineTests・CIImageTestHelpers と同型パターンを参照）。
 //
 
-import XCTest
 import CoreImage
 @testable import Soramoyou
+import XCTest
 
 final class SkyMotionAssetPreparerTests: XCTestCase {
-
     // MARK: - 2値化（binarizeMaskBytes）
 
     /// 閾値127を境に 0 または 255 だけを返すこと（設計書「2値化（フェザーではない）」）を検証する。
@@ -29,7 +28,7 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
 
     /// 出力が常に0/255の2値のみであること（中間値が残らないこと）を網羅的に検証する。
     func test_binarizeMaskBytes_outputIsAlwaysBinary() {
-        let allValues: [UInt8] = Array(0...255)
+        let allValues: [UInt8] = Array(0 ... 255)
         let result = SkyMotionAssetPreparer.binarizeMaskBytes(allValues, threshold: 127)
         XCTAssertTrue(result.allSatisfy { $0 == 0 || $0 == 255 }, "2値化後に0/255以外の値が残っている")
     }
@@ -115,15 +114,49 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
         XCTAssertNil(SkyMotionAssetPreparer.centroidPixel(binaryBytes: bytes, width: 8, height: 8))
     }
 
-    // MARK: - trajectoryの向き（設計書§4: 水平+40pxのみ・yは不変）
+    // MARK: - trajectoryの向き（設計書§4: 水平ドリフトのみ・yは不変）
 
-    /// trajectory の2点目が「重心から水平方向にのみ+40pxされ、yは不変」という設計書§4の契約を検証する。
+    /// trajectory の2点目が「重心から水平方向にのみドリフトし、yは不変」という設計書§4の契約を検証する。
     func test_trajectorySecondPoint_isHorizontalDriftOnly() {
         let centroid = CGPoint(x: 100, y: 50)
-        let driftPx: CGFloat = 40
+        let driftPx = SkyMotionAssetPreparer.driftPixels(imageWidth: 1000, ratio: 0.04)
         let second = CGPoint(x: centroid.x + driftPx, y: centroid.y)
         XCTAssertEqual(second.x, 140)
         XCTAssertEqual(second.y, 50, "trajectoryの2点目でYが変化している（水平ドリフトのみのはず）")
+    }
+
+    // MARK: - ドリフト量は画像幅比（2026-07-28 実機FB「横写真だけ雲が動いて見えない」の回帰防止）
+
+    /// ドリフト量が**画像幅に比例**すること。絶対px固定に戻すと、長辺1920縮小によって
+    /// 横写真(幅1920)と縦写真(幅1440)で相対移動量が1.33倍ズレ、横写真だけ雲が止まって見える。
+    func test_driftPixels_scalesWithImageWidth() {
+        let ratio = SkyMotionPreset.calm.driftWidthRatio
+        let landscape = SkyMotionAssetPreparer.driftPixels(imageWidth: 1920, ratio: ratio)
+        let portrait = SkyMotionAssetPreparer.driftPixels(imageWidth: 1440, ratio: ratio)
+
+        XCTAssertGreaterThan(landscape, portrait, "幅の広い横写真ほどドリフトpxも大きくなるべき")
+        // 幅比 1920:1440 = 4:3 がそのままドリフトpx比になる＝「画面に対する割合」が揃っている。
+        XCTAssertEqual(landscape / portrait, 1920.0 / 1440.0, accuracy: 0.0001,
+                       "ドリフトpxが画像幅に比例していない（絶対px固定に退行した疑い）")
+    }
+
+    /// 全プリセットのドリフト比率が「見える下限」と「実証済み安全上限」の間にあることを検証する。
+    /// 下限: 幅1.67%÷10.64秒で実機「動いていない」判定（→ 尺の長い calm でも 3.0% は確保する）。
+    /// 上限: 幅4.7%まではゴースト無し・地上固定OKを実証済み（旧 fast_10s 検証）。
+    func test_allPresetDriftRatios_areWithinProvenRange() {
+        for preset in SkyMotionPreset.allCases {
+            XCTAssertGreaterThanOrEqual(preset.driftWidthRatio, 0.018,
+                                        "\(preset.rawValue) のドリフトが小さすぎる（雲が止まって見える）")
+            XCTAssertLessThanOrEqual(preset.driftWidthRatio, 0.047,
+                                     "\(preset.rawValue) のドリフトが実証済み安全域を超えている")
+        }
+    }
+
+    /// 尺が長いプリセットほど総移動量（ドリフト比率）を大きく取ること。
+    /// 尺だけ伸ばしてドリフトを据え置くと 1秒あたりの速度が落ち、「動いていない」に戻る。
+    func test_longerPresets_haveLargerDrift() {
+        XCTAssertLessThan(SkyMotionPreset.quick.driftWidthRatio, SkyMotionPreset.standard.driftWidthRatio)
+        XCTAssertLessThan(SkyMotionPreset.standard.driftWidthRatio, SkyMotionPreset.calm.driftWidthRatio)
     }
 
     // MARK: - aspect比の近似（nearestAspectRatio）
@@ -168,11 +201,11 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
 
     private static func makeTwoBandGrayscaleCIImage(size: Int, topValue: UInt8, bottomValue: UInt8) -> CIImage {
         var bytes = [UInt8](repeating: 0, count: size * size * 4)
-        for y in 0..<size {
-            for x in 0..<size {
+        for y in 0 ..< size {
+            for x in 0 ..< size {
                 let i = (y * size + x) * 4
                 let c: UInt8 = y < size / 2 ? topValue : bottomValue
-                bytes[i]     = c
+                bytes[i] = c
                 bytes[i + 1] = c
                 bytes[i + 2] = c
                 bytes[i + 3] = 255
@@ -199,7 +232,7 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
         let extent = CGRect(x: 0, y: 0, width: size, height: size)
         let rgba = try CIImageTestHelpers.renderRGBA8Pixels(image, extent: extent)
         var gray = [UInt8](repeating: 0, count: size * size)
-        for i in 0..<(size * size) {
+        for i in 0 ..< (size * size) {
             gray[i] = rgba[i * 4]
         }
         return (gray, size, size)

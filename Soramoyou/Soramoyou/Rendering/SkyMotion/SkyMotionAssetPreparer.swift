@@ -77,13 +77,15 @@ final class SkyMotionAssetPreparer {
     /// 2値化の閾値（0...255）。設計書「閾値127相当」に対応。
     private static let binarizeThreshold: UInt8 = 127
 
-    /// trajectory の水平ドリフト量(px)。設計書§6 の既定値であり、
-    /// Cloud Functions 側（`functions/skyMotionCore.js` の `DRIFT_PIXELS_RIGHT`）と
-    /// 値を一致させること（クライアント側で計算済みの trajectory をそのまま Functions が使うため）。
-    /// 既定（フォールバック）の水平ドリフト量。実際の生成時は `SkyMotionPreset.driftPixels`
-    /// の値を `prepare(image:driftPixels:)` に渡す。internal なのはデフォルト引数と
+    /// 既定（フォールバック）の水平ドリフト量＝**画像幅に対する比率**。
+    /// 実際の生成時は `SkyMotionPreset.driftWidthRatio` の値を
+    /// `prepare(image:driftWidthRatio:)` に渡す。internal なのはデフォルト引数と
     /// テスト（`SkyMotionAssetPreparerTests`）から参照するため。
-    static let driftPixelsRight: CGFloat = 40
+    ///
+    /// ⚠️ 絶対pxではなく比率で持つ理由: 写真は長辺1920に縮小されるため、同じ絶対pxでも
+    ///    横写真(幅1920)は縦写真(幅1440)より相対移動量が1.33倍小さくなり、
+    ///    「横写真だけ雲が動いて見えない」不具合になっていた（2026-07-28 実機FB）。
+    static let driftWidthRatioDefault: CGFloat = SkyMotionPreset.standard.driftWidthRatio
 
     /// source.jpg の JPEG 品質
     private static let jpegQuality: CGFloat = 0.9
@@ -127,21 +129,21 @@ final class SkyMotionAssetPreparer {
     ///
     /// - Note: 重い処理本体は `Task.detached` にオフロードし、呼び出し元のアクター
     ///   （多くは MainActor）をブロックしないようにする（`LivingSkyEngine.prepare` と同じ流儀）。
-    /// - Parameter driftPixels: trajectory の水平ドリフト量(px)＝雲の移動量。
-    ///   `SkyMotionPreset.driftPixels` の値を渡す。既定は実証済み安全値(40)。
+    /// - Parameter driftWidthRatio: trajectory の水平ドリフト量＝雲の移動量を
+    ///   **縮小後の画像幅に対する比率**で指定する。`SkyMotionPreset.driftWidthRatio` の値を渡す。
     func prepare(
         image: UIImage,
-        driftPixels: CGFloat = SkyMotionAssetPreparer.driftPixelsRight
+        driftWidthRatio: CGFloat = SkyMotionAssetPreparer.driftWidthRatioDefault
     ) async throws -> PreparedSkyMotionAssets {
         let workTask = Task.detached(priority: .userInitiated) { () async throws -> PreparedSkyMotionAssets in
-            try await self.prepareAsync(image: image, driftPixels: driftPixels)
+            try await self.prepareAsync(image: image, driftWidthRatio: driftWidthRatio)
         }
         return try await workTask.value
     }
 
     // MARK: - Private: 処理本体（Task.detached からオフロードして呼ばれる）
 
-    private func prepareAsync(image: UIImage, driftPixels: CGFloat) async throws -> PreparedSkyMotionAssets {
+    private func prepareAsync(image: UIImage, driftWidthRatio: CGFloat) async throws -> PreparedSkyMotionAssets {
         // 手順①②: 向き正規化 + 長辺1920縮小（LivingSkyEngine.prepareAsync の①②を移植）
         let photo = try Self.normalizeAndScale(image: image, maxLongSide: Self.maxLongSide)
 
@@ -175,6 +177,7 @@ final class SkyMotionAssetPreparer {
         if detectedCentroid == nil {
             Self.logger.warning("空マスクが空（0画素）のため画像中心へフォールバックした")
         }
+        let driftPixels = Self.driftPixels(imageWidth: CGFloat(width), ratio: driftWidthRatio)
         let trajectory = [centroid, CGPoint(x: centroid.x + driftPixels, y: centroid.y)]
 
         // 手順⑥: aspect比の近似（純関数）
@@ -236,6 +239,19 @@ final class SkyMotionAssetPreparer {
 
         guard count > 0 else { return nil }
         return CGPoint(x: sumX / count, y: sumY / count)
+    }
+
+    /// 雲の水平移動量を「画像幅に対する比率」から実px量へ変換する（純関数・テスト対象）。
+    ///
+    /// ⚠️ ここを絶対pxで固定してはいけない。写真は長辺1920に縮小されるため、
+    ///    横写真は幅1920・縦写真は幅1440となり、同じ絶対pxでは横写真の相対移動量が
+    ///    1.33倍小さくなる。実機では「横写真だけ雲が止まって見える」として現れた（2026-07-28 FB）。
+    ///    比率で持てば、どの向きの写真でも画面に対して同じ割合だけ流れる。
+    /// - Parameters:
+    ///   - imageWidth: 縮小後の画像幅(px)。
+    ///   - ratio: `SkyMotionPreset.driftWidthRatio`（幅に対する比率）。
+    static func driftPixels(imageWidth: CGFloat, ratio: CGFloat) -> CGFloat {
+        imageWidth * ratio
     }
 
     /// 画像の縦横比を "16:9" / "9:16" / "1:1" のいずれか最も近いものへ近似する。
