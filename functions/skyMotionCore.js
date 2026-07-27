@@ -18,11 +18,6 @@
 /** 1日あたりの生成回数上限（livingSkyUsage.reservedCount の上限）。 */
 const DAILY_LIMIT = 3;
 
-/** trajectory の水平ドリフト量(px)。クライアント側で既に計算済みの値を
- *  Firestore の job.trajectory に保存して渡してくる想定のため、Functions
- *  側では実際には使わない（クライアントと合わせるための参照用定数）。 */
-const DRIFT_PIXELS_RIGHT = 40;
-
 /** ポーリングを打ち切って status="failed" / errorCode="timeout" にするまでの時間(ms)。 */
 const POLL_TIMEOUT_MS = 20 * 60 * 1000;
 
@@ -274,7 +269,6 @@ function isClaimableJob(jobData) {
 
 module.exports = {
   DAILY_LIMIT,
-  DRIFT_PIXELS_RIGHT,
   POLL_TIMEOUT_MS,
   SUBMIT_MAX_RETRIES,
   FAL_APP_ID,

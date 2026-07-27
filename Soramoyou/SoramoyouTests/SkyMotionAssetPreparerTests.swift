@@ -140,13 +140,25 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
                        "ドリフトpxが画像幅に比例していない（絶対px固定に退行した疑い）")
     }
 
-    /// 全プリセットのドリフト比率が「見える下限」と「実証済み安全上限」の間にあることを検証する。
-    /// 下限: 幅1.67%÷10.64秒で実機「動いていない」判定（→ 尺の長い calm でも 3.0% は確保する）。
-    /// 上限: 幅4.7%まではゴースト無し・地上固定OKを実証済み（旧 fast_10s 検証）。
-    func test_allPresetDriftRatios_areWithinProvenRange() {
+    /// **見かけの速さ（幅比 ÷ 出力尺）**が全プリセットで「動いて見える下限」を満たすことを検証する。
+    /// これが本命の不変条件。ドリフト比率だけを見ても、尺が伸びれば速度は落ちるため守れない。
+    ///
+    /// 実測の根拠: 0.157%/秒 → 実機「動いていない」／ 0.314%/秒 → 実機「とても良かった」。
+    /// 下限は後者に合わせて 0.30%/秒 とする（最も遅い calm でもこの水準を確保する）。
+    func test_allPresets_moveFastEnoughToBePerceived() {
         for preset in SkyMotionPreset.allCases {
-            XCTAssertGreaterThanOrEqual(preset.driftWidthRatio, 0.018,
-                                        "\(preset.rawValue) のドリフトが小さすぎる（雲が止まって見える）")
+            let percentPerSecond = preset.driftWidthRatio / preset.approximateSeconds * 100
+            XCTAssertGreaterThanOrEqual(
+                percentPerSecond, 0.30,
+                "\(preset.rawValue) の見かけ速度 \(percentPerSecond)%/秒 が遅すぎる（雲が止まって見える）"
+            )
+        }
+    }
+
+    /// ドリフト比率が実証済みの安全上限を超えないことを検証する。
+    /// 幅4.7%まではゴースト無し・地上固定OKを実証済み（旧 fast_10s 検証）。
+    func test_allPresetDriftRatios_stayWithinProvenCeiling() {
+        for preset in SkyMotionPreset.allCases {
             XCTAssertLessThanOrEqual(preset.driftWidthRatio, 0.047,
                                      "\(preset.rawValue) のドリフトが実証済み安全域を超えている")
         }
@@ -157,6 +169,32 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
     func test_longerPresets_haveLargerDrift() {
         XCTAssertLessThan(SkyMotionPreset.quick.driftWidthRatio, SkyMotionPreset.standard.driftWidthRatio)
         XCTAssertLessThan(SkyMotionPreset.standard.driftWidthRatio, SkyMotionPreset.calm.driftWidthRatio)
+    }
+
+    /// 速さの序列（quick > standard > calm）が保たれていること。
+    /// 3択の意味そのもの（「速い/標準/ゆっくり」）がラベルと矛盾しないための契約。
+    func test_presetSpeedOrdering_matchesLabels() {
+        let quick = SkyMotionPreset.quick.driftWidthRatio / SkyMotionPreset.quick.approximateSeconds
+        let standard = SkyMotionPreset.standard.driftWidthRatio / SkyMotionPreset.standard.approximateSeconds
+        let calm = SkyMotionPreset.calm.driftWidthRatio / SkyMotionPreset.calm.approximateSeconds
+        XCTAssertGreaterThan(quick, standard, "「速い」が「標準」より遅い")
+        XCTAssertGreaterThan(standard, calm, "「標準」が「ゆっくり」より遅い")
+    }
+
+    /// 速さ側(`SkyMotionAssetPreparer.driftWidthRatioDefault`)と尺側(`SkyMotionJob` の
+    /// `loopDuration` 既定値)の既定プリセットが一致していること。
+    /// 片方だけ変えると「標準の速さ × ゆっくりの尺」のようなチグハグな組み合わせになり、
+    /// 見かけ速度が想定外に落ちる。
+    func test_defaultPreset_isConsistentBetweenSpeedAndDuration() {
+        let job = SkyMotionJob(
+            id: "test", userId: "u", sourcePath: "s", skyMaskPath: "k",
+            groundMaskPath: "g", aspectRatio: "1:1", trajectory: []
+        )
+        let durationDefaultPreset = SkyMotionPreset.allCases.first { $0.loopDurationKey == job.loopDuration }
+        XCTAssertEqual(
+            durationDefaultPreset?.driftWidthRatio, SkyMotionAssetPreparer.driftWidthRatioDefault,
+            "速さの既定プリセットと尺の既定プリセットが食い違っている"
+        )
     }
 
     // MARK: - aspect比の近似（nearestAspectRatio）

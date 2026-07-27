@@ -85,7 +85,11 @@ final class SkyMotionAssetPreparer {
     /// ⚠️ 絶対pxではなく比率で持つ理由: 写真は長辺1920に縮小されるため、同じ絶対pxでも
     ///    横写真(幅1920)は縦写真(幅1440)より相対移動量が1.33倍小さくなり、
     ///    「横写真だけ雲が動いて見えない」不具合になっていた（2026-07-28 実機FB）。
-    static let driftWidthRatioDefault: CGFloat = SkyMotionPreset.standard.driftWidthRatio
+    ///
+    /// ⚠️ `SkyMotionJob` の作成用イニシャライザの `loopDuration` 既定値と**同じプリセット**を指すこと。
+    ///    速さ(ここ)と尺(あちら)がチグハグなプリセットの組み合わせになると、見かけの速度
+    ///    (幅比 ÷ 尺) が想定外に落ちて「動いて見えない」に戻る。
+    static let driftWidthRatioDefault: CGFloat = SkyMotionPreset.calm.driftWidthRatio
 
     /// source.jpg の JPEG 品質
     private static let jpegQuality: CGFloat = 0.9
