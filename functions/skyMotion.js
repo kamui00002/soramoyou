@@ -427,10 +427,14 @@ function runFfmpeg(args) {
 }
 
 /**
- * Kling の5秒mp4を「約10秒・一方向・継ぎ目なしループ」に変換して返す。
- *  1) setpts で 2.0倍スロー + minterpolate で滑らかな30fpsに
- *  2) 一方向クロスフェードループ（末尾を先頭に溶け込ませる。xfade offset は実尺から動的計算）
- * ⚠️ 失敗/タイムアウト時は throw する（呼び出し側が元の5秒mp4で続行＝graceful degrade）。
+ * Kling の5秒mp4を「一方向・継ぎ目なしループ」に変換して返す（尺は slowFactor 依存）。
+ *  1) setpts で slowFactor 倍スロー + minterpolate(blend) で滑らかな30fpsに
+ *  2) 手動クロスフェードループ（末尾D秒を先頭D秒に溶け込ませる。出力尺 ≈ L-D）
+ * ⚠️ ffmpeg 6.0(ffmpeg-static@5.x) の `xfade` はこの用途で**ハング**（→90秒timeout→degrade）または
+ *    **尺2倍化**する（2026-07-27 実測。7.x では正常だが npm 未提供）。さらに `fps` フィルタも複雑
+ *    グラフ内で尺を2倍化させる。よって xfade も fps も使わず、split+trim+fade+overlay+concat の
+ *    基本フィルタで手動クロスフェードする（6.0 で高速・正尺・継ぎ目Δ≈3 を実測確認）。
+ * ⚠️ 失敗/タイムアウト時は throw（呼び出し側が元の5秒mp4で続行＝graceful degrade）。
  * @param {Buffer} inputBuffer 元の mp4
  * @param {string} jobId 一時ファイル名の衝突回避用
  * @returns {Promise<Buffer>} 変換後の mp4
@@ -454,21 +458,38 @@ async function makeSeamlessLoop(inputBuffer, jobId, slowFactor = LOOP_SLOW_FACTO
       "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", slowPath,
     ]);
 
-    // 2) 一方向クロスフェードループ。main=先頭1秒を落とした本体、fade=先頭1秒。
-    //    末尾で fade をクロスフェードして先頭へ繋ぐ。xfade offset は「main尺 - D - マージン」で
-    //    動的計算（実測: マージン0.067は "Invalid argument"・0.6+で安定）。
-    const slowedDur = await probeDuration(slowPath);
-    const mainDur = slowedDur - LOOP_XFADE_DURATION; // trim=start=1 後の尺
-    const offset = Math.max(0, mainDur - LOOP_XFADE_DURATION - 0.6);
+    // 2) 手動クロスフェードループ（xfade不使用・ffmpeg6.0対策）。
+    //    body=先頭〜(L-2D) / xo=(L-2D)〜(L-D)を fade-out / xi=先頭D秒を fade-in、xo に xi を
+    //    overlay で重ねて body に concat。末尾D秒が先頭へ溶けるので end→start がseamlessにループ。
+    //    出力尺 = L-D。⚠️ `fps` フィルタは尺2倍化バグを誘発するため入れない（format/setsar のみ）。
+    const L = await probeDuration(slowPath);
+    const D = LOOP_XFADE_DURATION; // クロスフェード秒数
+    const bodyEnd = L - 2 * D;
+    if (!(bodyEnd > 0)) {
+      // 素材が短すぎてクロスフェード領域を取れない（想定外）。スロー版をそのまま返す。
+      return await fsp.readFile(slowPath);
+    }
     await runFfmpeg([
       "-y", "-i", slowPath,
       "-filter_complex",
-      `[0]trim=start=${LOOP_XFADE_DURATION},setpts=PTS-STARTPTS[main];` +
-      `[0]trim=end=${LOOP_XFADE_DURATION},setpts=PTS-STARTPTS[fade];` +
-      `[main][fade]xfade=transition=fade:duration=${LOOP_XFADE_DURATION}:offset=${offset.toFixed(2)}[v]`,
+      `[0]split=3[s0][s1][s2];` +
+      `[s0]trim=0:${bodyEnd.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p,setsar=1[body];` +
+      `[s1]trim=${bodyEnd.toFixed(3)}:${(L - D).toFixed(3)},setpts=PTS-STARTPTS,` +
+        `format=yuva420p,fade=t=out:st=0:d=${D}:alpha=1[xo];` +
+      `[s2]trim=0:${D},setpts=PTS-STARTPTS,format=yuva420p,fade=t=in:st=0:d=${D}:alpha=1[xi];` +
+      `[xo][xi]overlay,format=yuv420p,setsar=1[xf];` +
+      `[body][xf]concat=n=2:v=1[v]`,
       "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", outPath,
     ]);
 
+    // 3) 尺サニティチェック（silent degrade 隠蔽防止・アドバイザー指摘）。
+    //    期待は L-D。大きく外れたら「ループ生成が壊れた」とみなし throw → 呼び出し側で生5秒degrade+警告。
+    //    build 78-82 で xfade が黙って壊れ生5秒に落ちていたのを検知できず長期間隠れた反省。
+    const outDur = await probeDuration(outPath);
+    const expected = L - D;
+    if (!(outDur > 0) || Math.abs(outDur - expected) > 1.5) {
+      throw new Error(`ループ尺が異常: out=${outDur} expected≈${expected} (ffmpegループ破損の疑い)`);
+    }
     return await fsp.readFile(outPath);
   } finally {
     // 一時ファイルは best-effort で削除（/tmp は tmpfs＝メモリなので放置しない）。
