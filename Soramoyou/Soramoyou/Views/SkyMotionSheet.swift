@@ -271,6 +271,12 @@ struct SkyMotionSheet: View {
                     .foregroundColor(.white.opacity(0.6))
             }
             Spacer()
+            // 残高0のときは idle からも購入できるようにする。
+            // ⚠️ 「無料枠を使い切って失敗してから」しか買えない作りにすると、
+            //    まとめて作りたい人が失敗を1回踏まないと購入に辿り着けない。
+            if creditService.balance == 0 {
+                purchaseButton
+            }
             // 速さと尺がセットの単一3択（速い/標準/ゆっくり）。速さ=雲の移動量(trajectory)、尺=setpts。
             VStack(spacing: 6) {
                 Text("動きの速さ・長さ")
