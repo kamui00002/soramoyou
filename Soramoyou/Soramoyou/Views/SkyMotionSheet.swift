@@ -65,7 +65,7 @@ enum SkyMotionSheetState: Equatable {
     case downloadFailed(videoURLString: String)
     /// 失敗。`errorCode` はジョブ側の失敗理由（設計書§1: quota_exceeded 等）。
     /// クライアント側の失敗（準備/アップロード/未ログイン等）では nil になる。
-    case failed(errorCode: String?)
+    case failed(errorCode: String?, serverMessage: String?)
 }
 
 /// 「空を動かす」（Kling版）β のプレビュー・生成シート。
@@ -79,6 +79,9 @@ struct SkyMotionSheet: View {
     let sourceImage: UIImage
 
     // MARK: - State
+
+    /// 回数パックの残高・購入フロー。⚠️ 残高は**表示用**で、生成可否はサーバーが決める。
+    @ObservedObject private var creditService = SkyMotionCreditService.shared
 
     @State private var state: SkyMotionSheetState = .idle
     /// ユーザーが選んだプリセット（単一3択）。`loopDurationKey`（→サーバーの setpts）で
@@ -149,6 +152,11 @@ struct SkyMotionSheet: View {
             // シートを開いた時、進行中/完成未保存のジョブが残っていれば監視を張り直す（再開）。
             // これで「閉じてもOK・完成後に開けば結果を表示」が成立する。
             resumeActiveJobIfNeeded()
+            // 残高の購読と、**未完了トランザクションの再送**を開始する。
+            // ⚠️ 再送はここが唯一の入口。前回「購入は済んだがサーバー加算の確認前に落ちた」
+            //    ケースはここで拾い直される（＝課金したのに増えない事故の最後の砦）。
+            creditService.start()
+            await creditService.loadProducts()
         }
         .onChange(of: state) { newState in
             // 終端状態（完成/保存/DL失敗/失敗）に達したら再開対象から外す。これで完成済みジョブが
@@ -219,8 +227,8 @@ struct SkyMotionSheet: View {
             resultView(localVideoURL: url)
         case let .downloadFailed(videoURLString):
             downloadFailedView(videoURLString: videoURLString)
-        case let .failed(errorCode):
-            failedView(errorCode: errorCode)
+        case let .failed(errorCode, serverMessage):
+            failedView(errorCode: errorCode, serverMessage: serverMessage)
         }
     }
 
@@ -245,11 +253,22 @@ struct SkyMotionSheet: View {
             Text("空を動かす（Kling版・β）")
                 .font(.headline)
                 .foregroundColor(.white)
-            Text("この写真の空にゆるやかな動きをつけた動画を作ります。\n生成には数分かかることがあります（1日3回まで）。")
+            Text("この写真の空にゆるやかな動きをつけた動画を作ります。\n生成には数分かかることがあります。")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
+            // 残高表示。⚠️ これは**表示用**であって認可ではない（実際に生成できるかは
+            //    サーバーの reserveAndClaimJob が無料枠と残高を見て決める）。
+            if creditService.balance > 0 {
+                Label("残り \(creditService.balance) 回ぶんのクレジット", systemImage: "ticket")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.75))
+            } else {
+                Text("毎日1回まで無料で作れます")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
+            }
             Spacer()
             // 速さと尺がセットの単一3択（速い/標準/ゆっくり）。速さ=雲の移動量(trajectory)、尺=setpts。
             VStack(spacing: 6) {
@@ -433,18 +452,23 @@ struct SkyMotionSheet: View {
 
     // MARK: - 失敗
 
-    private func failedView(errorCode: String?) -> some View {
+    private func failedView(errorCode: String?, serverMessage: String?) -> some View {
         VStack(spacing: 20) {
             Spacer()
-            Image(systemName: "exclamationmark.triangle")
+            Image(systemName: errorCode == "quota_exceeded" ? "hourglass" : "exclamationmark.triangle")
                 .font(.system(size: 40))
                 .foregroundColor(.white.opacity(0.8))
-            Text(failureMessage(for: errorCode))
+            Text(failureMessage(for: errorCode, serverMessage: serverMessage))
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.85))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
             Spacer()
+            // 無料枠を使い切って残高も無いときだけ、購入導線を出す。
+            // ⚠️ 日次上限（paid_daily_cap）で弾かれた場合は買い足しても今日は使えないので出さない。
+            if errorCode == "quota_exceeded", creditService.balance == 0 {
+                purchaseButton
+            }
             Button {
                 // 「動かす」ボタンからやり直せるよう idle に戻す（シート自体は閉じない。
                 // シート自体を閉じたい場合はツールバーの「閉じる」を使う）。
@@ -463,13 +487,56 @@ struct SkyMotionSheet: View {
     }
 
     /// 設計書§1 の `errorCode` ごとの日本語メッセージ。
-    /// `errorCode == nil`（クライアント側の失敗・未知のコード）は「その他」扱いにまとめる。
-    private func failureMessage(for errorCode: String?) -> String {
+    ///
+    /// `quota_exceeded` は理由が2種類ある（無料枠を使い切って残高も無い／購入枠の日次上限）。
+    /// サーバーが理由ごとに文言を書き分けているので、**あればそれをそのまま出す**
+    /// （クライアントで理由を再判定すると、サーバーの上限値を二重管理することになる）。
+    private func failureMessage(for errorCode: String?, serverMessage: String?) -> String {
         switch errorCode {
         case "quota_exceeded":
-            "今日の無料回数（3回）を使い切ったみたい。また明日試してね"
+            serverMessage ?? "今日の生成回数を使い切ったみたい。また明日試してね"
         default:
             "生成に失敗したの。もう一度試してみて（回数は消費されていないわ）"
+        }
+    }
+
+    // MARK: - 回数パックの購入導線
+
+    /// クレジット購入ボタン。購入状態に応じてラベルと有効/無効が変わる。
+    @ViewBuilder
+    private var purchaseButton: some View {
+        let price = creditService.displayPrice(for: SkyMotionProduct.pack5)
+        let credits = SkyMotionProduct.displayCredits(for: SkyMotionProduct.pack5) ?? 5
+        Button {
+            Task { await creditService.purchase() }
+        } label: {
+            Group {
+                switch creditService.purchaseState {
+                case .purchasing, .verifying:
+                    HStack(spacing: 8) {
+                        ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        Text(creditService.purchaseState == .verifying ? "反映しています…" : "購入手続き中…")
+                    }
+                default:
+                    // 価格は StoreKit から取れたときだけ出す（取れないのに「¥1,000」と
+                    // 決め打ちすると、地域や価格改定でユーザーに嘘を見せることになる）。
+                    Text(price.map { "\(credits)回パックを購入（\($0)）" } ?? "\(credits)回パックを購入")
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(.white)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(Capsule().fill(Color.white.opacity(0.28)))
+        }
+        .disabled(isPurchaseInFlight)
+        .padding(.horizontal, 24)
+    }
+
+    private var isPurchaseInFlight: Bool {
+        switch creditService.purchaseState {
+        case .purchasing, .verifying: true
+        default: false
         }
     }
 
@@ -501,7 +568,7 @@ struct SkyMotionSheet: View {
                 // 失敗表示にフォールバックする（`firestore.rules` の create 条件が
                 // `request.auth.uid` を要求するため、未ログインではどのみち job 作成が失敗する）。
                 guard let userId = Auth.auth().currentUser?.uid else {
-                    state = .failed(errorCode: nil)
+                    state = .failed(errorCode: nil, serverMessage: nil)
                     return
                 }
 
@@ -549,7 +616,7 @@ struct SkyMotionSheet: View {
                     return
                 }
                 LoggingService.shared.logErrorEvent(error, context: "sky_motion_pipeline", category: .systemError)
-                state = .failed(errorCode: nil)
+                state = .failed(errorCode: nil, serverMessage: nil)
             }
         }
     }
@@ -568,7 +635,7 @@ struct SkyMotionSheet: View {
 
             case .completed:
                 guard let videoURLString = job.videoURL else {
-                    state = .failed(errorCode: nil)
+                    state = .failed(errorCode: nil, serverMessage: nil)
                     return
                 }
                 do {
@@ -590,7 +657,7 @@ struct SkyMotionSheet: View {
                 return
 
             case .failed:
-                state = .failed(errorCode: job.errorCode)
+                state = .failed(errorCode: job.errorCode, serverMessage: job.error)
                 LoggingService.shared.logEvent("sky_motion_job_failed", parameters: [
                     "error_code": job.errorCode ?? "unknown",
                 ])
@@ -616,7 +683,7 @@ struct SkyMotionSheet: View {
                     return
                 }
                 LoggingService.shared.logErrorEvent(error, context: "sky_motion_resume", category: .systemError)
-                state = .failed(errorCode: nil)
+                state = .failed(errorCode: nil, serverMessage: nil)
             }
         }
     }
