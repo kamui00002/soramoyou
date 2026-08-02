@@ -305,3 +305,81 @@ test("fetchWithTimeout: ヘッダー到達後に body が止まっても timeout
     "body スタール時は timeoutMs で reject されるべき（watchdog 先着＝ハング＝A の欠陥が再発）"
   );
 });
+
+// ============================================================
+// ループ化（スロー係数 / クロスフェード窓）
+// ============================================================
+
+test("slowFactorForJob: loopDuration が最優先で使われる", () => {
+  assert.equal(core.slowFactorForJob({ loopDuration: "short" }), 1.3);
+  assert.equal(core.slowFactorForJob({ loopDuration: "medium" }), 1.5);
+  assert.equal(core.slowFactorForJob({ loopDuration: "long" }), 1.7);
+});
+
+test("slowFactorForJob: 旧build の loopSpeed も受ける（後方互換）", () => {
+  assert.equal(core.slowFactorForJob({ loopSpeed: "fast" }), 1.3);
+  assert.equal(core.slowFactorForJob({ loopSpeed: "slow" }), 1.7);
+});
+
+test("slowFactorForJob: どちらも無い/未知なら既定値", () => {
+  assert.equal(core.slowFactorForJob({}), core.LOOP_SLOW_FACTOR_DEFAULT);
+  assert.equal(core.slowFactorForJob({ loopDuration: "unknown" }), core.LOOP_SLOW_FACTOR_DEFAULT);
+});
+
+test("スロー係数は全て上限以下（超えると『雲が動いて見えない』に戻る回帰ガード）", () => {
+  for (const [key, factor] of Object.entries(core.LOOP_DURATION_FACTORS)) {
+    assert.ok(
+      factor <= core.LOOP_SLOW_FACTOR_MAX,
+      `loopDuration=${key} の係数 ${factor} が上限 ${core.LOOP_SLOW_FACTOR_MAX} を超えている`
+        + "（実測: 係数2.3は実機NG『動いてない』/ 係数1.3はOK）"
+    );
+  }
+  for (const [key, factor] of Object.entries(core.LOOP_SPEED_FACTORS)) {
+    assert.ok(factor <= core.LOOP_SLOW_FACTOR_MAX, `loopSpeed=${key} の係数 ${factor} が上限超え`);
+  }
+  assert.ok(core.LOOP_SLOW_FACTOR_DEFAULT <= core.LOOP_SLOW_FACTOR_MAX);
+});
+
+test("スロー係数は尺の順序（short < medium < long）を保つ", () => {
+  const f = core.LOOP_DURATION_FACTORS;
+  assert.ok(f.short < f.medium, "short は medium より短いはず");
+  assert.ok(f.medium < f.long, "medium は long より短いはず");
+});
+
+test("loopTrimWindows: 先頭と末尾が同じ位置 A(D) に揃う（シームレスの必要条件）", () => {
+  const D = 1;
+  const L = 6.5;
+  const w = core.loopTrimWindows(L, D);
+  // 出力の先頭フレーム = body の開始 = A(bodyStart)
+  // 出力の末尾フレーム = xi の終端   = A(xiEnd)
+  assert.equal(w.bodyStart, w.xiEnd, "先頭と末尾が同じソース位置を指していないとループが飛ぶ");
+  assert.equal(w.bodyStart, D);
+});
+
+test("loopTrimWindows: body の終端と xo の開始が連続している（つなぎ目に飛びが無い）", () => {
+  const w = core.loopTrimWindows(6.5, 1);
+  assert.equal(w.bodyEnd, w.xoStart);
+});
+
+test("loopTrimWindows: xo は素材の末尾まで使い切る / 出力尺は L-D", () => {
+  const L = 6.5;
+  const D = 1;
+  const w = core.loopTrimWindows(L, D);
+  assert.equal(w.xoEnd, L);
+  assert.equal(w.outDuration, L - D);
+  // 各区間の長さ: body=L-2D, xo=D → 合計 L-D
+  assert.ok(Math.abs((w.bodyEnd - w.bodyStart) + (w.xoEnd - w.xoStart) - w.outDuration) < 1e-9);
+});
+
+test("loopTrimWindows: 旧実装（body を 0 から取る）に戻していないことの回帰ガード", () => {
+  const w = core.loopTrimWindows(6.5, 1);
+  assert.notEqual(w.bodyStart, 0,
+    "body を A[0,...] から取ると先頭A(0)/末尾A(D)がD秒ズレて巻き戻りが飛ぶ（build83以前のバグ）");
+});
+
+test("loopTrimWindows: クロスフェード区間が取れない短さなら null", () => {
+  assert.equal(core.loopTrimWindows(2, 1), null);   // L - 2D = 0
+  assert.equal(core.loopTrimWindows(1.5, 1), null); // L - 2D < 0
+  assert.equal(core.loopTrimWindows(0, 1), null);
+  assert.equal(core.loopTrimWindows(6.5, 0), null);
+});

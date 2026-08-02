@@ -64,25 +64,17 @@ const SIGNED_URL_EXPIRES_MS = 60 * 60 * 1000; // 1時間
 const FAL_API_TIMEOUT_MS = 25 * 1000; // submit / status / result（軽いJSON）
 const FAL_VIDEO_TIMEOUT_MS = 50 * 1000; // mp4 ダウンロード（数MB）
 
-// 「約10秒・一方向・継ぎ目なしループ」への変換パラメータ（ローカル実写検証で確定）。
-// 2.0倍スロー + minterpolate(補間で滑らかな30fps) → 一方向クロスフェードループ。
-const LOOP_SLOW_FACTOR = 2.0; // setpts 係数（5秒素材→約10秒スロー・最終約8.4秒）。2.3は実機で「遅すぎ」FB→2.0へ
-const LOOP_XFADE_DURATION = 1; // クロスフェード秒数
-
-// setpts スロー係数の決定。最終尺 ≈ 5×係数 − 1.6秒。
-// ⭐️ 速さと尺を独立させた(2026-07-24)。この係数は「尺」だけを担う:
-//    client の loopDuration("short"≒5秒=1.3 / "medium"≒7.5秒=1.8 / "long"≒10秒=2.3)。
-//    「速さ」は trajectory（雲の移動量）側で決まる（client が SkyMotionAssetPreparer で
-//    driftPixels を変えて生成に反映するため、サーバーはここに関与しない）。
-// 後方互換: 旧 build(79以前) は loopSpeed("fast"/"normal"/"slow") を書くのでそれも受ける。
-//           どちらも無い・未知なら LOOP_SLOW_FACTOR（2.0）にフォールバック。
-const LOOP_DURATION_FACTORS = { short: 1.3, medium: 1.8, long: 2.3 };
-const LOOP_SPEED_FACTORS = { fast: 1.5, normal: 2.0, slow: 2.5 }; // 旧build後方互換
-function slowFactorForJob(job) {
-  return LOOP_DURATION_FACTORS[job.loopDuration]
-    || LOOP_SPEED_FACTORS[job.loopSpeed]
-    || LOOP_SLOW_FACTOR;
-}
+// 「一方向・継ぎ目なしループ」への変換パラメータ。
+// setpts スロー + minterpolate(補間で滑らかな30fps) → 一方向クロスフェードループ。
+//
+// ⚠️ **尺と体感速度は分離できない**（2026-08-02 実測で判明）。
+//    2026-07-24 時点では「尺=setpts係数 / 速さ=trajectory」という前提で係数を
+//    1.3/1.8/2.3 と広く取っていたが、同一写真での対照実験で trajectory を 44px→63px と
+//    増やしても係数2.3の側が3.45倍遅いままだった＝速度を決めるのは係数の方だった。
+//    よって係数は「approved な 1.3 の近傍」に圧縮し、尺の差は小さく取る。
+//    詳細な実測値は skyMotionCore.LOOP_SLOW_FACTOR_MAX のコメント参照。
+const LOOP_XFADE_DURATION = core.LOOP_XFADE_DURATION; // クロスフェード秒数
+const slowFactorForJob = core.slowFactorForJob;
 // ⚠️ minterpolate は重い。子プロセスに独自タイムアウトを設け、超過/失敗時は元の5秒mp4に
 //    フォールバックする（関数ごと SIGKILL される「詰まり」を防ぐ＝fetch と同じ設計思想）。
 const FFMPEG_TIMEOUT_MS = 90 * 1000;
@@ -439,7 +431,7 @@ function runFfmpeg(args) {
  * @param {string} jobId 一時ファイル名の衝突回避用
  * @returns {Promise<Buffer>} 変換後の mp4
  */
-async function makeSeamlessLoop(inputBuffer, jobId, slowFactor = LOOP_SLOW_FACTOR) {
+async function makeSeamlessLoop(inputBuffer, jobId, slowFactor = core.LOOP_SLOW_FACTOR_DEFAULT) {
   const dir = os.tmpdir();
   const inPath = path.join(dir, `sky_${jobId}_in.mp4`);
   const slowPath = path.join(dir, `sky_${jobId}_slow.mp4`);
@@ -459,13 +451,16 @@ async function makeSeamlessLoop(inputBuffer, jobId, slowFactor = LOOP_SLOW_FACTO
     ]);
 
     // 2) 手動クロスフェードループ（xfade不使用・ffmpeg6.0対策）。
-    //    body=先頭〜(L-2D) / xo=(L-2D)〜(L-D)を fade-out / xi=先頭D秒を fade-in、xo に xi を
-    //    overlay で重ねて body に concat。末尾D秒が先頭へ溶けるので end→start がseamlessにループ。
+    //    body=A[D, L-D] / xo=A[L-D, L]を fade-out / xi=A[0, D]を fade-in、xo に xi を
+    //    overlay で重ねて body に concat。出力の先頭も末尾も A(D) に揃うのでシームレスに巻き戻る。
     //    出力尺 = L-D。⚠️ `fps` フィルタは尺2倍化バグを誘発するため入れない（format/setsar のみ）。
+    //    ⚠️ 切り出し窓の計算は core.loopTrimWindows（純関数・テスト済み）に集約している。
+    //       build 83 以前は body を A[0, L-2D] から始めており、先頭A(0)と末尾A(D)がD秒ズレて
+    //       巻き戻り時に飛んでいた（ffmpeg6.0実測: 継ぎ目 15.4倍 → 修正後 2.2倍）。
     const L = await probeDuration(slowPath);
     const D = LOOP_XFADE_DURATION; // クロスフェード秒数
-    const bodyEnd = L - 2 * D;
-    if (!(bodyEnd > 0)) {
+    const win = core.loopTrimWindows(L, D);
+    if (!win) {
       // 素材が短すぎてクロスフェード領域を取れない（想定外）。スロー版をそのまま返す。
       return await fsp.readFile(slowPath);
     }
@@ -473,10 +468,12 @@ async function makeSeamlessLoop(inputBuffer, jobId, slowFactor = LOOP_SLOW_FACTO
       "-y", "-i", slowPath,
       "-filter_complex",
       `[0]split=3[s0][s1][s2];` +
-      `[s0]trim=0:${bodyEnd.toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p,setsar=1[body];` +
-      `[s1]trim=${bodyEnd.toFixed(3)}:${(L - D).toFixed(3)},setpts=PTS-STARTPTS,` +
+      `[s0]trim=${win.bodyStart.toFixed(3)}:${win.bodyEnd.toFixed(3)},` +
+        `setpts=PTS-STARTPTS,format=yuv420p,setsar=1[body];` +
+      `[s1]trim=${win.xoStart.toFixed(3)}:${win.xoEnd.toFixed(3)},setpts=PTS-STARTPTS,` +
         `format=yuva420p,fade=t=out:st=0:d=${D}:alpha=1[xo];` +
-      `[s2]trim=0:${D},setpts=PTS-STARTPTS,format=yuva420p,fade=t=in:st=0:d=${D}:alpha=1[xi];` +
+      `[s2]trim=0:${win.xiEnd.toFixed(3)},setpts=PTS-STARTPTS,` +
+        `format=yuva420p,fade=t=in:st=0:d=${D}:alpha=1[xi];` +
       `[xo][xi]overlay,format=yuv420p,setsar=1[xf];` +
       `[body][xf]concat=n=2:v=1[v]`,
       "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", outPath,
@@ -486,7 +483,7 @@ async function makeSeamlessLoop(inputBuffer, jobId, slowFactor = LOOP_SLOW_FACTO
     //    期待は L-D。大きく外れたら「ループ生成が壊れた」とみなし throw → 呼び出し側で生5秒degrade+警告。
     //    build 78-82 で xfade が黙って壊れ生5秒に落ちていたのを検知できず長期間隠れた反省。
     const outDur = await probeDuration(outPath);
-    const expected = L - D;
+    const expected = win.outDuration;
     if (!(outDur > 0) || Math.abs(outDur - expected) > 1.5) {
       throw new Error(`ループ尺が異常: out=${outDur} expected≈${expected} (ffmpegループ破損の疑い)`);
     }

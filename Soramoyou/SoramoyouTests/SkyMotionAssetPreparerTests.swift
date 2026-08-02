@@ -140,17 +140,39 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
                        "ドリフトpxが画像幅に比例していない（絶対px固定に退行した疑い）")
     }
 
-    /// **見かけの速さ（幅比 ÷ 出力尺）**が全プリセットで「動いて見える下限」を満たすことを検証する。
-    /// これが本命の不変条件。ドリフト比率だけを見ても、尺が伸びれば速度は落ちるため守れない。
+    /// 出力尺の見込み値が「動いて見える上限」を超えないことを検証する。
     ///
-    /// 実測の根拠: 0.157%/秒 → 実機「動いていない」／ 0.314%/秒 → 実機「とても良かった」。
-    /// 下限は後者に合わせて 0.30%/秒 とする（最も遅い calm でもこの水準を確保する）。
-    func test_allPresets_moveFastEnoughToBePerceived() {
+    /// ⚠️ 以前ここには「見かけ速度 = 幅比 ÷ 尺 が下限以上」という不変条件を置いていたが、
+    ///    **同一写真での対照実験（2026-08-02）でこのモデルは否定された**:
+    ///    ドリフトを44px→63pxに増やしても、尺が長い側（setpts2.3）は3.45倍遅いままだった。
+    ///    速度を決めているのはサーバーの setpts 係数であり、client のドリフト比率ではない。
+    ///    よって速度の回帰ガードは `functions/skyMotionCore.test.js` の
+    ///    「スロー係数は全て上限以下」へ移した。ここでは尺の側だけを見る。
+    ///
+    /// 素材(Kling)は約5.1秒・出力 = setpts×5.1 − 1.0 なので、上限 setpts 1.8 に対応する
+    /// 出力尺は約8.2秒。これを超える値が入っていたら setpts 側が上限を破っている疑いがある。
+    func test_allPresetDurations_stayWithinPerceivableRange() {
         for preset in SkyMotionPreset.allCases {
-            let percentPerSecond = preset.driftWidthRatio / preset.approximateSeconds * 100
-            XCTAssertGreaterThanOrEqual(
-                percentPerSecond, 0.30,
-                "\(preset.rawValue) の見かけ速度 \(percentPerSecond)%/秒 が遅すぎる（雲が止まって見える）"
+            XCTAssertLessThanOrEqual(
+                preset.approximateSeconds, 8.2,
+                "\(preset.rawValue) の尺 \(preset.approximateSeconds)秒 は setpts 上限1.8を超えている"
+                    + "（実測: setpts2.3=尺10.6秒 は実機NG「動いてない」）"
+            )
+        }
+    }
+
+    /// ラベルの「約N秒」表記が `approximateSeconds` と乖離していないことを検証する。
+    /// 尺を変えたのに文言を直し忘れる（＝ユーザーに嘘の秒数を見せる）退行を防ぐ。
+    func test_presetLabels_matchApproximateSeconds() {
+        for preset in SkyMotionPreset.allCases {
+            // ラベル例「速い（約5.5秒）」から数値部分を取り出す。
+            let digits = preset.label.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted)
+                .first(where: { !$0.isEmpty })
+            let labeled = Double(digits ?? "")
+            XCTAssertNotNil(labeled, "\(preset.rawValue) のラベルに秒数が含まれていない: \(preset.label)")
+            XCTAssertEqual(
+                labeled ?? 0, Double(preset.approximateSeconds), accuracy: 0.6,
+                "\(preset.rawValue) のラベル「\(preset.label)」が実際の尺 \(preset.approximateSeconds)秒 と食い違う"
             )
         }
     }
@@ -165,20 +187,23 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
     }
 
     /// 尺が長いプリセットほど総移動量（ドリフト比率）を大きく取ること。
-    /// 尺だけ伸ばしてドリフトを据え置くと 1秒あたりの速度が落ち、「動いていない」に戻る。
+    /// ⚠️ これは体感速度の保証ではない（速度はサーバーの setpts 側・enum のコメント参照）。
+    ///    尺が長い＝雲がより遠くまで流れる、という指示内容の一貫性だけを見ている。
     func test_longerPresets_haveLargerDrift() {
         XCTAssertLessThan(SkyMotionPreset.quick.driftWidthRatio, SkyMotionPreset.standard.driftWidthRatio)
         XCTAssertLessThan(SkyMotionPreset.standard.driftWidthRatio, SkyMotionPreset.calm.driftWidthRatio)
     }
 
-    /// 速さの序列（quick > standard > calm）が保たれていること。
-    /// 3択の意味そのもの（「速い/標準/ゆっくり」）がラベルと矛盾しないための契約。
-    func test_presetSpeedOrdering_matchesLabels() {
-        let quick = SkyMotionPreset.quick.driftWidthRatio / SkyMotionPreset.quick.approximateSeconds
-        let standard = SkyMotionPreset.standard.driftWidthRatio / SkyMotionPreset.standard.approximateSeconds
-        let calm = SkyMotionPreset.calm.driftWidthRatio / SkyMotionPreset.calm.approximateSeconds
-        XCTAssertGreaterThan(quick, standard, "「速い」が「標準」より遅い")
-        XCTAssertGreaterThan(standard, calm, "「標準」が「ゆっくり」より遅い")
+    /// 尺の序列（quick < standard < calm）が保たれていること。
+    /// 3択の意味そのもの（「速い＝短い / ゆっくり＝長い」）がラベルと矛盾しないための契約。
+    /// サーバーの setpts 係数を大きくするほど尺が伸び、同時に遅くなる（両者は分離できない）。
+    func test_presetDurationOrdering_matchesLabels() {
+        XCTAssertLessThan(SkyMotionPreset.quick.approximateSeconds,
+                          SkyMotionPreset.standard.approximateSeconds,
+                          "「速い」が「標準」より長い")
+        XCTAssertLessThan(SkyMotionPreset.standard.approximateSeconds,
+                          SkyMotionPreset.calm.approximateSeconds,
+                          "「標準」が「ゆっくり」より長い")
     }
 
     /// 速さ側(`SkyMotionAssetPreparer.driftWidthRatioDefault`)と尺側(`SkyMotionJob` の

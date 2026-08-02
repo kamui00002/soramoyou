@@ -267,7 +267,84 @@ function isClaimableJob(jobData) {
   return !!jobData && jobData.status === "pending";
 }
 
+// ============================================================
+// ループ化（スロー係数 / クロスフェードの切り出し窓）
+// ============================================================
+
+/** クロスフェード秒数。ループの継ぎ目を溶かす区間の長さ。 */
+const LOOP_XFADE_DURATION = 1;
+
+/**
+ * setpts スロー係数の上限。**この値を超えると「雲が動いて見えない」に戻る。**
+ *
+ * ⚠️ 実測の根拠（同一写真・同一マスクでの対照実験 2026-08-02。
+ *    指標＝隣接フレーム平均絶対差×fps・継ぎ目1.2秒を除いた本体中央値）:
+ *      - 係数1.3（尺5.64秒）→ 動き量 10.48 …… 実機OK
+ *      - 係数2.3（尺10.64秒）→ 動き量  3.04 …… 実機NG「動いてない」
+ *    ドリフト量(trajectory)は 44px→63px と**増やしたのに** 3.45倍遅くなった。
+ *    ＝ 体感速度を決めているのは trajectory ではなく**この係数**である。
+ */
+const LOOP_SLOW_FACTOR_MAX = 1.8;
+
+/**
+ * client の loopDuration → setpts スロー係数。尺と体感速度の両方がここで決まる。
+ * 全て LOOP_SLOW_FACTOR_MAX 以下に収めること（上の実測コメント参照）。
+ */
+const LOOP_DURATION_FACTORS = { short: 1.3, medium: 1.5, long: 1.7 };
+/** 旧 build(79以前) の loopSpeed 後方互換。同じく上限以下に丸めてある。 */
+const LOOP_SPEED_FACTORS = { fast: 1.3, normal: 1.5, slow: 1.7 };
+/** loopDuration も loopSpeed も無い/未知のジョブのフォールバック。 */
+const LOOP_SLOW_FACTOR_DEFAULT = 1.5;
+
+/**
+ * ジョブから setpts スロー係数を決める。
+ * @param {{loopDuration?: string, loopSpeed?: string}} job
+ * @returns {number} setpts 係数
+ */
+function slowFactorForJob(job) {
+  return LOOP_DURATION_FACTORS[job.loopDuration]
+    || LOOP_SPEED_FACTORS[job.loopSpeed]
+    || LOOP_SLOW_FACTOR_DEFAULT;
+}
+
+/**
+ * クロスフェードループの切り出し窓を求める（純関数）。
+ *
+ * 素材 A（長さ L）を、末尾D秒が先頭へ溶ける長さ L-D のループにする。
+ *   body = A[D, L-D]  … 先頭は A(D)
+ *   xo   = A[L-D, L]  … フェードアウト（body の続きなので連続）
+ *   xi   = A[0, D]    … フェードイン（終端で A(D) になる）
+ * 結果、出力の**先頭も末尾も A(D)** に揃うのでシームレスに巻き戻る。
+ *
+ * ⚠️ body を A[0, L-2D] から始めてはいけない（build 83 以前のバグ）。
+ *    その場合 先頭=A(0) / 末尾=A(D) となりD秒ぶん巻き戻って見える。
+ *    ffmpeg 6.0 実測: 継ぎ目の差分が本体中央値の **15.4倍 → 2.2倍** に改善（2026-08-02）。
+ *
+ * @param {number} L 素材の長さ（秒）
+ * @param {number} D クロスフェード秒数
+ * @returns {{bodyStart:number, bodyEnd:number, xoStart:number, xoEnd:number, xiEnd:number, outDuration:number}|null}
+ *          クロスフェード区間が取れない短さなら null
+ */
+function loopTrimWindows(L, D) {
+  if (!(L > 0) || !(D > 0) || !(L - 2 * D > 0)) return null;
+  return {
+    bodyStart: D,
+    bodyEnd: L - D,
+    xoStart: L - D,
+    xoEnd: L,
+    xiEnd: D,
+    outDuration: L - D,
+  };
+}
+
 module.exports = {
+  LOOP_XFADE_DURATION,
+  LOOP_SLOW_FACTOR_MAX,
+  LOOP_DURATION_FACTORS,
+  LOOP_SPEED_FACTORS,
+  LOOP_SLOW_FACTOR_DEFAULT,
+  slowFactorForJob,
+  loopTrimWindows,
   DAILY_LIMIT,
   POLL_TIMEOUT_MS,
   SUBMIT_MAX_RETRIES,
