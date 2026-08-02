@@ -5,9 +5,9 @@
 //  Created on 2025-12-06.
 //
 
-import Foundation
 import Combine
 import FirebaseAuth
+import Foundation
 
 @MainActor
 class AuthViewModel: ObservableObject {
@@ -23,45 +23,47 @@ class AuthViewModel: ObservableObject {
     private var didRunWidgetBackfill = false
 
     init(authService: AuthServiceProtocol = AuthService(),
-         firestoreService: FirestoreServiceProtocol = FirestoreService()) {
+         firestoreService: FirestoreServiceProtocol = FirestoreService())
+    {
         self.authService = authService
         self.firestoreService = firestoreService
 
         #if DEBUG
-        // UIテストモードの場合は認証状態をリセット
-        if ProcessInfo.processInfo.arguments.contains("UI_TESTING") &&
-           ProcessInfo.processInfo.arguments.contains("RESET_AUTH_STATE") {
-            // 認証状態を同期的にリセット
-            currentUser = nil
-            isAuthenticated = false
+            // UIテストモードの場合は認証状態をリセット
+            if ProcessInfo.processInfo.arguments.contains("UI_TESTING"),
+               ProcessInfo.processInfo.arguments.contains("RESET_AUTH_STATE")
+            {
+                // 認証状態を同期的にリセット
+                currentUser = nil
+                isAuthenticated = false
 
-            // 認証状態の監視（signOutを先に実行してから監視開始）
-            authStateTask = Task { [weak self] in
-                // 先にサインアウトを完了させる
-                try? await authService.signOut()
-                guard let self = self else { return }
-                // その後、認証状態の監視を開始
-                await self.observeAuthState()
+                // 認証状態の監視（signOutを先に実行してから監視開始）
+                authStateTask = Task { [weak self] in
+                    // 先にサインアウトを完了させる
+                    try? await authService.signOut()
+                    guard let self else { return }
+                    // その後、認証状態の監視を開始
+                    await observeAuthState()
+                }
+            } else {
+                // 初期認証状態の確認（自動ログイン）
+                checkAuthState()
+
+                // 認証状態の監視（メモリリーク防止のため weak self を使用）
+                authStateTask = Task { [weak self] in
+                    guard let self else { return }
+                    await observeAuthState()
+                }
             }
-        } else {
+        #else
             // 初期認証状態の確認（自動ログイン）
             checkAuthState()
 
             // 認証状態の監視（メモリリーク防止のため weak self を使用）
             authStateTask = Task { [weak self] in
-                guard let self = self else { return }
-                await self.observeAuthState()
+                guard let self else { return }
+                await observeAuthState()
             }
-        }
-        #else
-        // 初期認証状態の確認（自動ログイン）
-        checkAuthState()
-
-        // 認証状態の監視（メモリリーク防止のため weak self を使用）
-        authStateTask = Task { [weak self] in
-            guard let self = self else { return }
-            await self.observeAuthState()
-        }
         #endif
     }
 
@@ -69,7 +71,7 @@ class AuthViewModel: ObservableObject {
         // Taskをキャンセルしてリソースを解放
         authStateTask?.cancel()
     }
-    
+
     func signIn(email: String, password: String) async throws {
         errorMessage = nil
 
@@ -88,7 +90,7 @@ class AuthViewModel: ObservableObject {
             throw error
         }
     }
-    
+
     func signUp(email: String, password: String) async throws {
         errorMessage = nil
 
@@ -97,7 +99,7 @@ class AuthViewModel: ObservableObject {
             let user = try await authService.signUp(email: email, password: password)
 
             // 2. Firestoreにユーザー情報を保存
-            let _ = try await firestoreService.updateUser(user)
+            _ = try await firestoreService.updateUser(user)
 
             // 3. 公開プロフィールを作成（機密情報を含まない）
             try await firestoreService.createPublicProfile(from: user)
@@ -124,7 +126,7 @@ class AuthViewModel: ObservableObject {
             let user = try await authService.signInAnonymously()
 
             // 2. Firestoreにユーザー情報を保存（emailはnil）
-            let _ = try await firestoreService.updateUser(user)
+            _ = try await firestoreService.updateUser(user)
 
             // 3. 公開プロフィールを作成
             try await firestoreService.createPublicProfile(from: user)
@@ -167,6 +169,9 @@ class AuthViewModel: ObservableObject {
             // ウィジェットのローカルキャッシュも消す（別ユーザーの空が残らないように）。
             WidgetCacheManager.shared.clearOnSignOut()
             didRunWidgetBackfill = false
+
+            // 「空を動かす」の購入クレジット残高も消す（共有端末で別ユーザーの残高を見せない）。
+            SkyMotionCreditService.shared.handleSignOut()
         } catch {
             // エラーをログに記録
             ErrorHandler.logError(error, context: "AuthViewModel.signOut")
@@ -175,7 +180,7 @@ class AuthViewModel: ObservableObject {
             throw error
         }
     }
-    
+
     /// 初期化時に現在の認証状態を確認（自動ログイン）
     func checkAuthState() {
         if let user = authService.currentUser() {
@@ -192,14 +197,14 @@ class AuthViewModel: ObservableObject {
             LoggingService.shared.setUserID(nil)
         }
     }
-    
+
     private func observeAuthState() async {
         for await user in authService.observeAuthState() {
             currentUser = user
             isAuthenticated = user != nil
 
             // ユーザーIDをLoggingServiceに設定/クリア
-            if let user = user {
+            if let user {
                 LoggingService.shared.setUserID(user.id)
                 // 認証済みになった瞬間に、現在の FCM トークンを取得して users/{uid} に保存する。
                 // MessagingDelegate の didReceiveRegistrationToken はコールド起動時に Auth が

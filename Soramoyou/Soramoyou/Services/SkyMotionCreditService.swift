@@ -54,6 +54,8 @@ final class SkyMotionCreditService: ObservableObject {
 
     private let db = Firestore.firestore()
     private var balanceListener: ListenerRegistration?
+    /// 現在購読中の uid。ログインし直しで別ユーザーの残高を出し続けないための見張り。
+    private var observedUid: String?
     private var updatesTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.soramoyou", category: "SkyMotionCredit")
 
@@ -65,25 +67,41 @@ final class SkyMotionCreditService: ObservableObject {
 
     // MARK: - ライフサイクル
 
-    /// アプリ起動時（またはシート表示時）に1度だけ呼ぶ。
+    /// 認証済みになったタイミングで呼ぶ（`ContentView` の `.task(id:)`）。
     /// 残高の購読と、**未完了トランザクションの再送**を開始する。
+    ///
+    /// 何度呼んでも安全:
+    /// - 残高購読は uid が変わった時だけ張り直す
+    /// - Transaction 監視は uid 非依存なので1本だけ維持する
+    /// - 未完了トランザクションの再送はサーバーが冪等（doc ID = transactionId）
     func start() {
         observeBalance()
         startTransactionListener()
         Task { await drainUnfinishedTransactions() }
     }
 
-    func stop() {
+    /// サインアウト時に呼ぶ。残高表示を持ち越さない。
+    /// ⚠️ Transaction 監視は**止めない**。サインアウト中に確定した購入も、次回ログイン後の
+    ///    再送で拾えるようにしておく（止めると取りこぼす）。
+    func handleSignOut() {
         balanceListener?.remove()
         balanceListener = nil
-        updatesTask?.cancel()
-        updatesTask = nil
+        observedUid = nil
+        balance = 0
+        purchaseState = .idle
     }
 
     /// 残高ドキュメントを購読する（サーバーが加算・減算するのをそのまま反映する）。
     private func observeBalance() {
-        guard let uid = Auth.auth().currentUser?.uid else { return }
+        guard let uid = Auth.auth().currentUser?.uid else {
+            handleSignOut()
+            return
+        }
+        // 同じ uid を二重購読しない（起動のたびに listener が積み上がるのを防ぐ）。
+        guard uid != observedUid else { return }
         balanceListener?.remove()
+        observedUid = uid
+        balance = 0 // 前のユーザーの残高を一瞬でも見せない
         balanceListener = db.collection("skyMotionBalance").document(uid)
             .addSnapshotListener { [weak self] snapshot, error in
                 guard let self else { return }
@@ -119,8 +137,9 @@ final class SkyMotionCreditService: ObservableObject {
 
     func loadProducts() async {
         do {
-            products = try await Product.products(for: Array(SkyMotionProduct.allProductIDs))
-            logger.info("回数パック: \(self.products.count, privacy: .public)件のプロダクトを取得")
+            let fetched = try await Product.products(for: Array(SkyMotionProduct.allProductIDs))
+            products = fetched
+            logger.info("回数パック: \(fetched.count, privacy: .public)件のプロダクトを取得")
         } catch {
             logger.error("回数パック: プロダクト取得に失敗 \(error.localizedDescription, privacy: .public)")
         }
