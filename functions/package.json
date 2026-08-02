@@ -7,12 +7,13 @@
     "node": "20"
   },
   "scripts": {
-    "lint": "node --check index.js && node --check skyMotion.js && node --check skyMotionCore.js",
-    "test": "node --test skyMotionCore.test.js",
+    "lint": "node --check index.js && node --check skyMotion.js && node --check skyMotionCore.js && node --check skyMotionPurchase.js && node --check skyMotionPurchaseVerify.js",
+    "test": "node --test skyMotionCore.test.js skyMotionPurchaseVerify.test.js",
     "deploy": "firebase deploy --only functions --project soramoyou-ios",
     "logs": "firebase functions:log --project soramoyou-ios"
   },
   "dependencies": {
+    "@apple/app-store-server-library": "^3.1.0",
     "ffmpeg-static": "^5.2.0",
     "ffprobe-static": "^3.1.0",
     "firebase-admin": "^12.6.0",

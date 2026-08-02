@@ -443,5 +443,46 @@ service cloud.firestore {
       // 書き込みは不可（予約・返金は Cloud Functions 専用）
       allow write: if false;
     }
+
+    // ============================================
+    // skyMotionPurchases collection (「空を動かす」回数パックの購入記録)
+    // ドキュメントID: StoreKit の transactionId
+    //   → 同じ購入は必ず同じドキュメント＝**冪等性を Firestore 層で無料で得る**。
+    // client は「買いました」の申告（status=pending＋JWS）までしか書けない。
+    // 検証とクレジット付与は Cloud Functions（Admin SDK）専用。
+    // ============================================
+    match /skyMotionPurchases/{transactionId} {
+      // 読み取り: 所有者のみ（client は status が credited になるのを待って finish する）
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+
+      // 作成: 認証済みユーザーが自分のIDで、status=pending の初期状態のみ。
+      // ⚠️ creditedCount / status=credited を client に書かせない（＝残高の自己申告を防ぐ）。
+      //    productId も client 申告は信用せず、サーバーが JWS の値で上書きして判定する。
+      allow create: if isAuthenticated()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.jws is string
+                    && request.resource.data.jws.size() > 0
+                    && request.resource.data.createdAt == request.time
+                    && !request.resource.data.keys().hasAny(['creditedCount', 'environment']);
+
+      // 更新・削除は不可（検証・付与は Cloud Functions 専用）
+      allow update, delete: if false;
+    }
+
+    // ============================================
+    // skyMotionBalance collection (「空を動かす」の購入クレジット残高)
+    // ドキュメントID: {uid}
+    // **残高の唯一の真実源＝サーバー権威**。client は表示用に読むだけ。
+    // 加算＝購入検証Function / 減算＝reserveAndClaimJob / 返金＝refundUsage のみ。
+    // ⚠️ 生成可否の判定に client 側の残高を使ってはいけない（表示用キャッシュに過ぎない）。
+    // ============================================
+    match /skyMotionBalance/{uid} {
+      // 読み取り: 所有者のみ
+      allow read: if isOwner(uid);
+
+      // 書き込みは不可（加算・減算・返金は Cloud Functions 専用）
+      allow write: if false;
+    }
   }
 }

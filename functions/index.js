@@ -344,3 +344,6 @@ exports.notifyFeedbackToDiscord = onDocumentCreated(
 
 // MARK: - 「空を動かす」β（フェーズ1a・DEBUG限定E2E検証用。詳細は functions/skyMotion.js）
 Object.assign(exports, require("./skyMotion"));
+
+// MARK: - 「空を動かす」回数パック（消費型IAP）の購入検証。詳細は functions/skyMotionPurchase.js
+exports.onSkyMotionPurchaseCreated = require("./skyMotionPurchase").onSkyMotionPurchaseCreated;

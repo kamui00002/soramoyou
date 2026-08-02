@@ -31,55 +31,199 @@ test("jstDateString: JST日付が変わらない時刻（UTC 14:59）", () => {
 // decideReservation（予約 = reserve-on-create）
 // ============================================================
 
-test("decideReservation: usageドキュメントが存在しない（初回利用）→ 予約可・count=1", () => {
-  const result = core.decideReservation(null, "2026-07-22", 3);
-  assert.deepEqual(result, { allowed: true, day: "2026-07-22", reservedCount: 1 });
+const DAY = "2026-07-22";
+const PREV = "2026-07-21";
+/** テスト用の上限（既定値の変更に引きずられないよう明示する）。 */
+const LIM = { free: 1, paid: 20 };
+
+test("decideReservation: 初回利用（usage無し）→ 無料枠から引く", () => {
+  const r = core.decideReservation(null, null, DAY, LIM);
+  assert.equal(r.allowed, true);
+  assert.equal(r.bucket, "free");
+  assert.equal(r.freeUsedToday, 1);
+  assert.equal(r.paidUsedToday, 0);
+  assert.equal(r.balance, 0, "無料枠を使ったのに残高が動いてはいけない");
 });
 
-test("decideReservation: 同日で上限未満 → 予約可・count+1", () => {
-  const usage = { day: "2026-07-22", reservedCount: 1 };
-  const result = core.decideReservation(usage, "2026-07-22", 3);
-  assert.deepEqual(result, { allowed: true, day: "2026-07-22", reservedCount: 2 });
+test("decideReservation: 無料枠が残っていれば残高があっても無料を先に使う（ユーザーに有利側）", () => {
+  const r = core.decideReservation({ day: DAY, freeUsedToday: 0 }, { balance: 5 }, DAY, LIM);
+  assert.equal(r.bucket, "free");
+  assert.equal(r.balance, 5, "無料枠優先なので残高は減らない");
 });
 
-test("decideReservation: 同日で上限到達 → 予約不可（fal未呼び出し=非課金）", () => {
-  const usage = { day: "2026-07-22", reservedCount: 3 };
-  const result = core.decideReservation(usage, "2026-07-22", 3);
-  assert.deepEqual(result, { allowed: false, day: "2026-07-22", reservedCount: 3 });
+test("decideReservation: 無料枠を使い切り＋残高あり → 購入枠から引く", () => {
+  const r = core.decideReservation({ day: DAY, freeUsedToday: 1 }, { balance: 5 }, DAY, LIM);
+  assert.equal(r.allowed, true);
+  assert.equal(r.bucket, "paid");
+  assert.equal(r.freeUsedToday, 1, "無料カウンタは動かない");
+  assert.equal(r.paidUsedToday, 1);
+  assert.equal(r.balance, 4);
 });
 
-test("decideReservation: 日付が変わっている（lazy reset）→ 0から予約可", () => {
-  const usage = { day: "2026-07-21", reservedCount: 3 }; // 前日は上限到達していた
-  const result = core.decideReservation(usage, "2026-07-22", 3);
-  assert.deepEqual(result, { allowed: true, day: "2026-07-22", reservedCount: 1 });
+test("decideReservation: 無料枠を使い切り＋残高0 → 拒否（fal未呼び出し=非課金・何も減らない）", () => {
+  const r = core.decideReservation({ day: DAY, freeUsedToday: 1 }, { balance: 0 }, DAY, LIM);
+  assert.equal(r.allowed, false);
+  assert.equal(r.reason, "free_exhausted_no_balance");
+  assert.equal(r.bucket, null);
+  assert.equal(r.freeUsedToday, 1);
+  assert.equal(r.paidUsedToday, 0);
+  assert.equal(r.balance, 0);
 });
 
-test("decideReservation: 既定の上限(DAILY_LIMIT=3)が使われる", () => {
-  const usage = { day: "2026-07-22", reservedCount: 3 };
-  const result = core.decideReservation(usage, "2026-07-22");
-  assert.equal(result.allowed, false);
+test("decideReservation: 残高はあるが購入枠の日次上限に到達 → 拒否・残高は減らさない", () => {
+  const usage = { day: DAY, freeUsedToday: 1, paidUsedToday: 20 };
+  const r = core.decideReservation(usage, { balance: 50 }, DAY, LIM);
+  assert.equal(r.allowed, false);
+  assert.equal(r.reason, "paid_daily_cap", "残高切れと区別できないとUI文言を出し分けられない");
+  assert.equal(r.balance, 50, "上限で弾いたのに残高が減ってはいけない");
+});
+
+test("decideReservation: 日付が変わったら無料枠も購入枠の日次カウンタもリセット（残高は不変）", () => {
+  const usage = { day: PREV, freeUsedToday: 1, paidUsedToday: 20 };
+  const r = core.decideReservation(usage, { balance: 3 }, DAY, LIM);
+  assert.equal(r.allowed, true);
+  assert.equal(r.bucket, "free");
+  assert.equal(r.paidUsedToday, 0);
+  assert.equal(r.balance, 3, "残高は日付と無関係な資産なのでリセットされない");
+});
+
+test("decideReservation: 残高が壊れた値（負・NaN・文字列）でも0扱いで安全に拒否", () => {
+  for (const bad of [{ balance: -5 }, { balance: NaN }, { balance: "10" }, {}, null]) {
+    const r = core.decideReservation({ day: DAY, freeUsedToday: 1 }, bad, DAY, LIM);
+    assert.equal(r.allowed, false, `balance=${JSON.stringify(bad)} で通ってはいけない`);
+  }
+});
+
+test("decideReservation: 既定の上限（FREE_DAILY_LIMIT）が使われる", () => {
+  const usage = { day: DAY, freeUsedToday: core.FREE_DAILY_LIMIT };
+  assert.equal(core.decideReservation(usage, null, DAY).allowed, false);
+});
+
+test("applyLazyReset: β時代の legacy reservedCount は freeUsedToday として読む（無料枠のタダ乗り防止）", () => {
+  const legacy = { day: DAY, reservedCount: 2 };
+  const r = core.applyLazyReset(legacy, DAY);
+  assert.equal(r.freeUsedToday, 2, "0扱いにすると既存ユーザーに無料枠を1回ぶん余計に与えてしまう");
+  assert.equal(r.paidUsedToday, 0);
+});
+
+test("applyLazyReset: 新形式が入っていれば legacy より新形式を優先", () => {
+  const mixed = { day: DAY, reservedCount: 9, freeUsedToday: 1, paidUsedToday: 3 };
+  const r = core.applyLazyReset(mixed, DAY);
+  assert.equal(r.freeUsedToday, 1);
+  assert.equal(r.paidUsedToday, 3);
 });
 
 // ============================================================
-// decideRefund（返金 = refund-on-failure）
+// decideRefund（返金 = refund-on-failure・引いた側だけ戻す）
 // ============================================================
 
-test("decideRefund: 同日ならcount-1（成功時は呼ばれない前提）", () => {
-  const usage = { day: "2026-07-22", reservedCount: 2 };
-  const result = core.decideRefund(usage, "2026-07-22");
-  assert.deepEqual(result, { day: "2026-07-22", reservedCount: 1 });
+test("decideRefund: 無料枠で予約したジョブ → 無料カウンタだけ戻す（残高は不変）", () => {
+  const usage = { day: DAY, freeUsedToday: 1, paidUsedToday: 2 };
+  const r = core.decideRefund(usage, { balance: 5 }, "free", DAY);
+  assert.equal(r.freeUsedToday, 0);
+  assert.equal(r.paidUsedToday, 2, "無料の失敗で購入カウンタを触ってはいけない");
+  assert.equal(r.balance, 5);
+  assert.equal(r.balanceChanged, false);
 });
 
-test("decideRefund: count=0を下回らない（0未満防止）", () => {
-  const usage = { day: "2026-07-22", reservedCount: 0 };
-  const result = core.decideRefund(usage, "2026-07-22");
-  assert.deepEqual(result, { day: "2026-07-22", reservedCount: 0 });
+test("decideRefund: 購入枠で予約したジョブ → 残高を戻し購入カウンタを減らす（無料は不変）", () => {
+  const usage = { day: DAY, freeUsedToday: 1, paidUsedToday: 2 };
+  const r = core.decideRefund(usage, { balance: 5 }, "paid", DAY);
+  assert.equal(r.freeUsedToday, 1, "購入の失敗で無料枠を戻してはいけない");
+  assert.equal(r.paidUsedToday, 1);
+  assert.equal(r.balance, 6, "課金ぶんは必ずユーザーに戻す");
+  assert.equal(r.balanceChanged, true);
 });
 
-test("decideRefund: 予約後に日付が変わっていた（lazy reset）→ 二重適用にならず0のまま", () => {
-  const usage = { day: "2026-07-21", reservedCount: 1 };
-  const result = core.decideRefund(usage, "2026-07-22");
-  assert.deepEqual(result, { day: "2026-07-22", reservedCount: 0 });
+test("decideRefund: bucket 未設定（β時代のジョブ）は無料枠扱い＝残高を勝手に増やさない", () => {
+  const r = core.decideRefund({ day: DAY, reservedCount: 1 }, { balance: 5 }, undefined, DAY);
+  assert.equal(r.freeUsedToday, 0);
+  assert.equal(r.balance, 5);
+  assert.equal(r.balanceChanged, false);
+});
+
+test("decideRefund: カウンタは0を下回らない", () => {
+  const r = core.decideRefund({ day: DAY, freeUsedToday: 0, paidUsedToday: 0 }, null, "paid", DAY);
+  assert.equal(r.paidUsedToday, 0);
+});
+
+test("decideRefund: 予約後に日付が変わっても、購入残高は日をまたいでも必ず戻る", () => {
+  const usage = { day: PREV, freeUsedToday: 1, paidUsedToday: 1 };
+  const r = core.decideRefund(usage, { balance: 2 }, "paid", DAY);
+  assert.equal(r.paidUsedToday, 0, "当日カウンタは元々0なので二重返金にならない");
+  assert.equal(r.balance, 3, "日付が変わっても課金ぶんは戻す（残高は日付と無関係）");
+});
+
+// ============================================================
+// decidePurchaseCredit（購入クレジット付与・冪等）
+// ============================================================
+
+const PACK = "com.yoshidometoru.Soramoyou.skymotion.pack5";
+
+test("decidePurchaseCredit: pending の正規購入 → パック数を加算", () => {
+  const r = core.decidePurchaseCredit({ status: "pending", productId: PACK }, { balance: 2 });
+  assert.equal(r.credit, true);
+  assert.equal(r.credits, 5);
+  assert.equal(r.newBalance, 7);
+});
+
+test("decidePurchaseCredit: 同じ購入の再配信（already credited）→ no-op（二重加算しない）", () => {
+  const r = core.decidePurchaseCredit(
+    { status: "credited", productId: PACK, creditedCount: 5 }, { balance: 7 }
+  );
+  assert.equal(r.credit, false);
+  assert.equal(r.reason, "already_credited");
+  assert.equal(r.newBalance, 7, "残高が動いてはいけない");
+});
+
+test("decidePurchaseCredit: 未知の productId → 付与しない（勝手な自己申告を通さない）", () => {
+  const r = core.decidePurchaseCredit(
+    { status: "pending", productId: "com.example.pack9999" }, { balance: 0 }
+  );
+  assert.equal(r.credit, false);
+  assert.equal(r.reason, "unknown_product");
+  assert.equal(r.newBalance, 0);
+});
+
+test("decidePurchaseCredit: failed 済みのドキュメントは再付与しない", () => {
+  const r = core.decidePurchaseCredit({ status: "failed", productId: PACK }, { balance: 1 });
+  assert.equal(r.credit, false);
+  assert.equal(r.reason, "not_pending");
+});
+
+test("decidePurchaseCredit: 残高ドキュメントが無い初回購入でも正しく加算", () => {
+  const r = core.decidePurchaseCredit({ status: "pending", productId: PACK }, null);
+  assert.equal(r.newBalance, 5);
+});
+
+test("PACK_CREDITS: 価格決定どおり5回パックが5クレジット（ASC/.storekit/iOS enum と一致必須）", () => {
+  assert.equal(core.PACK_CREDITS[PACK], 5);
+});
+
+test("購入→消費→失敗返金 の一連で残高が保存される（金銭喪失の総合ガード）", () => {
+  // 5回パックを購入
+  let balance = core.decidePurchaseCredit({ status: "pending", productId: PACK }, null).newBalance;
+  assert.equal(balance, 5);
+
+  // 無料枠1回を消費（残高は減らない）
+  let usage = { day: DAY, freeUsedToday: 0, paidUsedToday: 0 };
+  let r = core.decideReservation(usage, { balance }, DAY, LIM);
+  assert.equal(r.bucket, "free");
+  usage = { day: r.day, freeUsedToday: r.freeUsedToday, paidUsedToday: r.paidUsedToday };
+  assert.equal(r.balance, 5);
+
+  // 無料枠が尽きたので購入枠から1回消費
+  r = core.decideReservation(usage, { balance }, DAY, LIM);
+  assert.equal(r.bucket, "paid");
+  usage = { day: r.day, freeUsedToday: r.freeUsedToday, paidUsedToday: r.paidUsedToday };
+  balance = r.balance;
+  assert.equal(balance, 4);
+
+  // その生成が失敗した → 残高が戻る
+  const refund = core.decideRefund(usage, { balance }, "paid", DAY);
+  assert.equal(refund.balance, 5, "失敗した生成で課金ぶんを失ってはいけない");
+  assert.equal(refund.paidUsedToday, 0);
+  assert.equal(refund.freeUsedToday, 1, "無料枠は既に使ったままで正しい");
 });
 
 // ============================================================
@@ -399,4 +543,18 @@ test("FAL_PROMPT の『地上を固定する』指示は残っていること", 
   const p = core.FAL_PROMPT.toLowerCase();
   assert.ok(p.includes("remain completely still"), "地上固定の指示が消えている");
   assert.ok(p.includes("fixed camera"), "カメラ固定の指示が消えている");
+});
+
+test("β許可ユーザーは無料枠が多い / 一般公開時は claim を外すだけで1回に揃う", () => {
+  assert.equal(core.FREE_DAILY_LIMIT, 1, "公開後の無料枠はユーザー決定どおり1日1回");
+  assert.equal(core.BETA_FREE_DAILY_LIMIT, 3, "β中は実機検証を回せる回数を残す");
+  assert.ok(core.BETA_FREE_DAILY_LIMIT >= core.FREE_DAILY_LIMIT);
+  assert.equal(core.PAID_DAILY_LIMIT, 20, "乗っ取り時の被害上限（ユーザー決定）");
+
+  // β上限で3回まで無料が通り、4回目で購入枠に落ちること
+  const betaLim = { free: core.BETA_FREE_DAILY_LIMIT, paid: core.PAID_DAILY_LIMIT };
+  const usage3 = { day: DAY, freeUsedToday: 2, paidUsedToday: 0 };
+  assert.equal(core.decideReservation(usage3, null, DAY, betaLim).bucket, "free");
+  const usage4 = { day: DAY, freeUsedToday: 3, paidUsedToday: 0 };
+  assert.equal(core.decideReservation(usage4, null, DAY, betaLim).allowed, false);
 });

@@ -174,37 +174,70 @@ async function isBetaAllowed(uid) {
  *   claimed=true, reserved=true : 予約成功。status="submitting" まで書き込み済み
  *                                 （呼び出し側は fal.ai へ進んでよい）
  */
-async function reserveAndClaimJob(uid, jobRef) {
+async function reserveAndClaimJob(uid, jobRef, isBeta) {
   const usageRef = db.collection("livingSkyUsage").doc(uid);
+  const balanceRef = db.collection("skyMotionBalance").doc(uid);
   const today = core.jstDateString();
+  // β許可ユーザーは実機検証を回せるよう無料枠を多めに取る。一般公開時は claim の付与を
+  // やめるだけで自動的に FREE_DAILY_LIMIT（1回）へ揃う。
+  const limits = {
+    free: isBeta ? core.BETA_FREE_DAILY_LIMIT : core.FREE_DAILY_LIMIT,
+    paid: core.PAID_DAILY_LIMIT,
+  };
   return db.runTransaction(async (tx) => {
     // Firestoreトランザクションは読み取りが書き込みより先である必要がある。
-    // job/usageは独立ドキュメントなので並列に読んでよい。
-    const [jobSnap, usageSnap] = await Promise.all([tx.get(jobRef), tx.get(usageRef)]);
+    // job/usage/balanceは独立ドキュメントなので並列に読んでよい。
+    // ⚠️ 無料枠と購入残高の判定は**必ず同一トランザクション内**で行う。別々に
+    //    read-then-write すると同時実行2件が balance=1 を両方見て両方通る。
+    const [jobSnap, usageSnap, balanceSnap] = await Promise.all([
+      tx.get(jobRef), tx.get(usageRef), tx.get(balanceRef),
+    ]);
     const jobData = jobSnap.exists ? jobSnap.data() : null;
     if (!core.isClaimableJob(jobData)) {
-      return { claimed: false, reserved: false };
+      return { claimed: false, reserved: false, bucket: null };
     }
 
     const usageData = usageSnap.exists ? usageSnap.data() : null;
-    const decision = core.decideReservation(usageData, today);
+    const balanceData = balanceSnap.exists ? balanceSnap.data() : null;
+    const decision = core.decideReservation(usageData, balanceData, today, limits);
     if (!decision.allowed) {
       tx.update(jobRef, {
         status: "failed",
         errorCode: "quota_exceeded",
-        error: "本日の生成回数の上限に達しました",
+        error: decision.reason === "paid_daily_cap"
+          ? "本日の生成回数の上限に達しました。残りのクレジットは明日以降お使いいただけます"
+          : "本日の無料生成を使い切りました。クレジットを購入すると続けて作成できます",
+        quotaReason: decision.reason,
         updatedAt: FieldValue.serverTimestamp(),
       });
-      return { claimed: true, reserved: false };
+      return { claimed: true, reserved: false, bucket: null };
     }
 
-    tx.update(jobRef, { status: "submitting", updatedAt: FieldValue.serverTimestamp() });
+    // ⚠️ chargedBucket を job に必ず残す。返金は別プロセス（ポーラーの failJob）で起きるため、
+    //    どちら側を引いたかをジョブ自身が覚えていないと戻す先が分からない。
+    tx.update(jobRef, {
+      status: "submitting",
+      chargedBucket: decision.bucket,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
     tx.set(
       usageRef,
-      { day: decision.day, reservedCount: decision.reservedCount, updatedAt: FieldValue.serverTimestamp() },
+      {
+        day: decision.day,
+        freeUsedToday: decision.freeUsedToday,
+        paidUsedToday: decision.paidUsedToday,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
       { merge: true }
     );
-    return { claimed: true, reserved: true };
+    if (decision.bucket === "paid") {
+      tx.set(
+        balanceRef,
+        { balance: decision.balance, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+    }
+    return { claimed: true, reserved: true, bucket: decision.bucket };
   });
 }
 
@@ -228,19 +261,40 @@ async function deleteJobInputFiles(uid, jobId) {
   );
 }
 
-/** livingSkyUsage/{uid} をトランザクションで返金する（refund-on-failure）。 */
-async function refundUsage(uid) {
+/**
+ * 予約を返金する（refund-on-failure）。**予約時に引いた側だけを戻す。**
+ * @param {string} uid
+ * @param {"free"|"paid"} bucket job.chargedBucket。未設定（β時代のジョブ）は無料枠扱い。
+ */
+async function refundUsage(uid, bucket) {
   const usageRef = db.collection("livingSkyUsage").doc(uid);
+  const balanceRef = db.collection("skyMotionBalance").doc(uid);
   const today = core.jstDateString();
   await db.runTransaction(async (tx) => {
-    const snap = await tx.get(usageRef);
-    const current = snap.exists ? snap.data() : null;
-    const decision = core.decideRefund(current, today);
+    const [usageSnap, balanceSnap] = await Promise.all([tx.get(usageRef), tx.get(balanceRef)]);
+    const decision = core.decideRefund(
+      usageSnap.exists ? usageSnap.data() : null,
+      balanceSnap.exists ? balanceSnap.data() : null,
+      bucket,
+      today
+    );
     tx.set(
       usageRef,
-      { day: decision.day, reservedCount: decision.reservedCount, updatedAt: FieldValue.serverTimestamp() },
+      {
+        day: decision.day,
+        freeUsedToday: decision.freeUsedToday,
+        paidUsedToday: decision.paidUsedToday,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
       { merge: true }
     );
+    if (decision.balanceChanged) {
+      tx.set(
+        balanceRef,
+        { balance: decision.balance, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+    }
   });
 }
 
@@ -343,7 +397,7 @@ exports.onSkyMotionJobCreated = onDocumentCreated(
     // --- 1. 予約 + status claim（pending→submitting）を単一トランザクションで実施。
     //     上限到達なら fal.ai を一切呼ばない（非課金）。既に処理済み（再配信）なら
     //     トランザクション内で何もしない。 ---
-    const claim = await reserveAndClaimJob(uid, jobRef);
+    const claim = await reserveAndClaimJob(uid, jobRef, allowed);
     if (!claim.claimed) {
       logger.info("空を動かす: 既に処理済みのためスキップ（再配信・トランザクション判定）", { jobId, uid });
       return;
@@ -701,7 +755,19 @@ async function pollOneJob(doc, now, falKeyValue) {
  * 通知はbest-effort（失敗してもjob状態の更新自体には影響させない）。
  */
 async function failJob(jobRef, uid, errorCode, errorMessage) {
-  await refundUsage(uid);
+  // ⚠️ 返金先（無料枠 or 購入残高）は job.chargedBucket が唯一の手がかり。
+  //    ここは予約と別プロセス（ポーラー）で走るので、job を読み直して決める。
+  //    読めなかった場合は "free" 扱い＝ユーザーの残高を勝手に増やさない安全側に倒す。
+  let bucket = "free";
+  try {
+    const snap = await jobRef.get();
+    if (snap.exists && snap.data().chargedBucket === "paid") bucket = "paid";
+  } catch (err) {
+    logger.warn("空を動かす: chargedBucket の読み取りに失敗（無料枠へ返金します）", {
+      jobId: jobRef.id, uid, error: err.message,
+    });
+  }
+  await refundUsage(uid, bucket);
   await jobRef.update({
     status: "failed",
     errorCode,

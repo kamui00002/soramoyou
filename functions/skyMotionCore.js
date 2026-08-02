@@ -15,8 +15,36 @@
 // 調整可能な数値定数（design doc §6 と一致させること）
 // ============================================================
 
-/** 1日あたりの生成回数上限（livingSkyUsage.reservedCount の上限）。 */
-const DAILY_LIMIT = 3;
+/**
+ * 一般ユーザーの1日あたり**無料**生成回数（livingSkyUsage.freeUsedToday の上限）。
+ * Phase C（回数パック課金）の公開後の値。「まず1回試してもらう入口」として1回に絞る。
+ */
+const FREE_DAILY_LIMIT = 1;
+
+/**
+ * β許可ユーザー（custom claim `skyMotionBeta`）の1日あたり無料生成回数。
+ * ⚠️ 開発者が実機検証を回せるように多めに残している。**一般公開時は claim の付与自体を
+ *    やめる**ことで自動的に FREE_DAILY_LIMIT に揃う（この定数を消す必要はない）。
+ */
+const BETA_FREE_DAILY_LIMIT = 3;
+
+/**
+ * 1日あたりの**購入残高**からの生成回数の上限（livingSkyUsage.paidUsedToday の上限）。
+ * 通常利用では絶対に当たらない値。アカウント乗っ取り・クライアント暴走時の被害上限として置く
+ * （残高が大きいユーザーが1日で全部溶かされるのを防ぐ）。
+ */
+const PAID_DAILY_LIMIT = 20;
+
+/**
+ * @deprecated 旧・無料β時代の1日あたり上限。`FREE_DAILY_LIMIT` に置き換わった。
+ * 既存の呼び出し互換のためだけに残す（新規コードでは使わない）。
+ */
+const DAILY_LIMIT = FREE_DAILY_LIMIT;
+
+/** 消費型プロダクトID → 付与クレジット数。ASC / .storekit / iOS の enum と一致させること。 */
+const PACK_CREDITS = {
+  "com.yoshidometoru.Soramoyou.skymotion.pack5": 5,
+};
 
 /** ポーリングを打ち切って status="failed" / errorCode="timeout" にするまでの時間(ms)。 */
 const POLL_TIMEOUT_MS = 20 * 60 * 1000;
@@ -105,48 +133,147 @@ function jstDateString(date) {
 
 /**
  * usage ドキュメントを「当日基準」に正規化する（lazy reset）。
- * day が当日と異なる（または未設定）場合は reservedCount=0 として扱う。
- * @param {{day?: string, reservedCount?: number}|null|undefined} usageData
+ * day が当日と異なる（または未設定）場合は当日ぶんのカウンタを 0 として扱う。
+ *
+ * ⚠️ **カウンタは無料枠と購入枠で別々に持つ**（Phase C）。1本にまとめると
+ *    「無料を使い切ったか」と「今日あと何回買った枠を使えるか」の両方を表現できない。
+ *    例: 無料1回+購入3回で合計4だとしても、無料枠が尽きたかは合計値からは分からない。
+ *
+ * ⚠️ **後方互換**: β時代のドキュメントは `{day, reservedCount}` しか持たない。
+ *    当時は全て無料生成だったので、legacy な `reservedCount` は `freeUsedToday` として読む
+ *    （0扱いにすると既存ユーザーに無料枠のリセットを1回ぶん与えてしまう）。
+ *
+ * @param {{day?: string, freeUsedToday?: number, paidUsedToday?: number, reservedCount?: number}|null|undefined} usageData
  * @param {string} todayStr jstDateString() の結果
- * @returns {{day: string, reservedCount: number}}
+ * @returns {{day: string, freeUsedToday: number, paidUsedToday: number}}
  */
 function applyLazyReset(usageData, todayStr) {
   const sameDay = !!usageData && usageData.day === todayStr;
-  const reservedCount = sameDay && typeof usageData.reservedCount === "number"
-    ? usageData.reservedCount
-    : 0;
-  return { day: todayStr, reservedCount };
-}
-
-/**
- * 予約可否を判定する（reserve-on-create）。
- * 上限未満なら reservedCount+1 した新しい usage を返す。
- * 上限到達なら allowed=false（呼び出し側は fal.ai を一切呼ばないこと）。
- * @param {{day?: string, reservedCount?: number}|null|undefined} usageData 現在の usage ドキュメント
- * @param {string} todayStr jstDateString() の結果
- * @param {number} [dailyLimit] 既定 DAILY_LIMIT
- * @returns {{allowed: boolean, day: string, reservedCount: number}}
- */
-function decideReservation(usageData, todayStr, dailyLimit) {
-  const limit = typeof dailyLimit === "number" ? dailyLimit : DAILY_LIMIT;
-  const { day, reservedCount } = applyLazyReset(usageData, todayStr);
-  if (reservedCount >= limit) {
-    return { allowed: false, day, reservedCount };
+  if (!sameDay) {
+    return { day: todayStr, freeUsedToday: 0, paidUsedToday: 0 };
   }
-  return { allowed: true, day, reservedCount: reservedCount + 1 };
+  const legacy = typeof usageData.reservedCount === "number" ? usageData.reservedCount : 0;
+  const free = typeof usageData.freeUsedToday === "number" ? usageData.freeUsedToday : legacy;
+  const paid = typeof usageData.paidUsedToday === "number" ? usageData.paidUsedToday : 0;
+  return { day: todayStr, freeUsedToday: free, paidUsedToday: paid };
+}
+
+/** 残高ドキュメントから残高を安全に取り出す（欠落・不正値は0）。 */
+function readBalance(balanceData) {
+  const b = balanceData && balanceData.balance;
+  return typeof b === "number" && Number.isFinite(b) && b > 0 ? Math.floor(b) : 0;
 }
 
 /**
- * 返金（refund-on-failure）後の usage を計算する。0未満にはならない。
- * 予約時から日付が変わっていた場合でも lazy reset と整合する（新しい日は
- * どのみち reservedCount=0 から始まるため、返金の二重適用にはならない）。
- * @param {{day?: string, reservedCount?: number}|null|undefined} usageData 現在の usage ドキュメント
+ * 予約可否を判定する（reserve-on-create）。**無料枠を先に使い、尽きたら購入残高を使う。**
+ *
+ * 返り値の `bucket` が「どちらから引いたか」を表す。**返金時にこれが必要**なので、
+ * 呼び出し側は job ドキュメントに保存しておくこと（返金は別プロセス＝ポーラーで起きる）。
+ *
+ * @param {object|null|undefined} usageData 現在の usage ドキュメント
+ * @param {object|null|undefined} balanceData 現在の balance ドキュメント
  * @param {string} todayStr jstDateString() の結果
- * @returns {{day: string, reservedCount: number}}
+ * @param {{free?: number, paid?: number}} [limits] 既定 FREE_DAILY_LIMIT / PAID_DAILY_LIMIT
+ * @returns {{allowed: boolean, bucket: "free"|"paid"|null, reason: string|null,
+ *            day: string, freeUsedToday: number, paidUsedToday: number, balance: number}}
+ *   allowed=false のとき reason は "free_exhausted_no_balance"（残高切れ）または
+ *   "paid_daily_cap"（残高はあるが当日の購入枠上限）。UI の文言を出し分けるために使う。
  */
-function decideRefund(usageData, todayStr) {
-  const { day, reservedCount } = applyLazyReset(usageData, todayStr);
-  return { day, reservedCount: Math.max(0, reservedCount - 1) };
+function decideReservation(usageData, balanceData, todayStr, limits) {
+  const freeLimit = limits && typeof limits.free === "number" ? limits.free : FREE_DAILY_LIMIT;
+  const paidLimit = limits && typeof limits.paid === "number" ? limits.paid : PAID_DAILY_LIMIT;
+  const { day, freeUsedToday, paidUsedToday } = applyLazyReset(usageData, todayStr);
+  const balance = readBalance(balanceData);
+
+  // 1) 無料枠が残っていれば必ずそちらを先に使う（購入ぶんを温存する＝ユーザーに有利側）。
+  if (freeUsedToday < freeLimit) {
+    return {
+      allowed: true, bucket: "free", reason: null,
+      day, freeUsedToday: freeUsedToday + 1, paidUsedToday, balance,
+    };
+  }
+  // 2) 無料枠を使い切ったら購入残高。ただし当日の購入枠上限を超えない。
+  if (balance <= 0) {
+    return {
+      allowed: false, bucket: null, reason: "free_exhausted_no_balance",
+      day, freeUsedToday, paidUsedToday, balance,
+    };
+  }
+  if (paidUsedToday >= paidLimit) {
+    return {
+      allowed: false, bucket: null, reason: "paid_daily_cap",
+      day, freeUsedToday, paidUsedToday, balance,
+    };
+  }
+  return {
+    allowed: true, bucket: "paid", reason: null,
+    day, freeUsedToday, paidUsedToday: paidUsedToday + 1, balance: balance - 1,
+  };
+}
+
+/**
+ * 返金（refund-on-failure）後の usage / balance を計算する。**予約時に引いた側だけを戻す。**
+ *
+ * 予約時から日付が変わっていた場合、当日カウンタはどのみち0から始まるので二重返金にはならない。
+ * ただし **残高は日をまたいでも戻す**（購入したクレジットは日付と無関係な資産のため）。
+ *
+ * @param {object|null|undefined} usageData 現在の usage ドキュメント
+ * @param {object|null|undefined} balanceData 現在の balance ドキュメント
+ * @param {"free"|"paid"} bucket 予約時に引いた側（job.chargedBucket）
+ * @param {string} todayStr jstDateString() の結果
+ * @returns {{day: string, freeUsedToday: number, paidUsedToday: number, balance: number, balanceChanged: boolean}}
+ */
+function decideRefund(usageData, balanceData, bucket, todayStr) {
+  const { day, freeUsedToday, paidUsedToday } = applyLazyReset(usageData, todayStr);
+  const balance = readBalance(balanceData);
+  if (bucket === "paid") {
+    return {
+      day, freeUsedToday,
+      paidUsedToday: Math.max(0, paidUsedToday - 1),
+      balance: balance + 1, balanceChanged: true,
+    };
+  }
+  // 既定は無料枠の返金（bucket 未設定の旧ジョブもここに落ちる＝β時代は全て無料だったので正しい）。
+  return {
+    day, freeUsedToday: Math.max(0, freeUsedToday - 1), paidUsedToday,
+    balance, balanceChanged: false,
+  };
+}
+
+// ============================================================
+// 購入クレジットの付与（skyMotionPurchases・冪等）
+// ============================================================
+
+/**
+ * 購入1件ぶんのクレジット付与を判定する（純関数）。
+ *
+ * 冪等性の担保は2段:
+ *   ① doc ID = StoreKit の transactionId なので、同じ購入は同じドキュメントになる
+ *   ② それでも onDocumentCreated は at-least-once なので、**既に credited なら no-op** にする
+ *
+ * @param {{status?: string, productId?: string, creditedCount?: number}|null|undefined} purchaseData
+ * @param {object|null|undefined} balanceData 現在の balance ドキュメント
+ * @param {Object<string, number>} [packCredits] 既定 PACK_CREDITS
+ * @returns {{credit: boolean, credits: number, newBalance: number, reason: string|null}}
+ *   credit=false のとき reason は "already_credited" / "unknown_product" / "not_pending"。
+ */
+function decidePurchaseCredit(purchaseData, balanceData, packCredits) {
+  const table = packCredits || PACK_CREDITS;
+  const balance = readBalance(balanceData);
+  if (!purchaseData) {
+    return { credit: false, credits: 0, newBalance: balance, reason: "not_pending" };
+  }
+  if (purchaseData.status === "credited") {
+    return { credit: false, credits: 0, newBalance: balance, reason: "already_credited" };
+  }
+  if (purchaseData.status && purchaseData.status !== "pending") {
+    return { credit: false, credits: 0, newBalance: balance, reason: "not_pending" };
+  }
+  const credits = table[purchaseData.productId];
+  if (typeof credits !== "number" || credits <= 0) {
+    return { credit: false, credits: 0, newBalance: balance, reason: "unknown_product" };
+  }
+  return { credit: true, credits, newBalance: balance + credits, reason: null };
 }
 
 // ============================================================
@@ -343,6 +470,12 @@ function loopTrimWindows(L, D) {
 }
 
 module.exports = {
+  FREE_DAILY_LIMIT,
+  BETA_FREE_DAILY_LIMIT,
+  PAID_DAILY_LIMIT,
+  PACK_CREDITS,
+  readBalance,
+  decidePurchaseCredit,
   LOOP_XFADE_DURATION,
   LOOP_SLOW_FACTOR_MAX,
   LOOP_DURATION_FACTORS,
