@@ -383,3 +383,20 @@ test("loopTrimWindows: クロスフェード区間が取れない短さなら nu
   assert.equal(core.loopTrimWindows(0, 1), null);
   assert.equal(core.loopTrimWindows(6.5, 0), null);
 });
+
+test("FAL_PROMPT に速度を殺す語を入れ直していないこと（回帰ガード）", () => {
+  // 実測: これらの語があると trajectory を10%まで上げても効かず、ばらつきも4.1倍になる。
+  for (const word of ["slowly", "gentle", "calm river"]) {
+    assert.ok(
+      !core.FAL_PROMPT.toLowerCase().includes(word),
+      `FAL_PROMPT に "${word}" が含まれている（雲が動かなくなる。2026-08-02 実測）`
+    );
+  }
+});
+
+test("FAL_PROMPT の『地上を固定する』指示は残っていること", () => {
+  // こちらは実測で効いている（4本すべて地上の移動 0〜1px）ので消してはいけない。
+  const p = core.FAL_PROMPT.toLowerCase();
+  assert.ok(p.includes("remain completely still"), "地上固定の指示が消えている");
+  assert.ok(p.includes("fixed camera"), "カメラ固定の指示が消えている");
+});

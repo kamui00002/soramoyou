@@ -63,12 +63,17 @@ function buildFalResultUrl(requestId) {
 function fetchWithTimeout(url, options, timeoutMs) {
   return fetch(url, { ...(options || {}), signal: AbortSignal.timeout(timeoutMs) });
 }
+// ⚠️ **「slowly」「gentle」「calm river」を書いてはいけない。**
+//    旧プロンプトはこの3語で「ゆっくり動け」と3回指示しており、trajectory（雲の移動量）を
+//    いくら増やしても打ち消されていた。実測（同一写真・ドリフト幅10%固定・2026-08-02）:
+//      旧プロンプト: 2回生成して 1.572 / 0.379 %幅/秒（4.1倍のばらつき＝当たり外れが激しい）
+//      新プロンプト: 2回生成して 3.087 / 2.126 %幅/秒（1.45倍・**外れの方でも十分動く**）
+//    「地上を固定する」側の記述は効いている（4本すべて地上の移動 0〜1px）ので触らない。
 const FAL_PROMPT =
-  "Clouds drift slowly and continuously across the sky in one steady " +
-  "direction, flowing smoothly and naturally like a calm river. The ground, " +
+  "Clouds drift steadily and continuously across the sky in one direction at " +
+  "a clearly visible pace, flowing smoothly and naturally. The ground, " +
   "buildings, utility poles and power lines remain completely still and " +
-  "perfectly fixed. Fixed camera, photorealistic, smooth continuous gentle " +
-  "motion.";
+  "perfectly fixed. Fixed camera, photorealistic, continuous motion.";
 const FAL_NEGATIVE_PROMPT = "blur, distort, low quality, camera shake, ground movement, warping";
 // ⚠️ 必ず "5"。kling-v1.5-pro の Motion Control（static_mask_url + dynamic_masks）は
 //    duration="10" だと fal が 422 feature_not_supported を返す（マスクは5秒専用）。

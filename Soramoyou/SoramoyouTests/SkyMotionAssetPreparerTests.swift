@@ -130,7 +130,7 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
     /// ドリフト量が**画像幅に比例**すること。絶対px固定に戻すと、長辺1920縮小によって
     /// 横写真(幅1920)と縦写真(幅1440)で相対移動量が1.33倍ズレ、横写真だけ雲が止まって見える。
     func test_driftPixels_scalesWithImageWidth() {
-        let ratio = SkyMotionPreset.calm.driftWidthRatio
+        let ratio = SkyMotionPreset.driftWidthRatio
         let landscape = SkyMotionAssetPreparer.driftPixels(imageWidth: 1920, ratio: ratio)
         let portrait = SkyMotionAssetPreparer.driftPixels(imageWidth: 1440, ratio: ratio)
 
@@ -177,21 +177,25 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
         }
     }
 
-    /// ドリフト比率が実証済みの安全上限を超えないことを検証する。
-    /// 幅4.7%まではゴースト無し・地上固定OKを実証済み（旧 fast_10s 検証）。
-    func test_allPresetDriftRatios_stayWithinProvenCeiling() {
-        for preset in SkyMotionPreset.allCases {
-            XCTAssertLessThanOrEqual(preset.driftWidthRatio, 0.047,
-                                     "\(preset.rawValue) のドリフトが実証済み安全域を超えている")
-        }
+    /// ドリフト比率が「Kling に無視される領域」に落ちていないことを検証する。
+    ///
+    /// 実測（同一写真・空の累積フロー %幅/秒）: 2.3%→0.120 / 4.0%→0.046 / 6.5%→0.264 と
+    /// 6.5%以下は横並びでほぼ静止。10%で 2.1〜3.1 に跳ねる（`SkyMotionPreset` の表）。
+    /// 下げる方向の変更は「雲が動かない」実機不具合に直結するのでここで止める。
+    func test_driftRatio_isAboveIgnoredThreshold() {
+        XCTAssertGreaterThanOrEqual(
+            SkyMotionPreset.driftWidthRatio, 0.07,
+            "ドリフト比率が Kling に無視される領域（幅6.5%以下）に入っている"
+        )
     }
 
-    /// 尺が長いプリセットほど総移動量（ドリフト比率）を大きく取ること。
-    /// ⚠️ これは体感速度の保証ではない（速度はサーバーの setpts 側・enum のコメント参照）。
-    ///    尺が長い＝雲がより遠くまで流れる、という指示内容の一貫性だけを見ている。
-    func test_longerPresets_haveLargerDrift() {
-        XCTAssertLessThan(SkyMotionPreset.quick.driftWidthRatio, SkyMotionPreset.standard.driftWidthRatio)
-        XCTAssertLessThan(SkyMotionPreset.standard.driftWidthRatio, SkyMotionPreset.calm.driftWidthRatio)
+    /// ドリフト比率が実測で地上固定を確認できた上限を超えないことを検証する。
+    /// 幅10%までは地上の移動0〜1pxを4本で確認済み。それ以上は未検証なので上げるなら実測すること。
+    func test_driftRatio_staysWithinVerifiedCeiling() {
+        XCTAssertLessThanOrEqual(
+            SkyMotionPreset.driftWidthRatio, 0.10,
+            "ドリフト比率が実測で地上固定を確認した範囲（幅10%）を超えている"
+        )
     }
 
     /// 尺の序列（quick < standard < calm）が保たれていること。
@@ -206,20 +210,26 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
                           "「標準」が「ゆっくり」より長い")
     }
 
-    /// 速さ側(`SkyMotionAssetPreparer.driftWidthRatioDefault`)と尺側(`SkyMotionJob` の
-    /// `loopDuration` 既定値)の既定プリセットが一致していること。
-    /// 片方だけ変えると「標準の速さ × ゆっくりの尺」のようなチグハグな組み合わせになり、
-    /// 見かけ速度が想定外に落ちる。
-    func test_defaultPreset_isConsistentBetweenSpeedAndDuration() {
+    /// `SkyMotionJob` の `loopDuration` 既定値が、実在するプリセットを指していること。
+    /// 未知のキーになるとサーバーの `slowFactorForJob` がフォールバック値に落ち、
+    /// ユーザーが選んだ尺と実際の尺が食い違う。
+    func test_defaultLoopDuration_mapsToAnExistingPreset() {
         let job = SkyMotionJob(
             id: "test", userId: "u", sourcePath: "s", skyMaskPath: "k",
             groundMaskPath: "g", aspectRatio: "1:1", trajectory: []
         )
-        let durationDefaultPreset = SkyMotionPreset.allCases.first { $0.loopDurationKey == job.loopDuration }
-        XCTAssertEqual(
-            durationDefaultPreset?.driftWidthRatio, SkyMotionAssetPreparer.driftWidthRatioDefault,
-            "速さの既定プリセットと尺の既定プリセットが食い違っている"
+        XCTAssertNotNil(
+            SkyMotionPreset.allCases.first { $0.loopDurationKey == job.loopDuration },
+            "loopDuration の既定値 '\(job.loopDuration)' に対応するプリセットが無い"
         )
+    }
+
+    /// アセット準備側の既定ドリフトが、プリセット共通の値と一致していること。
+    /// 二重定義になると片方だけ直して「無視される領域」に戻る事故が起きる。
+    func test_preparerDefaultDrift_matchesPresetConstant() {
+        XCTAssertEqual(SkyMotionAssetPreparer.driftWidthRatioDefault,
+                       SkyMotionPreset.driftWidthRatio,
+                       "ドリフト比率が2箇所で食い違っている")
     }
 
     // MARK: - aspect比の近似（nearestAspectRatio）

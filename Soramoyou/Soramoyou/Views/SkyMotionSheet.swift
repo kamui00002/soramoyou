@@ -81,8 +81,9 @@ struct SkyMotionSheet: View {
     // MARK: - State
 
     @State private var state: SkyMotionSheetState = .idle
-    /// ユーザーが選んだプリセット（単一3択・速さと尺がセット）。driftWidthRatio(速さ) と
-    /// loopDurationKey(尺) の両方を持つ。既定は .calm（≒10秒・落ち着いた見た目）。
+    /// ユーザーが選んだプリセット（単一3択）。`loopDurationKey`（→サーバーの setpts）で
+    /// 尺と減速の度合いが決まる。雲の移動量はプリセット共通（`SkyMotionPreset.driftWidthRatio`）。
+    /// 既定は .calm（≒7.5秒・落ち着いた見た目）。
     @State private var selectedPreset: SkyMotionPreset = .calm
     /// 進行中ジョブID（UserDefaults 永続）。シートを閉じてもサーバーは生成を続けるため、これを
     /// 残しておき、次にシートを開いた時 `resumeActiveJobIfNeeded()` で監視を張り直して結果を
@@ -517,9 +518,9 @@ struct SkyMotionSheet: View {
                     )
                 }
 
-                // プリセット → 雲の移動量(driftWidthRatio=速さ・画像幅比) と loopDurationKey(尺)。
+                // 雲の移動量(画像幅比)はプリセット共通。プリセットの違いは loopDurationKey(尺)側で付く。
                 let assets = try await SkyMotionAssetPreparer().prepare(
-                    image: sourceImage, driftWidthRatio: selectedPreset.driftWidthRatio
+                    image: sourceImage, driftWidthRatio: SkyMotionPreset.driftWidthRatio
                 )
                 try Task.checkCancellation()
 
