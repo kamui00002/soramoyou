@@ -226,6 +226,10 @@ async function reserveAndClaimJob(uid, jobRef, isBeta) {
         day: decision.day,
         freeUsedToday: decision.freeUsedToday,
         paidUsedToday: decision.paidUsedToday,
+        // ⚠️ 当日の無料枠上限を**サーバーが書いて**client に見せる。client 側に
+        //    「1回/日」とハードコードすると、β(3回)と一般(1回)で表示が嘘になるし、
+        //    上限を変えるたび2箇所を直すことになる（＝必ずどちらかがズレる）。
+        freeLimit: limits.free,
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true }

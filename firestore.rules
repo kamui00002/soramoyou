@@ -453,7 +453,13 @@ service cloud.firestore {
     // ============================================
     match /skyMotionPurchases/{transactionId} {
       // 読み取り: 所有者のみ（client は status が credited になるのを待って finish する）
-      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      // ⚠️ `resource == null`（＝ドキュメント未作成）を必ず許可すること。
+      //    client は「同じ購入を二重に送らない」ため書き込み前に存在確認の get をする。
+      //    この分岐が無いと、存在しないドキュメントへの get で `resource.data` が null 参照になり
+      //    **読み取りが拒否され、購入がサーバーに一度も届かない**（2026-08-03 実機で発生）。
+      //    存在しないドキュメントの不在を知られても情報漏洩にはならない。
+      allow read: if isAuthenticated()
+                  && (resource == null || resource.data.userId == request.auth.uid);
 
       // 作成: 認証済みユーザーが自分のIDで、status=pending の初期状態のみ。
       // ⚠️ creditedCount / status=credited を client に書かせない（＝残高の自己申告を防ぐ）。

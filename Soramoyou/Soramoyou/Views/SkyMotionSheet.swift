@@ -261,14 +261,27 @@ struct SkyMotionSheet: View {
                 .padding(.horizontal, 32)
             // 残高表示。⚠️ これは**表示用**であって認可ではない（実際に生成できるかは
             //    サーバーの reserveAndClaimJob が無料枠と残高を見て決める）。
-            if creditService.balance > 0 {
-                Label("残り \(creditService.balance) 回ぶんのクレジット", systemImage: "ticket")
+            VStack(spacing: 4) {
+                if let free = creditService.freeRemainingToday {
+                    // サーバーが書いた当日の上限から算出した実数。
+                    Label(
+                        free > 0 ? "今日の無料生成: あと \(free) 回" : "今日の無料生成: 使い切りました",
+                        systemImage: free > 0 ? "gift" : "gift.fill"
+                    )
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.75))
-            } else {
-                Text("毎日1回まで無料で作れます")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(.white.opacity(free > 0 ? 0.8 : 0.55))
+                } else {
+                    // まだ1度も生成していない等で使用状況が取れていない。
+                    // ⚠️ 回数を断定しない（β=3回 / 一般=1回でサーバー側が変わるため）。
+                    Text("毎日きまった回数まで無料で作れます")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                if creditService.balance > 0 {
+                    Label("購入クレジット: 残り \(creditService.balance) 回", systemImage: "ticket")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.75))
+                }
             }
             Spacer()
             // 残高0のときは idle からも購入できるようにする。
@@ -515,7 +528,10 @@ struct SkyMotionSheet: View {
         let price = creditService.displayPrice(for: SkyMotionProduct.pack5)
         let credits = SkyMotionProduct.displayCredits(for: SkyMotionProduct.pack5) ?? 5
         Button {
-            Task { await creditService.purchase() }
+            // ⚠️ ここで `Task { }` を作ってはいけない。シートを閉じると Task ごと消えて
+            //    purchaseState が .verifying のまま固まり、ボタンが永久に押せなくなる。
+            //    Task の寿命は SkyMotionCreditService 側が持つ。
+            creditService.purchase()
         } label: {
             Group {
                 switch creditService.purchaseState {

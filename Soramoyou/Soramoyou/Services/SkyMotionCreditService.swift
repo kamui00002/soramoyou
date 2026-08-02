@@ -47,6 +47,10 @@ final class SkyMotionCreditService: ObservableObject {
 
     /// 購入済みクレジット残高（**表示用キャッシュ**。認可には使わない）。
     @Published private(set) var balance: Int = 0
+    /// 今日まだ使える無料枠の残り。サーバーが `livingSkyUsage` に書いた値から算出する。
+    /// ⚠️ 上限は client にハードコードしない（β=3回 / 一般=1回で変わるうえ、
+    ///    サーバーと二重管理すると必ずどちらかがズレる）。未取得の間は nil。
+    @Published private(set) var freeRemainingToday: Int?
     /// 購入フローの状態。
     @Published private(set) var purchaseState: SkyMotionPurchaseState = .idle
     /// 取得済みプロダクト（価格表示用）。
@@ -54,9 +58,12 @@ final class SkyMotionCreditService: ObservableObject {
 
     private let db = Firestore.firestore()
     private var balanceListener: ListenerRegistration?
+    private var usageListener: ListenerRegistration?
     /// 現在購読中の uid。ログインし直しで別ユーザーの残高を出し続けないための見張り。
     private var observedUid: String?
     private var updatesTask: Task<Void, Never>?
+    /// 購入処理の Task。**View ではなくこのサービスが所有する**（画面を閉じても走り切らせる）。
+    private var purchaseTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.soramoyou", category: "SkyMotionCredit")
 
     /// サーバーの検証完了を待つ上限。超えても購入自体は Apple 側に残るので、
@@ -86,12 +93,15 @@ final class SkyMotionCreditService: ObservableObject {
     func handleSignOut() {
         balanceListener?.remove()
         balanceListener = nil
+        usageListener?.remove()
+        usageListener = nil
         observedUid = nil
         balance = 0
+        freeRemainingToday = nil
         purchaseState = .idle
     }
 
-    /// 残高ドキュメントを購読する（サーバーが加算・減算するのをそのまま反映する）。
+    /// 残高と無料枠の使用状況を購読する（どちらもサーバーが書いた値をそのまま反映する）。
     private func observeBalance() {
         guard let uid = Auth.auth().currentUser?.uid else {
             handleSignOut()
@@ -100,8 +110,11 @@ final class SkyMotionCreditService: ObservableObject {
         // 同じ uid を二重購読しない（起動のたびに listener が積み上がるのを防ぐ）。
         guard uid != observedUid else { return }
         balanceListener?.remove()
+        usageListener?.remove()
         observedUid = uid
         balance = 0 // 前のユーザーの残高を一瞬でも見せない
+        freeRemainingToday = nil
+
         balanceListener = db.collection("skyMotionBalance").document(uid)
             .addSnapshotListener { [weak self] snapshot, error in
                 guard let self else { return }
@@ -112,6 +125,39 @@ final class SkyMotionCreditService: ObservableObject {
                 let value = snapshot?.data()?["balance"] as? Int ?? 0
                 Task { @MainActor in self.balance = max(0, value) }
             }
+
+        usageListener = db.collection("livingSkyUsage").document(uid)
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let self else { return }
+                if let error {
+                    logger.error("無料枠の購読に失敗: \(error.localizedDescription, privacy: .public)")
+                    return
+                }
+                let remaining = Self.freeRemaining(from: snapshot?.data())
+                Task { @MainActor in self.freeRemainingToday = remaining }
+            }
+    }
+
+    /// `livingSkyUsage` から「今日あと何回無料で作れるか」を求める。
+    ///
+    /// - 日付が今日でなければ lazy reset されるので上限まるごと残っている
+    /// - `freeLimit` はサーバーが書いた当日の上限（β=3 / 一般=1）。無い場合は表示しない（nil）
+    /// - β時代の legacy `reservedCount` は無料使用数として読む（サーバーの applyLazyReset と同じ規則）
+    nonisolated static func freeRemaining(from data: [String: Any]?) -> Int? {
+        guard let data, let limit = data["freeLimit"] as? Int else { return nil }
+        let today = jstDateString()
+        guard (data["day"] as? String) == today else { return max(0, limit) }
+        let legacy = data["reservedCount"] as? Int ?? 0
+        let used = data["freeUsedToday"] as? Int ?? legacy
+        return max(0, limit - used)
+    }
+
+    /// JST の "YYYY-MM-DD"（サーバー `skyMotionCore.jstDateString` と同じ規則）。
+    nonisolated static func jstDateString(_ date: Date = Date()) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 9 * 3600) ?? .current
+        let c = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
     /// 外部（別端末での購入・承認待ちの解決など）からの Transaction 更新を購読する。
@@ -154,7 +200,23 @@ final class SkyMotionCreditService: ObservableObject {
 
     /// 回数パックを購入する。
     /// 成功時は **サーバーがクレジットを加算し終えてから** finish する（不変条件1）。
-    func purchase(productID: String = SkyMotionProduct.pack5) async {
+    ///
+    /// ⚠️ 実処理は**このサービスが所有する Task** で回す。View の `Task { }` に直接
+    ///    書くと、シートを閉じた瞬間に Task が破棄され、`purchaseState` が `.verifying` の
+    ///    まま二度と解決しない＝**購入ボタンが永久に押せなくなる**（2026-08-03 実機で発生）。
+    ///    購入は「画面を閉じても最後まで走り切る」べき処理なので、寿命を View から切り離す。
+    func purchase(productID: String = SkyMotionProduct.pack5) {
+        guard purchaseTask == nil else {
+            logger.info("回数パック: 購入処理が進行中のため無視")
+            return
+        }
+        purchaseTask = Task { [weak self] in
+            await self?.runPurchase(productID: productID)
+            self?.purchaseTask = nil
+        }
+    }
+
+    private func runPurchase(productID: String) async {
         guard Auth.auth().currentUser?.uid != nil else {
             purchaseState = .failed(message: "ログインが必要です")
             return
@@ -257,8 +319,11 @@ final class SkyMotionCreditService: ObservableObject {
     private func submitPurchaseDocumentIfNeeded(
         docRef: DocumentReference, uid: String, transaction: StoreKit.Transaction, jws: String
     ) async throws {
-        let existing = try await docRef.getDocument()
-        if existing.exists { return }
+        // 既存確認は「二重送信を避ける」ための最適化に過ぎない。
+        // ⚠️ **読めなかったからといって書き込みを諦めてはいけない。**
+        //    ここで throw すると購入がサーバーに一度も届かず、ユーザーは払ったのに増えない。
+        //    重複しても doc ID = transactionId なのでサーバー側が冪等に吸収する。
+        if let existing = try? await docRef.getDocument(), existing.exists { return }
         try await docRef.setData([
             "userId": uid,
             "status": "pending",

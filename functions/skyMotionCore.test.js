@@ -558,3 +558,15 @@ test("β許可ユーザーは無料枠が多い / 一般公開時は claim を�
   const usage4 = { day: DAY, freeUsedToday: 3, paidUsedToday: 0 };
   assert.equal(core.decideReservation(usage4, null, DAY, betaLim).allowed, false);
 });
+
+test("freeLimit をサーバーが書く前提: 予約結果から client 表示用の残り回数が復元できる", () => {
+  // client(SkyMotionCreditService.freeRemaining)は day/freeLimit/freeUsedToday を見る。
+  // サーバーが書く形と client が読む形が食い違うと「あと何回」が嘘になるので、
+  // サーバー側が返すフィールドが揃っていることをここで固定する。
+  const r = core.decideReservation({ day: DAY, freeUsedToday: 0 }, null, DAY, LIM);
+  assert.equal(typeof r.day, "string");
+  assert.equal(typeof r.freeUsedToday, "number");
+  assert.equal(typeof r.paidUsedToday, "number");
+  // 上限は呼び出し側(limits)が持つ＝そのまま freeLimit として書ける
+  assert.equal(LIM.free - r.freeUsedToday, 0, "上限1回を1回使ったので残り0");
+});
