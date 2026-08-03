@@ -1,5 +1,5 @@
 // ⭐️ SkyMotionSheet.swift
-// 「空を動かす」（Kling版）フェーズ2: DEBUG限定E2E検証用のUI導線
+// 「空を動かす」（Kling版）のUI導線（β・allowlistゲート）
 //
 //  SkyMotionSheet.swift
 //  Soramoyou
@@ -7,16 +7,20 @@
 // 設計書: docs/sky-motion-design.md（唯一のデータ契約の土台）
 //   §0 アーキテクチャ概要: 画像3枚アップロード → livingSkyJobs 作成 → snapshot listener で
 //      status 変化を待つ（pending → submitting → submitted → completed/failed）
-//   §5 回数・コスト方針: 3回/日/ユーザー。quota_exceeded 時は fal.ai を一切呼び出さない
+//   §5 回数・コスト方針: 無料枠(一般1回/β3回)＋購入残高(日次上限20回)。quota_exceeded 時は
+//      fal.ai を一切呼び出さない（真実源はサーバーの reserveAndClaimJob）
 //
 // ⚠️ 命名・見た目が近い既存の Metal ローカル版 Living Sky（`LivingSkySheet`・`LivingSkyPreviewView.swift`）
 //    とは別機能。UI クロームの作りだけ参考にしたが、型は一切再利用しない（新規実装）。
 //    既存 LivingSky* 系ファイルには一切手を入れない（温存）。
 //
-// スコープ: DEBUG限定のE2E検証（フェーズ2 UI導線）。本番導線化はしない
-//   （呼び出し元 `EditView` 側で `#if DEBUG` ゲート必須。設計書§7）。
-//   フェーズB第一歩として「初回の写真送信同意ゲート」を実装済み（下記 Consent 節）。
-//   allowlist ゲート（DEBUG or skyMotionBeta claim）自体は変更なし・公開ゲート解除はフェーズC。
+// スコープ: β（allowlist限定）。到達可能なのは **DEBUGビルド（常に可）と、
+//   Release/TestFlight で custom claim `skyMotionBeta` を持つユーザー**
+//   （ゲート実装は `SkyMotionAccess.isEnabled()` / `EditView`）。
+//   ⚠️「DEBUG限定」ではない——TestFlightのallowlistユーザーにも到達し、実課金（サンドボックス/
+//   本番IAP）が動く。露出範囲を過小に見せる旧コメントは2026-08-03に訂正した。
+//   「初回の写真送信同意ゲート」実装済み（下記 Consent 節）。一般公開ゲート解除は claim 付与の
+//   運用停止で行う（rules/EditView/purchasesの3箇所を同時に。詳細は firestore.rules のコメント）。
 //   スライダー等のパラメータUIも持たない（PoC固定レシピ。マスク・軌跡・aspect比は
 //   `SkyMotionAssetPreparer` が自動算出する）。
 
@@ -70,8 +74,8 @@ enum SkyMotionSheetState: Equatable {
 
 /// 「空を動かす」（Kling版）β のプレビュー・生成シート。
 ///
-/// - 対象: DEBUG限定のE2E検証（フェーズ2 UI導線）。開発者の実機でのみ動く想定
-///   （呼び出し元 `EditView` が `#if DEBUG` でゲートする）。
+/// - 対象: DEBUGビルド＋Release/TestFlightの `skyMotionBeta` claim保有者
+///   （ゲートは `SkyMotionAccess.isEnabled()`。「DEBUG限定」ではない点に注意）。
 struct SkyMotionSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -171,17 +175,7 @@ struct SkyMotionSheet: View {
             }
         }
         .onDisappear {
-            // パイプラインTaskをキャンセル（Firestore listener は observeJob の onTermination 経由で
-            // 自動 remove される）。ループ再生も止めて余計な CPU/バッテリー消費を防ぐ。
-            pipelineTask?.cancel()
-            queuePlayer.pause()
-            // player/looper を解放してから、保持しているローカル一時mp4を削除する（G6/codex-10）。
-            // 本機能は DEBUG限定到達のため `LivingSkyVideoExporter.saveToPhotos` の
-            // `#if !DEBUG` 削除分岐が走らず、ここで明示的に消さない限り残り続けてしまう。
-            playerLooper = nil
-            if let url = currentLocalVideoURL {
-                try? FileManager.default.removeItem(at: url)
-            }
+            cleanUpPlaybackAndTempFile()
         }
         .alert("保存に失敗しました", isPresented: Binding(
             get: { saveErrorMessage != nil },
@@ -380,15 +374,26 @@ struct SkyMotionSheet: View {
         }
     }
 
-    /// 完成/保存後に「もう一度作る」で呼ぶ。現在のプレビューを片付けて idle に戻し、別プリセットで
-    /// 再生成できるようにする。activeJobId は onChange(.completed 等) で既にクリア済みだが念のため空に。
-    private func regenerate() {
+    /// パイプラインの中断・ループ再生の停止・保持中のローカル一時mp4の削除をまとめて行う。
+    ///
+    /// `.onDisappear`（シートを閉じた時）と `regenerate()`（もう一度作る）の共通後片付け。
+    /// - Firestore listener は observeJob の onTermination 経由で自動 remove される。
+    /// - player/looper を解放してから一時mp4を削除する（G6/codex-10）。
+    /// - 保存時は exporter に使い捨てコピーを渡す方式（`saveToPhotos` 参照）のため、
+    ///   原本の削除はビルド構成によらずここが唯一の責務。
+    private func cleanUpPlaybackAndTempFile() {
         pipelineTask?.cancel()
         queuePlayer.pause()
         playerLooper = nil
         if let url = currentLocalVideoURL {
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    /// 完成/保存後に「もう一度作る」で呼ぶ。現在のプレビューを片付けて idle に戻し、別プリセットで
+    /// 再生成できるようにする。activeJobId は onChange(.completed 等) で既にクリア済みだが念のため空に。
+    private func regenerate() {
+        cleanUpPlaybackAndTempFile()
         activeJobId = ""
         LoggingService.shared.logEvent("sky_motion_regenerate_tapped", parameters: nil)
         state = .idle
@@ -587,9 +592,9 @@ struct SkyMotionSheet: View {
         pipelineTask = Task {
             defer { pipelineTask = nil }
             do {
-                // DEBUG限定のE2E検証機能のため未ログインは想定外だが、クラッシュさせず
-                // 失敗表示にフォールバックする（`firestore.rules` の create 条件が
-                // `request.auth.uid` を要求するため、未ログインではどのみち job 作成が失敗する）。
+                // 導線ゲート（SkyMotionAccess）が認証済みユーザーにしか出ないため未ログインは
+                // 想定外だが、クラッシュさせず失敗表示にフォールバックする（`firestore.rules` の
+                // create 条件が `request.auth.uid` を要求するため、どのみち job 作成は失敗する）。
                 guard let userId = Auth.auth().currentUser?.uid else {
                     state = .failed(errorCode: nil, serverMessage: nil)
                     return
@@ -763,12 +768,14 @@ struct SkyMotionSheet: View {
     }
 
     /// 「カメラロールに保存」ボタンのアクション。
-    /// `LivingSkyVideoExporter.saveToPhotos` をそのまま再利用するが、本機能は DEBUG限定到達のため
-    /// そちらの `#if !DEBUG` 削除分岐は走らない。一時ファイルの明示削除は `.onDisappear`（player/looper
-    /// 解放後）にまとめている（G6/codex-10対応）。保存直後にここで消さない理由: `.saved` 状態でも
-    /// プレビューはループ再生を継続する仕様（`state` の doc comment・`saveErrorMessage` の doc comment
-    /// 参照）で、`AVPlayerLooper` が内部でループ用に URL を再オープンする可能性を否定できない以上、
-    /// 再生中のファイルを削除するのは避ける。`onDisappear` まで待てば再生終了後の削除になり安全。
+    ///
+    /// ⚠️ `LivingSkyVideoExporter.saveToPhotos` は **Release ビルドでは渡したファイルを
+    ///    成否問わず削除する**（`#if !DEBUG` の defer。旧 Living Sky の後始末仕様）。
+    ///    本機能は TestFlight（Release）にも到達するため、再生中の `localVideoURL` を
+    ///    直接渡すと保存直後にファイルが消え、①`.saved` 状態のループ再生が次のループ
+    ///    再オープンで壊れうる ②2回目の「保存」が必ず失敗する。
+    ///    → **使い捨てのコピーを渡す**。原本はこのシートが所有し続け、削除は従来どおり
+    ///    `.onDisappear`（player/looper 解放後）にまとめる（G6/codex-10対応）。
     private func saveToPhotos(localVideoURL: URL) {
         guard !isSaving else { return }
         isSaving = true
@@ -776,7 +783,12 @@ struct SkyMotionSheet: View {
         Task {
             defer { isSaving = false }
             do {
-                try await LivingSkyVideoExporter().saveToPhotos(fileURL: localVideoURL)
+                // exporter に渡す使い捨てコピー（Release では exporter 側の defer が消してくれる。
+                // DEBUG では残るが、tmp ディレクトリなので OS が回収する）。
+                let disposableCopy = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("skymotion_save_\(UUID().uuidString).mp4")
+                try FileManager.default.copyItem(at: localVideoURL, to: disposableCopy)
+                try await LivingSkyVideoExporter().saveToPhotos(fileURL: disposableCopy)
                 state = .saved(localVideoURL: localVideoURL)
                 LoggingService.shared.logEvent("sky_motion_video_saved", parameters: nil)
             } catch {

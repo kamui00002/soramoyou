@@ -35,12 +35,6 @@ const BETA_FREE_DAILY_LIMIT = 3;
  */
 const PAID_DAILY_LIMIT = 20;
 
-/**
- * @deprecated 旧・無料β時代の1日あたり上限。`FREE_DAILY_LIMIT` に置き換わった。
- * 既存の呼び出し互換のためだけに残す（新規コードでは使わない）。
- */
-const DAILY_LIMIT = FREE_DAILY_LIMIT;
-
 /** 消費型プロダクトID → 付与クレジット数。ASC / .storekit / iOS の enum と一致させること。 */
 const PACK_CREDITS = {
   "com.yoshidometoru.Soramoyou.skymotion.pack5": 5,
@@ -483,7 +477,6 @@ module.exports = {
   LOOP_SLOW_FACTOR_DEFAULT,
   slowFactorForJob,
   loopTrimWindows,
-  DAILY_LIMIT,
   POLL_TIMEOUT_MS,
   SUBMIT_MAX_RETRIES,
   FAL_APP_ID,

@@ -224,13 +224,6 @@ final class SkyMotionAssetPreparerTests: XCTestCase {
         )
     }
 
-    /// アセット準備側の既定ドリフトが、プリセット共通の値と一致していること。
-    /// 二重定義になると片方だけ直して「無視される領域」に戻る事故が起きる。
-    func test_preparerDefaultDrift_matchesPresetConstant() {
-        XCTAssertEqual(SkyMotionAssetPreparer.driftWidthRatioDefault,
-                       SkyMotionPreset.driftWidthRatio,
-                       "ドリフト比率が2箇所で食い違っている")
-    }
 
     // MARK: - aspect比の近似（nearestAspectRatio）
 

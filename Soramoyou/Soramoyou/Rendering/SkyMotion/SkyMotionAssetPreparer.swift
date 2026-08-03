@@ -77,19 +77,6 @@ final class SkyMotionAssetPreparer {
     /// 2値化の閾値（0...255）。設計書「閾値127相当」に対応。
     private static let binarizeThreshold: UInt8 = 127
 
-    /// 既定（フォールバック）の水平ドリフト量＝**画像幅に対する比率**。
-    /// 実際の生成時は `SkyMotionPreset.driftWidthRatio` の値を
-    /// `prepare(image:driftWidthRatio:)` に渡す。internal なのはデフォルト引数と
-    /// テスト（`SkyMotionAssetPreparerTests`）から参照するため。
-    ///
-    /// ⚠️ 絶対pxではなく比率で持つ理由: 写真は長辺1920に縮小されるため、同じ絶対pxでも
-    ///    横写真(幅1920)は縦写真(幅1440)より相対移動量が1.33倍小さくなり、
-    ///    「横写真だけ雲が動いて見えない」不具合になっていた（2026-07-28 実機FB）。
-    ///
-    /// ⚠️ 比率には**下限がある**。幅6.5%以下は Kling にほぼ無視されて雲が動かない
-    ///    （`SkyMotionPreset` 冒頭の実測表）。小さくするときは必ず実測し直すこと。
-    static let driftWidthRatioDefault: CGFloat = SkyMotionPreset.driftWidthRatio
-
     /// source.jpg の JPEG 品質
     private static let jpegQuality: CGFloat = 0.9
 
@@ -136,7 +123,7 @@ final class SkyMotionAssetPreparer {
     ///   **縮小後の画像幅に対する比率**で指定する。`SkyMotionPreset.driftWidthRatio` の値を渡す。
     func prepare(
         image: UIImage,
-        driftWidthRatio: CGFloat = SkyMotionAssetPreparer.driftWidthRatioDefault
+        driftWidthRatio: CGFloat = SkyMotionPreset.driftWidthRatio
     ) async throws -> PreparedSkyMotionAssets {
         let workTask = Task.detached(priority: .userInitiated) { () async throws -> PreparedSkyMotionAssets in
             try await self.prepareAsync(image: image, driftWidthRatio: driftWidthRatio)
