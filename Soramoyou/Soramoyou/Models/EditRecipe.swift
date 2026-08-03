@@ -6,8 +6,8 @@
 //  Soramoyou
 //
 
-import Foundation
 import CoreImage
+import Foundation
 
 /// 非破壊編集レシピ
 ///
@@ -25,7 +25,6 @@ import CoreImage
 /// - `init(from legacySettings:)` で既存 Firestore データを読み込める
 /// - `toEditSettings()` で旧コードへ公開できる
 struct EditRecipe: Codable, Equatable {
-
     // MARK: - メタデータ
 
     /// JSON スキーマバージョン（破壊的変更時にインクリメント）
@@ -205,10 +204,10 @@ struct EditRecipe: Codable, Equatable {
     /// 未編集の投稿をパーソナルAI編集の学習コーパスに記録しないためのゲートに使う。
     var isNeutral: Bool {
         var baseline = EditRecipe()
-        baseline.schemaVersion   = schemaVersion
-        baseline.recipeVersion   = recipeVersion
-        baseline.createdAt       = createdAt
-        baseline.lastModifiedAt  = lastModifiedAt
+        baseline.schemaVersion = schemaVersion
+        baseline.recipeVersion = recipeVersion
+        baseline.createdAt = createdAt
+        baseline.lastModifiedAt = lastModifiedAt
         return self == baseline
     }
 
@@ -228,6 +227,22 @@ struct EditRecipe: Codable, Equatable {
         seed.cropRectNorm = nil
         seed.targetDynamicRange = nil
         return seed
+    }
+
+    // MARK: - 候補レシピへの写真固有フィールド合成
+
+    /// 「あなたの定番」系（全体平均・空タイプ別・固定プリセット）の候補レシピに、現在編集中の写真固有フィールドを合成する。
+    /// 本適用（EditViewModel）とサムネイル生成（候補選択シート）の両方から呼ばれる共有ロジック。
+    /// 二重実装するとコミット913a3cdと同種の「skyCorrectionIntensity が黙って消える」回帰を再び生むため一本化する。
+    /// - Parameter includeSkyCorrection: true=本適用用（intensity を転写）。false=サムネイル生成用
+    ///   （skyMask なしで描画するため intensity を転写しても無視され「レシピは0.7・見た目は補正なし」の食い違いになる。よって nil にする）。
+    func mergingPhotoSpecificFields(from current: EditRecipe, includeSkyCorrection: Bool = true) -> EditRecipe {
+        var merged = self
+        merged.cropRectNorm = current.cropRectNorm
+        merged.toneCurvePoints = current.toneCurvePoints
+        merged.targetDynamicRange = current.targetDynamicRange
+        merged.skyCorrectionIntensity = includeSkyCorrection ? current.skyCorrectionIntensity : nil
+        return merged
     }
 
     // MARK: - EditSettings からの変換（後方互換）
@@ -253,13 +268,12 @@ struct EditRecipe: Codable, Equatable {
         // NaN / Inf を検出したら安全な 0 を返す（後段の CIFilter / Slider にゴミを伝播させない）
         guard n.isFinite else { return 0 }
 
-        let result: Double
-        if n > 0 {
-            result = scalePos * pow(n, pPos)
+        let result: Double = if n > 0 {
+            scalePos * pow(n, pPos)
         } else if n < 0 {
-            result = -scaleNeg * pow(-n, pNeg)
+            -scaleNeg * pow(-n, pNeg)
         } else {
-            result = 0
+            0
         }
 
         // pow が NaN/Inf を返すケース（極端な指数や入力値）に対するセーフティ
@@ -280,13 +294,12 @@ struct EditRecipe: Codable, Equatable {
     ) -> Double {
         guard d.isFinite else { return 0 }
 
-        let result: Double
-        if d > 0 {
-            result = pow(d / scalePos, 1.0 / pPos)
+        let result: Double = if d > 0 {
+            pow(d / scalePos, 1.0 / pPos)
         } else if d < 0 {
-            result = -pow(-d / scaleNeg, 1.0 / pNeg)
+            -pow(-d / scaleNeg, 1.0 / pNeg)
         } else {
-            result = 0
+            0
         }
 
         guard result.isFinite else { return 0 }
@@ -308,10 +321,10 @@ struct EditRecipe: Codable, Equatable {
     ///   physical 値 → 新マッピングの逆変換 → スライダー位置 → 新マッピングのフォワード = 同じ physical 値
     init(from legacySettings: EditSettings) {
         // 露出: EV = normalized * 2.0
-        self.exposureEV = Double(legacySettings.exposure ?? 0) * 2.0
+        exposureEV = Double(legacySettings.exposure ?? 0) * 2.0
 
         // 明るさ: 負側のみ power 1.5 で緩やかに（最大値は ±0.5 据え置き）
-        self.brightnessCI = Self.asymmetricForward(
+        brightnessCI = Self.asymmetricForward(
             Double(legacySettings.brightness ?? 0),
             pNeg: 1.5, scaleNeg: 0.5,
             pPos: 1.0, scalePos: 0.5
@@ -319,55 +332,55 @@ struct EditRecipe: Codable, Equatable {
 
         // コントラスト: 負側のみ power 2.0 で大きく緩やかに（白化が急激な対策）
         // 最大効き 0.5..1.5 は据え置き、0 付近の傾きだけを抑える
-        self.contrastCI = 1.0 + Self.asymmetricForward(
+        contrastCI = 1.0 + Self.asymmetricForward(
             Double(legacySettings.contrast ?? 0),
             pNeg: 2.0, scaleNeg: 0.5,
             pPos: 1.0, scalePos: 0.5
         )
 
         // ガンマ: power = 1.0 - normalized * 0.5 (正値→明るく, 負値→暗く)
-        self.gamma = 1.0 - Double(legacySettings.tone ?? 0) * 0.5
+        gamma = 1.0 - Double(legacySettings.tone ?? 0) * 0.5
 
         // ハイライト: 1.0 + normalized
-        self.highlights = 1.0 + Double(legacySettings.highlight ?? 0)
+        highlights = 1.0 + Double(legacySettings.highlight ?? 0)
 
         // シャドウ: 1.0 + normalized
-        self.shadowAmount = 1.0 + Double(legacySettings.shadow ?? 0)
+        shadowAmount = 1.0 + Double(legacySettings.shadow ?? 0)
 
         // ブラックポイント: normalized * 0.15
-        self.blackPointBias = Double(legacySettings.blackPoint ?? 0) * 0.15
+        blackPointBias = Double(legacySettings.blackPoint ?? 0) * 0.15
 
         // 彩度: 正側を power 0.7 + scale 1.5 で punchy に（最大値 2.5 まで拡張）
         // 負側は線形 (scale 1.0) で従来通り
-        self.saturationCI = 1.0 + Self.asymmetricForward(
+        saturationCI = 1.0 + Self.asymmetricForward(
             Double(legacySettings.saturation ?? 0),
             pNeg: 1.0, scaleNeg: 1.0,
             pPos: 0.7, scalePos: 1.5
         )
 
         // 複合ツール（正規化スケールのまま保持）
-        if let v = legacySettings.brilliance   { self.brillianceNorm       = Double(v) }
-        if let v = legacySettings.naturalSaturation { self.naturalSaturationNorm = Double(v) }
-        if let v = legacySettings.warmth       { self.warmthNorm           = Double(v) }
-        if let v = legacySettings.tint         { self.tintNorm             = Double(v) }
-        if let v = legacySettings.sharpness    { self.sharpnessNorm        = Double(v) }
-        if let v = legacySettings.vignette     { self.vignetteNorm         = Double(v) }
-        if let v = legacySettings.colorTemperature { self.colorTemperatureNorm = Double(v) }
-        if let v = legacySettings.whiteBalance { self.whiteBalanceNorm     = Double(v) }
-        if let v = legacySettings.texture      { self.textureNorm          = Double(v) }
-        if let v = legacySettings.clarity      { self.clarityNorm          = Double(v) }
-        if let v = legacySettings.dehaze       { self.dehazeNorm           = Double(v) }
-        if let v = legacySettings.grain        { self.grainNorm            = Double(v) }
-        if let v = legacySettings.fade         { self.fadeNorm             = Double(v) }
-        if let v = legacySettings.noiseReduction { self.noiseReductionNorm = Double(v) }
-        if let v = legacySettings.curves       { self.curvesNorm           = Double(v) }
-        if let v = legacySettings.hsl          { self.hslNorm              = Double(v) }
-        if let v = legacySettings.lensCorrection { self.lensCorrectionNorm = Double(v) }
-        if let v = legacySettings.doubleExposure { self.doubleExposureNorm = Double(v) }
+        if let v = legacySettings.brilliance { brillianceNorm = Double(v) }
+        if let v = legacySettings.naturalSaturation { naturalSaturationNorm = Double(v) }
+        if let v = legacySettings.warmth { warmthNorm = Double(v) }
+        if let v = legacySettings.tint { tintNorm = Double(v) }
+        if let v = legacySettings.sharpness { sharpnessNorm = Double(v) }
+        if let v = legacySettings.vignette { vignetteNorm = Double(v) }
+        if let v = legacySettings.colorTemperature { colorTemperatureNorm = Double(v) }
+        if let v = legacySettings.whiteBalance { whiteBalanceNorm = Double(v) }
+        if let v = legacySettings.texture { textureNorm = Double(v) }
+        if let v = legacySettings.clarity { clarityNorm = Double(v) }
+        if let v = legacySettings.dehaze { dehazeNorm = Double(v) }
+        if let v = legacySettings.grain { grainNorm = Double(v) }
+        if let v = legacySettings.fade { fadeNorm = Double(v) }
+        if let v = legacySettings.noiseReduction { noiseReductionNorm = Double(v) }
+        if let v = legacySettings.curves { curvesNorm = Double(v) }
+        if let v = legacySettings.hsl { hslNorm = Double(v) }
+        if let v = legacySettings.lensCorrection { lensCorrectionNorm = Double(v) }
+        if let v = legacySettings.doubleExposure { doubleExposureNorm = Double(v) }
 
-        self.appliedFilter = legacySettings.appliedFilter
-        self.createdAt = Date()
-        self.lastModifiedAt = Date()
+        appliedFilter = legacySettings.appliedFilter
+        createdAt = Date()
+        lastModifiedAt = Date()
     }
 
     // MARK: - EditSettings への変換（後方互換）
@@ -379,20 +392,20 @@ struct EditRecipe: Codable, Equatable {
     func toEditSettings() -> EditSettings {
         // 物理スケール → 正規化スケールへ逆変換
         // 明るさ・コントラスト・彩度は init(from:) と同じ非対称パワー曲線の逆関数を使う
-        let exposureNorm   = Float(exposureEV / 2.0)
+        let exposureNorm = Float(exposureEV / 2.0)
         let brightnessNorm = Float(Self.asymmetricInverse(
             brightnessCI,
             pNeg: 1.5, scaleNeg: 0.5,
             pPos: 1.0, scalePos: 0.5
         ))
-        let contrastNorm   = Float(Self.asymmetricInverse(
+        let contrastNorm = Float(Self.asymmetricInverse(
             contrastCI - 1.0,
             pNeg: 2.0, scaleNeg: 0.5,
             pPos: 1.0, scalePos: 0.5
         ))
-        let toneNorm       = Float((1.0 - gamma) / 0.5)
-        let highlightNorm  = Float(highlights - 1.0)
-        let shadowNorm     = Float(shadowAmount - 1.0)
+        let toneNorm = Float((1.0 - gamma) / 0.5)
+        let highlightNorm = Float(highlights - 1.0)
+        let shadowNorm = Float(shadowAmount - 1.0)
         let blackPointNorm = Float(blackPointBias / 0.15)
         let saturationNorm = Float(Self.asymmetricInverse(
             saturationCI - 1.0,
@@ -401,33 +414,33 @@ struct EditRecipe: Codable, Equatable {
         ))
 
         return EditSettings(
-            exposure:          exposureNorm   != 0 ? exposureNorm   : nil,
-            brightness:        brightnessNorm != 0 ? brightnessNorm : nil,
-            contrast:          contrastNorm   != 0 ? contrastNorm   : nil,
-            tone:              toneNorm       != 0 ? toneNorm       : nil,
-            brilliance:        brillianceNorm.map       { Float($0) },
-            highlight:         highlightNorm  != 0 ? highlightNorm  : nil,
-            shadow:            shadowNorm     != 0 ? shadowNorm     : nil,
-            blackPoint:        blackPointNorm != 0 ? blackPointNorm : nil,
-            saturation:        saturationNorm != 0 ? saturationNorm : nil,
+            exposure: exposureNorm != 0 ? exposureNorm : nil,
+            brightness: brightnessNorm != 0 ? brightnessNorm : nil,
+            contrast: contrastNorm != 0 ? contrastNorm : nil,
+            tone: toneNorm != 0 ? toneNorm : nil,
+            brilliance: brillianceNorm.map { Float($0) },
+            highlight: highlightNorm != 0 ? highlightNorm : nil,
+            shadow: shadowNorm != 0 ? shadowNorm : nil,
+            blackPoint: blackPointNorm != 0 ? blackPointNorm : nil,
+            saturation: saturationNorm != 0 ? saturationNorm : nil,
             naturalSaturation: naturalSaturationNorm.map { Float($0) },
-            warmth:            warmthNorm.map            { Float($0) },
-            tint:              tintNorm.map              { Float($0) },
-            sharpness:         sharpnessNorm.map         { Float($0) },
-            vignette:          vignetteNorm.map          { Float($0) },
-            colorTemperature:  colorTemperatureNorm.map  { Float($0) },
-            whiteBalance:      whiteBalanceNorm.map      { Float($0) },
-            texture:           textureNorm.map           { Float($0) },
-            clarity:           clarityNorm.map           { Float($0) },
-            dehaze:            dehazeNorm.map            { Float($0) },
-            grain:             grainNorm.map             { Float($0) },
-            fade:              fadeNorm.map              { Float($0) },
-            noiseReduction:    noiseReductionNorm.map    { Float($0) },
-            curves:            curvesNorm.map            { Float($0) },
-            hsl:               hslNorm.map               { Float($0) },
-            lensCorrection:    lensCorrectionNorm.map    { Float($0) },
-            doubleExposure:    doubleExposureNorm.map    { Float($0) },
-            appliedFilter:     appliedFilter
+            warmth: warmthNorm.map { Float($0) },
+            tint: tintNorm.map { Float($0) },
+            sharpness: sharpnessNorm.map { Float($0) },
+            vignette: vignetteNorm.map { Float($0) },
+            colorTemperature: colorTemperatureNorm.map { Float($0) },
+            whiteBalance: whiteBalanceNorm.map { Float($0) },
+            texture: textureNorm.map { Float($0) },
+            clarity: clarityNorm.map { Float($0) },
+            dehaze: dehazeNorm.map { Float($0) },
+            grain: grainNorm.map { Float($0) },
+            fade: fadeNorm.map { Float($0) },
+            noiseReduction: noiseReductionNorm.map { Float($0) },
+            curves: curvesNorm.map { Float($0) },
+            hsl: hslNorm.map { Float($0) },
+            lensCorrection: lensCorrectionNorm.map { Float($0) },
+            doubleExposure: doubleExposureNorm.map { Float($0) },
+            appliedFilter: appliedFilter
         )
     }
 
@@ -438,47 +451,47 @@ struct EditRecipe: Codable, Equatable {
         var data: [String: Any] = [
             "schemaVersion": schemaVersion,
             "recipeVersion": recipeVersion,
-            "exposureEV":    exposureEV,
-            "brightnessCI":  brightnessCI,
-            "contrastCI":    contrastCI,
-            "gamma":         gamma,
-            "highlights":    highlights,
-            "shadowAmount":  shadowAmount,
+            "exposureEV": exposureEV,
+            "brightnessCI": brightnessCI,
+            "contrastCI": contrastCI,
+            "gamma": gamma,
+            "highlights": highlights,
+            "shadowAmount": shadowAmount,
             "blackPointBias": blackPointBias,
-            "saturationCI":  saturationCI
+            "saturationCI": saturationCI,
         ]
 
         // Optional フィールド
-        if let v = brillianceNorm        { data["brillianceNorm"]        = v }
+        if let v = brillianceNorm { data["brillianceNorm"] = v }
         if let v = naturalSaturationNorm { data["naturalSaturationNorm"] = v }
-        if let v = warmthNorm            { data["warmthNorm"]            = v }
-        if let v = tintNorm              { data["tintNorm"]              = v }
-        if let v = sharpnessNorm         { data["sharpnessNorm"]         = v }
-        if let v = vignetteNorm          { data["vignetteNorm"]          = v }
-        if let v = colorTemperatureNorm  { data["colorTemperatureNorm"]  = v }
-        if let v = whiteBalanceNorm      { data["whiteBalanceNorm"]      = v }
-        if let v = textureNorm           { data["textureNorm"]           = v }
-        if let v = clarityNorm           { data["clarityNorm"]           = v }
-        if let v = dehazeNorm            { data["dehazeNorm"]            = v }
-        if let v = grainNorm             { data["grainNorm"]             = v }
-        if let v = fadeNorm              { data["fadeNorm"]              = v }
-        if let v = noiseReductionNorm    { data["noiseReductionNorm"]    = v }
-        if let v = curvesNorm            { data["curvesNorm"]            = v }
-        if let v = hslNorm               { data["hslNorm"]               = v }
-        if let v = lensCorrectionNorm    { data["lensCorrectionNorm"]    = v }
-        if let v = doubleExposureNorm    { data["doubleExposureNorm"]    = v }
-        if let v = style2DToneNorm       { data["style2DToneNorm"]       = v }
-        if let v = style2DColorNorm      { data["style2DColorNorm"]      = v }
+        if let v = warmthNorm { data["warmthNorm"] = v }
+        if let v = tintNorm { data["tintNorm"] = v }
+        if let v = sharpnessNorm { data["sharpnessNorm"] = v }
+        if let v = vignetteNorm { data["vignetteNorm"] = v }
+        if let v = colorTemperatureNorm { data["colorTemperatureNorm"] = v }
+        if let v = whiteBalanceNorm { data["whiteBalanceNorm"] = v }
+        if let v = textureNorm { data["textureNorm"] = v }
+        if let v = clarityNorm { data["clarityNorm"] = v }
+        if let v = dehazeNorm { data["dehazeNorm"] = v }
+        if let v = grainNorm { data["grainNorm"] = v }
+        if let v = fadeNorm { data["fadeNorm"] = v }
+        if let v = noiseReductionNorm { data["noiseReductionNorm"] = v }
+        if let v = curvesNorm { data["curvesNorm"] = v }
+        if let v = hslNorm { data["hslNorm"] = v }
+        if let v = lensCorrectionNorm { data["lensCorrectionNorm"] = v }
+        if let v = doubleExposureNorm { data["doubleExposureNorm"] = v }
+        if let v = style2DToneNorm { data["style2DToneNorm"] = v }
+        if let v = style2DColorNorm { data["style2DColorNorm"] = v }
         if let v = skyCorrectionIntensity { data["skyCorrectionIntensity"] = v }
-        if let f = appliedFilter         { data["appliedFilter"]         = f.rawValue }
-        if let tp = toneCurvePoints      { data["toneCurvePoints"]       = tp.toFirestoreData() }
-        if let dr = targetDynamicRange   { data["targetDynamicRange"]    = dr.rawValue }
+        if let f = appliedFilter { data["appliedFilter"] = f.rawValue }
+        if let tp = toneCurvePoints { data["toneCurvePoints"] = tp.toFirestoreData() }
+        if let dr = targetDynamicRange { data["targetDynamicRange"] = dr.rawValue }
         if let cr = cropRectNorm {
             data["cropRectNorm"] = [
                 "x": cr.origin.x,
                 "y": cr.origin.y,
                 "w": cr.size.width,
-                "h": cr.size.height
+                "h": cr.size.height,
             ]
         }
 
@@ -526,55 +539,55 @@ struct EditRecipe: Codable, Equatable {
     /// UI Slider に伝播しない。
     init?(from firestoreData: [String: Any]) {
         guard let sv = firestoreData["schemaVersion"] as? Int else { return nil }
-        self.schemaVersion  = sv
-        self.recipeVersion  = firestoreData["recipeVersion"]  as? String ?? "2026.03"
+        schemaVersion = sv
+        recipeVersion = firestoreData["recipeVersion"] as? String ?? "2026.03"
 
         // 物理スケール（範囲は EditRecipe プロパティのコメントに準拠）
-        self.exposureEV     = Self.sanitizeFinite(firestoreData["exposureEV"]     as? Double, default: 0.0, min: -3.0, max: 3.0)
-        self.brightnessCI   = Self.sanitizeFinite(firestoreData["brightnessCI"]   as? Double, default: 0.0, min: -0.5, max: 0.5)
-        self.contrastCI     = Self.sanitizeFinite(firestoreData["contrastCI"]     as? Double, default: 1.0, min: 0.5, max: 1.5)
-        self.gamma          = Self.sanitizeFinite(firestoreData["gamma"]          as? Double, default: 1.0, min: 0.5, max: 1.5)
-        self.highlights     = Self.sanitizeFinite(firestoreData["highlights"]     as? Double, default: 1.0, min: 0.0, max: 2.0)
-        self.shadowAmount   = Self.sanitizeFinite(firestoreData["shadowAmount"]   as? Double, default: 1.0, min: 0.0, max: 2.0)
-        self.blackPointBias = Self.sanitizeFinite(firestoreData["blackPointBias"] as? Double, default: 0.0, min: -0.15, max: 0.15)
+        exposureEV = Self.sanitizeFinite(firestoreData["exposureEV"] as? Double, default: 0.0, min: -3.0, max: 3.0)
+        brightnessCI = Self.sanitizeFinite(firestoreData["brightnessCI"] as? Double, default: 0.0, min: -0.5, max: 0.5)
+        contrastCI = Self.sanitizeFinite(firestoreData["contrastCI"] as? Double, default: 1.0, min: 0.5, max: 1.5)
+        gamma = Self.sanitizeFinite(firestoreData["gamma"] as? Double, default: 1.0, min: 0.5, max: 1.5)
+        highlights = Self.sanitizeFinite(firestoreData["highlights"] as? Double, default: 1.0, min: 0.0, max: 2.0)
+        shadowAmount = Self.sanitizeFinite(firestoreData["shadowAmount"] as? Double, default: 1.0, min: 0.0, max: 2.0)
+        blackPointBias = Self.sanitizeFinite(firestoreData["blackPointBias"] as? Double, default: 0.0, min: -0.15, max: 0.15)
         // 彩度は #20 で正側を 2.5 まで拡張済み
-        self.saturationCI   = Self.sanitizeFinite(firestoreData["saturationCI"]   as? Double, default: 1.0, min: 0.0, max: 2.5)
+        saturationCI = Self.sanitizeFinite(firestoreData["saturationCI"] as? Double, default: 1.0, min: 0.0, max: 2.5)
 
         // 正規化スケール (-1...1) は共通のサニタイザを使う
-        self.brillianceNorm        = Self.sanitizeNorm(firestoreData["brillianceNorm"]        as? Double)
-        self.naturalSaturationNorm = Self.sanitizeNorm(firestoreData["naturalSaturationNorm"] as? Double)
-        self.warmthNorm            = Self.sanitizeNorm(firestoreData["warmthNorm"]            as? Double)
-        self.tintNorm              = Self.sanitizeNorm(firestoreData["tintNorm"]              as? Double)
-        self.sharpnessNorm         = Self.sanitizeNorm(firestoreData["sharpnessNorm"]         as? Double)
-        self.vignetteNorm          = Self.sanitizeNorm(firestoreData["vignetteNorm"]          as? Double)
-        self.colorTemperatureNorm  = Self.sanitizeNorm(firestoreData["colorTemperatureNorm"]  as? Double)
-        self.whiteBalanceNorm      = Self.sanitizeNorm(firestoreData["whiteBalanceNorm"]      as? Double)
-        self.textureNorm           = Self.sanitizeNorm(firestoreData["textureNorm"]           as? Double)
-        self.clarityNorm           = Self.sanitizeNorm(firestoreData["clarityNorm"]           as? Double)
-        self.dehazeNorm            = Self.sanitizeNorm(firestoreData["dehazeNorm"]            as? Double)
-        self.grainNorm             = Self.sanitizeNorm(firestoreData["grainNorm"]             as? Double)
-        self.fadeNorm              = Self.sanitizeNorm(firestoreData["fadeNorm"]              as? Double)
-        self.noiseReductionNorm    = Self.sanitizeNorm(firestoreData["noiseReductionNorm"]    as? Double)
-        self.curvesNorm            = Self.sanitizeNorm(firestoreData["curvesNorm"]            as? Double)
-        self.hslNorm               = Self.sanitizeNorm(firestoreData["hslNorm"]               as? Double)
-        self.lensCorrectionNorm    = Self.sanitizeNorm(firestoreData["lensCorrectionNorm"]    as? Double)
-        self.doubleExposureNorm    = Self.sanitizeNorm(firestoreData["doubleExposureNorm"]    as? Double)
-        self.style2DToneNorm       = Self.sanitizeNorm(firestoreData["style2DToneNorm"]       as? Double)
-        self.style2DColorNorm      = Self.sanitizeNorm(firestoreData["style2DColorNorm"]      as? Double)
-        self.skyCorrectionIntensity = Self.sanitizeIntensity(firestoreData["skyCorrectionIntensity"] as? Double)
+        brillianceNorm = Self.sanitizeNorm(firestoreData["brillianceNorm"] as? Double)
+        naturalSaturationNorm = Self.sanitizeNorm(firestoreData["naturalSaturationNorm"] as? Double)
+        warmthNorm = Self.sanitizeNorm(firestoreData["warmthNorm"] as? Double)
+        tintNorm = Self.sanitizeNorm(firestoreData["tintNorm"] as? Double)
+        sharpnessNorm = Self.sanitizeNorm(firestoreData["sharpnessNorm"] as? Double)
+        vignetteNorm = Self.sanitizeNorm(firestoreData["vignetteNorm"] as? Double)
+        colorTemperatureNorm = Self.sanitizeNorm(firestoreData["colorTemperatureNorm"] as? Double)
+        whiteBalanceNorm = Self.sanitizeNorm(firestoreData["whiteBalanceNorm"] as? Double)
+        textureNorm = Self.sanitizeNorm(firestoreData["textureNorm"] as? Double)
+        clarityNorm = Self.sanitizeNorm(firestoreData["clarityNorm"] as? Double)
+        dehazeNorm = Self.sanitizeNorm(firestoreData["dehazeNorm"] as? Double)
+        grainNorm = Self.sanitizeNorm(firestoreData["grainNorm"] as? Double)
+        fadeNorm = Self.sanitizeNorm(firestoreData["fadeNorm"] as? Double)
+        noiseReductionNorm = Self.sanitizeNorm(firestoreData["noiseReductionNorm"] as? Double)
+        curvesNorm = Self.sanitizeNorm(firestoreData["curvesNorm"] as? Double)
+        hslNorm = Self.sanitizeNorm(firestoreData["hslNorm"] as? Double)
+        lensCorrectionNorm = Self.sanitizeNorm(firestoreData["lensCorrectionNorm"] as? Double)
+        doubleExposureNorm = Self.sanitizeNorm(firestoreData["doubleExposureNorm"] as? Double)
+        style2DToneNorm = Self.sanitizeNorm(firestoreData["style2DToneNorm"] as? Double)
+        style2DColorNorm = Self.sanitizeNorm(firestoreData["style2DColorNorm"] as? Double)
+        skyCorrectionIntensity = Self.sanitizeIntensity(firestoreData["skyCorrectionIntensity"] as? Double)
 
         if let filterString = firestoreData["appliedFilter"] as? String {
-            self.appliedFilter = FilterType(rawValue: filterString)
+            appliedFilter = FilterType(rawValue: filterString)
         }
 
         // トーンカーブ制御点（Phase 3 追加フィールド）
         if let ptData = firestoreData["toneCurvePoints"] as? [String: Any] {
-            self.toneCurvePoints = ToneCurvePoints(from: ptData)
+            toneCurvePoints = ToneCurvePoints(from: ptData)
         }
 
         // ダイナミックレンジ（Phase 2 追加フィールド）
         if let dr = firestoreData["targetDynamicRange"] as? String {
-            self.targetDynamicRange = DynamicRange(rawValue: dr)
+            targetDynamicRange = DynamicRange(rawValue: dr)
         }
 
         // クロップ矩形
@@ -582,8 +595,9 @@ struct EditRecipe: Codable, Equatable {
            let x = cr["x"] as? Double,
            let y = cr["y"] as? Double,
            let w = cr["w"] as? Double,
-           let h = cr["h"] as? Double {
-            self.cropRectNorm = CGRect(x: x, y: y, width: w, height: h)
+           let h = cr["h"] as? Double
+        {
+            cropRectNorm = CGRect(x: x, y: y, width: w, height: h)
         }
     }
 }
@@ -622,11 +636,11 @@ struct CurvePoint: Codable, Equatable {
 /// デフォルト値はリニア（恒等変換）。
 /// `isIdentity` が true のとき FilterGraphBuilder はトーンカーブ処理をスキップできる。
 struct ToneCurvePoints: Codable, Equatable {
-    var point0: CurvePoint = CurvePoint(x: 0.0,  y: 0.0)
-    var point1: CurvePoint = CurvePoint(x: 0.25, y: 0.25)
-    var point2: CurvePoint = CurvePoint(x: 0.5,  y: 0.5)
-    var point3: CurvePoint = CurvePoint(x: 0.75, y: 0.75)
-    var point4: CurvePoint = CurvePoint(x: 1.0,  y: 1.0)
+    var point0: CurvePoint = .init(x: 0.0, y: 0.0)
+    var point1: CurvePoint = .init(x: 0.25, y: 0.25)
+    var point2: CurvePoint = .init(x: 0.5, y: 0.5)
+    var point3: CurvePoint = .init(x: 0.75, y: 0.75)
+    var point4: CurvePoint = .init(x: 1.0, y: 1.0)
 
     static let identity = ToneCurvePoints()
 
@@ -642,7 +656,7 @@ struct ToneCurvePoints: Codable, Equatable {
             "point1": pt(point1),
             "point2": pt(point2),
             "point3": pt(point3),
-            "point4": pt(point4)
+            "point4": pt(point4),
         ]
     }
 
@@ -658,11 +672,11 @@ struct ToneCurvePoints: Codable, Equatable {
               let p2 = parse("point2"),
               let p3 = parse("point3"),
               let p4 = parse("point4") else { return nil }
-        self.point0 = p0
-        self.point1 = p1
-        self.point2 = p2
-        self.point3 = p3
-        self.point4 = p4
+        point0 = p0
+        point1 = p1
+        point2 = p2
+        point3 = p3
+        point4 = p4
     }
 
     init() {}

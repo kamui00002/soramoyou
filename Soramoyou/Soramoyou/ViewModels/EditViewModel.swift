@@ -8,11 +8,11 @@
 //  Created on 2025-12-06.
 //
 
-import Foundation
-import UIKit
-import SwiftUI
 import Combine
 import CoreImage
+import Foundation
+import SwiftUI
+import UIKit
 
 @MainActor
 class EditViewModel: ObservableObject {
@@ -25,11 +25,19 @@ class EditViewModel: ObservableObject {
     /// 編集レシピ（不変データ構造）
     /// 【改善】mutable な EditSettings から immutable な EditRecipe に移行。
     /// Undo/Redo・状態管理が値コピーで安全に行える。
-    @Published var editRecipe: EditRecipe = EditRecipe()
+    @Published var editRecipe: EditRecipe = .init()
 
-    /// 「あなたの定番」（柱1 v1）を適用できるか。コーパスに十分な学習データがある時だけ true。
-    /// エディタ起動時（loadEquippedTools）に算出し、true のときだけボタンを表示する。
+    /// 「AIで自動編集」ボタンを表示できるか（＝ `personalDefaultCandidates` が1件以上あるか）。
+    /// 柱1 v2（候補シート導入）で固定プリセットが最低4件（`minCandidateCount`）を保証するため、
+    /// 実質的に常に true になる（旧「コーパスに十分な学習データがある時だけ true」から意味が変化）。
+    /// エディタ起動時（loadEquippedTools）に算出する。
     @Published private(set) var hasPersonalDefault = false
+
+    /// 「AIで自動編集」候補シート（柱1 v2）に並べる編集パターン一覧。
+    /// `refreshPersonalDefaultAvailability()` で `PersonalDefaultCandidateProvider.candidates(from:)`
+    /// を通じて算出する。固定プリセットで最低件数（`minCandidateCount`）を保証するため、
+    /// 新規ユーザー（コーパス0件）でも空にはならない。
+    @Published private(set) var personalDefaultCandidates: [PersonalDefaultCandidate] = []
 
     /// 後方互換 computed property
     ///
@@ -186,16 +194,16 @@ class EditViewModel: ObservableObject {
     // MARK: - リクエストID管理（レースコンディション防止）☁️
 
     /// 現在のプレビューリクエストID
-    private var currentPreviewRequestId: UUID = UUID()
+    private var currentPreviewRequestId: UUID = .init()
     /// 現在の高速プレビューリクエストID
-    private var currentFastPreviewRequestId: UUID = UUID()
+    private var currentFastPreviewRequestId: UUID = .init()
     /// 現在の finalize Task（ドラッグ終了後のフル解像度生成）の ID
     ///
     /// finalize 系（`finalizeToolValue` 等）が起動した generatePreview Task が、
     /// 完了時に `isEditingRealtime` / `fastPreviewImage` をリセットしてよいか判定する。
     /// 次のドラッグが始まると上書きされ、古い Task のクリーンアップはスキップされる。
     private var finalizePendingId: UUID?
-    
+
     init(
         images: [UIImage] = [],
         userId: String? = nil,
@@ -205,7 +213,7 @@ class EditViewModel: ObservableObject {
         skyMaskProvider: SkyMaskProviderProtocol = HeuristicSkyMaskProvider(),
         initialRecipe: EditRecipe? = nil
     ) {
-        self.originalImages = images
+        originalImages = images
         self.userId = userId
         self.imageService = imageService
         self.firestoreService = firestoreService
@@ -217,19 +225,19 @@ class EditViewModel: ObservableObject {
         // imageStates は画像切替時に save→restore されるため、editRecipe だけでなく
         // 全スロットに入れないと切替で seed が消えてしまう。
         let defaultSnapshot = EditorSnapshot(
-            recipe:              initialRecipe ?? EditRecipe(),
-            rotationDegrees:     0,
+            recipe: initialRecipe ?? EditRecipe(),
+            rotationDegrees: 0,
             isFlippedHorizontal: false,
-            isFlippedVertical:   false,
-            cropAspectRatio:     .free
+            isFlippedVertical: false,
+            cropAspectRatio: .free
         )
-        self.imageStates = Array(repeating: defaultSnapshot, count: images.count)
-        self.historyManagers = images.map { _ in EditHistoryManager() }
+        imageStates = Array(repeating: defaultSnapshot, count: images.count)
+        historyManagers = images.map { _ in EditHistoryManager() }
 
         // seed を現在の編集レシピにも反映（最初の generatePreview() から効かせる）。
         // history には積まない: seed 自体がこの編集セッションのベースラインのため。
-        if let initialRecipe = initialRecipe {
-            self.editRecipe = initialRecipe
+        if let initialRecipe {
+            editRecipe = initialRecipe
             // レシピ共有の計測（共有レシピ付きでエディタが起動した回数）
             LoggingService.shared.logEvent("recipe_share_applied", parameters: nil)
         }
@@ -237,9 +245,9 @@ class EditViewModel: ObservableObject {
         // 初期プレビューを生成（メモリリーク防止のため weak self を使用）
         if !images.isEmpty {
             Task { [weak self] in
-                guard let self = self else { return }
-                await self.loadEquippedTools()
-                await self.generatePreview()
+                guard let self else { return }
+                await loadEquippedTools()
+                await generatePreview()
             }
         }
     }
@@ -252,27 +260,27 @@ class EditViewModel: ObservableObject {
     }
 
     // MARK: - Image Management
-    
+
     // MARK: - スナップショット ヘルパー
 
     /// 現在の編集状態を EditorSnapshot として取得
     private var currentSnapshot: EditorSnapshot {
         EditorSnapshot(
-            recipe:              editRecipe,
-            rotationDegrees:     rotationDegrees,
+            recipe: editRecipe,
+            rotationDegrees: rotationDegrees,
             isFlippedHorizontal: isFlippedHorizontal,
-            isFlippedVertical:   isFlippedVertical,
-            cropAspectRatio:     cropAspectRatio
+            isFlippedVertical: isFlippedVertical,
+            cropAspectRatio: cropAspectRatio
         )
     }
 
     /// EditorSnapshot を現在の状態に復元する
     private func applySnapshot(_ snap: EditorSnapshot) {
-        editRecipe          = snap.recipe
-        rotationDegrees     = snap.rotationDegrees
+        editRecipe = snap.recipe
+        rotationDegrees = snap.rotationDegrees
         isFlippedHorizontal = snap.isFlippedHorizontal
-        isFlippedVertical   = snap.isFlippedVertical
-        cropAspectRatio     = snap.cropAspectRatio
+        isFlippedVertical = snap.isFlippedVertical
+        cropAspectRatio = snap.cropAspectRatio
         invalidateLowResCache()
     }
 
@@ -316,21 +324,21 @@ class EditViewModel: ObservableObject {
         currentImageIndex = 0
 
         // 現在の編集状態をリセット（1枚目用のクリーンな状態）
-        editRecipe          = EditRecipe()
-        rotationDegrees     = 0
+        editRecipe = EditRecipe()
+        rotationDegrees = 0
         isFlippedHorizontal = false
-        isFlippedVertical   = false
-        cropAspectRatio     = .free
+        isFlippedVertical = false
+        cropAspectRatio = .free
 
         // 画像ごとのスロットを再構築（既存スロットは破棄）
         let defaultSnapshot = EditorSnapshot(
-            recipe:              EditRecipe(),
-            rotationDegrees:     0,
+            recipe: EditRecipe(),
+            rotationDegrees: 0,
             isFlippedHorizontal: false,
-            isFlippedVertical:   false,
-            cropAspectRatio:     .free
+            isFlippedVertical: false,
+            cropAspectRatio: .free
         )
-        imageStates     = Array(repeating: defaultSnapshot, count: images.count)
+        imageStates = Array(repeating: defaultSnapshot, count: images.count)
         historyManagers = images.map { _ in EditHistoryManager() }
 
         notifyHistoryChange()
@@ -353,15 +361,15 @@ class EditViewModel: ObservableObject {
         guard imageStates.indices.contains(index) else { return }
         // 履歴通知のためコピーを取り、UI 状態をスナップショットへ揃える
         let snap = imageStates[index]
-        editRecipe          = snap.recipe
-        rotationDegrees     = snap.rotationDegrees
+        editRecipe = snap.recipe
+        rotationDegrees = snap.rotationDegrees
         isFlippedHorizontal = snap.isFlippedHorizontal
-        isFlippedVertical   = snap.isFlippedVertical
-        cropAspectRatio     = snap.cropAspectRatio
+        isFlippedVertical = snap.isFlippedVertical
+        cropAspectRatio = snap.cropAspectRatio
         // 画像が変われば履歴マネージャーも切り替わるため、UI に通知
         notifyHistoryChange()
     }
-    
+
     /// 現在の画像を取得
     var currentImage: UIImage? {
         guard currentImageIndex < originalImages.count else { return nil }
@@ -379,7 +387,7 @@ class EditViewModel: ObservableObject {
         guard let image = currentImage else { return nil }
         return applyTransform(to: image)
     }
-    
+
     /// 次の画像に切り替え
     func nextImage() {
         guard currentImageIndex < originalImages.count - 1 else { return }
@@ -422,9 +430,9 @@ class EditViewModel: ObservableObject {
         fastPreviewTask?.cancel()
         throttledPreviewTask?.cancel()
     }
-    
+
     // MARK: - Filter Management
-    
+
     /// フィルターを適用
     func applyFilter(_ filter: FilterType) {
         historyManager.push(currentSnapshot)
@@ -447,47 +455,80 @@ class EditViewModel: ObservableObject {
 
     // MARK: - パーソナルAI編集（柱1 v1）「あなたの定番」
 
-    /// コーパスに十分な学習データがあるかを判定し `hasPersonalDefault` を更新する。
-    /// （エディタ起動時に呼ぶ。未ログイン or データ不足なら false。）
+    /// コーパスから候補シート一覧（`personalDefaultCandidates`）と表示可否（`hasPersonalDefault`）を更新する。
+    /// （エディタ起動時に呼ぶ。）
+    /// ⚠️ userId が nil（未ログイン）でも entries=[] として候補を計算する
+    ///    （新規ユーザー・未ログインでも固定プリセット候補を出す確定仕様。
+    ///    従来の「userId nil → hasPersonalDefault=false」から挙動が変わる点に注意）。
     func refreshPersonalDefaultAvailability() {
-        guard let userId = userId else {
-            hasPersonalDefault = false
-            return
-        }
-        let entries = recipeCorpusStore.entries(userId: userId)
-        hasPersonalDefault = PersonalRecipeProfile.representative(for: nil, from: entries) != nil
+        let entries = userId.map { recipeCorpusStore.entries(userId: $0) } ?? []
+        let candidates = PersonalDefaultCandidateProvider.candidates(from: entries)
+        personalDefaultCandidates = candidates
+        // `candidates` は固定プリセットで最低 minCandidateCount 件を保証するため実質常に true になるが、
+        // 「候補が1件も無い」という理論上の状態にも安全に倒れるよう配列の有無で判定する
+        // （`representative(for:from:)` を再度呼んで二重計算しない）。
+        hasPersonalDefault = !candidates.isEmpty
     }
 
-    /// 「あなたの定番」を現在の画像に適用する。
-    /// - 過去の自分の編集（コーパス）から代表レシピを作り、トーン・カラー・フィルターを転写する。
-    /// - クロップ・トーンカーブ（写真固有）は現在の値を保持する。
+    /// 「あなたの定番」系の候補（`representative` 単体 or 候補シートで選ばれた `PersonalDefaultCandidate`）を
+    /// 実際に適用する共通処理。
+    /// - 写真固有の編集（クロップ・トーンカーブ・ダイナミックレンジ・空補正）は
+    ///   `EditRecipe.mergingPhotoSpecificFields` で現在値を保持し、候補レシピでは上書きしない
+    ///   （HDR指定が SDR に戻る／直前のワンタップ空補正が消える、という統合レビューで発見した回帰の防止）。
     /// - Undo 可能（適用前のスナップショットを履歴に push する）。
-    func applyPersonalDefault() {
-        guard let userId = userId else { return }
-        let entries = recipeCorpusStore.entries(userId: userId)
-        guard var representative = PersonalRecipeProfile.representative(for: nil, from: entries) else {
-            return
-        }
-        // 写真固有の編集（クロップ・トーンカーブ・ダイナミックレンジ・空補正）は現在値を保持し、
-        // 定番では上書きしない（HDR指定が SDR に戻る不具合の防止を含む）。
-        // ⚠️ skyCorrectionIntensity を保全し忘れると、`representative()` が返す新規レシピには
-        //    このフィールドが未設定（nil）のため、「あなたの定番」適用のたびに直前の
-        //    ワンタップ空補正が黙って消える回帰が起きる（統合レビューで発見）。
-        representative.cropRectNorm      = editRecipe.cropRectNorm
-        representative.toneCurvePoints   = editRecipe.toneCurvePoints
-        representative.targetDynamicRange = editRecipe.targetDynamicRange
-        representative.skyCorrectionIntensity = editRecipe.skyCorrectionIntensity
+    /// - `applyPersonalDefault()` と `applyPersonalDefaultCandidate(_:)` の両方から呼ばれ、
+    ///   合成・履歴・計装・プレビュー再生成のロジックを一本化する。
+    private func applyPersonalDefaultRecipe(
+        _ recipe: EditRecipe,
+        loggingEvent: String,
+        loggingParameters: [String: Any]
+    ) {
+        let merged = recipe.mergingPhotoSpecificFields(from: editRecipe)
 
         historyManager.push(currentSnapshot)
         notifyHistoryChange()
-        editRecipe = representative
+        editRecipe = merged
 
         // パーソナルAI編集の利用計装（柱1 主要操作）
-        LoggingService.shared.logEvent("personal_default_applied", parameters: ["sample_count": entries.count])
+        LoggingService.shared.logEvent(loggingEvent, parameters: loggingParameters)
 
         Task { [weak self] in
             await self?.generatePreview()
         }
+    }
+
+    /// 「あなたの定番」（過去の編集履歴全体から導いた代表レシピ）を現在の画像に適用する。
+    /// - 過去の自分の編集（コーパス）から代表レシピを作り、トーン・カラー・フィルターを転写する。
+    /// ⚠️ 候補選択シート（`personalDefaultCandidates` / `applyPersonalDefaultCandidate(_:)`）導入後は
+    ///    UI からは呼ばれない。既存テスト
+    ///    `testApplyPersonalDefaultAppliesRepresentativeAndPreservesPhotoSpecific` の互換のため残置する。
+    func applyPersonalDefault() {
+        guard let userId else { return }
+        let entries = recipeCorpusStore.entries(userId: userId)
+        guard let representative = PersonalRecipeProfile.representative(for: nil, from: entries) else {
+            return
+        }
+        applyPersonalDefaultRecipe(
+            representative,
+            loggingEvent: "personal_default_applied",
+            loggingParameters: ["sample_count": entries.count]
+        )
+    }
+
+    /// 候補シート（`personalDefaultCandidates`）でユーザーが選んだ編集パターンを適用する。
+    /// パターン選択シート導入後は「AIで自動編集」ボタンの実体としてこちらが UI から呼ばれる。
+    func applyPersonalDefaultCandidate(_ candidate: PersonalDefaultCandidate) {
+        let candidateIndex = personalDefaultCandidates.firstIndex(of: candidate) ?? -1
+        let sampleCount = userId.map { recipeCorpusStore.entries(userId: $0).count } ?? 0
+        applyPersonalDefaultRecipe(
+            candidate.recipe,
+            loggingEvent: "personal_default_candidate_selected",
+            loggingParameters: [
+                "candidate_kind": candidate.kind.analyticsValue,
+                "candidate_index": candidateIndex,
+                "sample_count": sampleCount,
+            ]
+        )
     }
 
     // MARK: - ワンタップ空補正 ⭐️
@@ -512,7 +553,8 @@ class EditViewModel: ObservableObject {
         guard let coverage = cachedSkyMaskCoverage,
               let confidence = cachedSkyMaskConfidence,
               coverage >= Self.skyCorrectionMinCoverage,
-              confidence >= Self.skyCorrectionMinConfidence else {
+              confidence >= Self.skyCorrectionMinConfidence
+        else {
             errorMessage = "空が見つかりませんでした。別の写真でお試しください。"
             return
         }
@@ -525,7 +567,7 @@ class EditViewModel: ObservableObject {
         LoggingService.shared.logEvent("sky_correction_applied", parameters: [
             "sky_coverage": coverage,
             "confidence": confidence,
-            "intensity": Self.skyCorrectionDefaultIntensity
+            "intensity": Self.skyCorrectionDefaultIntensity,
         ])
 
         await generatePreview()
@@ -621,6 +663,14 @@ class EditViewModel: ObservableObject {
         applyTransform(to: normalizeImageOrientation(image))
     }
 
+    /// パターン選択シートのサムネイル生成用。現在の画像に向き正規化＋回転・反転だけを焼き込んだベース画像を返す
+    /// （クロップ・フィルター等は未適用）。candidate.recipe に現在の cropRectNorm を合成するため、
+    /// cropRectNorm の切り出し基準（回転・反転適用後の画像）と一致させる必要がある。
+    func currentTransformedImageForThumbnails() -> UIImage? {
+        guard let image = currentImage else { return nil }
+        return normalizedTransformedImage(image)
+    }
+
     /// 画像ごとに独立したパラメータ版（`generateFinalImages()` から使用）
     private func normalizedTransformedImage(
         _ image: UIImage,
@@ -639,7 +689,8 @@ class EditViewModel: ObservableObject {
         let transformKey = makeTransformKey()
         if cachedSkyMask != nil,
            cachedSkyMaskImageIndex == currentImageIndex,
-           cachedSkyMaskTransformKey == transformKey {
+           cachedSkyMaskTransformKey == transformKey
+        {
             return
         }
 
@@ -707,7 +758,8 @@ class EditViewModel: ObservableObject {
     /// マスクが必要なため、キャッシュを使い回すと別画像のマスクを誤用しかねない）。
     private func makeExportSkyMask(for image: UIImage, recipe: EditRecipe) async -> ExportSkyMaskResult {
         guard let intensity = recipe.skyCorrectionIntensity,
-              intensity > skyCorrectionActiveThreshold else {
+              intensity > skyCorrectionActiveThreshold
+        else {
             return .notApplicable
         }
         guard let ciImage = CIImage(image: image) else { return .failed }
@@ -724,23 +776,27 @@ class EditViewModel: ObservableObject {
     }
 
     // MARK: - Edit Tool Management
-    
+
     /// 装備ツールを読み込む（全27ツールを順序に従って表示）
     func loadEquippedTools() async {
-        guard let userId = userId else {
+        // 「AIで自動編集」候補シートの可用性を更新。
+        // ⚠️ userId ガードより前に呼ぶ必要がある。ガードの後ろに置くと未ログイン時に
+        // 一度もこの呼び出しに到達せず、`refreshPersonalDefaultAvailability()` 側の
+        // 「userId が nil でも固定プリセット候補を出す」実装が死んだ分岐になってしまう
+        // （新規ユーザー・未ログインでも固定プリセット候補を出す確定仕様のため）。
+        refreshPersonalDefaultAvailability()
+
+        guard let userId else {
             // 未ログイン時は全ツールをデフォルト順序で表示
             equippedTools = EditTool.allCases
-            equippedToolsOrder = equippedTools.map { $0.rawValue }
+            equippedToolsOrder = equippedTools.map(\.rawValue)
             return
         }
-
-        // 「あなたの定番」ボタンの可用性を更新（コーパスに十分な学習データがあるか）
-        refreshPersonalDefaultAvailability()
 
         do {
             // リトライ可能な操作として実行
             let user = try await RetryableOperation.executeIfRetryable { [self] in
-                try await self.firestoreService.fetchUser(userId: userId)
+                try await firestoreService.fetchUser(userId: userId)
             }
 
             // 全27ツールを使用（順序のみカスタマイズ）
@@ -748,7 +804,8 @@ class EditViewModel: ObservableObject {
 
             // ツールの順序を取得して並び替え
             if let order = user.customEditToolsOrder,
-               !order.isEmpty {
+               !order.isEmpty
+            {
                 equippedToolsOrder = order
                 // 順序に従ってツールを並び替え
                 allTools.sort { tool1, tool2 in
@@ -757,7 +814,7 @@ class EditViewModel: ObservableObject {
                     return index1 < index2
                 }
             } else {
-                equippedToolsOrder = allTools.map { $0.rawValue }
+                equippedToolsOrder = allTools.map(\.rawValue)
             }
 
             equippedTools = allTools
@@ -765,9 +822,10 @@ class EditViewModel: ObservableObject {
             // notFoundエラーの場合はユーザードキュメントが未作成なので、全ツールをデフォルト順序で表示
             // エラーメッセージは表示しない（正常なケースとして扱う）
             if let firestoreError = error as? FirestoreServiceError,
-               case .notFound = firestoreError {
+               case .notFound = firestoreError
+            {
                 equippedTools = EditTool.allCases
-                equippedToolsOrder = equippedTools.map { $0.rawValue }
+                equippedToolsOrder = equippedTools.map(\.rawValue)
                 return
             }
 
@@ -775,12 +833,12 @@ class EditViewModel: ObservableObject {
             ErrorHandler.logError(error, context: "EditViewModel.loadEquippedTools", userId: userId)
             // エラー時は全ツールをデフォルト順序で表示
             equippedTools = EditTool.allCases
-            equippedToolsOrder = equippedTools.map { $0.rawValue }
+            equippedToolsOrder = equippedTools.map(\.rawValue)
             // ユーザーフレンドリーなメッセージを表示
             errorMessage = error.userFriendlyMessage
         }
     }
-    
+
     /// 編集ツールの値を設定
     func setToolValue(_ value: Float, for tool: EditTool) {
         // 非リアルタイム変更前の状態を Undo スタックに積む
@@ -827,9 +885,9 @@ class EditViewModel: ObservableObject {
                 let waitNano = UInt64((fastPreviewMinInterval - elapsed) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: waitNano)
                 guard !Task.isCancelled else { return }
-                guard let self = self else { return }
-                self.lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
-                self.renderFastPreviewOrAsync()
+                guard let self else { return }
+                lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
+                renderFastPreviewOrAsync()
             }
         }
     }
@@ -839,7 +897,8 @@ class EditViewModel: ObservableObject {
         let transformKey = makeTransformKey()
         if let lowResCIImage = cachedLowResCIImage,
            cachedImageIndex == currentImageIndex,
-           cachedTransformKey == transformKey {
+           cachedTransformKey == transformKey
+        {
             // キャッシュ有効 → 同期レンダリング（Task overhead なし）
             // skyMask: 同期経路のため新規生成はせず、キャッシュ済みマスクのみを渡す
             // （未生成なら nil＝空補正なしとして描画される。次の generatePreview() で追いつく）。
@@ -880,18 +939,18 @@ class EditViewModel: ObservableObject {
         } else {
             throttledPreviewTask?.cancel()
             throttledPreviewTask = Task { [weak self] in
-                guard let self = self else { return }
-                let waitNano = UInt64((self.fastPreviewMinInterval - elapsed) * 1_000_000_000)
+                guard let self else { return }
+                let waitNano = UInt64((fastPreviewMinInterval - elapsed) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: waitNano)
                 guard !Task.isCancelled else { return }
-                self.lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
-                self.renderFastPreviewOrAsync()
+                lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
+                renderFastPreviewOrAsync()
             }
         }
     }
 
     /// スライダー操作完了時に呼び出し、高品質プレビューを生成
-    func finalizeToolValue(for tool: EditTool) {
+    func finalizeToolValue(for _: EditTool) {
         // ドラッグ開始時の状態を履歴に積む
         if let preDrag = preDragSnapshot {
             historyManager.push(preDrag)
@@ -920,13 +979,13 @@ class EditViewModel: ObservableObject {
         let myId = UUID()
         finalizePendingId = myId
         Task { [weak self] in
-            guard let self = self else { return }
-            await self.generatePreview()
+            guard let self else { return }
+            await generatePreview()
             // 自分が最新の finalize Task でなければ何もしない（新しい Task に委ねる）
-            guard self.finalizePendingId == myId else { return }
-            self.finalizePendingId = nil
-            self.isEditingRealtime = false
-            self.fastPreviewImage = nil
+            guard finalizePendingId == myId else { return }
+            finalizePendingId = nil
+            isEditingRealtime = false
+            fastPreviewImage = nil
         }
     }
 
@@ -944,7 +1003,7 @@ class EditViewModel: ObservableObject {
     func resetAllEdits() {
         historyManager.push(currentSnapshot)
         notifyHistoryChange()
-        editRecipe = EditRecipe()   // 編集レシピをリセット
+        editRecipe = EditRecipe() // 編集レシピをリセット
         rotationDegrees = 0
         isFlippedHorizontal = false
         isFlippedVertical = false
@@ -987,10 +1046,10 @@ class EditViewModel: ObservableObject {
                 let waitNano = UInt64((fastPreviewMinInterval - elapsed) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: waitNano)
                 guard !Task.isCancelled else { return }
-                guard let self = self else { return }
-                self.lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
-                self.fastPreviewTask?.cancel()
-                self.fastPreviewTask = Task { [weak self] in
+                guard let self else { return }
+                lastFastPreviewTime = CFAbsoluteTimeGetCurrent()
+                fastPreviewTask?.cancel()
+                fastPreviewTask = Task { [weak self] in
                     await self?.generatePreviewFast()
                 }
             }
@@ -1208,9 +1267,9 @@ class EditViewModel: ObservableObject {
         }
 
         // [-1, 1] の範囲にクランプして EditRecipe に書き込む
-        let clampedTone  = Double(min(1.0, max(-1.0, toneNorm)))
+        let clampedTone = Double(min(1.0, max(-1.0, toneNorm)))
         let clampedColor = Double(min(1.0, max(-1.0, colorNorm)))
-        editRecipe.style2DToneNorm  = clampedTone
+        editRecipe.style2DToneNorm = clampedTone
         editRecipe.style2DColorNorm = clampedColor
 
         // 既存の triggerRealtimePreview() に乗せる
@@ -1237,7 +1296,7 @@ class EditViewModel: ObservableObject {
     func resetStyle2D() {
         historyManager.push(currentSnapshot)
         notifyHistoryChange()
-        editRecipe.style2DToneNorm  = nil
+        editRecipe.style2DToneNorm = nil
         editRecipe.style2DColorNorm = nil
         Task { [weak self] in
             await self?.generatePreview()
@@ -1284,7 +1343,7 @@ class EditViewModel: ObservableObject {
             // 済みの空マスク（ensureSkyMaskCached）と extent の縦横が食い違い、空補正が
             // 誤った領域に合成される恐れがあった。normalizedTransformedImage で経路を揃える。
             let processedImage = await Task.detached(priority: .userInitiated) { [weak self] in
-                guard let self = self else { return image }
+                guard let self else { return image }
                 return await MainActor.run {
                     self.normalizedTransformedImage(image)
                 }
@@ -1296,7 +1355,8 @@ class EditViewModel: ObservableObject {
             // 空補正が設定されているのにマスク未生成（レシピ共有・Undo/Redo等での復元）なら
             // ここで生成しておく。ベストエフォート: 失敗しても補正なしでプレビューを継続する。
             if let intensity = editRecipe.skyCorrectionIntensity,
-               intensity > skyCorrectionActiveThreshold {
+               intensity > skyCorrectionActiveThreshold
+            {
                 try? await ensureSkyMaskCached(quality: .preview)
                 guard requestId == currentPreviewRequestId else { return }
             }
@@ -1339,7 +1399,8 @@ class EditViewModel: ObservableObject {
         let transformKey = makeTransformKey()
         if cachedLowResCIImage == nil
             || cachedImageIndex != currentImageIndex
-            || cachedTransformKey != transformKey {
+            || cachedTransformKey != transformKey
+        {
             await rebuildLowResCacheAsync()
         }
 
@@ -1407,7 +1468,7 @@ class EditViewModel: ObservableObject {
 
         // 重い画像処理をバックグラウンドで実行
         let result = await Task.detached(priority: .userInitiated) { [weak self] () -> CIImage? in
-            guard let self = self else { return nil }
+            guard let self else { return nil }
 
             // MainActorでUIImage関連の処理を実行
             let processedImage: UIImage = await MainActor.run {
@@ -1491,7 +1552,7 @@ class EditViewModel: ObservableObject {
         let absSin = abs(sin(radians))
         let absCos = abs(cos(radians))
         let canvasSize = CGSize(
-            width:  size.width * absCos + size.height * absSin,
+            width: size.width * absCos + size.height * absSin,
             height: size.width * absSin + size.height * absCos
         )
 
@@ -1529,7 +1590,7 @@ class EditViewModel: ObservableObject {
             ))
         }
     }
-    
+
     // MARK: - Final Image Generation
 
     /// 最終的な編集済み画像を生成（全画像）
@@ -1548,11 +1609,11 @@ class EditViewModel: ObservableObject {
             var snapshot: EditorSnapshot = imageStates.indices.contains(index)
                 ? imageStates[index]
                 : EditorSnapshot(
-                    recipe:              EditRecipe(),
-                    rotationDegrees:     0,
+                    recipe: EditRecipe(),
+                    rotationDegrees: 0,
                     isFlippedHorizontal: false,
-                    isFlippedVertical:   false,
-                    cropAspectRatio:     .free
+                    isFlippedVertical: false,
+                    cropAspectRatio: .free
                 )
 
             // ⭐️ レビュー指摘1対応: 向き正規化（.up 焼き込み）→ 回転・反転適用の順で処理する
@@ -1560,8 +1621,8 @@ class EditViewModel: ObservableObject {
             let transformedImage = normalizedTransformedImage(
                 image,
                 rotation: snapshot.rotationDegrees,
-                flipH:    snapshot.isFlippedHorizontal,
-                flipV:    snapshot.isFlippedVertical
+                flipH: snapshot.isFlippedHorizontal,
+                flipV: snapshot.isFlippedVertical
             )
             // 空補正の書き出し用マスクは画像ごとに独立して .export 品質で新規生成する
             // （プレビュー用キャッシュは currentImageIndex 1枚分しか保持しないため使い回せない）。
@@ -1569,7 +1630,7 @@ class EditViewModel: ObservableObject {
             switch await makeExportSkyMask(for: transformedImage, recipe: snapshot.recipe) {
             case .notApplicable:
                 exportSkyMask = nil
-            case .success(let mask):
+            case let .success(mask):
                 exportSkyMask = mask
             case .failed:
                 // ⭐️ レビュー指摘6対応: マスク生成に失敗すると画像には補正が反映されない。
@@ -1580,11 +1641,11 @@ class EditViewModel: ObservableObject {
                 var fallbackRecipe = snapshot.recipe
                 fallbackRecipe.skyCorrectionIntensity = nil
                 snapshot = EditorSnapshot(
-                    recipe:              fallbackRecipe,
-                    rotationDegrees:     snapshot.rotationDegrees,
+                    recipe: fallbackRecipe,
+                    rotationDegrees: snapshot.rotationDegrees,
                     isFlippedHorizontal: snapshot.isFlippedHorizontal,
-                    isFlippedVertical:   snapshot.isFlippedVertical,
-                    cropAspectRatio:     snapshot.cropAspectRatio
+                    isFlippedVertical: snapshot.isFlippedVertical,
+                    cropAspectRatio: snapshot.cropAspectRatio
                 )
                 if imageStates.indices.contains(index) {
                     imageStates[index] = snapshot
@@ -1612,7 +1673,7 @@ class EditViewModel: ObservableObject {
     func currentEditRecipes() -> [EditRecipe] {
         // 現在画像の編集状態を最新化した上で配列を返す
         saveCurrentImageState()
-        return imageStates.map { $0.recipe }
+        return imageStates.map(\.recipe)
     }
 
     /// 現在の画像の最終的な編集済み画像を生成
@@ -1631,7 +1692,7 @@ class EditViewModel: ObservableObject {
         switch await makeExportSkyMask(for: transformedImage, recipe: recipe) {
         case .notApplicable:
             exportSkyMask = nil
-        case .success(let mask):
+        case let .success(mask):
             exportSkyMask = mask
         case .failed:
             // ⭐️ レビュー指摘6対応: 画像には補正が反映されないため、レシピ側の
@@ -1660,15 +1721,15 @@ enum EditViewModelError: LocalizedError {
     case noImage
     case previewGenerationFailed
     case toolNotEquipped
-    
+
     var errorDescription: String? {
         switch self {
         case .noImage:
-            return "画像が設定されていません"
+            "画像が設定されていません"
         case .previewGenerationFailed:
-            return "プレビューの生成に失敗しました"
+            "プレビューの生成に失敗しました"
         case .toolNotEquipped:
-            return "このツールは装備されていません"
+            "このツールは装備されていません"
         }
     }
 }
