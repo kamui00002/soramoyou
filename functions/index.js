@@ -68,35 +68,12 @@ function isBlocked(userData, otherId) {
   return !!(userData && Array.isArray(userData.blockedUserIds) && userData.blockedUserIds.includes(otherId));
 }
 
-/** 無効トークンエラーか。 */
-function isInvalidTokenError(code) {
-  return (
-    code === "messaging/registration-token-not-registered" ||
-    code === "messaging/invalid-registration-token" ||
-    code === "messaging/invalid-argument"
-  );
-}
+// 送信・無効トークン掃除の実体は pushHelpers.js に集約（skyMotion.js と共有）。
+const { isInvalidTokenError, sendToToken } = require("./pushHelpers");
 
 /** 単一ユーザーへ送る（リアクション通知用）。無効トークンは掃除する。 */
 async function sendToUser(uid, userData, notification, data) {
-  const token = userData && userData.fcmToken;
-  if (!token) return;
-  try {
-    await messaging.send({
-      token,
-      notification,
-      data,
-      apns: { payload: { aps: { sound: "default" } } },
-    });
-  } catch (err) {
-    const code = err && err.code;
-    if (isInvalidTokenError(code)) {
-      await db.collection("users").doc(uid).update({ fcmToken: FieldValue.delete() })
-        .catch((e) => logger.warn("fcmToken cleanup failed", { uid, code: String(e && e.code) }));
-    } else {
-      logger.error("FCM send failed", { uid, code: String(code) });
-    }
-  }
+  await sendToToken(uid, userData && userData.fcmToken, notification, data);
 }
 
 /** multicast の失敗レスポンスから無効トークンを掃除する。 */

@@ -222,12 +222,18 @@ final class SkyMotionCreditService: ObservableObject {
             return
         }
         purchaseState = .purchasing
+        LoggingService.shared.logEvent("sky_motion_purchase_started", parameters: [
+            "product_id": productID,
+        ])
 
         if products.first(where: { $0.id == productID }) == nil {
             await loadProducts()
         }
         guard let product = products.first(where: { $0.id == productID }) else {
             purchaseState = .failed(message: "購入アイテムを取得できませんでした。時間をおいて再度お試しください")
+            LoggingService.shared.logEvent("sky_motion_purchase_failed", parameters: [
+                "reason": "product_unavailable",
+            ])
             return
         }
 
@@ -245,6 +251,7 @@ final class SkyMotionCreditService: ObservableObject {
                 await submitAndFinish(verification, reportToUI: true)
             case .userCancelled:
                 purchaseState = .cancelled
+                LoggingService.shared.logEvent("sky_motion_purchase_cancelled", parameters: nil)
             case .pending:
                 // ファミリー共有の承認待ちなど。承認されたら Transaction.updates に流れてくる。
                 purchaseState = .failed(message: "購入の承認待ちです。承認されると自動で反映されます")
@@ -254,6 +261,9 @@ final class SkyMotionCreditService: ObservableObject {
         } catch {
             logger.error("回数パック: 購入に失敗 \(error.localizedDescription, privacy: .public)")
             purchaseState = .failed(message: "購入に失敗しました: \(error.localizedDescription)")
+            LoggingService.shared.logEvent("sky_motion_purchase_failed", parameters: [
+                "reason": "storekit_error",
+            ])
         }
     }
 
@@ -320,12 +330,20 @@ final class SkyMotionCreditService: ObservableObject {
                 await transaction.finish()
                 logger.info("回数パック: 加算完了→finish (tx=\(transactionId, privacy: .public))")
                 if reportToUI { purchaseState = .success(credits: count) }
+                // 起動時の再送（reportToUI=false）で成功した場合も計装する（救出の頻度を知りたい）。
+                LoggingService.shared.logEvent("sky_motion_purchase_succeeded", parameters: [
+                    "credits": count,
+                    "via_resend": reportToUI ? 0 : 1,
+                ])
             case let .failed(message):
                 // サーバーが「この購入は無効」と判断した。finish しないと Apple が
                 // 延々と再送してくるので finish する（残高は増えない）。
                 await transaction.finish()
                 logger.error("回数パック: サーバー検証NG→finish (tx=\(transactionId, privacy: .public))")
                 if reportToUI { purchaseState = .failed(message: message) }
+                LoggingService.shared.logEvent("sky_motion_purchase_failed", parameters: [
+                    "reason": "server_rejected",
+                ])
             }
         } catch {
             // ネットワーク断・タイムアウト等。**finish しない**のが正解。

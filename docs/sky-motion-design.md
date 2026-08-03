@@ -27,7 +27,7 @@
   8. ポーリング（submittedAt 基準でタイムアウト判定）で完了を待つ → mp4 を Storage の
      livingSky/{uid}/{jobId}/output.mp4 に書き込み
   9. status="completed"（videoURL設定。以降は巻き戻さない）または
-     status="failed"（error設定・reservedCountをrefund・入力ファイル削除）
+     status="failed"（error設定・chargedBucketの側へrefund・入力ファイル削除）
 ```
 
 - クライアントが書けるのは **画像3枚のアップロード** と **status="pending" の初期ドキュメント作成のみ**。
@@ -77,30 +77,47 @@
 
 ---
 
-## 2. `livingSkyUsage/{uid}` スキーマ
+## 2. `livingSkyUsage/{uid}` スキーマ（2026-08-03 Phase C＝回数パック課金で3カウンタ化）
 
 | フィールド | 型 | 設定者 | 説明 |
 |---|---|---|---|
 | `day` | string | function | JST `"YYYY-MM-DD"` |
-| `reservedCount` | int | function | 当日の予約済み回数 |
+| `freeUsedToday` | int | function | 当日の無料枠使用数（上限: 一般1回 / β=claim保有者3回） |
+| `paidUsedToday` | int | function | 当日の購入枠使用数（上限20回＝乗っ取り時の被害上限） |
+| `freeLimit` | int | function | 当日の無料枠上限。client の「あとN回」表示の真実源（二重管理しない） |
+| `reservedCount` | int | 【旧】 | β時代の単一カウンタ。新規書き込みなし。読み取り時は `freeUsedToday` として解釈（後方互換） |
 | `updatedAt` | Timestamp | function | |
 
+購入クレジット残高は別コレクション `skyMotionBalance/{uid}.balance`（日付非依存の資産）。
+カウンタを3本に分けるのは、1本だと「無料を使い切ったか」と「今日あと何回買った枠を
+使えるか」を同時に表現できないため。購入記録は `skyMotionPurchases/{transactionId}`
+（詳細は `docs/firestore-schema.md`・`docs/sky-motion-billing-plan.md`）。
+
 **lazy reset方式**: 日次cronは使わない。Cloud Functions がトランザクション内で
-`day` を読み、当日と異なれば `reservedCount = 0` として扱ってから予約処理を行う
+`day` を読み、当日と異なれば当日カウンタ=0 として扱ってから予約処理を行う
 （ドキュメントが存在しない・`day` が古い、いずれも「未予約」として扱う）。
 
 **reserve-on-create + refund-on-failure**:
 1. ジョブ作成トリガー受信時、まず allowlist（custom claim `skyMotionBeta`）を
    Admin SDK 経由で再検証する（不許可なら `status="failed"` / `errorCode="forbidden"` にして
    **fal.ai を呼び出さない**。予約も行わない）
-2. 許可されていれば、`livingSkyUsage/{uid}` の予約とジョブの `status`
-   （`pending`→`submitting`）の claim を**単一トランザクション**で行う。トランザクション内で
-   job の最新状態をライブ読み取りし、`pending` でなければ何もしない（at-least-once 再配信対策）。
-   `reservedCount >= 上限(3)` なら `status="failed"` / `errorCode="quota_exceeded"` にして
-   **fal.ai を呼び出さない**（非課金）。予約可能なら `reservedCount += 1` を書き込み、
-   job を `status="submitting"` にしてから fal.ai を呼ぶ
-3. fal.ai 呼び出しが失敗（submit失敗・downstream不可・timeout）した場合、
-   同トランザクション方式で `reservedCount -= 1` して返金する（成功時は返金しない）
+2. 許可されていれば、`livingSkyUsage/{uid}`＋`skyMotionBalance/{uid}` の予約とジョブの
+   `status`（`pending`→`submitting`）の claim を**単一トランザクション**で行う。
+   トランザクション内で job の最新状態をライブ読み取りし、`pending` でなければ何もしない
+   （at-least-once 再配信対策・`isClaimableJob`）。判定は**無料枠優先→尽きたら購入残高**:
+   - 無料枠が残っていれば `freeUsedToday += 1`（購入ぶんを温存＝ユーザー有利側）
+   - 尽きて残高>0 なら `paidUsedToday += 1`・`balance -= 1`（日次上限20回）
+   - どちらも不可なら `status="failed"` / `errorCode="quota_exceeded"` / `quotaReason` で
+     理由を区別し **fal.ai を呼び出さない**（非課金）
+   - **どちらから引いたかを `job.chargedBucket`（"free"/"paid"）に必ず保存する**
+     （返金は別プロセス＝ポーラーで起きるため、job 自身が覚えていないと戻す先が分からない）
+3. fal.ai 呼び出しが失敗（submit失敗・downstream不可・timeout）した場合、`failJob` が
+   **返金＋`status="failed"` 遷移を単一トランザクション**で行う。トランザクション内で
+   `isRefundableJob`（`status` が `submitting`/`submitted` のときのみ true）をライブ判定し、
+   既に terminal なら no-op（**二重返金・completed の failed への巻き戻り・二重通知を防ぐ**）。
+   返金は `chargedBucket` の側だけを戻す（free の失敗で残高を増やさない／paid の失敗で
+   購入クレジットを取りこぼさない）。bucket は呼び出し元が `claim.bucket` /
+   `job.chargedBucket` を引数で渡す（failJob 内で再読み取りしない）
 
 **セキュリティルール（`firestore.rules` に実装済み）**:
 - `read`: `isOwner(uid)`
@@ -143,23 +160,30 @@ fal.ai Kling の Motion Control API に渡す際の極性は以下の通り（Po
 
 ---
 
-## 5. 回数・コスト方針
+## 5. 回数・コスト方針（2026-08-03 Phase C＝回数パック課金で改定）
 
-- **3回/日/ユーザー**（無料枠。§2 の `reservedCount` 上限）
+- **無料枠: 一般1回/日・β（claim保有者）3回/日**（§2 の `freeUsedToday` 上限）。
+  一般公開時は claim の付与をやめるだけで自動的に1回へ揃う
+- **購入残高: 5回パック¥1,000（消費型IAP）**。残高からの利用は20回/日が上限
+  （乗っ取り・暴走時の被害上限）。詳細は `docs/sky-motion-billing-plan.md`
 - **reserve-on-create + refund-on-failure**: 予約は fal.ai 呼び出し前に確定させ、
-  失敗時のみ返金する（成功時は消費のまま）
+  失敗時のみ `chargedBucket` の側へ返金する（成功時は消費のまま）
 - `quota_exceeded` 時は fal.ai を一切呼び出さない（＝コストゼロ）
 
 ---
 
 ## 6. 調整可能な数値定数
 
-Cloud Functions 実装担当が **1箇所（設定ファイル or 定数モジュール）にまとめて** 変更できるようにすること:
+Cloud Functions 実装担当が **1箇所（`functions/skyMotionCore.js`）にまとめて** 変更できるようにすること:
 
 | 定数 | 既定値 | 説明 |
 |---|---|---|
-| 1日の上限 | 3 | `livingSkyUsage.reservedCount` の上限 |
-| ドリフト | +40px | trajectory の水平移動量 |
+| `FREE_DAILY_LIMIT` | 1 | 一般ユーザーの無料枠/日 |
+| `BETA_FREE_DAILY_LIMIT` | 3 | β（skyMotionBeta claim）の無料枠/日 |
+| `PAID_DAILY_LIMIT` | 20 | 購入残高からの利用上限/日 |
+| `PACK_CREDITS` | pack5→5 | 消費型プロダクトID→付与クレジット数 |
+| ドリフト | 幅の10% | trajectory の水平移動量（`SkyMotionPreset.driftWidthRatio`。幅6.5%以下はKlingに無視される実測あり） |
+| `LOOP_DURATION_FACTORS` | 1.3/1.5/1.7 | setpts 係数（上限 `LOOP_SLOW_FACTOR_MAX`=1.8。超えると「動いて見えない」） |
 | poll のタイムアウト | 20分 | `submittedAt` からの経過時間がこれを超えたらポーリングを打ち切って `status="failed"` / `errorCode="timeout"` にする（`createdAt` は基準にしない） |
 | submit のリトライ回数 | 1回 | fal.ai submit 失敗時の再試行回数 |
 
@@ -170,8 +194,9 @@ Cloud Functions 実装担当が **1箇所（設定ファイル or 定数モジ�
 - Cloud Functions 本体（`functions/skyMotion.js` 相当）: トリガー実装・allowlist再検証・fal.ai 連携・
   ポーリング・トランザクション予約/返金ロジック
 - Swift クライアント本体: マスク2値化・アップロード・snapshot listener・UI
-- DEBUG限定導線（本番導線化はしない。既存 Metal版 Living Sky が本番導線→撤収した経緯があるため、
-  本機能も検証が済むまで DEBUG ゲート必須）
+- 導線ゲート: DEBUG ビルド＋Release/TestFlight の skyMotionBeta claim 保有者
+  （`SkyMotionAccess.isEnabled()`）。⚠️「DEBUG限定」ではない——TestFlight の allowlist
+  ユーザーにも到達し、IAPが動く（2026-08-03 訂正）
 
 ### 既知の制限（公開β送り・今は許容）
 

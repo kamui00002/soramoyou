@@ -92,45 +92,8 @@ async function getReadSignedUrl(path) {
   return url;
 }
 
-/** 無効トークンエラーか（index.js の同名ロジックと同じ判定基準）。 */
-function isInvalidTokenError(code) {
-  return (
-    code === "messaging/registration-token-not-registered" ||
-    code === "messaging/invalid-registration-token" ||
-    code === "messaging/invalid-argument"
-  );
-}
-
-/**
- * 単一ユーザーへプッシュ通知を送る（index.js の sendToUser と同じ流儀）。
- * 「空を動かす」の完了/失敗通知専用。fcmToken が無ければ何もしない。
- * 無効トークンは users/{uid}.fcmToken を掃除する。
- */
-async function sendSkyMotionNotification(uid, notification, data) {
-  const userSnap = await db.collection("users").doc(uid).get();
-  const userData = userSnap.exists ? userSnap.data() : null;
-  const token = userData && userData.fcmToken;
-  if (!token) return;
-  try {
-    await messaging.send({
-      token,
-      notification,
-      data,
-      apns: { payload: { aps: { sound: "default" } } },
-    });
-  } catch (err) {
-    const code = err && err.code;
-    if (isInvalidTokenError(code)) {
-      await db
-        .collection("users")
-        .doc(uid)
-        .update({ fcmToken: FieldValue.delete() })
-        .catch((e) => logger.warn("fcmTokenクリーンアップ失敗", { uid, code: String(e && e.code) }));
-    } else {
-      logger.error("空を動かす通知の送信に失敗しました", { uid, code: String(code) });
-    }
-  }
-}
+// 送信・無効トークン掃除の実体は pushHelpers.js に集約（index.js と共有）。
+const { sendToUid: sendSkyMotionNotification } = require("./pushHelpers");
 
 /** Firestore Timestamp/Date/数値いずれでもミリ秒に正規化する。 */
 function toMillis(value) {
