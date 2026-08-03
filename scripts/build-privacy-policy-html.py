@@ -9,9 +9,10 @@
 
 使い方:
   python3 scripts/build-privacy-policy-html.py
-  → marketing/privacy-policy/index.html を出力
+  firebase deploy --only hosting --project soramoyou-ios
 
-ホスティング先を決めたら、この HTML をそのまま置くだけ（外部依存なし・単一ファイル）。
+出力先は Firebase Hosting の公開ディレクトリ `hosting/`（firebase.json の hosting.public）。
+外部CDN依存なしの単一ファイルなので、他のホスティングへ移す場合もそのまま置ける。
 """
 import html
 import pathlib
@@ -20,7 +21,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "Soramoyou/Soramoyou/Views/SettingsView.swift"
-OUT = ROOT / "marketing/privacy-policy/index.html"
+# Firebase Hosting の公開ディレクトリ配下。ASC に登録するURLは <site>/privacy/ になる。
+OUT = ROOT / "hosting/privacy/index.html"
 
 
 def extract_policy_text() -> str:
