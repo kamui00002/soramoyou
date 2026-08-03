@@ -6,8 +6,8 @@
 //  プライバシーポリシー、利用規約、アプリ情報を表示
 //
 
-import SwiftUI
 import StoreKit
+import SwiftUI
 
 /// アプリの設定画面
 /// プライバシーポリシー、利用規約、アプリ情報を表示する
@@ -97,7 +97,7 @@ struct SettingsView: View {
                 SkyStitchHelpView(onClose: { showingStitchGuide = false })
             }
             .alert("ログアウト", isPresented: $showingLogoutConfirmation) {
-                Button("キャンセル", role: .cancel) { }
+                Button("キャンセル", role: .cancel) {}
                 Button("ログアウト", role: .destructive) {
                     Task {
                         do {
@@ -115,7 +115,7 @@ struct SettingsView: View {
             }
             // アカウント削除の確認アラート
             .alert("アカウントを削除", isPresented: $showingDeleteAccountConfirmation) {
-                Button("キャンセル", role: .cancel) { }
+                Button("キャンセル", role: .cancel) {}
                 Button("削除する", role: .destructive) {
                     Task {
                         await performAccountDeletion()
@@ -216,7 +216,7 @@ struct SettingsView: View {
         }
         .navigationViewStyle(.stack)
     }
-    
+
     // MARK: - Account Deletion
 
     /// アカウント削除を実行（ViewModelに委譲）
@@ -517,10 +517,10 @@ struct SettingsView: View {
                 ) {
                     showingLogoutConfirmation = true
                 }
-                
+
                 Divider()
                     .padding(.leading, 44)
-                
+
                 // アカウント削除
                 SettingsRow(
                     title: "アカウントを削除",
@@ -564,7 +564,7 @@ struct SettingsView: View {
     }
 
     /// 設定カード
-    private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    private func settingsCard(@ViewBuilder content: () -> some View) -> some View {
         VStack(spacing: 0) {
             content()
         }
@@ -705,7 +705,7 @@ struct PrivacyPolicyView: View {
         """
         プライバシーポリシー
 
-        最終更新日: 2026年7月24日
+        最終更新日: 2026年8月3日
 
         「そらもよう」（以下、「本アプリ」）は、ユーザーのプライバシーを尊重し、個人情報の保護に努めています。本プライバシーポリシーは、本アプリが収集する情報とその利用方法について説明します。
 
@@ -722,8 +722,9 @@ struct PrivacyPolicyView: View {
         - ハッシュタグ
 
         3. 位置情報
-        - 投稿に付加する位置情報（市区町村レベル）
-        - 位置情報の使用はユーザーの許可が必要です
+        - 投稿に位置情報を付ける場合、撮影地の緯度・経度（正確な位置情報）を保存します
+        - アプリ上での表示は市区町村・ランドマーク名などに丸めて行います
+        - 位置情報の使用はユーザーの許可が必要で、付けるかどうかは投稿ごとに選べます
 
         4. 写真のメタデータ
         - 撮影日時（EXIF情報）
@@ -737,6 +738,12 @@ struct PrivacyPolicyView: View {
         - 広告識別子（IDFA）※ユーザーの許可がある場合のみ
         - 広告の表示・クリック情報
 
+        7. 購入情報
+        - App内課金（「空を動かす」の回数パック）の取引ID・商品ID・購入日時
+        - 残りの利用回数
+        ※ クレジットカード番号などの決済情報は、Apple が処理するため本アプリでは
+        　 一切受け取らず、保存もしません
+
         ■ 情報の利用目的
 
         収集した情報は以下の目的で利用します：
@@ -746,6 +753,7 @@ struct PrivacyPolicyView: View {
         - ユーザーサポートの提供
         - 広告の表示（Google AdMob）
         - アプリのクラッシュ分析と品質向上（Firebase Crashlytics）
+        - App内課金で購入された利用回数の付与と管理
 
         ■ 第三者サービスへのデータ提供
 
@@ -763,6 +771,12 @@ struct PrivacyPolicyView: View {
         - 「空を動かす」（空の写真から動画を生成するベータ機能）をご利用の場合に限り、選択された写真を動画生成のため fal.ai（米国）のサーバーへ送信します
         - この機能をご利用にならない限り、写真が fal.ai へ送信されることはありません
         - プライバシーポリシー: https://fal.ai/legal/privacy-policy
+
+        4. Apple（Apple Inc.）
+        - App内課金の決済処理に使用します
+        - 決済情報（クレジットカード番号など）は Apple が直接処理し、本アプリは受け取りません
+        - 本アプリは Apple から受け取った取引の署名を検証し、取引ID・商品IDのみを保存します
+        - プライバシーポリシー: https://www.apple.com/legal/privacy/
 
         上記以外の第三者に対して、ユーザーの個人情報を提供することはありません。
 
