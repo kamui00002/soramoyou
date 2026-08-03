@@ -5,9 +5,9 @@
 //  Created on 2025-12-06.
 //
 
-import SwiftUI
 import MapKit
 import os
+import SwiftUI
 
 private let logger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "com.soramoyou.photo-editor",
@@ -23,15 +23,18 @@ struct PostInfoView: View {
     /// onAppear フォールバック生成を一度だけ実行するためのフラグ。
     /// onAppear は SwiftUI の仕様で複数回発火しうるため、二重生成を防ぐ。
     @State private var hasGeneratedFallback = false
-    
+
     private let locationService: LocationServiceProtocol
     private let userId: String?
-    
+
     init(
         images: [UIImage],
         editedImages: [UIImage],
         editSettings: EditSettings,
         editRecipe: EditRecipe? = nil,
+        // 複数枚投稿時、各画像の編集レシピ全件を学習コーパスへ記録するための配列。
+        // 既定値 [] により、editRecipes を渡さない既存呼び出し（下書き経路等）は無改修で互換を保つ。
+        editRecipes: [EditRecipe] = [],
         userId: String?,
         externalEditInfos: [ExternalEditInfo?] = [],
         editingContext: PostEditingContext? = nil,
@@ -45,8 +48,9 @@ struct PostInfoView: View {
         // 各画像の外部編集情報を保持（ギャラリーで写真Appバッジ表示用）⭐️ Issue #4
         postViewModel.setExternalEditInfos(externalEditInfos)
         if !editedImages.isEmpty {
-            // 通常経路: EditView から生成済みの編集後画像を受け取る（全編集を保持）
-            postViewModel.setEditedImages(editedImages, editSettings: editSettings, editRecipe: editRecipe)
+            // 通常経路: EditView から生成済みの編集後画像を受け取る（全編集を保持）。
+            // editRecipes は複数枚投稿時の学習コーパス記録用（既定 [] は下書き経路等の互換維持）。
+            postViewModel.setEditedImages(editedImages, editSettings: editSettings, editRecipe: editRecipe, editRecipes: editRecipes)
         }
         // 再編集（投稿済み画像の上書き更新）の場合は、元投稿の caption / frameCaption / mood /
         // 枠スタイル / 公開範囲 / ハッシュタグ / 保持メタを seed する。以降 savePost は updatePost になる。
@@ -60,7 +64,7 @@ struct PostInfoView: View {
         self.locationService = locationService
         self.userId = userId
     }
-    
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -69,7 +73,7 @@ struct PostInfoView: View {
                     colors: [
                         Color(red: 0.68, green: 0.85, blue: 0.90),
                         Color(red: 0.53, green: 0.81, blue: 0.98),
-                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                        Color(red: 0.39, green: 0.58, blue: 0.93),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -91,7 +95,7 @@ struct PostInfoView: View {
                             // 編集済み写真のプレビュー
                             photoPreviewSection
                         }
-                        
+
                         // キャプション入力
                         captionSection
 
@@ -104,16 +108,16 @@ struct PostInfoView: View {
 
                         // ハッシュタグ表示
                         hashtagSection
-                        
+
                         // 位置情報
                         locationSection
-                        
+
                         // AI空タイプ判定セクション ☁️
                         skyTypeSection
 
                         // 自動抽出された情報
                         extractedInfoSection
-                        
+
                         // 公開設定
                         visibilitySection
 
@@ -141,7 +145,7 @@ struct PostInfoView: View {
                 MapView(
                     selectedLandmark: $selectedLandmark,
                     onLandmarkSelected: { landmark in
-                        if let landmark = landmark {
+                        if let landmark {
                             let location = Location(
                                 latitude: landmark.placemark.coordinate.latitude,
                                 longitude: landmark.placemark.coordinate.longitude,
@@ -198,18 +202,18 @@ struct PostInfoView: View {
         }
         .navigationViewStyle(.stack)
     }
-    
+
     // MARK: - Photo Preview Section
-    
+
     private var photoPreviewSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("写真プレビュー")
                 .font(.headline)
                 .foregroundColor(.white)
-            
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    ForEach(Array(viewModel.editedImages.enumerated()), id: \.offset) { index, image in
+                    ForEach(Array(viewModel.editedImages.enumerated()), id: \.offset) { _, image in
                         Image(uiImage: image)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
@@ -222,41 +226,41 @@ struct PostInfoView: View {
             }
         }
     }
-    
+
     // MARK: - Caption Section
-    
+
     private var captionSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("キャプション")
                 .font(.headline)
                 .foregroundColor(.white)
-            
+
             // ⚠️ インライン Binding(get:set:) ＋ setter 内 extractHashtags（@Published更新）は、
             //   実機の実キーボード入力中に再描画レースを起こし「打った文字が表示されない」不具合になる。
             //   直接束縛にして、ハッシュタグ抽出は入力確定後の .onChange で行う。
             TextEditor(text: $viewModel.caption)
-            .frame(height: 100)
-            .padding(8)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(.white.opacity(0.2))
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(.white.opacity(0.4), lineWidth: 1)
-                    )
-            )
-            .foregroundColor(.primary)
-            .scrollContentBackground(.hidden)
-            .onChange(of: viewModel.caption) { newValue in
-                viewModel.extractHashtags(from: newValue)
-            }
-            
+                .frame(height: 100)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.white.opacity(0.2))
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(.white.opacity(0.4), lineWidth: 1)
+                        )
+                )
+                .foregroundColor(.primary)
+                .scrollContentBackground(.hidden)
+                .onChange(of: viewModel.caption) { newValue in
+                    viewModel.extractHashtags(from: newValue)
+                }
+
             Text("ハッシュタグは「#」で始まる単語で自動的に抽出されます")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.8))
         }
     }
-    
+
     // MARK: - Mood Section（機能1）
 
     /// 気分（mood）選択セクション。肥大化と型チェック負荷を避けるため本体は
@@ -288,7 +292,7 @@ struct PostInfoView: View {
             Text("ハッシュタグ")
                 .font(.headline)
                 .foregroundColor(.white)
-            
+
             if viewModel.hashtags.isEmpty {
                 Text("ハッシュタグはありません")
                     .font(.caption)
@@ -308,15 +312,15 @@ struct PostInfoView: View {
             }
         }
     }
-    
+
     // MARK: - Location Section
-    
+
     private var locationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("位置情報")
                 .font(.headline)
                 .foregroundColor(.white)
-            
+
             if let location = viewModel.location {
                 VStack(alignment: .leading, spacing: 8) {
                     if let landmark = location.landmark {
@@ -332,7 +336,7 @@ struct PostInfoView: View {
                     Text("緯度: \(location.latitude, specifier: "%.6f"), 経度: \(location.longitude, specifier: "%.6f")")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.7))
-                    
+
                     Button("位置情報を変更") {
                         showLocationPicker = true
                     }
@@ -372,7 +376,7 @@ struct PostInfoView: View {
                     )
                 }
             }
-            
+
             Button(action: {
                 showMapView = true
             }) {
@@ -395,7 +399,7 @@ struct PostInfoView: View {
             }
         }
     }
-    
+
     // MARK: - Helper Methods ☁️
 
     /// 16進数カラーコードをColorに変換
@@ -572,7 +576,7 @@ struct PostInfoView: View {
                     LinearGradient(
                         colors: [
                             Color(red: 0.2, green: 0.3, blue: 0.5).opacity(0.6),
-                            Color(red: 0.3, green: 0.4, blue: 0.6).opacity(0.4)
+                            Color(red: 0.3, green: 0.4, blue: 0.6).opacity(0.4),
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -602,7 +606,7 @@ struct PostInfoView: View {
             LazyVGrid(columns: [
                 GridItem(.flexible()),
                 GridItem(.flexible()),
-                GridItem(.flexible())
+                GridItem(.flexible()),
             ], spacing: 10) {
                 ForEach(SkyType.allCases, id: \.self) { skyType in
                     SkyTypeButton(
@@ -622,11 +626,11 @@ struct PostInfoView: View {
     private func confidenceColor(_ confidence: Double) -> Color {
         switch confidence {
         case 0.8...:
-            return Color(red: 0.2, green: 0.7, blue: 0.4) // 緑
-        case 0.6..<0.8:
-            return Color(red: 0.9, green: 0.7, blue: 0.2) // 黄色
+            Color(red: 0.2, green: 0.7, blue: 0.4) // 緑
+        case 0.6 ..< 0.8:
+            Color(red: 0.9, green: 0.7, blue: 0.2) // 黄色
         default:
-            return Color(red: 0.8, green: 0.4, blue: 0.3) // オレンジ
+            Color(red: 0.8, green: 0.4, blue: 0.3) // オレンジ
         }
     }
 
@@ -639,7 +643,7 @@ struct PostInfoView: View {
                     Text("自動抽出された情報")
                         .font(.headline)
                         .foregroundColor(.white)
-                    
+
                     VStack(alignment: .leading, spacing: 12) {
                         // 撮影時刻
                         if let capturedAt = info.capturedAt {
@@ -651,7 +655,7 @@ struct PostInfoView: View {
                                     .foregroundColor(.white)
                             }
                         }
-                        
+
                         // 時間帯
                         if let timeOfDay = info.timeOfDay {
                             HStack {
@@ -662,7 +666,7 @@ struct PostInfoView: View {
                                     .foregroundColor(.white)
                             }
                         }
-                        
+
                         // 空の種類
                         if let skyType = info.skyType {
                             HStack {
@@ -673,7 +677,7 @@ struct PostInfoView: View {
                                     .foregroundColor(.white)
                             }
                         }
-                        
+
                         // 色温度
                         if let colorTemperature = info.colorTemperature {
                             HStack {
@@ -684,14 +688,14 @@ struct PostInfoView: View {
                                     .foregroundColor(.white)
                             }
                         }
-                        
+
                         // 主要色
                         if !info.skyColors.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("主要色")
                                     .font(.subheadline)
                                     .foregroundColor(.white.opacity(0.8))
-                                
+
                                 HStack(spacing: 12) {
                                     ForEach(info.skyColors.prefix(5), id: \.self) { colorHex in
                                         ColorCircle(colorHex: colorHex)
@@ -713,7 +717,7 @@ struct PostInfoView: View {
             }
         }
     }
-    
+
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -721,7 +725,7 @@ struct PostInfoView: View {
         formatter.locale = Locale(identifier: "ja_JP")
         return formatter.string(from: date)
     }
-    
+
     // MARK: - Visibility Section
 
     private var visibilitySection: some View {
@@ -822,12 +826,12 @@ struct PostInfoView: View {
                 .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
             }
             .disabled(viewModel.isUploading)
-            
+
             if viewModel.isUploading {
                 ProgressView(value: viewModel.uploadProgress)
                     .progressViewStyle(LinearProgressViewStyle(tint: .white))
             }
-            
+
             Button(action: {
                 Task {
                     do {
@@ -845,21 +849,21 @@ struct PostInfoView: View {
             .disabled(viewModel.isUploading)
         }
     }
-    
+
     // MARK: - Helper Methods
-    
+
     private func addLocation() async {
         do {
             let location = try await locationService.getCurrentLocation()
             let geocode = try await locationService.reverseGeocode(location: location)
-            
+
             let locationData = Location(
                 latitude: location.coordinate.latitude,
                 longitude: location.coordinate.longitude,
                 city: geocode.city,
                 prefecture: geocode.prefecture
             )
-            
+
             viewModel.setLocation(locationData)
         } catch {
             viewModel.errorMessage = error.userFriendlyMessage
@@ -871,8 +875,8 @@ struct PostInfoView: View {
 
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
-    
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
         let result = FlowResult(
             in: proposal.replacingUnspecifiedDimensions().width,
             subviews: subviews,
@@ -880,8 +884,8 @@ struct FlowLayout: Layout {
         )
         return result.size
     }
-    
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
         let result = FlowResult(
             in: bounds.width,
             subviews: subviews,
@@ -889,34 +893,34 @@ struct FlowLayout: Layout {
         )
         for (index, subview) in subviews.enumerated() {
             subview.place(at: CGPoint(x: bounds.minX + result.frames[index].minX,
-                                     y: bounds.minY + result.frames[index].minY),
-                         proposal: .unspecified)
+                                      y: bounds.minY + result.frames[index].minY),
+                          proposal: .unspecified)
         }
     }
-    
+
     struct FlowResult {
         var size: CGSize = .zero
         var frames: [CGRect] = []
-        
+
         init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
             var currentX: CGFloat = 0
             var currentY: CGFloat = 0
             var lineHeight: CGFloat = 0
-            
+
             for subview in subviews {
                 let size = subview.sizeThatFits(.unspecified)
-                
-                if currentX + size.width > maxWidth && currentX > 0 {
+
+                if currentX + size.width > maxWidth, currentX > 0 {
                     currentX = 0
                     currentY += lineHeight + spacing
                     lineHeight = 0
                 }
-                
+
                 frames.append(CGRect(x: currentX, y: currentY, width: size.width, height: size.height))
                 lineHeight = max(lineHeight, size.height)
                 currentX += size.width + spacing
             }
-            
+
             size = CGSize(width: maxWidth, height: currentY + lineHeight)
         }
     }
@@ -934,19 +938,19 @@ struct MapView: View {
         center: CLLocationCoordinate2D(latitude: 35.6762, longitude: 139.6503), // 東京
         span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
     )
-    
+
     private let locationService: LocationServiceProtocol
-    
+
     init(
         selectedLandmark: Binding<MKMapItem?>,
         onLandmarkSelected: @escaping (MKMapItem?) -> Void,
         locationService: LocationServiceProtocol = LocationService()
     ) {
-        self._selectedLandmark = selectedLandmark
+        _selectedLandmark = selectedLandmark
         self.onLandmarkSelected = onLandmarkSelected
         self.locationService = locationService
     }
-    
+
     var body: some View {
         NavigationView {
             VStack {
@@ -959,7 +963,7 @@ struct MapView: View {
                                 await searchLandmarks()
                             }
                         }
-                    
+
                     Button("検索") {
                         Task {
                             await searchLandmarks()
@@ -967,7 +971,7 @@ struct MapView: View {
                     }
                 }
                 .padding()
-                
+
                 // 地図表示
                 Map(coordinateRegion: $region, annotationItems: searchResults.map { MapItemWrapper(item: $0) }) { wrapper in
                     MapAnnotation(coordinate: wrapper.item.placemark.coordinate) {
@@ -981,7 +985,7 @@ struct MapView: View {
                         }
                     }
                 }
-                
+
                 // 検索結果リスト
                 if !searchResults.isEmpty {
                     List(searchResults, id: \.self) { item in
@@ -1015,10 +1019,10 @@ struct MapView: View {
         }
         .navigationViewStyle(.stack)
     }
-    
+
     private func searchLandmarks() async {
         guard !searchText.isEmpty else { return }
-        
+
         do {
             let results = try await locationService.searchLandmarks(query: searchText, region: region)
             searchResults = results
@@ -1040,7 +1044,7 @@ struct MapItemWrapper: Identifiable {
 
 struct ColorCircle: View {
     let colorHex: String
-    
+
     var body: some View {
         VStack(spacing: 4) {
             Circle()
@@ -1050,24 +1054,24 @@ struct ColorCircle: View {
                     Circle()
                         .stroke(Color.gray.opacity(0.3), lineWidth: 1)
                 )
-            
+
             Text(colorHex)
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
     }
-    
+
     private func hexToColor(_ hex: String) -> Color {
         var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
-        
+
         var rgb: UInt64 = 0
         Scanner(string: hexSanitized).scanHexInt64(&rgb)
-        
+
         let r = Double((rgb & 0xFF0000) >> 16) / 255.0
         let g = Double((rgb & 0x00FF00) >> 8) / 255.0
         let b = Double(rgb & 0x0000FF) / 255.0
-        
+
         return Color(red: r, green: g, blue: b)
     }
 }
@@ -1132,4 +1136,3 @@ struct PostInfoView_Previews: PreviewProvider {
         )
     }
 }
-
