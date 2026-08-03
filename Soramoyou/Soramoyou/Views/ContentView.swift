@@ -25,18 +25,18 @@ struct ContentView: View {
                         // 認証状態の確認が完了するまで待機
                         Task {
                             #if DEBUG
-                            // UIテストモードの場合はローディング時間を短縮
-                            let isUITesting = ProcessInfo.processInfo.arguments.contains("UI_TESTING")
-                            let waitTime: UInt64 = isUITesting ? 100_000_000 : 500_000_000 // UIテスト: 0.1秒, 通常: 0.5秒
+                                // UIテストモードの場合はローディング時間を短縮
+                                let isUITesting = ProcessInfo.processInfo.arguments.contains("UI_TESTING")
+                                let waitTime: UInt64 = isUITesting ? 100_000_000 : 500_000_000 // UIテスト: 0.1秒, 通常: 0.5秒
                             #else
-                            let waitTime: UInt64 = 500_000_000 // 通常: 0.5秒
+                                let waitTime: UInt64 = 500_000_000 // 通常: 0.5秒
                             #endif
                             try? await Task.sleep(nanoseconds: waitTime)
                             isLoading = false
-                            
+
                             // ビュー表示後にATT/AdMob初期化を実行
                             // ATTダイアログはビューが表示された後でないと表示されない
-                            if !hasRequestedATT && AdService.isAdsEnabled {
+                            if !hasRequestedATT, AdService.isAdsEnabled {
                                 hasRequestedATT = true
                                 await AdService.shared.initialize()
                             }
@@ -45,6 +45,15 @@ struct ContentView: View {
             } else if authViewModel.isAuthenticated {
                 // 認証済み: メインタブビューを表示
                 MainTabView()
+                    .task(id: authViewModel.isAuthenticated) {
+                        // ⚠️「空を動かす」回数パックの**未完了トランザクション再送はここが砦**。
+                        //    購入は済んだがサーバー加算の確認前にアプリが落ちた場合、次に
+                        //    ユーザーが取る行動は「アプリを開き直す」であって「空を動かすシートを
+                        //    開き直す」ではない。だからシートではなく起動直後に回す。
+                        //    ログインし直しで uid が変わった場合も、id: で task が張り直されて
+                        //    残高の購読先が正しい uid になる。
+                        SkyMotionCreditService.shared.start()
+                    }
             } else if authViewModel.isGuest {
                 // ゲストモード: 閲覧専用タブビューを表示（投稿・プロフィール機能は制限）
                 GuestTabView()
@@ -71,5 +80,3 @@ struct ContentView_Previews: PreviewProvider {
             .environmentObject(AuthViewModel())
     }
 }
-
-

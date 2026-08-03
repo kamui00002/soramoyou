@@ -149,5 +149,28 @@ service firebase.storage {
       // Only the owner can upload private original images
       allow write: if isOwner(userId) && isImageFile() && isValidSize();
     }
+
+    // Living Sky job assets (source photo + masks uploaded by client,
+    // output.mp4 written server-side by Cloud Functions via Admin SDK).
+    // DEBUG-only E2E feature; client only ever writes the 3 input images.
+    // Access is further gated by the custom claim `skyMotionBeta` (allowlist),
+    // since rules/Functions themselves are deployed to production and reachable
+    // by any authenticated (incl. anonymous, self-signup) user otherwise.
+    match /livingSky/{userId}/{jobId}/{fileName} {
+      // Only the owner can read (input images + the finished output.mp4)
+      allow read: if isOwner(userId);
+
+      // Only an allowlisted owner can upload the 3 known input image files
+      // (source.jpg / sky_mask.png / ground_mask.png). Restricting fileName to
+      // this whitelist makes output.mp4 write genuinely unreachable through this
+      // client path (previously only true "by convention" via isImageFile(),
+      // since Cloud Functions always writes output.mp4 server-side via the
+      // Admin SDK, which bypasses these rules entirely).
+      allow write: if isOwner(userId)
+                   && request.auth.token.skyMotionBeta == true
+                   && fileName in ['source.jpg', 'sky_mask.png', 'ground_mask.png']
+                   && isImageFile()
+                   && isValidSize();
+    }
   }
 }

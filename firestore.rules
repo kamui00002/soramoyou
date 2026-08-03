@@ -388,5 +388,113 @@ service cloud.firestore {
       // アイテムの更新は不可
       allow update: if false;
     }
+
+    // ============================================
+    // LivingSkyJobs collection (空を動かすβ・非同期ジョブ) ⭐️
+    // DEBUG限定E2E検証用。ただし rules/Functions 自体は本番デプロイされ全認証ユーザーに
+    // 開くため、匿名認証・セルフサインアップ経由の悪用を防ぐ根本対策として
+    // custom claim `skyMotionBeta==true` の allowlist で create を締める
+    // （Cloud Functions 側でも Admin SDK 経由で多層防御として再検証する。functions/skyMotion.js 参照）。
+    // クライアントは pending 状態での作成のみ可能。
+    // status遷移（submitting/submitted/completed/failed）や falRequestId/videoURL の
+    // 書き込みは Cloud Functions（Admin SDK）専用のため、client からの
+    // update/delete は一律禁止する（Admin SDK は rules をバイパスするため
+    // 実害はない）。
+    // ============================================
+    match /livingSkyJobs/{jobId} {
+      // 読み取り: 所有者のみ
+      allow read: if isAuthenticated()
+                  && resource.data.userId == request.auth.uid;
+
+      // 作成: allowlistされた認証済みユーザーが自分のIDで、status=pending の初期状態のみ。
+      // サーバー専用フィールド（falRequestId/videoURL）は初期作成時に含めさせない。
+      // id はドキュメントID（jobId）と一致必須、createdAt は serverTimestamp() 必須（偽装防止）。
+      // sourcePath/skyMaskPath/groundMaskPath は Storage 側のパス規約
+      // （livingSky/{uid}/{jobId}/{fileName}）と厳密一致させ、他ユーザー/他ジョブの
+      // Storageオブジェクトを誤って（あるいは意図的に）参照させない。
+      allow create: if isAuthenticated()
+                    && request.auth.token.skyMotionBeta == true
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.id == jobId
+                    && request.resource.data.createdAt == request.time
+                    && request.resource.data.sourcePath
+                       == 'livingSky/' + request.auth.uid + '/' + jobId + '/source.jpg'
+                    && request.resource.data.skyMaskPath
+                       == 'livingSky/' + request.auth.uid + '/' + jobId + '/sky_mask.png'
+                    && request.resource.data.groundMaskPath
+                       == 'livingSky/' + request.auth.uid + '/' + jobId + '/ground_mask.png'
+                    && !request.resource.data.keys().hasAny(['falRequestId', 'videoURL']);
+
+      // 更新・削除は不可（状態遷移は Cloud Functions 専用）
+      allow update, delete: if false;
+    }
+
+    // ============================================
+    // LivingSkyUsage collection (空を動かすβ・1日あたりの利用回数カウンタ)
+    // ドキュメントID: {uid}
+    // 予約（reserve-on-create）・返金（refund-on-failure）は Cloud Functions
+    // （Admin SDK）専用のため、client からの write は一律禁止する。
+    // ============================================
+    match /livingSkyUsage/{uid} {
+      // 読み取り: 所有者のみ
+      allow read: if isOwner(uid);
+
+      // 書き込みは不可（予約・返金は Cloud Functions 専用）
+      allow write: if false;
+    }
+
+    // ============================================
+    // skyMotionPurchases collection (「空を動かす」回数パックの購入記録)
+    // ドキュメントID: StoreKit の transactionId
+    //   → 同じ購入は必ず同じドキュメント＝**冪等性を Firestore 層で無料で得る**。
+    // client は「買いました」の申告（status=pending＋JWS）までしか書けない。
+    // 検証とクレジット付与は Cloud Functions（Admin SDK）専用。
+    // ============================================
+    match /skyMotionPurchases/{transactionId} {
+      // 読み取り: 所有者のみ（client は status が credited になるのを待って finish する）
+      // ⚠️ `resource == null`（＝ドキュメント未作成）を必ず許可すること。
+      //    client は「同じ購入を二重に送らない」ため書き込み前に存在確認の get をする。
+      //    この分岐が無いと、存在しないドキュメントへの get で `resource.data` が null 参照になり
+      //    **読み取りが拒否され、購入がサーバーに一度も届かない**（2026-08-03 実機で発生）。
+      //    存在しないドキュメントの不在を知られても情報漏洩にはならない。
+      allow read: if isAuthenticated()
+                  && (resource == null || resource.data.userId == request.auth.uid);
+
+      // 作成: β許可（skyMotionBeta claim）ユーザーが自分のIDで、status=pending の初期状態のみ。
+      // ⚠️ creditedCount / status=credited を client に書かせない（＝残高の自己申告を防ぐ）。
+      //    productId も client 申告は信用せず、サーバーが JWS の値で上書きして判定する。
+      // ⚠️ skyMotionBeta 条件は livingSkyJobs.create と対称（片方だけだと、偽JWSの乱造で
+      //    購入検証Function（Apple OCSP へのネットワーク呼び出し込み）を起動させ放題になる）。
+      //    一般公開時は claim 運用をやめ、この行を livingSkyJobs 側・EditView のゲートと
+      //    **3箇所同時に**外すこと。ズレると「課金は通るが生成できない」事故になる。
+      allow create: if isAuthenticated()
+                    && request.auth.token.skyMotionBeta == true
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.jws is string
+                    && request.resource.data.jws.size() > 0
+                    && request.resource.data.jws.size() < 100000
+                    && request.resource.data.createdAt == request.time
+                    && !request.resource.data.keys().hasAny(['creditedCount', 'environment']);
+
+      // 更新・削除は不可（検証・付与は Cloud Functions 専用）
+      allow update, delete: if false;
+    }
+
+    // ============================================
+    // skyMotionBalance collection (「空を動かす」の購入クレジット残高)
+    // ドキュメントID: {uid}
+    // **残高の唯一の真実源＝サーバー権威**。client は表示用に読むだけ。
+    // 加算＝購入検証Function / 減算＝reserveAndClaimJob / 返金＝refundUsage のみ。
+    // ⚠️ 生成可否の判定に client 側の残高を使ってはいけない（表示用キャッシュに過ぎない）。
+    // ============================================
+    match /skyMotionBalance/{uid} {
+      // 読み取り: 所有者のみ
+      allow read: if isOwner(uid);
+
+      // 書き込みは不可（加算・減算・返金は Cloud Functions 専用）
+      allow write: if false;
+    }
   }
 }

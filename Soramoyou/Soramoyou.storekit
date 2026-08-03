@@ -1,35 +1,46 @@
 {
-  "appPolicies" : {
-    "eula" : "",
-    "policies" : [
-    ]
+  "appPolicies": {
+    "eula": "",
+    "policies": []
   },
-  "identifier" : "B0C1D2E3-F4A5-4B6C-8D7E-9F0A1B2C3D4E",
-  "nonRenewingSubscriptions" : [
-  ],
-  "products" : [
+  "identifier": "B0C1D2E3-F4A5-4B6C-8D7E-9F0A1B2C3D4E",
+  "nonRenewingSubscriptions": [],
+  "products": [
     {
-      "displayPrice" : "300",
-      "familyShareable" : false,
-      "internalID" : "A1B2C3D4",
-      "localizations" : [
+      "displayPrice": "300",
+      "familyShareable": false,
+      "internalID": "A1B2C3D4",
+      "localizations": [
         {
-          "description" : "重ね撮りした空を1枚の広角写真に合成して投稿できる機能を解放します（買い切り・1回購入で恒久解放）。",
-          "displayName" : "広角合成",
-          "locale" : "ja_JP"
+          "description": "重ね撮りした空を1枚の広角写真に合成して投稿できる機能を解放します（買い切り・1回購入で恒久解放）。",
+          "displayName": "広角合成",
+          "locale": "ja_JP"
         }
       ],
-      "productID" : "com.yoshidometoru.Soramoyou.panorama",
-      "referenceName" : "広角合成（パノラマ）",
-      "type" : "NonConsumable"
+      "productID": "com.yoshidometoru.Soramoyou.panorama",
+      "referenceName": "広角合成（パノラマ）",
+      "type": "NonConsumable"
+    },
+    {
+      "displayPrice": "1000",
+      "familyShareable": false,
+      "internalID": "SKYMOT05",
+      "localizations": [
+        {
+          "description": "「空を動かす」で動画を5回ぶん作れるクレジットです。1回の生成につき1回ぶん消費します。",
+          "displayName": "空を動かす 5回パック",
+          "locale": "ja_JP"
+        }
+      ],
+      "productID": "com.yoshidometoru.Soramoyou.skymotion.pack5",
+      "referenceName": "空を動かす 5回パック（消費型）",
+      "type": "Consumable"
     }
   ],
-  "settings" : {
-  },
-  "subscriptionGroups" : [
-  ],
-  "version" : {
-    "major" : 3,
-    "minor" : 0
+  "settings": {},
+  "subscriptionGroups": [],
+  "version": {
+    "major": 3,
+    "minor": 0
   }
 }

@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PrivacyInfo.xcprivacy ⭐️ — そらもよう本体アプリのプライバシーマニフェスト
+
+  ■ 宣言の根拠（2026-08-03 にコードを実査して作成。推測で書かない）
+
+  1) NSPrivacyAccessedAPITypes（Required Reason API）
+     実査コマンド: grep -rnE 'UserDefaults|@AppStorage|contentModificationDate|
+       volumeAvailableCapacity|systemUptime|activeProcessorCount' --include='*.swift'
+     結果:
+       - UserDefaults / @AppStorage … 本体ターゲットに 22 箇所 → **宣言が必要**
+       - ファイルのタイムスタンプ / 空き容量 / 起動時刻 / CPU数 … **0 箇所**（宣言不要）
+     理由コード: `UserDefaults(suiteName:)`（App Group 共有）は 0 箇所で、
+       保存しているのはこのアプリ自身の設定・既読フラグのみ。他社アプリとは共有しない。
+       → CA92.1（App Group 共有）ではなく **1C8F.1**（自アプリのデータのみ）が正しい。
+
+  2) NSPrivacyTrackingDomains は**キーごと省略している**
+     ⚠️ 空配列で提出すると ITMS-91064 で Invalid Binary 却下される（2026-06-17 に実際に食らった）。
+     広告のトラッキングドメインは GoogleMobileAds.framework が**自前のマニフェストで宣言**
+     しているので、こちらで重複宣言しない。
+
+  3) NSPrivacyTracking = false
+     このアプリ自身のコードは、他社のデータと突き合わせるトラッキングを行わない。
+     AdMob 由来のトラッキングは GoogleMobileAds のマニフェストが宣言する（集計はAppleが行う）。
+
+  4) NSPrivacyCollectedDataTypes は「**このアプリのコードが送っているもの**」だけを書く
+     Firebase / GoogleMobileAds / Kingfisher / OpenCV は各SDKが自前のマニフェストを同梱して
+     いるので、SDK が独自に集める分をここに重複して書かない。
+     ここに書いたのは、すべて自前コードが Firestore / Storage / Analytics へ送っているもの。
+
+  ■ ウィジェット（SoramoyouWidget）について
+     UserDefaults / @AppStorage の使用は **0 箇所**、Required Reason API も使っていないため
+     ウィジェット用のマニフェストは作っていない。ウィジェットで UserDefaults を使い始めたら
+     `SoramoyouWidget/PrivacyInfo.xcprivacy` を別途追加すること。
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!-- 1C8F.1: このアプリ自身のデータのみを読み書きする（設定・既読フラグ等） -->
+				<string>1C8F.1</string>
+			</array>
+		</dict>
+	</array>
+
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<!-- メールアドレス: Firebase Auth のアカウント作成・ログイン -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeEmailAddress</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+
+		<!-- ユーザーID: Firestore の userId・Analytics/Crashlytics の setUserID（内部UIDのみ） -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeUserID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+
+		<!-- 名前: プロフィールの表示名（users.displayName） -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeName</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+
+		<!-- 写真・動画: 投稿画像を Firebase Storage へアップロード -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePhotosorVideos</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+
+		<!-- その他のユーザーコンテンツ: キャプション・ハッシュタグ・コメント・フィードバック本文 -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+
+		<!-- 正確な位置情報: 投稿に添える撮影地（posts.location の latitude/longitude）。
+		     ユーザーが位置情報を付けることを選んだ場合のみ収集する。 -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePreciseLocation</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+
+		<!-- 購入履歴: 「空を動かす」回数パックの transactionId / productId を Firestore に保存 -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePurchaseHistory</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+
+		<!-- 製品操作: 画面表示・主要操作のイベント（LoggingService → Firebase Analytics）。
+		     PII は LoggingService の sanitize 層で除去してから送信している。 -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+
+		<!-- クラッシュデータ: Crashlytics（setUserID で内部UIDを紐づけているため Linked = true） -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeCrashData</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
