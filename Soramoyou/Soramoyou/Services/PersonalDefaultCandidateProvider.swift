@@ -56,15 +56,16 @@ struct PersonalDefaultCandidate: Identifiable, Equatable {
 ///
 /// `FilterGraphBuilder` で検証済みの既存 `FilterType` のみを土台にする
 /// （新規の編集係数をここで発明しない）。
+///
+/// ⚠️ 宣言順＝候補として採用する優先順位（先頭ほど優先的に採用される）。
+/// `candidates(from:)` の固定プリセット補完ループは `CaseIterable` の `allCases`
+/// （＝この宣言順）をそのまま優先順位として使うため、ケースの並び替えは優先順位の変更を意味する。
 enum FixedPresetKind: String, CaseIterable {
     case vivid
     case warm
     case cool
     case drama
     case natural
-
-    /// 候補として採用する優先順位（先頭ほど優先的に採用される）。
-    static let priorityOrder: [FixedPresetKind] = [.vivid, .warm, .cool, .drama, .natural]
 
     /// 対応する既存 `FilterType`。
     var filterType: FilterType {
@@ -121,9 +122,9 @@ enum PersonalDefaultCandidateProvider {
     /// 1. 全体の「あなたの定番」（`PersonalRecipeProfile.representative(for: nil, from:)` が成立すれば先頭に追加）。
     ///    ⚠️ 履歴不足で nil でも `return` せず続行する
     ///    （新規ユーザーにも固定プリセットで候補を出す確定仕様のため）。
-    /// 2. 空タイプ別の「〇〇の定番」を、`RecipeCorpusProfile.minimumSamples` 件以上ある空タイプに限り、
+    /// 2. 空タイプ別の「〇〇の定番」を、`PersonalRecipeProfile.minimumSamples` 件以上ある空タイプに限り、
     ///    サンプル数降順（同数は `SkyType.allCases` の宣言順）で `maxCandidateCount` 件まで追加。
-    /// 3. まだ `minCandidateCount` 件に満たなければ、`FixedPresetKind.priorityOrder` から補充する。
+    /// 3. まだ `minCandidateCount` 件に満たなければ、`FixedPresetKind.allCases`（宣言順＝優先順位）から補充する。
     ///
     /// いずれの段階でも既採用候補と `isSimilar` な結果は追加しない
     /// （候補シートに似た結果ばかり並ぶのを防ぐ）。
@@ -171,8 +172,8 @@ enum PersonalDefaultCandidateProvider {
             )
         }
 
-        // (c) 固定プリセットで最低件数を保証する。
-        for preset in FixedPresetKind.priorityOrder {
+        // (c) 固定プリセットで最低件数を保証する（宣言順＝優先順位。enum FixedPresetKind のコメント参照）。
+        for preset in FixedPresetKind.allCases {
             guard result.count < minCandidateCount else { break }
             let recipe = preset.recipe
             guard !result.contains(where: { isSimilar($0.recipe, recipe) }) else { continue }

@@ -289,12 +289,37 @@ class PostViewModel: ObservableObject {
 
     // MARK: - Post Save
 
-    /// パーソナルAI編集の学習コーパスに記録する対象レシピ一覧を返す（中立レシピは除外）。
+    /// 投稿種別が「配置写真(collage)」かどうかの述語。
+    /// ⚠️ 本 PR で新規追加した corpusSkyType 算出行のみで使用する。ファイル内に既にある
+    /// `postKind == .collage` の直書き箇所（folded 判定・imagesToUpload 分岐・isCollage 変数等）は
+    /// スコープ外のため置換しない。既存箇所の置換は別タスクで行う。
+    private var isCollagePost: Bool { postKind == .collage }
+
+    /// パーソナルAI編集の学習コーパスに記録する対象レシピ一覧を返す（中立レシピ・重複レシピは除外）。
     /// 複数画像投稿では画像ごとの editRecipes（EditView「次へ」経由）を優先し、
     /// 未設定（下書き経路など）の場合は従来どおり単数の editRecipe にフォールバックする。
+    ///
+    /// 重複除去（B案）:
+    /// 「あなたの定番」の代表値計算は savedAt 降順ランクに 0.8^k の減衰重みを付けるため
+    /// （`PersonalRecipeProfile.recencyDecay`）、同一レシピをN枚に適用した投稿がN件記録されると
+    /// 上位ランクを独占し（10枚で理論重みの最大89%）、過去の学習を1回の投稿で上書きしてしまう。
+    /// ほぼ同一のN件は情報量が1件分しかないので、`PersonalDefaultCandidateProvider.isSimilar` で
+    /// 既に採用したレシピと"ほぼ同じ"と判定されたものは記録しない＝1件に畳む。
+    /// 画像ごとに本当に異なる編集は isSimilar が偽になり全件記録される。
+    /// collage（配置写真）も同じ扱い（畳み込み後は1枚の見た目なのにNパネル分が全体定番だけを
+    /// 膨張させる問題＝G2 も同時解消）。
     func recipesToRecordInCorpus() -> [EditRecipe] {
         let source = editRecipes.isEmpty ? (editRecipe.map { [$0] } ?? []) : editRecipes
-        return source.filter { !$0.isNeutral }
+        let nonNeutral = source.filter { !$0.isNeutral }
+
+        var deduped: [EditRecipe] = []
+        for recipe in nonNeutral {
+            let isDuplicate = deduped.contains { PersonalDefaultCandidateProvider.isSimilar($0, recipe) }
+            if !isDuplicate {
+                deduped.append(recipe)
+            }
+        }
+        return deduped
     }
 
     /// 投稿を保存
@@ -384,24 +409,23 @@ class PostViewModel: ObservableObject {
             // 記録に失敗しても投稿成功は妨げない。skyType は AI判定 or ユーザー選択を使う。
             // ⚠️ 未編集（中立）レシピは学習データを薄めるため記録しない（recipesToRecordInCorpus 内でゲート）。
             // 再編集（上書き更新）ではコーパスへ重複記録しない（新規投稿のみ学習に使う）。
-            // 複数枚投稿では画像ごとの editRecipes を全件記録する（旧実装は最後の1枚しか記録されず、
-            // 学習コーパスが投稿枚数分の情報を取りこぼしていた不具合の修正）。
+            // 複数枚投稿では画像ごとの editRecipes を記録する（旧実装は最後の1枚しか記録されず、
+            // 学習コーパスが投稿枚数分の情報を取りこぼしていた不具合の修正）。ただし見た目上ほぼ同じ
+            // レシピは isSimilar で1件に畳んでから記録する（recipesToRecordInCorpus 内の重複除去）。
             if editingContext == nil {
                 // collage（配置写真）は素材N枚を1枚に畳んで保存する特別扱いのため、createPost の
                 // skyType 決定式（isCollage ? nil : effectiveSkyType）と揃える。揃えないと
                 // 「複数素材の空タイプを1値で表せない」collage 由来のレコードが特定の空タイプ配下の
                 // 候補として学習データを汚染してしまう。
-                let corpusSkyType: SkyType? = (postKind == .collage) ? nil : effectiveSkyType
-                let store = RecipeCorpusStore()
-                for recipe in recipesToRecordInCorpus() {
-                    store.append(
-                        RecipeCorpusEntry(
-                            recipe: recipe,
-                            skyType: corpusSkyType,
-                            capturedAt: extractedInfo?.capturedAt
-                        ),
-                        userId: userId
-                    )
+                let corpusSkyType: SkyType? = isCollagePost ? nil : effectiveSkyType
+                let recipesToRecord = recipesToRecordInCorpus()
+                if !recipesToRecord.isEmpty {
+                    // append(_:userId:) をN回呼ぶとN回の全読み書きが走るため、
+                    // append(contentsOf:userId:) で読み込み1回・書き込み1回にまとめる（G7）。
+                    let entries = recipesToRecord.map {
+                        RecipeCorpusEntry(recipe: $0, skyType: corpusSkyType, capturedAt: extractedInfo?.capturedAt)
+                    }
+                    RecipeCorpusStore().append(contentsOf: entries, userId: userId)
                 }
             }
 

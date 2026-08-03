@@ -2,7 +2,7 @@
 //  PersonalDefaultCandidateProviderTests.swift
 //  SoramoyouTests
 //
-//  パーソナルAI編集（柱1 v2）の純関数テスト:
+//  ⭐️ パーソナルAI編集（柱1 v2）の純関数テスト:
 //  「AIで自動編集」候補シートに並べる編集パターン一覧（PersonalDefaultCandidateProvider）の仕様検証。
 //
 //  ⚠️ アサーションは実装の実挙動ではなく、依頼元が定義した仕様（候補の種類・件数・順序・重複除外）

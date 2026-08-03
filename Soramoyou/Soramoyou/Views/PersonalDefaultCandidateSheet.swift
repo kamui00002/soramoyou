@@ -45,6 +45,10 @@ struct PersonalDefaultCandidateSheet: View {
     /// `ImageService.resizeImage` が detached continuation でキャンセル不能なため、
     /// 「結果反映前に自分の世代が最新か」を確認する世代制を最後の防衛線として使う。
     @State private var thumbnailGeneration: Int = 0
+    /// onAppear 計装（`personal_default_candidates_shown`）を一度だけ送るためのフラグ。
+    /// onAppear は SwiftUI の仕様で複数回発火しうるため、二重送信を防ぐ
+    /// （`PostInfoView.hasGeneratedFallback` と同じ流儀）。
+    @State private var hasLoggedShown = false
 
     // MARK: - Body
 
@@ -79,6 +83,9 @@ struct PersonalDefaultCandidateSheet: View {
         .onAppear {
             // パーソナルAI編集の利用計装（柱1 v2 主要操作）。
             // PII を含まない安定文字列（`analyticsValue`）のみを送る。
+            // onAppear は複数回発火しうるため hasLoggedShown で一度だけに限定する。
+            guard !hasLoggedShown else { return }
+            hasLoggedShown = true
             let kinds = viewModel.personalDefaultCandidates.map(\.kind.analyticsValue)
             LoggingService.shared.logEvent("personal_default_candidates_shown", parameters: [
                 "candidate_count": kinds.count,
@@ -213,7 +220,14 @@ struct PersonalDefaultCandidateSheet: View {
 // MARK: - Preview
 
 #Preview {
-    // モックの EditViewModel を使ったプレビュー
+    // モックの EditViewModel を使ったプレビュー。
+    // userId なし＝固定プリセット4件のプレビュー。
+    // `EditViewModel.init()` は images が空だと loadEquippedTools()（内部で
+    // refreshPersonalDefaultAvailability() を呼ぶ）を起動しないため、呼ばないと
+    // personalDefaultCandidates が空のまま＝候補ゼロで何も描画されない。
+    // ここで明示的に呼び、履歴ゼロ→固定プリセット4件が表示される状態にする
+    // （画像を渡していないためサムネイルは生成されず、プレースホルダ＋ラベル表示になる）。
     let vm = EditViewModel()
+    vm.refreshPersonalDefaultAvailability()
     return PersonalDefaultCandidateSheet(viewModel: vm)
 }

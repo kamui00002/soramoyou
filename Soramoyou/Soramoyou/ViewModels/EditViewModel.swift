@@ -31,7 +31,11 @@ class EditViewModel: ObservableObject {
     /// 柱1 v2（候補シート導入）で固定プリセットが最低4件（`minCandidateCount`）を保証するため、
     /// 実質的に常に true になる（旧「コーパスに十分な学習データがある時だけ true」から意味が変化）。
     /// エディタ起動時（loadEquippedTools）に算出する。
-    @Published private(set) var hasPersonalDefault = false
+    /// S2対応: `personalDefaultCandidates` から導出する computed property にし、値の手動代入による
+    /// 二重管理（配列とフラグの食い違い）を排除した。`personalDefaultCandidates` 自体が @Published
+    /// のため、View 側の更新は引き続き `refreshPersonalDefaultAvailability()` 実行時（＝配列の
+    /// 再代入時）に発火する。
+    var hasPersonalDefault: Bool { !personalDefaultCandidates.isEmpty }
 
     /// 「AIで自動編集」候補シート（柱1 v2）に並べる編集パターン一覧。
     /// `refreshPersonalDefaultAvailability()` で `PersonalDefaultCandidateProvider.candidates(from:)`
@@ -455,6 +459,11 @@ class EditViewModel: ObservableObject {
 
     // MARK: - パーソナルAI編集（柱1 v1）「あなたの定番」
 
+    /// `refreshPersonalDefaultAvailability()` で読んだコーパス件数（G6対応）。
+    /// `applyPersonalDefaultCandidate()` のログ用 `sample_count` がこの値を再利用することで、
+    /// 適用のたびにコーパスをディスクから再読込しないようにする（値の意味＝コーパス件数は変えない）。
+    private var corpusSampleCount = 0
+
     /// コーパスから候補シート一覧（`personalDefaultCandidates`）と表示可否（`hasPersonalDefault`）を更新する。
     /// （エディタ起動時に呼ぶ。）
     /// ⚠️ userId が nil（未ログイン）でも entries=[] として候補を計算する
@@ -462,12 +471,10 @@ class EditViewModel: ObservableObject {
     ///    従来の「userId nil → hasPersonalDefault=false」から挙動が変わる点に注意）。
     func refreshPersonalDefaultAvailability() {
         let entries = userId.map { recipeCorpusStore.entries(userId: $0) } ?? []
-        let candidates = PersonalDefaultCandidateProvider.candidates(from: entries)
-        personalDefaultCandidates = candidates
-        // `candidates` は固定プリセットで最低 minCandidateCount 件を保証するため実質常に true になるが、
-        // 「候補が1件も無い」という理論上の状態にも安全に倒れるよう配列の有無で判定する
-        // （`representative(for:from:)` を再度呼んで二重計算しない）。
-        hasPersonalDefault = !candidates.isEmpty
+        corpusSampleCount = entries.count
+        personalDefaultCandidates = PersonalDefaultCandidateProvider.candidates(from: entries)
+        // hasPersonalDefault は personalDefaultCandidates から導出する computed property（S2対応）
+        // のため、ここでの手動代入は不要（配列の再代入だけで自動的に追従する）。
     }
 
     /// 「あなたの定番」系の候補（`representative` 単体 or 候補シートで選ばれた `PersonalDefaultCandidate`）を
@@ -519,14 +526,16 @@ class EditViewModel: ObservableObject {
     /// パターン選択シート導入後は「AIで自動編集」ボタンの実体としてこちらが UI から呼ばれる。
     func applyPersonalDefaultCandidate(_ candidate: PersonalDefaultCandidate) {
         let candidateIndex = personalDefaultCandidates.firstIndex(of: candidate) ?? -1
-        let sampleCount = userId.map { recipeCorpusStore.entries(userId: $0).count } ?? 0
+        // G6対応: sample_count は refreshPersonalDefaultAvailability() で読んだコーパス件数
+        // （corpusSampleCount）を再利用する。以前は候補適用のたびにコーパスをディスクから
+        // 再読込していたが、値そのもの（コーパス件数）は変えていない。
         applyPersonalDefaultRecipe(
             candidate.recipe,
             loggingEvent: "personal_default_candidate_selected",
             loggingParameters: [
                 "candidate_kind": candidate.kind.analyticsValue,
                 "candidate_index": candidateIndex,
-                "sample_count": sampleCount,
+                "sample_count": corpusSampleCount,
             ]
         )
     }

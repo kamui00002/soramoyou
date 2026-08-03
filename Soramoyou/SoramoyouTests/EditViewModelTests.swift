@@ -416,6 +416,28 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.equippedTools.contains(.brightness))
     }
 
+    /// 🆕 G4回帰テスト: `loadEquippedTools()` 内で `refreshPersonalDefaultAvailability()` を
+    /// `guard let userId else { ... return }` より前に呼んでいることが生命線であることを守るテスト。
+    /// この呼び出し順序を入れ替え、ユーザーガードの後ろに `refreshPersonalDefaultAvailability()` を
+    /// 移動すると、未ログイン時はガードで早期 return してしまい候補が一度も算出されなくなる
+    /// （＝このテストが落ちることで順序回帰を検知するのが狙い）。
+    func testLoadEquippedToolsWithoutUserStillPopulatesCandidates() async {
+        // Given
+        viewModel = EditViewModel(
+            images: [],
+            userId: nil,
+            imageService: mockImageService,
+            firestoreService: mockFirestoreService
+        )
+
+        // When
+        await viewModel.loadEquippedTools()
+
+        // Then
+        XCTAssertEqual(viewModel.personalDefaultCandidates.count, 4, "未ログインでも固定プリセット4件（全 preset）で候補シートが埋まる")
+        XCTAssertTrue(viewModel.hasPersonalDefault, "未ログインでも『AIで自動編集』ボタンは表示される")
+    }
+
     // MARK: - ワンタップ空補正: マスクキャッシュのライフサイクル（レビュー keep 対応 #7）
 
     /// 🔧 レビュー指摘2 回帰テスト:
@@ -517,24 +539,8 @@ final class EditViewModelTests: XCTestCase {
 
     func testApplyPersonalDefaultAppliesRepresentativeAndPreservesPhotoSpecific() async {
         // Arrange: 一時コーパスに3件の編集（exposureEV=1.0, saturationCI=1.4）を仕込む
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        let (vm, tmp) = makeCorpusFixture()
         defer { try? FileManager.default.removeItem(at: tmp) }
-        let store = RecipeCorpusStore(baseDirectory: tmp)
-        for _ in 0 ..< 3 {
-            var r = EditRecipe()
-            r.exposureEV = 1.0
-            r.saturationCI = 1.4
-            store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
-        }
-
-        let vm = EditViewModel(
-            images: [createTestImage()],
-            userId: "u1",
-            imageService: MockImageService(),
-            firestoreService: MockFirestoreService(),
-            recipeCorpusStore: store
-        )
         // 写真固有の編集（クロップ・HDR・空補正）を現在値として設定
         vm.editRecipe.cropRectNorm = CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5)
         vm.editRecipe.targetDynamicRange = .hdr
@@ -560,24 +566,8 @@ final class EditViewModelTests: XCTestCase {
         // Arrange: testApplyPersonalDefaultAppliesRepresentativeAndPreservesPhotoSpecific と同じ仕込み
         // （exposureEV/saturationCI が全件一致するため、空タイプ別「晴れの定番」は全体候補と isSimilar 判定で
         //   重複排除され、実質「全体の定番 + 固定プリセット3件」の4件になる想定）。
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        let (vm, tmp) = makeCorpusFixture()
         defer { try? FileManager.default.removeItem(at: tmp) }
-        let store = RecipeCorpusStore(baseDirectory: tmp)
-        for _ in 0 ..< 3 {
-            var r = EditRecipe()
-            r.exposureEV = 1.0
-            r.saturationCI = 1.4
-            store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
-        }
-
-        let vm = EditViewModel(
-            images: [createTestImage()],
-            userId: "u1",
-            imageService: MockImageService(),
-            firestoreService: MockFirestoreService(),
-            recipeCorpusStore: store
-        )
 
         // Act
         vm.refreshPersonalDefaultAvailability()
@@ -626,24 +616,8 @@ final class EditViewModelTests: XCTestCase {
     /// 起きないことを確認する。
     func testApplyPersonalDefaultCandidatePreservesPhotoSpecificFields() async {
         // Arrange
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        let (vm, tmp) = makeCorpusFixture()
         defer { try? FileManager.default.removeItem(at: tmp) }
-        let store = RecipeCorpusStore(baseDirectory: tmp)
-        for _ in 0 ..< 3 {
-            var r = EditRecipe()
-            r.exposureEV = 1.0
-            r.saturationCI = 1.4
-            store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
-        }
-
-        let vm = EditViewModel(
-            images: [createTestImage()],
-            userId: "u1",
-            imageService: MockImageService(),
-            firestoreService: MockFirestoreService(),
-            recipeCorpusStore: store
-        )
         // 写真固有の編集（クロップ・HDR・空補正）を現在値として設定
         vm.editRecipe.cropRectNorm = CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5)
         vm.editRecipe.targetDynamicRange = .hdr
@@ -784,6 +758,33 @@ final class EditViewModelTests: XCTestCase {
             UIColor.blue.setFill()
             context.fill(CGRect(origin: .zero, size: size))
         }
+    }
+
+    /// 🆕 S4対応: 「あなたの定番」系テストで繰り返し使うコーパス fixture 構築を1箇所に集約する。
+    /// exposureEV=1.0 / saturationCI=1.4 の編集レシピを skyType=.clear・userId="u1" で3件
+    /// コーパスに積んだ状態の `EditViewModel` を返す。呼び出し側は返却された一時ディレクトリを
+    /// `defer { try? FileManager.default.removeItem(at: tmp) }` で必ず削除すること
+    /// （元の各テストで tmp 生成直後に defer していたのと同じ後始末をテスト側に残すため）。
+    /// - Returns: (vm: 構築済み EditViewModel, tmp: 一時コーパスディレクトリ)
+    private func makeCorpusFixture() -> (vm: EditViewModel, tmp: URL) {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        let store = RecipeCorpusStore(baseDirectory: tmp)
+        for _ in 0 ..< 3 {
+            var r = EditRecipe()
+            r.exposureEV = 1.0
+            r.saturationCI = 1.4
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
+        }
+
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: "u1",
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            recipeCorpusStore: store
+        )
+        return (vm, tmp)
     }
 }
 

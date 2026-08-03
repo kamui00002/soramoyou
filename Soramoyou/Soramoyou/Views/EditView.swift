@@ -285,11 +285,13 @@ struct EditView: View {
         }
     }
 
-    // MARK: - あなたの定番バー（柱1 v1）
+    // MARK: - あなたの定番バー（柱1 v2）
 
     /// 「あなたの定番」を適用する目立つボタン。
     /// ツールバーのアイコンでは見つけにくかったため、編集コントロール直上に大きく配置する。
-    /// コーパスに十分な学習データがあるときだけ表示する。
+    /// 固定プリセットが最低4件（`minCandidateCount`）を保証するため、コーパスの学習データが
+    /// 無い新規ユーザー・未ログイン時でも候補は必ず出る＝実質常時表示になる
+    /// （`EditViewModel.refreshPersonalDefaultAvailability()` 参照）。
     /// 押すと候補選択シートを開く（即適用は廃止・候補から選ぶ方式）。
     private var personalDefaultBar: some View {
         Button {
