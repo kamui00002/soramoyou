@@ -70,6 +70,12 @@ enum SkyMotionSheetState: Equatable {
     /// 失敗。`errorCode` はジョブ側の失敗理由（設計書§1: quota_exceeded 等）。
     /// クライアント側の失敗（準備/アップロード/未ログイン等）では nil になる。
     case failed(errorCode: String?, serverMessage: String?)
+    /// ジョブ作成後に **listener が一時エラーで切断**した状態。ジョブ自体の結果は不明で、
+    /// サーバーは生成を続けている可能性がある（＝回数は消費済みかもしれない）。
+    /// `.failed` と厳密に区別する: `.failed` は activeJobId をクリアするが、この状態で
+    /// クリアすると**課金/枠を消費して完成した動画へ二度と到達できなくなる**（B-3）。
+    /// `.downloadFailed`（videoURL は分かっているがDLに失敗）とも別物（こちらは結果自体が不明）。
+    case connectionLost
 }
 
 /// 「空を動かす」（Kling版）β のプレビュー・生成シート。
@@ -170,7 +176,9 @@ struct SkyMotionSheet: View {
             switch newState {
             case .completed, .saved, .downloadFailed, .failed:
                 activeJobId = ""
-            case .idle, .preparing, .uploading, .waiting:
+            case .idle, .preparing, .uploading, .waiting, .connectionLost:
+                // ⚠️ connectionLost は「未確定」であって終端ではない。ここで activeJobId を
+                //    消すと、サーバーが完成させた（＝消費済みの）動画へ二度と到達できなくなる。
                 break
             }
         }
@@ -224,6 +232,40 @@ struct SkyMotionSheet: View {
             downloadFailedView(videoURLString: videoURLString)
         case let .failed(errorCode, serverMessage):
             failedView(errorCode: errorCode, serverMessage: serverMessage)
+        case .connectionLost:
+            connectionLostView
+        }
+    }
+
+    // MARK: - listener切断（結果未確定・ジョブは生きている可能性がある）
+
+    /// listener が一時エラーで切れたときの表示。
+    /// ⚠️「回数は消費されていない」とは**言わない**（ジョブ作成済み＝予約済みなので嘘になる）。
+    ///    「もう一度試す」（新規生成）ではなく「状況を確認する」（同じジョブの監視を張り直す）を出す。
+    private var connectionLostView: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Image(systemName: "wifi.exclamationmark")
+                .font(.system(size: 40))
+                .foregroundColor(.white.opacity(0.8))
+            Text("通信が不安定で、生成の状況を確認できなくなったの。\n生成はサーバーで続いている可能性があるわ。")
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.85))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Spacer()
+            Button {
+                resumeActiveJobIfNeeded()
+            } label: {
+                Text("状況を確認する")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(Capsule().fill(Color.white.opacity(0.2)))
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
         }
     }
 
@@ -635,7 +677,21 @@ struct SkyMotionSheet: View {
                     "loop_preset": selectedPreset.rawValue,
                 ])
 
-                try await observeJobUntilTerminal(jobId: jobId, using: jobService)
+                do {
+                    try await observeJobUntilTerminal(jobId: jobId, using: jobService)
+                } catch {
+                    if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                        return
+                    }
+                    // ここに来るのは「ジョブ作成に成功した後、listener が死んだ」場合のみ
+                    // （DL失敗は observeJobUntilTerminal 内で .downloadFailed に落ちる）。
+                    // サーバーは生成を続けている可能性があるため .failed にしない
+                    // （「回数は消費されていない」という文言が嘘になる）。activeJobId は保持。
+                    LoggingService.shared.logErrorEvent(
+                        error, context: "sky_motion_listener_lost", category: .systemError
+                    )
+                    state = .connectionLost
+                }
             } catch {
                 // シートを閉じた（.onDisappear → pipelineTask.cancel()）ことによる中断は
                 // 正常操作なのでエラー表示しない。URLSession の非同期APIはキャンセル時に
@@ -698,7 +754,12 @@ struct SkyMotionSheet: View {
     /// 「閉じてもOK・完成後に開けば表示」の担保。`.idle` かつ pipelineTask 不在のときだけ動く
     /// （生成中の再表示での二重監視や、既に表示中の状態の破壊を防ぐ）。
     private func resumeActiveJobIfNeeded() {
-        guard case .idle = state, pipelineTask == nil, !activeJobId.isEmpty else { return }
+        // .idle（通常の再開）に加えて .connectionLost（listener切断からの復帰）も入口にする。
+        switch state {
+        case .idle, .connectionLost: break
+        default: return
+        }
+        guard pipelineTask == nil, !activeJobId.isEmpty else { return }
         let jobId = activeJobId
         state = .waiting
         LoggingService.shared.logEvent("sky_motion_job_resumed", parameters: ["job_id": jobId])
@@ -711,7 +772,9 @@ struct SkyMotionSheet: View {
                     return
                 }
                 LoggingService.shared.logErrorEvent(error, context: "sky_motion_resume", category: .systemError)
-                state = .failed(errorCode: nil, serverMessage: nil)
+                // 再開はジョブが実在する前提の経路。listener の一時エラーで .failed にすると
+                // activeJobId が消え、消費済みの結果へ到達できなくなる（B-3）。
+                state = .connectionLost
             }
         }
     }

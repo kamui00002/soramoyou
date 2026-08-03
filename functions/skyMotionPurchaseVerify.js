@@ -11,7 +11,11 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { SignedDataVerifier, Environment } = require("@apple/app-store-server-library");
+const {
+  SignedDataVerifier,
+  Environment,
+  VerificationStatus,
+} = require("@apple/app-store-server-library");
 
 /** アプリの Bundle ID（pbxproj の PRODUCT_BUNDLE_IDENTIFIER と一致させること）。 */
 const BUNDLE_ID = "com.yoshidometoru.Soramoyou";
@@ -68,30 +72,54 @@ function verifierFor(environment, enableOnlineChecks) {
  *    Production 決め打ちにすると TestFlight の購入が全部検証失敗し、
  *    「コードのバグに見える幻のバグ」を追うことになる。
  *
+ * ⚠️ **失敗には「一時的」と「恒久的」の2種類があり、混同すると金銭喪失になる。**
+ *    Apple 公式ライブラリは OCSP（証明書失効確認）のネットワーク失敗・非200応答を
+ *    `VerificationException(status = RETRYABLE_VERIFICATION_FAILURE)` として区別している。
+ *    これを恒久失敗として扱い `status="failed"` を書くと、クライアントは
+ *    「サーバーが無効と判断した」と解釈して `transaction.finish()` してしまい、
+ *    **正当な購入が Apple 側からも消えて再送経路が完全に断たれる**。
+ *    そのため throw する Error に `retryable` プロパティを載せ、呼び出し側は
+ *    retryable のとき status を書かず pending のまま残す（リコンサイラが後で再試行する）。
+ *    片方の環境だけ retryable だった場合も**安全側＝retryable 扱い**にする
+ *    （恒久と断定できないものを恒久扱いする方が取り返しがつかない）。
+ *
  * @param {string} jws signedTransactionInfo（クライアントの `Transaction.jsonRepresentation` ではなく署名付きJWS）
  * @param {{enableOnlineChecks?: boolean, verifierFactory?: Function}} [options]
  *   verifierFactory はテストで差し替えるためのフック（本番では渡さない）。
  * @returns {Promise<{transaction: object, environment: string}>}
- * @throws {Error} どちらの環境でも検証できなかった場合（メッセージに両方の理由を含む）
+ * @throws {Error & {retryable: boolean}} どちらの環境でも検証できなかった場合
+ *   （メッセージに両方の理由・retryable に再試行可否を含む）
  */
 async function verifyTransactionJWS(jws, options) {
   if (typeof jws !== "string" || jws.length === 0) {
-    throw new Error("JWS検証に失敗しました (jwsが空です)");
+    const err = new Error("JWS検証に失敗しました (jwsが空です)");
+    err.retryable = false; // 入力不正は再試行しても直らない
+    throw err;
   }
   const opts = options || {};
   const online = opts.enableOnlineChecks !== false; // 既定で失効確認あり
   const factory = opts.verifierFactory || ((env) => verifierFor(env, online));
 
-  const errors = [];
+  const results = [];
   for (const env of [Environment.PRODUCTION, Environment.SANDBOX]) {
     try {
       const transaction = await factory(env).verifyAndDecodeTransaction(jws);
       return { transaction, environment: env };
     } catch (err) {
-      errors.push(`${env}: ${err && err.message ? err.message : String(err)}`);
+      results.push({
+        env,
+        // ⚠️ VerificationException は message が空文字列（super()を引数なしで呼ぶ実装）。
+        //    status が唯一の判定材料なので、message ではなく status を見る。
+        message: err && err.message ? err.message : `VerificationStatus=${err && err.status}`,
+        retryable: !!(err && err.status === VerificationStatus.RETRYABLE_VERIFICATION_FAILURE),
+      });
     }
   }
-  throw new Error(`JWS検証に失敗しました (${errors.join(" / ")})`);
+  const combined = new Error(
+    `JWS検証に失敗しました (${results.map((r) => `${r.env}: ${r.message}`).join(" / ")})`
+  );
+  combined.retryable = results.some((r) => r.retryable);
+  throw combined;
 }
 
 module.exports = {
@@ -99,6 +127,7 @@ module.exports = {
   APP_APPLE_ID,
   APPLE_ROOT_CA_FILES,
   Environment,
+  VerificationStatus,
   loadRootCAs,
   verifyTransactionJWS,
 };

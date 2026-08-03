@@ -570,3 +570,24 @@ test("freeLimit をサーバーが書く前提: 予約結果から client 表示
   // 上限は呼び出し側(limits)が持つ＝そのまま freeLimit として書ける
   assert.equal(LIM.free - r.freeUsedToday, 0, "上限1回を1回使ったので残り0");
 });
+
+// ============================================================
+// isRefundableJob（failJob の二重返金・巻き戻り防止ガード）
+// ============================================================
+
+test("isRefundableJob: submitting も submitted も true（両経路の返金を漏らさない）", () => {
+  // onSkyMotionJobCreated の submit 失敗時は "submitting"、ポーラーの失敗時は "submitted"。
+  // 片方だけをガードにすると、もう片方の経路の返金が漏れる（Fable調査の指摘）。
+  assert.equal(core.isRefundableJob({ status: "submitting" }), true);
+  assert.equal(core.isRefundableJob({ status: "submitted" }), true);
+});
+
+test("isRefundableJob: terminal状態と未予約は false（二重返金・completed巻き戻り防止）", () => {
+  assert.equal(core.isRefundableJob({ status: "completed" }), false,
+    "completed を返金可にすると、遅延した failJob が動画完成後に返金＋failed巻き戻しする");
+  assert.equal(core.isRefundableJob({ status: "failed" }), false,
+    "failed を返金可にすると failJob の再実行が二重返金になる");
+  assert.equal(core.isRefundableJob({ status: "pending" }), false, "予約前＝返す物がない");
+  assert.equal(core.isRefundableJob(null), false);
+  assert.equal(core.isRefundableJob(undefined), false);
+});

@@ -265,42 +265,9 @@ async function deleteJobInputFiles(uid, jobId) {
   );
 }
 
-/**
- * 予約を返金する（refund-on-failure）。**予約時に引いた側だけを戻す。**
- * @param {string} uid
- * @param {"free"|"paid"} bucket job.chargedBucket。未設定（β時代のジョブ）は無料枠扱い。
- */
-async function refundUsage(uid, bucket) {
-  const usageRef = db.collection("livingSkyUsage").doc(uid);
-  const balanceRef = db.collection("skyMotionBalance").doc(uid);
-  const today = core.jstDateString();
-  await db.runTransaction(async (tx) => {
-    const [usageSnap, balanceSnap] = await Promise.all([tx.get(usageRef), tx.get(balanceRef)]);
-    const decision = core.decideRefund(
-      usageSnap.exists ? usageSnap.data() : null,
-      balanceSnap.exists ? balanceSnap.data() : null,
-      bucket,
-      today
-    );
-    tx.set(
-      usageRef,
-      {
-        day: decision.day,
-        freeUsedToday: decision.freeUsedToday,
-        paidUsedToday: decision.paidUsedToday,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-    if (decision.balanceChanged) {
-      tx.set(
-        balanceRef,
-        { balance: decision.balance, updatedAt: FieldValue.serverTimestamp() },
-        { merge: true }
-      );
-    }
-  });
-}
+// （旧 refundUsage は failJob に統合した。返金と failed 遷移を別トランザクションに分けると、
+//   間で失敗したとき job が submitted のまま残り、次周期のポーラーが再度 failJob を呼んで
+//   **二重返金**する穴があった。詳細は failJob のコメント参照。）
 
 /** fal.ai へ submit する（成功したら request_id を返す。失敗したら throw する）。 */
 async function submitToFal(payload, falKeyValue) {
@@ -443,7 +410,7 @@ exports.onSkyMotionJobCreated = onDocumentCreated(
     } catch (err) {
       // --- 4b. submit失敗（リトライも失敗）→ 予約返金・入力ファイル削除・失敗通知 ---
       logger.error("空を動かす: submit失敗（リトライも失敗）", { jobId, uid, error: err.message });
-      await failJob(jobRef, uid, "submit_failed", err.message);
+      await failJob(jobRef, uid, claim.bucket, "submit_failed", err.message);
     }
   }
 );
@@ -603,6 +570,9 @@ async function pollOneJob(doc, now, falKeyValue) {
   const jobRef = doc.ref;
   const uid = job.userId;
   const falRequestId = job.falRequestId;
+  // 返金先。予約時に reserveAndClaimJob が job に書いた chargedBucket が唯一の真実源。
+  // 未設定（β時代の旧ジョブ）は無料枠扱い＝残高を勝手に増やさない安全側。
+  const bucket = job.chargedBucket === "paid" ? "paid" : "free";
 
   if (!uid || !falRequestId) {
     logger.error("空を動かす: userId/falRequestId が無いジョブ（データ不整合）", { jobId });
@@ -626,9 +596,9 @@ async function pollOneJob(doc, now, falKeyValue) {
       // （2026-07-23 の「20分待たせて失敗」事故の再発防止）。
       // 5xx等の一時的なdownstream不調はタイムアウト経由の回復（次回周期リトライ）に委ねる。
       if (core.isPermanentHttpStatus(res.status)) {
-        await failJob(jobRef, uid, "downstream_unavailable", `poll status 恒久HTTPエラー: ${res.status}`);
+        await failJob(jobRef, uid, bucket, "downstream_unavailable", `poll status 恒久HTTPエラー: ${res.status}`);
       } else if (timedOut) {
-        await failJob(jobRef, uid, "timeout", `poll status HTTPエラー: ${res.status}`);
+        await failJob(jobRef, uid, bucket, "timeout", `poll status HTTPエラー: ${res.status}`);
       } else {
         await jobRef.update({ pollAttempts: FieldValue.increment(1) }).catch(() => {});
       }
@@ -638,7 +608,7 @@ async function pollOneJob(doc, now, falKeyValue) {
   } catch (err) {
     // fetch自体の失敗（ネットワーク等）も同様に一時的異常として扱う。
     if (timedOut) {
-      await failJob(jobRef, uid, "timeout", `poll status取得失敗: ${err.message}`);
+      await failJob(jobRef, uid, bucket, "timeout", `poll status取得失敗: ${err.message}`);
     } else {
       await jobRef.update({ pollAttempts: FieldValue.increment(1) }).catch(() => {});
     }
@@ -649,7 +619,7 @@ async function pollOneJob(doc, now, falKeyValue) {
 
   if (normalized.state === "PENDING" || normalized.state === "UNKNOWN") {
     if (timedOut) {
-      await failJob(jobRef, uid, "timeout", "20分以内に完了しませんでした");
+      await failJob(jobRef, uid, bucket, "timeout", "20分以内に完了しませんでした");
     } else {
       await jobRef.update({ pollAttempts: FieldValue.increment(1) }).catch(() => {});
     }
@@ -660,6 +630,7 @@ async function pollOneJob(doc, now, falKeyValue) {
     await failJob(
       jobRef,
       uid,
+      bucket,
       "downstream_unavailable",
       `${normalized.errorType || "unknown"}: ${normalized.errorMessage}`
     );
@@ -684,7 +655,7 @@ async function pollOneJob(doc, now, falKeyValue) {
       // 20分リトライせず即失敗＋返金する（一時的異常の throw 経路には乗せない）。
       if (core.isPermanentHttpStatus(resultRes.status)) {
         await failJob(
-          jobRef, uid, "downstream_unavailable",
+          jobRef, uid, bucket, "downstream_unavailable",
           `fal result 恒久エラー: status=${resultRes.status} body=${body.slice(0, 300)}`
         );
         return;
@@ -721,7 +692,7 @@ async function pollOneJob(doc, now, falKeyValue) {
   } catch (err) {
     logger.error("空を動かす: 結果取得/保存に失敗（一時的異常として扱う）", { jobId, uid, error: err.message });
     if (timedOut) {
-      await failJob(jobRef, uid, "downstream_unavailable", err.message);
+      await failJob(jobRef, uid, bucket, "downstream_unavailable", err.message);
     } else {
       await jobRef.update({ pollAttempts: FieldValue.increment(1) }).catch(() => {});
     }
@@ -754,30 +725,83 @@ async function pollOneJob(doc, now, falKeyValue) {
 
 /**
  * ジョブを失敗にし、予約を返金し、入力ファイルを削除し、失敗プッシュ通知を送る。
- * このヘルパーが呼ばれる時点で reserveAndClaimJob() による予約は必ず成立している
- * （submit_failed/timeout/downstream_unavailable はいずれも予約成立後にしか起こらない経路）。
- * 通知はbest-effort（失敗してもjob状態の更新自体には影響させない）。
+ *
+ * 🔴 **返金＋failed遷移は単一トランザクション**（`reserveAndClaimJob` の対称）。
+ *    旧実装は「返金トランザクション → 素の status 更新」の2段階で、間で失敗すると
+ *    job が submitted のまま残り、次周期のポーラーが再度 failJob を呼んで**二重返金**
+ *    しえた（paid 側の balance には上限が無いため実質無限に水増しされうる）。
+ *    トランザクション内で `core.isRefundableJob`（submitting/submitted のみ true）を
+ *    ライブ読み取り判定することで、二重呼び出し・completed の failed への巻き戻り・
+ *    二重通知をすべて no-op に落とす。
+ *
+ * 🔴 **bucket は呼び出し元が渡す**（A-4）。呼び出し元は `claim.bucket` / `job.chargedBucket`
+ *    を既にメモリに持っているのに、旧実装はここで job を読み直し、読み取り失敗時に
+ *    "free" フォールバックしていた——paid ジョブでそれが起きると購入クレジットが
+ *    永久に戻らない。既知の値を渡せばこの再読み取りリスクごと消える。
+ *
+ * 通知・入力ファイル削除は best-effort（失敗しても job 状態には影響させない）。
+ * ⚠️ 通知条件はトランザクションの transitioned 結果を使う。`decideRefund` の
+ *    `balanceChanged` から導いてはいけない（free 返金は常に balanceChanged=false のため、
+ *    最頻経路の通知とファイル削除が丸ごとスキップされる）。
+ *
+ * @param {FirebaseFirestore.DocumentReference} jobRef
+ * @param {string} uid
+ * @param {"free"|"paid"} bucket 予約時に引いた側（claim.bucket / job.chargedBucket）
+ * @param {string} errorCode
+ * @param {string} errorMessage
  */
-async function failJob(jobRef, uid, errorCode, errorMessage) {
-  // ⚠️ 返金先（無料枠 or 購入残高）は job.chargedBucket が唯一の手がかり。
-  //    ここは予約と別プロセス（ポーラー）で走るので、job を読み直して決める。
-  //    読めなかった場合は "free" 扱い＝ユーザーの残高を勝手に増やさない安全側に倒す。
-  let bucket = "free";
-  try {
-    const snap = await jobRef.get();
-    if (snap.exists && snap.data().chargedBucket === "paid") bucket = "paid";
-  } catch (err) {
-    logger.warn("空を動かす: chargedBucket の読み取りに失敗（無料枠へ返金します）", {
-      jobId: jobRef.id, uid, error: err.message,
+async function failJob(jobRef, uid, bucket, errorCode, errorMessage) {
+  const usageRef = db.collection("livingSkyUsage").doc(uid);
+  const balanceRef = db.collection("skyMotionBalance").doc(uid);
+  const today = core.jstDateString();
+
+  const { transitioned } = await db.runTransaction(async (tx) => {
+    const [jobSnap, usageSnap, balanceSnap] = await Promise.all([
+      tx.get(jobRef), tx.get(usageRef), tx.get(balanceRef),
+    ]);
+    const jobData = jobSnap.exists ? jobSnap.data() : null;
+    if (!core.isRefundableJob(jobData)) {
+      return { transitioned: false }; // 既に terminal（または未予約）→ 何もしない
+    }
+    const decision = core.decideRefund(
+      usageSnap.exists ? usageSnap.data() : null,
+      balanceSnap.exists ? balanceSnap.data() : null,
+      bucket,
+      today
+    );
+    tx.set(
+      usageRef,
+      {
+        day: decision.day,
+        freeUsedToday: decision.freeUsedToday,
+        paidUsedToday: decision.paidUsedToday,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    if (decision.balanceChanged) {
+      tx.set(
+        balanceRef,
+        { balance: decision.balance, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+    }
+    tx.update(jobRef, {
+      status: "failed",
+      errorCode,
+      error: errorMessage,
+      updatedAt: FieldValue.serverTimestamp(),
     });
-  }
-  await refundUsage(uid, bucket);
-  await jobRef.update({
-    status: "failed",
-    errorCode,
-    error: errorMessage,
-    updatedAt: FieldValue.serverTimestamp(),
+    return { transitioned: true };
   });
+
+  if (!transitioned) {
+    logger.info("空を動かす: failJob no-op（既に終端状態・二重返金防止）", {
+      jobId: jobRef.id, uid, errorCode,
+    });
+    return;
+  }
+
   await deleteJobInputFiles(uid, jobRef.id);
   try {
     await sendSkyMotionNotification(

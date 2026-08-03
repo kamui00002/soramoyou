@@ -393,6 +393,24 @@ function isClaimableJob(jobData) {
   return !!jobData && jobData.status === "pending";
 }
 
+/**
+ * このジョブをまだ「失敗＋返金」処理してよいか（`isClaimableJob` の返金側の対）。
+ *
+ * 予約が成立している状態は2つ:
+ *   - "submitting": `reserveAndClaimJob` が claim した直後（onSkyMotionJobCreated の submit 失敗経路）
+ *   - "submitted" : fal へ submit 済み（pollSkyMotionJobs の各失敗経路）
+ * ⚠️ **どちらか片方だけをガードにすると、もう片方の経路の返金が漏れる**（Fable調査で指摘）。
+ *
+ * terminal（completed/failed）は false ＝ `failJob` を二重に呼んでも no-op になり、
+ * **二重返金・completed の failed への巻き戻り・二重通知をすべて防ぐ**。
+ * "pending" も false（予約前なので返す物がない。誤って通しても安全側に倒れる）。
+ * @param {{status?: string}|null|undefined} jobData トランザクション内で読んだ最新の job データ
+ * @returns {boolean} true なら返金＋failed遷移を進めてよい
+ */
+function isRefundableJob(jobData) {
+  return !!jobData && (jobData.status === "submitting" || jobData.status === "submitted");
+}
+
 // ============================================================
 // ループ化（スロー係数 / クロスフェードの切り出し窓）
 // ============================================================
@@ -499,4 +517,5 @@ module.exports = {
   isPollTimedOut,
   isPermanentHttpStatus,
   isClaimableJob,
+  isRefundableJob,
 };

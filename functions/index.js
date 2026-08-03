@@ -347,3 +347,6 @@ Object.assign(exports, require("./skyMotion"));
 
 // MARK: - 「空を動かす」回数パック（消費型IAP）の購入検証。詳細は functions/skyMotionPurchase.js
 exports.onSkyMotionPurchaseCreated = require("./skyMotionPurchase").onSkyMotionPurchaseCreated;
+// pending詰まりのリコンサイラ（⚠️ Object.assign配線ではないため個別exportが必須。忘れるとdeployされない）
+exports.reconcilePendingSkyMotionPurchases =
+  require("./skyMotionPurchase").reconcilePendingSkyMotionPurchases;

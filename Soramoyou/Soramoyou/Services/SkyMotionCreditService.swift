@@ -217,7 +217,7 @@ final class SkyMotionCreditService: ObservableObject {
     }
 
     private func runPurchase(productID: String) async {
-        guard Auth.auth().currentUser?.uid != nil else {
+        guard let uid = Auth.auth().currentUser?.uid else {
             purchaseState = .failed(message: "ログインが必要です")
             return
         }
@@ -232,7 +232,13 @@ final class SkyMotionCreditService: ObservableObject {
         }
 
         do {
-            let result = try await product.purchase()
+            // 🔴 購入に appAccountToken（このuidに紐づく安定UUID）を埋め込む。
+            //    これが無いと、「Aが購入 → finish前に落ちる → 同じ端末でBがログイン →
+            //    起動時の未完了再送がその時点のuid=Bで購入docを作る」経路で
+            //    **Bに誤付与**される（共有端末で現実に起こる）。サーバーはJWS内の
+            //    このトークンで本当の購入者を確定する（skyMotionPurchase.js 参照）。
+            let token = try await resolveAppAccountToken(uid: uid)
+            let result = try await product.purchase(options: [.appAccountToken(token)])
             switch result {
             case let .success(verification):
                 purchaseState = .verifying
@@ -249,6 +255,27 @@ final class SkyMotionCreditService: ObservableObject {
             logger.error("回数パック: 購入に失敗 \(error.localizedDescription, privacy: .public)")
             purchaseState = .failed(message: "購入に失敗しました: \(error.localizedDescription)")
         }
+    }
+
+    /// このユーザーの購入用 appAccountToken（安定UUID）を取得する。
+    ///
+    /// 初回に1度だけ生成して `users/{uid}.iapAccountToken` へ永続化し、以後は同じ値を返す
+    /// （端末をまたいでも・再購入でも同一）。**uid から決定的にUUIDを計算する方式は採らない**
+    /// —— Swift と Node で同じハッシュを実装して完全一致させるのは脆く、
+    /// 保存された1つの値を双方が参照する方が確実（Fable設計）。
+    ///
+    /// ⚠️ 保存は**小文字**規約。Swift の `UUID().uuidString` は大文字だが、Apple のJWSに
+    ///    載って返る appAccountToken は小文字になる。サーバーの逆引き（Firestoreの文字列
+    ///    完全一致）が壊れないよう、書く時点で小文字に揃える。
+    private func resolveAppAccountToken(uid: String) async throws -> UUID {
+        let ref = db.collection("users").document(uid)
+        let snap = try await ref.getDocument()
+        if let str = snap.data()?["iapAccountToken"] as? String, let existing = UUID(uuidString: str) {
+            return existing
+        }
+        let token = UUID()
+        try await ref.setData(["iapAccountToken": token.uuidString.lowercased()], merge: true)
+        return token
     }
 
     // MARK: - サーバー検証（購入フローの心臓部）

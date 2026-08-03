@@ -89,3 +89,73 @@ test("本物の検証器に壊れたJWSを渡すと必ず失敗する（配線�
     /JWS検証に失敗/
   );
 });
+
+// ============================================================
+// retryable 判定（A-1: 一時的失敗を恒久失敗にしない）
+// ============================================================
+
+/** VerificationException 相当（message空・statusのみ）を作る。 */
+function verificationError(status) {
+  const err = new Error(); // Apple実装は super() 引数なし＝message空文字列
+  err.status = status;
+  return err;
+}
+
+test("両環境とも RETRYABLE_VERIFICATION_FAILURE → retryable=true", async () => {
+  const factory = () => ({
+    verifyAndDecodeTransaction: async () => {
+      throw verificationError(verify.VerificationStatus.RETRYABLE_VERIFICATION_FAILURE);
+    },
+  });
+  await assert.rejects(
+    () => verify.verifyTransactionJWS("dummy", { verifierFactory: factory }),
+    (err) => {
+      assert.equal(err.retryable, true,
+        "OCSP一時障害を恒久失敗にすると、クライアントがfinishして正当な購入が永久喪失する");
+      return true;
+    }
+  );
+});
+
+test("片方 retryable・片方 恒久 → retryable=true（安全側）", async () => {
+  const factory = (env) => ({
+    verifyAndDecodeTransaction: async () => {
+      if (env === verify.Environment.PRODUCTION) {
+        throw verificationError(verify.VerificationStatus.RETRYABLE_VERIFICATION_FAILURE);
+      }
+      throw verificationError(verify.VerificationStatus.INVALID_ENVIRONMENT);
+    },
+  });
+  await assert.rejects(
+    () => verify.verifyTransactionJWS("dummy", { verifierFactory: factory }),
+    (err) => {
+      assert.equal(err.retryable, true, "恒久と断定できないものを恒久扱いする方が取り返しがつかない");
+      return true;
+    }
+  );
+});
+
+test("両環境とも恒久失敗 → retryable=false（failedにしてよい）", async () => {
+  const factory = () => ({
+    verifyAndDecodeTransaction: async () => {
+      throw verificationError(verify.VerificationStatus.VERIFICATION_FAILURE);
+    },
+  });
+  await assert.rejects(
+    () => verify.verifyTransactionJWS("dummy", { verifierFactory: factory }),
+    (err) => {
+      assert.equal(err.retryable, false);
+      return true;
+    }
+  );
+});
+
+test("空のJWSは retryable=false（再試行しても直らない）", async () => {
+  await assert.rejects(
+    () => verify.verifyTransactionJWS(""),
+    (err) => {
+      assert.equal(err.retryable, false);
+      return true;
+    }
+  );
+});

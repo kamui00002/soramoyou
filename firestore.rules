@@ -461,14 +461,20 @@ service cloud.firestore {
       allow read: if isAuthenticated()
                   && (resource == null || resource.data.userId == request.auth.uid);
 
-      // 作成: 認証済みユーザーが自分のIDで、status=pending の初期状態のみ。
+      // 作成: β許可（skyMotionBeta claim）ユーザーが自分のIDで、status=pending の初期状態のみ。
       // ⚠️ creditedCount / status=credited を client に書かせない（＝残高の自己申告を防ぐ）。
       //    productId も client 申告は信用せず、サーバーが JWS の値で上書きして判定する。
+      // ⚠️ skyMotionBeta 条件は livingSkyJobs.create と対称（片方だけだと、偽JWSの乱造で
+      //    購入検証Function（Apple OCSP へのネットワーク呼び出し込み）を起動させ放題になる）。
+      //    一般公開時は claim 運用をやめ、この行を livingSkyJobs 側・EditView のゲートと
+      //    **3箇所同時に**外すこと。ズレると「課金は通るが生成できない」事故になる。
       allow create: if isAuthenticated()
+                    && request.auth.token.skyMotionBeta == true
                     && request.resource.data.userId == request.auth.uid
                     && request.resource.data.status == 'pending'
                     && request.resource.data.jws is string
                     && request.resource.data.jws.size() > 0
+                    && request.resource.data.jws.size() < 100000
                     && request.resource.data.createdAt == request.time
                     && !request.resource.data.keys().hasAny(['creditedCount', 'environment']);
 
