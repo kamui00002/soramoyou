@@ -693,6 +693,42 @@ final class EditViewModelTests: XCTestCase {
         )
     }
 
+    /// 🆕 空タイプ切替UI（G7）: `selectableSkyTypes` はサンプル数降順で並ぶことを検証する。
+    /// 候補シートの初期選択（`selectableSkyTypes.first`）がこの順序に依存するため、
+    /// 「件数が多い空タイプほど先頭に来る」という契約そのものをここで確認する。
+    func testSelectableSkyTypesOrderedBySampleCountDescending() async {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = RecipeCorpusStore(baseDirectory: tmp)
+
+        // sunset 4件・clear 3件・cloudy は minimumSamples(3) 未満の2件のみ（選択肢に出ないはず）
+        for _ in 0 ..< 4 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .sunset), userId: "u1")
+        }
+        for _ in 0 ..< 3 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
+        }
+        for _ in 0 ..< 2 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .cloudy), userId: "u1")
+        }
+
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: "u1",
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            recipeCorpusStore: store
+        )
+        vm.refreshPersonalDefaultAvailability()
+
+        XCTAssertEqual(vm.selectableSkyTypes, [.sunset, .clear],
+                       "サンプル数降順（sunset=4件 > clear=3件）で並ぶべき。cloudy(2件)は不足のため含まれない")
+    }
+
     /// 🆕 `EditRecipe.mergingPhotoSpecificFields(from:includeSkyCorrection:)` の
     /// `includeSkyCorrection` 引数そのものを検証する（候補パス/サムネイル生成パスの土台となる純関数）。
     /// - `includeSkyCorrection: false`（サムネイル生成用）→ skyCorrectionIntensity は nil になる

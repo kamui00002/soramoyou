@@ -463,22 +463,46 @@ class EditViewModel: ObservableObject {
 
     // MARK: - パーソナルAI編集（柱1 v1）「あなたの定番」
 
-    /// `refreshPersonalDefaultAvailability()` で読んだコーパス件数（G6対応）。
-    /// `applyPersonalDefaultCandidate()` のログ用 `sample_count` がこの値を再利用することで、
-    /// 適用のたびにコーパスをディスクから再読込しないようにする（値の意味＝コーパス件数は変えない）。
-    private var corpusSampleCount = 0
+    /// `refreshPersonalDefaultAvailability()` で読んだコーパス（空タイプ切替UI対応・G7）。
+    ///
+    /// 候補シートが空タイプを切り替えるたびにディスクを読み直さないよう、ここに1回だけキャッシュする。
+    /// `personalDefaultCandidatePool(for:)` と `applyPersonalDefaultCandidate()` のログ用
+    /// `sample_count`（= `cachedCorpusEntries.count`）が再利用する。
+    private var cachedCorpusEntries: [RecipeCorpusEntry] = []
 
-    /// コーパスから候補プール（`personalDefaultCandidatePool`）と表示可否（`hasPersonalDefault`）を更新する。
-    /// （エディタ起動時に呼ぶ。）
+    /// 履歴が `PersonalRecipeProfile.minimumSamples` 件以上ある空タイプ（サンプル数降順）。
+    /// 候補シートの空タイプ切替UIで「選べる空タイプ」を判定するために公開する
+    /// （サンプル不足の空タイプはグレー表示にして選ばせない）。
+    @Published private(set) var selectableSkyTypes: [SkyType] = []
+
+    /// コーパスから候補プール（`personalDefaultCandidatePool`）・空タイプ切替候補（`selectableSkyTypes`）・
+    /// 表示可否（`hasPersonalDefault`）を更新する。（エディタ起動時に呼ぶ。）
     /// ⚠️ userId が nil（未ログイン）でも entries=[] として候補を計算する
     ///    （新規ユーザー・未ログインでも固定プリセット候補を出す確定仕様。
     ///    従来の「userId nil → hasPersonalDefault=false」から挙動が変わる点に注意）。
     func refreshPersonalDefaultAvailability() {
         let entries = userId.map { recipeCorpusStore.entries(userId: $0) } ?? []
-        corpusSampleCount = entries.count
+        cachedCorpusEntries = entries
+        // `personalDefaultCandidatePool`（skyType: nil 相当＝全体の『あなたの定番』＋固定プリセット全件）は
+        // 空タイプ切替UI導入前からの後方互換プロパティとして意味を変えずに残す設計判断（G7）。
+        // 候補シート自体は表示時に空タイプごとの `personalDefaultCandidatePool(for:)` を呼び直す方式に
+        // 変わったためこのプロパティを直接描画には使わなくなったが、①既存テストの大半がこのプロパティの
+        // 件数・内容（= skyType: nil の結果）をそのまま検証していること、②「AIで自動編集」ボタンの
+        // 表示可否（`hasPersonalDefault`）は空タイプに依存せず判定できてよいこと、の2点から、
+        // 意味を変えず残すほうが既存テストへの影響を最小化できると判断した。
         personalDefaultCandidatePool = PersonalDefaultCandidateProvider.candidatePool(from: entries)
+        selectableSkyTypes = PersonalDefaultCandidateProvider.selectableSkyTypes(from: entries)
         // hasPersonalDefault は personalDefaultCandidatePool から導出する computed property（S2対応）
         // のため、ここでの手動代入は不要（配列の再代入だけで自動的に追従する）。
+    }
+
+    /// 指定した空タイプ向けの候補プールを返す（候補シートが空タイプを切り替えるたびに呼ぶ・G7）。
+    /// `refreshPersonalDefaultAvailability()` でキャッシュした `cachedCorpusEntries` を再利用するため、
+    /// 切替のたびにコーパスをディスクから再読込しない。
+    /// - Parameter skyType: 対象の空タイプ。nil の場合は「あなたの定番」（全体）へフォールバックする
+    ///   （`PersonalDefaultCandidateProvider.candidatePool(from:skyType:)` の挙動に準拠）。
+    func personalDefaultCandidatePool(for skyType: SkyType?) -> [PersonalDefaultCandidate] {
+        PersonalDefaultCandidateProvider.candidatePool(from: cachedCorpusEntries, skyType: skyType)
     }
 
     /// 「あなたの定番」系の候補（`representative` 単体 or 候補シートで選ばれた `PersonalDefaultCandidate`）を
@@ -526,25 +550,29 @@ class EditViewModel: ObservableObject {
         )
     }
 
-    /// 候補シート（`personalDefaultCandidatePool` を描画後に選別した表示リスト）でユーザーが選んだ
+    /// 候補シート（`personalDefaultCandidatePool(for:)` を描画後に選別した表示リスト）でユーザーが選んだ
     /// 編集パターンを適用する。パターン選択シート導入後は「AIで自動編集」ボタンの実体として
     /// こちらが UI から呼ばれる。
-    /// - Parameter displayIndex: ユーザーが**候補シートに実際に表示されたカードの何番目**を選んだか
-    ///   （0始まり）。プール内の index ではない点に注意。プールは打ち切りなしの優先順リストであり
-    ///   見た目の重複判定で候補が間引かれるため、プール内 index を送ると「ユーザーが左から何番目を
-    ///   選んだか」という計装の意図とズレる。呼び出し側（`PersonalDefaultCandidateSheet`）が
-    ///   表示リスト内での位置を渡す。
-    func applyPersonalDefaultCandidate(_ candidate: PersonalDefaultCandidate, displayIndex: Int) {
-        // G6対応: sample_count は refreshPersonalDefaultAvailability() で読んだコーパス件数
-        // （corpusSampleCount）を再利用する。以前は候補適用のたびにコーパスをディスクから
-        // 再読込していたが、値そのもの（コーパス件数）は変えていない。
+    /// - Parameters:
+    ///   - displayIndex: ユーザーが**候補シートに実際に表示されたカードの何番目**を選んだか
+    ///     （0始まり）。プール内の index ではない点に注意。プールは打ち切りなしの優先順リストであり
+    ///     見た目の重複判定で候補が間引かれるため、プール内 index を送ると「ユーザーが左から何番目を
+    ///     選んだか」という計装の意図とズレる。呼び出し側（`PersonalDefaultCandidateSheet`）が
+    ///     表示リスト内での位置を渡す。
+    ///   - skyType: 候補シートで選択中だった空タイプ（空タイプ切替UI・G7）。計装の `sky_type` に
+    ///     `rawValue`（未選択なら `"none"`）として載せる。既存呼び出し元（テスト等）を壊さないよう
+    ///     既定値 nil を持たせる。
+    func applyPersonalDefaultCandidate(_ candidate: PersonalDefaultCandidate, displayIndex: Int, skyType: SkyType? = nil) {
         applyPersonalDefaultRecipe(
             candidate.recipe,
             loggingEvent: "personal_default_candidate_selected",
             loggingParameters: [
                 "candidate_kind": candidate.kind.analyticsValue,
                 "candidate_index": displayIndex,
-                "sample_count": corpusSampleCount,
+                // sample_count は refreshPersonalDefaultAvailability() でキャッシュした
+                // cachedCorpusEntries を再利用する（候補適用のたびにディスクを再読込しない・G7）。
+                "sample_count": cachedCorpusEntries.count,
+                "sky_type": skyType?.rawValue ?? "none",
             ]
         )
     }

@@ -107,13 +107,20 @@ enum FixedPresetKind: String, CaseIterable {
 ///
 /// 設計方針:
 /// - `PersonalRecipeProfile` と同じく副作用なし・I/O なしの純関数のみで構成し、単体テストで網羅する。
-/// - 候補は「全体の定番 → 空タイプ別の定番 → 固定プリセット」の優先順で並べる。
+/// - 候補は「（指定空タイプ or 全体の）定番 → 固定プリセット」の優先順で並べる。
 ///   ⚠️ ここでは件数を絞り込まない（打ち切りなし）。実際に何件表示するかは、
 ///   このプールを実際に描画してサムネイル同士を見た目で比較する呼び出し側
 ///   （`PersonalDefaultThumbnailComparer`、別タスクで実装）が決める。
 /// - `isSimilar` は「描画前の安価なふるい」として残す（明らかに同一のレシピを
 ///   描画コストをかけずに落とすため）。最終的な見た目の重複判定（人間の目には
 ///   同じに見えるか）は描画後に `PersonalDefaultThumbnailComparer` が担う。
+///
+/// ⚠️ 仕様変更（候補シートに空タイプ切替 UI を置く方式へ移行）:
+/// 旧仕様は「minimumSamples 以上ある空タイプ全ての定番」を1プールに混在させていたため、
+/// 目の前の1枚（晴れ or 夕焼けのどちらか）とは無関係な空タイプの定番まで並び、
+/// 「似た定番が3枚並ぶ」問題を起こしていた。新仕様では呼び出し側（候補シート）が
+/// 空タイプを1つ選び、そのプールには**その空タイプの定番（または全体へのフォールバック）
+/// 1件だけ**を先頭に置く。関係ない空タイプの定番はそもそもプールに入れない。
 enum PersonalDefaultCandidateProvider {
     /// 候補シートに出す最小件数の目安。
     ///
@@ -129,70 +136,67 @@ enum PersonalDefaultCandidateProvider {
     /// 呼び出し側が最終的に何件表示するかを決める際の目安値として残している。
     static let maxCandidateCount = 5
 
-    /// コーパスから候補プールを導出する。
+    /// 履歴が `PersonalRecipeProfile.minimumSamples` 件以上ある空タイプを、サンプル数降順で返す。
+    ///
+    /// 候補シートの空タイプ切替 UI で「選べる空タイプ」を出すために使う
+    /// （サンプル不足の空タイプを選ばせても定番を作れず意味がないため、そもそも選択肢に出さない）。
+    ///
+    /// 決定的な順序にするため (skyType, サンプル数, 宣言順index) を先に収集してからソートする
+    /// （辞書やSet経由の非決定的な順序を避ける）。サンプル数が同数の場合は
+    /// `SkyType.allCases` の宣言順で並べる。
+    static func selectableSkyTypes(from entries: [RecipeCorpusEntry]) -> [SkyType] {
+        skyTypeStats(from: entries).map(\.skyType)
+    }
+
+    /// 指定した空タイプ向けの候補プールを導出する。
     ///
     /// 「4〜5件に絞り込んだ最終リスト」ではなく、**優先順に並んだ候補プール**を返す。
     /// 実際に何件表示するかは、描画後に見た目で選別する呼び出し側が決める
     /// （このメソッドは件数で打ち切らない）。
     ///
     /// 手順:
-    /// 1. 全体の「あなたの定番」（`PersonalRecipeProfile.representative(for: nil, from:)` が成立すれば先頭に追加）。
-    ///    ⚠️ 履歴不足で nil でも `return` せず続行する
-    ///    （新規ユーザーにも固定プリセットで候補を出す確定仕様のため）。
-    /// 2. 空タイプ別の「〇〇の定番」を、`PersonalRecipeProfile.minimumSamples` 件以上ある空タイプ**全て**を対象に、
-    ///    サンプル数降順（同数は `SkyType.allCases` の宣言順）でプールへ追加する（件数による打ち切りなし）。
-    /// 3. 固定プリセットを `FixedPresetKind.allCases`（宣言順＝優先順位）から**常に全件**プールの末尾に追加する
+    /// 1. 先頭候補（定番系は最大1件。これが今回の変更の要点）:
+    ///    - `skyType` が指定され、かつその空タイプの履歴が `PersonalRecipeProfile.minimumSamples`
+    ///      件以上あれば、その空タイプの定番（`representative(for: skyType, from:)`）を先頭に置く。
+    ///      ⚠️ `representative(for:from:)` 自身にも「一致サンプル不足なら全体へフォールバック」する
+    ///      ロジックがあるため、ここで事前に件数を確認してから呼ぶ
+    ///      （そうしないと、フォールバックで実質「全体の定番」を計算したのに
+    ///      ラベルだけ「〇〇の定番」と表示する食い違いが起きる）。
+    ///    - それ以外（`skyType` が nil、または該当履歴が不足）は「あなたの定番」
+    ///      （`representative(for: nil, from:)`）にフォールバックする。
+    ///    - それも作れなければ（履歴が全体でも不足）先頭候補なし。
+    /// 2. 固定プリセットを `FixedPresetKind.allCases`（宣言順＝優先順位）から**常に全件**プールの末尾に追加する
     ///    （履歴の有無・多寡に関わらず、フォールバックとして必ず全プリセットをプールに含める）。
     ///
     /// いずれの段階でも既採用候補と `isSimilar` な結果は追加しない
     /// （描画前の安価なふるいとして、明らかに同一のレシピを描画コストをかけずに落とす。
     ///  最終的な見た目の重複判定は描画後に `PersonalDefaultThumbnailComparer` が行う）。
-    static func candidatePool(from entries: [RecipeCorpusEntry]) -> [PersonalDefaultCandidate] {
+    static func candidatePool(from entries: [RecipeCorpusEntry], skyType: SkyType?) -> [PersonalDefaultCandidate] {
         var result: [PersonalDefaultCandidate] = []
 
-        // (a) 全体の「あなたの定番」。
-        if let overallRecipe = PersonalRecipeProfile.representative(for: nil, from: entries) {
+        // (a) 先頭候補: 指定空タイプの定番 → 「あなたの定番」の順にフォールバック。
+        // ⚠️ 複数の空タイプの定番を1つのプールに混ぜない（定番系は最大1件）というのが
+        // 今回の仕様変更の要点。関係ない空タイプの定番を出さないことで
+        // 「似た定番が3枚並ぶ」問題を根本的に解消する。
+        if
+            let skyType,
+            entries.filter({ $0.skyType == skyType }).count >= PersonalRecipeProfile.minimumSamples,
+            let skyTypeRecipe = PersonalRecipeProfile.representative(for: skyType, from: entries)
+        {
+            result.append(
+                PersonalDefaultCandidate(
+                    kind: .skyType(skyType),
+                    label: "\(skyType.displayName)の定番",
+                    recipe: skyTypeRecipe
+                )
+            )
+        } else if let overallRecipe = PersonalRecipeProfile.representative(for: nil, from: entries) {
             result.append(
                 PersonalDefaultCandidate(kind: .overallDefault, label: "あなたの定番", recipe: overallRecipe)
             )
         }
 
-        // (b) 空タイプ別の定番。
-        // まず「minimumSamples 件以上ある空タイプ」だけを (skyType, サンプル数, 宣言順index) で収集し、
-        // サンプル数降順・同数は宣言順というルールで決定的にソートする
-        // （毎回同じ候補順になるように。辞書やSet経由の非決定的な順序を避ける）。
-        let skyTypeStats: [(skyType: SkyType, sampleCount: Int, declarationIndex: Int)] =
-            SkyType.allCases.enumerated().compactMap { index, skyType in
-                let sampleCount = entries.filter { $0.skyType == skyType }.count
-                guard sampleCount >= PersonalRecipeProfile.minimumSamples else { return nil }
-                return (skyType, sampleCount, index)
-            }
-
-        let sortedSkyTypeStats = skyTypeStats.sorted { lhs, rhs in
-            if lhs.sampleCount != rhs.sampleCount {
-                return lhs.sampleCount > rhs.sampleCount
-            }
-            return lhs.declarationIndex < rhs.declarationIndex
-        }
-
-        // ⚠️ プールなので件数での打ち切りはしない
-        // （条件（minimumSamples 以上）を満たす空タイプは全てプールへ入れる）。
-        for stat in sortedSkyTypeStats {
-            // sampleCount は既に minimumSamples 以上を保証済みなので、
-            // representative(for:from:) は matched（skyType 一致サンプル）を使って算出される
-            // （全体へのフォールバックは発生しない）。
-            guard let recipe = PersonalRecipeProfile.representative(for: stat.skyType, from: entries) else { continue }
-            guard !result.contains(where: { isSimilar($0.recipe, recipe) }) else { continue }
-            result.append(
-                PersonalDefaultCandidate(
-                    kind: .skyType(stat.skyType),
-                    label: "\(stat.skyType.displayName)の定番",
-                    recipe: recipe
-                )
-            )
-        }
-
-        // (c) 固定プリセットは常に全件をプールの末尾に追加する（宣言順＝優先順位。
+        // (b) 固定プリセットは常に全件をプールの末尾に追加する（宣言順＝優先順位。
         // enum FixedPresetKind のコメント参照）。
         // ⚠️ プールなので「最低件数を満たしたら打ち切り」はしない
         // （履歴が豊富なユーザーでも、表示側が選べるようにプリセット全5件を候補として渡す）。
@@ -203,6 +207,15 @@ enum PersonalDefaultCandidateProvider {
         }
 
         return result
+    }
+
+    /// 旧シグネチャ（空タイプ指定なし）の薄いオーバーロード。
+    ///
+    /// 呼び出し側の移行を壊さないよう、`candidatePool(from:skyType: nil)` へ委譲するだけに留める
+    /// （= 常に「あなたの定番」へフォールバックする。空タイプ別の定番が欲しい場合は
+    /// `candidatePool(from:skyType:)` を明示的に呼ぶこと）。
+    static func candidatePool(from entries: [RecipeCorpusEntry]) -> [PersonalDefaultCandidate] {
+        candidatePool(from: entries, skyType: nil)
     }
 
     /// 2 つのレシピが「見た目上ほぼ同じ」かどうかを固定閾値で判定する。
@@ -228,5 +241,27 @@ enum PersonalDefaultCandidateProvider {
     /// （「一度も触っていない」＝ 0 相当という `EditRecipe` 側の設計に合わせる）。
     private static func absDiff(_ a: Double?, _ b: Double?) -> Double {
         abs((a ?? 0) - (b ?? 0))
+    }
+
+    /// `minimumSamples` 件以上ある空タイプを (skyType, サンプル数, 宣言順index) の形で収集し、
+    /// サンプル数降順・同数は宣言順というルールで決定的にソートする。
+    ///
+    /// `selectableSkyTypes(from:)` から使う内部ヘルパー。
+    private static func skyTypeStats(
+        from entries: [RecipeCorpusEntry]
+    ) -> [(skyType: SkyType, sampleCount: Int, declarationIndex: Int)] {
+        let stats: [(skyType: SkyType, sampleCount: Int, declarationIndex: Int)] =
+            SkyType.allCases.enumerated().compactMap { index, skyType in
+                let sampleCount = entries.filter { $0.skyType == skyType }.count
+                guard sampleCount >= PersonalRecipeProfile.minimumSamples else { return nil }
+                return (skyType, sampleCount, index)
+            }
+
+        return stats.sorted { lhs, rhs in
+            if lhs.sampleCount != rhs.sampleCount {
+                return lhs.sampleCount > rhs.sampleCount
+            }
+            return lhs.declarationIndex < rhs.declarationIndex
+        }
     }
 }
