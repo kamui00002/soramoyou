@@ -16,8 +16,10 @@ import UIKit
 
 /// 「AIで自動編集」候補選択シート本体。
 ///
-/// `EditViewModel.personalDefaultCandidates` を横スクロールカードで並べ、
-/// タップした候補を即座に `applyPersonalDefaultCandidate(_:)` で適用してシートを閉じる。
+/// `EditViewModel.personalDefaultCandidatePool` を優先順に描画し、既に採用した画像と
+/// 見た目で区別できる（`PersonalDefaultThumbnailComparer.isVisuallyDistinct`）候補だけを
+/// 横スクロールカードとして採用していく。タップした候補は即座に
+/// `applyPersonalDefaultCandidate(_:displayIndex:)` で適用してシートを閉じる。
 struct PersonalDefaultCandidateSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var viewModel: EditViewModel
@@ -36,17 +38,22 @@ struct PersonalDefaultCandidateSheet: View {
 
     // MARK: - 状態
 
-    /// 生成済み候補サムネイルのキャッシュ。キー: `PersonalDefaultCandidate.id`
-    @State private var candidateThumbnails: [String: UIImage] = [:]
-    /// サムネイル生成中フラグ（UI のプレースホルダ表示用）
+    /// 見た目で選別した後の**採用済み**候補と、実際に描画したサムネイル画像のペア。
+    /// これがそのままカードとして表示される「最終リスト」であり、表示順＝配列順＝
+    /// `applyPersonalDefaultCandidate(_:displayIndex:)` に渡す `displayIndex` になる。
+    /// 候補と画像を1つの配列に持つことで、辞書 + プール参照方式だと起きがちな
+    /// 「選別後の候補と画像の対応ズレ」を構造的に防ぐ。
+    @State private var acceptedCandidates: [(candidate: PersonalDefaultCandidate, image: UIImage)] = []
+    /// サムネイル生成中フラグ（末尾 ProgressView の表示用）
     @State private var isGeneratingThumbnails = false
     /// サムネイル生成の世代トークン（race condition 回避）。
     /// `Style2DPadView.regeneratePresetThumbnails()` と同じパターン:
     /// `ImageService.resizeImage` が detached continuation でキャンセル不能なため、
     /// 「結果反映前に自分の世代が最新か」を確認する世代制を最後の防衛線として使う。
     @State private var thumbnailGeneration: Int = 0
-    /// onAppear 計装（`personal_default_candidates_shown`）を一度だけ送るためのフラグ。
-    /// onAppear は SwiftUI の仕様で複数回発火しうるため、二重送信を防ぐ
+    /// 計装（`personal_default_candidates_shown`）を一度だけ送るためのフラグ。
+    /// 選別完了時（`regenerateCandidateThumbnails()` の末尾）に一度だけ送るため、
+    /// `.task` が同一シートインスタンスで複数回走った場合の二重送信を防ぐ
     /// （`PostInfoView.hasGeneratedFallback` と同じ流儀）。
     @State private var hasLoggedShown = false
 
@@ -56,8 +63,13 @@ struct PersonalDefaultCandidateSheet: View {
         NavigationView {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
-                    ForEach(viewModel.personalDefaultCandidates) { candidate in
-                        candidateCard(candidate)
+                    ForEach(Array(acceptedCandidates.enumerated()), id: \.element.candidate.id) { index, entry in
+                        candidateCard(entry.candidate, image: entry.image, displayIndex: index)
+                    }
+                    if isGeneratingThumbnails {
+                        ProgressView()
+                            .tint(.white.opacity(0.5))
+                            .frame(width: thumbDisplaySize, height: thumbDisplaySize)
                     }
                 }
                 .padding(20)
@@ -80,34 +92,26 @@ struct PersonalDefaultCandidateSheet: View {
         .task {
             await regenerateCandidateThumbnails()
         }
-        .onAppear {
-            // パーソナルAI編集の利用計装（柱1 v2 主要操作）。
-            // PII を含まない安定文字列（`analyticsValue`）のみを送る。
-            // onAppear は複数回発火しうるため hasLoggedShown で一度だけに限定する。
-            guard !hasLoggedShown else { return }
-            hasLoggedShown = true
-            let kinds = viewModel.personalDefaultCandidates.map(\.kind.analyticsValue)
-            LoggingService.shared.logEvent("personal_default_candidates_shown", parameters: [
-                "candidate_count": kinds.count,
-                "candidate_kinds": kinds.joined(separator: ","),
-            ])
-        }
     }
 
     // MARK: - カード
 
-    /// 候補 1 件分のカード（サムネイル + ラベル）。
+    /// 採用済み候補 1 件分のカード（サムネイル + ラベル）。
     /// タップで即座に候補を適用してシートを閉じる
     /// （選び直したくなった場合は既存の編集画面 Undo が受け皿になる想定）。
-    private func candidateCard(_ candidate: PersonalDefaultCandidate) -> some View {
+    private func candidateCard(_ candidate: PersonalDefaultCandidate, image: UIImage, displayIndex: Int) -> some View {
         Button(action: {
             let impact = UIImpactFeedbackGenerator(style: .light)
             impact.impactOccurred()
-            viewModel.applyPersonalDefaultCandidate(candidate)
+            viewModel.applyPersonalDefaultCandidate(candidate, displayIndex: displayIndex)
             dismiss()
         }) {
             VStack(spacing: 8) {
-                candidateThumbnail(candidate)
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: thumbDisplaySize, height: thumbDisplaySize)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
                 Text(candidate.label)
                     .font(.caption)
                     .foregroundColor(.white)
@@ -117,31 +121,16 @@ struct PersonalDefaultCandidateSheet: View {
         .accessibilityLabel("\(candidate.label) を適用")
     }
 
-    /// サムネイル本体（生成済みならプレビュー画像、生成前は角丸プレースホルダ + ProgressView）。
-    @ViewBuilder
-    private func candidateThumbnail(_ candidate: PersonalDefaultCandidate) -> some View {
-        ZStack {
-            // 角丸の背景（画像未生成時のプレースホルダ兼用）
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.white.opacity(0.08))
-                .frame(width: thumbDisplaySize, height: thumbDisplaySize)
+    // MARK: - サムネイル生成 + 描画後の見た目選別
 
-            if let image = candidateThumbnails[candidate.id] {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: thumbDisplaySize, height: thumbDisplaySize)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-            } else if isGeneratingThumbnails {
-                ProgressView()
-                    .tint(.white.opacity(0.5))
-            }
-        }
-    }
-
-    // MARK: - サムネイル生成
-
-    /// 全候補分のサムネイルを非同期・逐次で生成する。
+    /// 候補プールを優先順に描画し、見た目で区別できる候補だけを `acceptedCandidates` へ採用していく。
+    ///
+    /// 従来（プール導入前）は「候補一覧をそのまま全部描画して表示する」だけだったが、
+    /// `PersonalDefaultCandidateProvider.candidatePool(from:)` がレシピの数値差だけで
+    /// 重複排除した打ち切りなしのプール（最大11件程度）を返すようになったため、
+    /// 「レシピは違うが描画すると見た目はほぼ同じ」候補まで並んでしまう。これを防ぐため、
+    /// ここで実際に描画してから `PersonalDefaultThumbnailComparer.isVisuallyDistinct` で
+    /// 見た目の重複を判定し、選ばれた候補だけをカードとして表示する。
     ///
     /// - ベース画像は `viewModel.currentTransformedImageForThumbnails()`（向き正規化＋回転・反転
     ///   焼き込み済み）を使う。生画像をそのまま使うと `cropRectNorm` の切り出し基準
@@ -162,8 +151,8 @@ struct PersonalDefaultCandidateSheet: View {
         thumbnailGeneration &+= 1
         let myGeneration = thumbnailGeneration
 
-        // 2. 既存キャッシュをクリアし生成中フラグを立てる
-        candidateThumbnails = [:]
+        // 2. 既存の採用リストをクリアし生成中フラグを立てる
+        acceptedCandidates = []
         isGeneratingThumbnails = true
 
         /// 自分が最新世代でなければ何もしない（古いタスクの状態書き換え防止）
@@ -194,9 +183,11 @@ struct PersonalDefaultCandidateSheet: View {
         //    ここまで完走しているが、その間にシートが閉じられていれば離脱）
         guard isStillCurrent(), !Task.isCancelled else { return }
 
-        // 6. 各候補を順次適用（並列 GPU 生成はしない）
-        for candidate in viewModel.personalDefaultCandidates {
-            // 各候補適用前に世代+キャンセルチェック
+        // 6. プールを優先順に順次描画し、見た目で区別できる候補だけ採用する（並列 GPU 生成はしない）。
+        for candidate in viewModel.personalDefaultCandidatePool {
+            // 採用数が上限に達したら、プールを最後まで見ずに打ち切る。
+            guard acceptedCandidates.count < PersonalDefaultCandidateProvider.maxCandidateCount else { break }
+            // 各候補描画前に世代+キャンセルチェック
             guard isStillCurrent(), !Task.isCancelled else { return }
 
             let recipe = candidate.recipe.mergingPhotoSpecificFields(
@@ -208,12 +199,32 @@ struct PersonalDefaultCandidateSheet: View {
                 let thumb = try await imageService.applyEditRecipe(recipe, to: smallImage)
                 // 結果反映前にも世代チェック
                 guard isStillCurrent(), !Task.isCancelled else { return }
-                candidateThumbnails[candidate.id] = thumb
+
+                let acceptedImages = acceptedCandidates.map(\.image)
+                if PersonalDefaultThumbnailComparer.isVisuallyDistinct(thumb, from: acceptedImages) {
+                    acceptedCandidates.append((candidate: candidate, image: thumb))
+                }
+                // 区別できない（見た目が既採用と同じ）候補は捨てて次のプール要素へ進む。
             } catch {
-                // 個別候補の生成失敗は無視（プレースホルダ表示で継続）
+                // 個別候補の描画失敗は捨てて次の候補へ（既存挙動を維持）
                 continue
             }
         }
+
+        // 7. 選別完了時点で「実際に表示された件数・種類」を計装する。
+        //    onAppear 即時ではなく、選別が終わったこの時点で 1 回だけ送る
+        //    （プール全体ではなく、見た目選別後の実際の表示件数・種類を送るため）。
+        //    defer に置かないのは、世代切れ・ベース画像取得失敗などの早期 return でも
+        //    発火してしまい「表示していないものを表示した」と誤記録するのを避けるため。
+        guard isStillCurrent(), !Task.isCancelled, !hasLoggedShown else { return }
+        hasLoggedShown = true
+        let kinds = acceptedCandidates.map(\.candidate.kind.analyticsValue)
+        LoggingService.shared.logEvent("personal_default_candidates_shown", parameters: [
+            "candidate_count": kinds.count,
+            "candidate_kinds": kinds.joined(separator: ","),
+            // プール件数（選別前の母数）。「N件から M件に絞られた」を運用で追えるようにするため。
+            "pool_size": viewModel.personalDefaultCandidatePool.count,
+        ])
     }
 }
 
@@ -221,12 +232,15 @@ struct PersonalDefaultCandidateSheet: View {
 
 #Preview {
     // モックの EditViewModel を使ったプレビュー。
-    // userId なし＝固定プリセット4件のプレビュー。
     // `EditViewModel.init()` は images が空だと loadEquippedTools()（内部で
     // refreshPersonalDefaultAvailability() を呼ぶ）を起動しないため、呼ばないと
-    // personalDefaultCandidates が空のまま＝候補ゼロで何も描画されない。
-    // ここで明示的に呼び、履歴ゼロ→固定プリセット4件が表示される状態にする
-    // （画像を渡していないためサムネイルは生成されず、プレースホルダ＋ラベル表示になる）。
+    // personalDefaultCandidatePool が空のまま＝候補ゼロで何も描画されない。
+    // ここで明示的に呼び、履歴ゼロ→固定プリセット全件がプールに入る状態にする。
+    // ⚠️ ただし images が空のため `currentTransformedImageForThumbnails()` が nil を返し、
+    // `regenerateCandidateThumbnails()` は描画前に早期 return する
+    // （＝ acceptedCandidates は空のまま。このプレビューはカードもプレースホルダも
+    // 描画されない空のシートになる。実機の見た目を確認したい場合は images 付きの
+    // EditViewModel を渡すこと）。
     let vm = EditViewModel()
     vm.refreshPersonalDefaultAvailability()
     return PersonalDefaultCandidateSheet(viewModel: vm)

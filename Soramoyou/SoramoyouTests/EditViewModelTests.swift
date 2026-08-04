@@ -434,7 +434,10 @@ final class EditViewModelTests: XCTestCase {
         await viewModel.loadEquippedTools()
 
         // Then
-        XCTAssertEqual(viewModel.personalDefaultCandidates.count, 4, "未ログインでも固定プリセット4件（全 preset）で候補シートが埋まる")
+        XCTAssertEqual(
+            viewModel.personalDefaultCandidatePool.count, FixedPresetKind.allCases.count,
+            "未ログインでも固定プリセット全件（プールは打ち切りなし）で候補プールが埋まる"
+        )
         XCTAssertTrue(viewModel.hasPersonalDefault, "未ログインでも『AIで自動編集』ボタンは表示される")
     }
 
@@ -560,12 +563,14 @@ final class EditViewModelTests: XCTestCase {
                        "空補正の強度は保持（統合レビューで発見した消失バグの回帰防止）")
     }
 
-    /// 🆕 候補シート（柱1 v2）: コーパスに十分な履歴があると、
-    /// 「全体の定番」が先頭 + 固定プリセットで埋められ、候補が min〜max 件（4〜5件）出ることを検証する。
+    /// 🆕 候補プール（柱1 v2）: コーパスに十分な履歴があると、
+    /// 「全体の定番」が先頭 + 固定プリセット全件で埋められることを検証する。
+    /// プール化により件数の打ち切りは無くなったため、件数は「1(全体の定番) + プリセット全件」の
+    /// 固定値になる（空タイプ別「晴れの定番」は全体候補と isSimilar 判定で重複排除される想定）。
     func testRefreshPersonalDefaultAvailabilityPopulatesCandidates() async {
         // Arrange: testApplyPersonalDefaultAppliesRepresentativeAndPreservesPhotoSpecific と同じ仕込み
         // （exposureEV/saturationCI が全件一致するため、空タイプ別「晴れの定番」は全体候補と isSimilar 判定で
-        //   重複排除され、実質「全体の定番 + 固定プリセット3件」の4件になる想定）。
+        //   重複排除される）。
         let (vm, tmp) = makeCorpusFixture()
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -573,15 +578,17 @@ final class EditViewModelTests: XCTestCase {
         vm.refreshPersonalDefaultAvailability()
 
         // Assert
-        XCTAssertTrue((4 ... 5).contains(vm.personalDefaultCandidates.count),
-                      "候補シートは最小4件〜最大5件の範囲に収まる（実際: \(vm.personalDefaultCandidates.count)件）")
-        XCTAssertEqual(vm.personalDefaultCandidates.first?.kind, .overallDefault,
+        XCTAssertEqual(
+            vm.personalDefaultCandidatePool.count, 1 + FixedPresetKind.allCases.count,
+            "候補プールは打ち切りなし：全体の定番1件 + 固定プリセット全件（実際: \(vm.personalDefaultCandidatePool.count)件）"
+        )
+        XCTAssertEqual(vm.personalDefaultCandidatePool.first?.kind, .overallDefault,
                        "3件以上の履歴があれば先頭候補は全体の『あなたの定番』")
         XCTAssertTrue(vm.hasPersonalDefault)
     }
 
-    /// 🆕 候補シート（柱1 v2）: コーパスが0件（新規ユーザー・未ログイン想定）でも
-    /// 固定プリセット4件で候補シートが必ず埋まる新仕様を検証する。
+    /// 🆕 候補プール（柱1 v2）: コーパスが0件（新規ユーザー・未ログイン想定）でも
+    /// 固定プリセット全件で候補プールが必ず埋まる新仕様を検証する。
     func testRefreshPersonalDefaultShowsPresetsWithoutHistory() async {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
@@ -598,9 +605,12 @@ final class EditViewModelTests: XCTestCase {
 
         vm.refreshPersonalDefaultAvailability()
 
-        XCTAssertEqual(vm.personalDefaultCandidates.count, 4, "履歴0件では固定プリセット4件（minCandidateCount）で埋まる")
+        XCTAssertEqual(
+            vm.personalDefaultCandidatePool.count, FixedPresetKind.allCases.count,
+            "履歴0件では固定プリセット全件（プールは打ち切りなし）で埋まる"
+        )
         XCTAssertTrue(
-            vm.personalDefaultCandidates.allSatisfy { candidate in
+            vm.personalDefaultCandidatePool.allSatisfy { candidate in
                 if case .preset = candidate.kind { return true }
                 return false
             },
@@ -623,13 +633,17 @@ final class EditViewModelTests: XCTestCase {
         vm.editRecipe.targetDynamicRange = .hdr
         vm.editRecipe.skyCorrectionIntensity = 0.6
 
-        // Act: 候補シートから「全体の定番」候補を選んで適用
+        // Act: 候補プールから「全体の定番」候補を選んで適用
         vm.refreshPersonalDefaultAvailability()
-        guard let overallCandidate = vm.personalDefaultCandidates.first(where: { $0.kind == .overallDefault }) else {
-            XCTFail("『全体の定番』候補が候補シートに見つからない")
+        guard let overallCandidate = vm.personalDefaultCandidatePool.first(where: { $0.kind == .overallDefault }) else {
+            XCTFail("『全体の定番』候補が候補プールに見つからない")
             return
         }
-        vm.applyPersonalDefaultCandidate(overallCandidate)
+        // displayIndex はシート側で描画後に選別した表示リスト内の位置。
+        // このテストは候補プールから直接取得しているためシートの選別を経ていないが、
+        // applyPersonalDefaultCandidate 自体は displayIndex を計装にしか使わないため、
+        // 適用結果の検証（写真固有フィールドの保持）には影響しない。
+        vm.applyPersonalDefaultCandidate(overallCandidate, displayIndex: 0)
 
         // Assert: 代表値が適用され、写真固有編集は保持される
         XCTAssertEqual(vm.editRecipe.exposureEV, 1.0, accuracy: 0.0001)
@@ -642,12 +656,12 @@ final class EditViewModelTests: XCTestCase {
 
     /// 【仕様変更に伴う書き換え】旧テスト `testRefreshPersonalDefaultUnavailableBelowMinimum` は
     /// 「3件未満なら hasPersonalDefault=false（ボタン非表示）」という旧仕様を検証していたが、
-    /// 候補シート導入（柱1 v2 / `PersonalDefaultCandidateProvider`）で
-    /// 「履歴不足でも固定プリセットで最低4件を保証し常時表示する」に仕様が変わったため、
+    /// 候補プール導入（柱1 v2 / `PersonalDefaultCandidateProvider`）で
+    /// 「履歴不足でも固定プリセット全件を保証し常時表示する」に仕様が変わったため、
     /// 新仕様に合わせて内容を書き換えた（テスト名も実態に合わせて変更）。
     func testRefreshPersonalDefaultBelowMinimumShowsPresetOnly() async {
         // 2件のみ（minimumSamples=3 未満）→ 全体/空タイプ別の「あなたの定番」は不成立だが、
-        // 固定プリセットのみで候補シートが埋まることを検証する。
+        // 固定プリセットのみで候補プールが埋まることを検証する。
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -667,11 +681,11 @@ final class EditViewModelTests: XCTestCase {
 
         XCTAssertTrue(vm.hasPersonalDefault, "履歴不足でも固定プリセットでボタンは表示される（新仕様）")
         XCTAssertEqual(
-            vm.personalDefaultCandidates.count, PersonalDefaultCandidateProvider.minCandidateCount,
-            "『あなたの定番』系が不成立のため固定プリセットの最低件数のみになる"
+            vm.personalDefaultCandidatePool.count, FixedPresetKind.allCases.count,
+            "『あなたの定番』系が不成立のため固定プリセット全件のみになる（プールは打ち切りなし）"
         )
         XCTAssertTrue(
-            vm.personalDefaultCandidates.allSatisfy { candidate in
+            vm.personalDefaultCandidatePool.allSatisfy { candidate in
                 if case .preset = candidate.kind { return true }
                 return false
             },

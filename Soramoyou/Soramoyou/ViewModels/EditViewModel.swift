@@ -27,21 +27,25 @@ class EditViewModel: ObservableObject {
     /// Undo/Redo・状態管理が値コピーで安全に行える。
     @Published var editRecipe: EditRecipe = .init()
 
-    /// 「AIで自動編集」ボタンを表示できるか（＝ `personalDefaultCandidates` が1件以上あるか）。
-    /// 柱1 v2（候補シート導入）で固定プリセットが最低4件（`minCandidateCount`）を保証するため、
+    /// 「AIで自動編集」ボタンを表示できるか（＝ `personalDefaultCandidatePool` が1件以上あるか）。
+    /// 柱1 v2（候補シート導入）で固定プリセットが常に全件（`FixedPresetKind.allCases`）プールへ入るため、
     /// 実質的に常に true になる（旧「コーパスに十分な学習データがある時だけ true」から意味が変化）。
     /// エディタ起動時（loadEquippedTools）に算出する。
-    /// S2対応: `personalDefaultCandidates` から導出する computed property にし、値の手動代入による
-    /// 二重管理（配列とフラグの食い違い）を排除した。`personalDefaultCandidates` 自体が @Published
+    /// S2対応: `personalDefaultCandidatePool` から導出する computed property にし、値の手動代入による
+    /// 二重管理（配列とフラグの食い違い）を排除した。`personalDefaultCandidatePool` 自体が @Published
     /// のため、View 側の更新は引き続き `refreshPersonalDefaultAvailability()` 実行時（＝配列の
     /// 再代入時）に発火する。
-    var hasPersonalDefault: Bool { !personalDefaultCandidates.isEmpty }
+    var hasPersonalDefault: Bool { !personalDefaultCandidatePool.isEmpty }
 
-    /// 「AIで自動編集」候補シート（柱1 v2）に並べる編集パターン一覧。
-    /// `refreshPersonalDefaultAvailability()` で `PersonalDefaultCandidateProvider.candidates(from:)`
-    /// を通じて算出する。固定プリセットで最低件数（`minCandidateCount`）を保証するため、
-    /// 新規ユーザー（コーパス0件）でも空にはならない。
-    @Published private(set) var personalDefaultCandidates: [PersonalDefaultCandidate] = []
+    /// 「AIで自動編集」候補プール（柱1 v2）。
+    ///
+    /// ⚠️ これは**候補プール**であり、「実際に候補シートへ表示される最終リスト」ではない。
+    /// `refreshPersonalDefaultAvailability()` で `PersonalDefaultCandidateProvider.candidatePool(from:)`
+    /// を通じて算出する優先順のプール（打ち切りなし・最大11件程度）で、この中から実際に何件・どれを
+    /// 表示するかは `PersonalDefaultCandidateSheet` が描画後に見た目（`PersonalDefaultThumbnailComparer`）
+    /// で選別して決める。固定プリセットが常に全件プールへ入るため、新規ユーザー（コーパス0件）でも
+    /// 空にはならない。
+    @Published private(set) var personalDefaultCandidatePool: [PersonalDefaultCandidate] = []
 
     /// 後方互換 computed property
     ///
@@ -464,7 +468,7 @@ class EditViewModel: ObservableObject {
     /// 適用のたびにコーパスをディスクから再読込しないようにする（値の意味＝コーパス件数は変えない）。
     private var corpusSampleCount = 0
 
-    /// コーパスから候補シート一覧（`personalDefaultCandidates`）と表示可否（`hasPersonalDefault`）を更新する。
+    /// コーパスから候補プール（`personalDefaultCandidatePool`）と表示可否（`hasPersonalDefault`）を更新する。
     /// （エディタ起動時に呼ぶ。）
     /// ⚠️ userId が nil（未ログイン）でも entries=[] として候補を計算する
     ///    （新規ユーザー・未ログインでも固定プリセット候補を出す確定仕様。
@@ -472,8 +476,8 @@ class EditViewModel: ObservableObject {
     func refreshPersonalDefaultAvailability() {
         let entries = userId.map { recipeCorpusStore.entries(userId: $0) } ?? []
         corpusSampleCount = entries.count
-        personalDefaultCandidates = PersonalDefaultCandidateProvider.candidates(from: entries)
-        // hasPersonalDefault は personalDefaultCandidates から導出する computed property（S2対応）
+        personalDefaultCandidatePool = PersonalDefaultCandidateProvider.candidatePool(from: entries)
+        // hasPersonalDefault は personalDefaultCandidatePool から導出する computed property（S2対応）
         // のため、ここでの手動代入は不要（配列の再代入だけで自動的に追従する）。
     }
 
@@ -483,7 +487,7 @@ class EditViewModel: ObservableObject {
     ///   `EditRecipe.mergingPhotoSpecificFields` で現在値を保持し、候補レシピでは上書きしない
     ///   （HDR指定が SDR に戻る／直前のワンタップ空補正が消える、という統合レビューで発見した回帰の防止）。
     /// - Undo 可能（適用前のスナップショットを履歴に push する）。
-    /// - `applyPersonalDefault()` と `applyPersonalDefaultCandidate(_:)` の両方から呼ばれ、
+    /// - `applyPersonalDefault()` と `applyPersonalDefaultCandidate(_:displayIndex:)` の両方から呼ばれ、
     ///   合成・履歴・計装・プレビュー再生成のロジックを一本化する。
     private func applyPersonalDefaultRecipe(
         _ recipe: EditRecipe,
@@ -506,7 +510,7 @@ class EditViewModel: ObservableObject {
 
     /// 「あなたの定番」（過去の編集履歴全体から導いた代表レシピ）を現在の画像に適用する。
     /// - 過去の自分の編集（コーパス）から代表レシピを作り、トーン・カラー・フィルターを転写する。
-    /// ⚠️ 候補選択シート（`personalDefaultCandidates` / `applyPersonalDefaultCandidate(_:)`）導入後は
+    /// ⚠️ 候補選択シート（`personalDefaultCandidatePool` / `applyPersonalDefaultCandidate(_:displayIndex:)`）導入後は
     ///    UI からは呼ばれない。既存テスト
     ///    `testApplyPersonalDefaultAppliesRepresentativeAndPreservesPhotoSpecific` の互換のため残置する。
     func applyPersonalDefault() {
@@ -522,10 +526,15 @@ class EditViewModel: ObservableObject {
         )
     }
 
-    /// 候補シート（`personalDefaultCandidates`）でユーザーが選んだ編集パターンを適用する。
-    /// パターン選択シート導入後は「AIで自動編集」ボタンの実体としてこちらが UI から呼ばれる。
-    func applyPersonalDefaultCandidate(_ candidate: PersonalDefaultCandidate) {
-        let candidateIndex = personalDefaultCandidates.firstIndex(of: candidate) ?? -1
+    /// 候補シート（`personalDefaultCandidatePool` を描画後に選別した表示リスト）でユーザーが選んだ
+    /// 編集パターンを適用する。パターン選択シート導入後は「AIで自動編集」ボタンの実体として
+    /// こちらが UI から呼ばれる。
+    /// - Parameter displayIndex: ユーザーが**候補シートに実際に表示されたカードの何番目**を選んだか
+    ///   （0始まり）。プール内の index ではない点に注意。プールは打ち切りなしの優先順リストであり
+    ///   見た目の重複判定で候補が間引かれるため、プール内 index を送ると「ユーザーが左から何番目を
+    ///   選んだか」という計装の意図とズレる。呼び出し側（`PersonalDefaultCandidateSheet`）が
+    ///   表示リスト内での位置を渡す。
+    func applyPersonalDefaultCandidate(_ candidate: PersonalDefaultCandidate, displayIndex: Int) {
         // G6対応: sample_count は refreshPersonalDefaultAvailability() で読んだコーパス件数
         // （corpusSampleCount）を再利用する。以前は候補適用のたびにコーパスをディスクから
         // 再読込していたが、値そのもの（コーパス件数）は変えていない。
@@ -534,7 +543,7 @@ class EditViewModel: ObservableObject {
             loggingEvent: "personal_default_candidate_selected",
             loggingParameters: [
                 "candidate_kind": candidate.kind.analyticsValue,
-                "candidate_index": candidateIndex,
+                "candidate_index": displayIndex,
                 "sample_count": corpusSampleCount,
             ]
         )
