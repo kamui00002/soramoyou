@@ -729,6 +729,38 @@ final class EditViewModelTests: XCTestCase {
                        "サンプル数降順（sunset=4件 > clear=3件）で並ぶべき。cloudy(2件)は不足のため含まれない")
     }
 
+    /// 🆕 `corpusSampleCount(for:)`: 候補シートで選べない空タイプの「あと何回」表示に使う
+    /// 空タイプ別の履歴件数取得を検証する。`cachedCorpusEntries`（`refreshPersonalDefaultAvailability()`
+    /// でキャッシュ済み）をフィルタして数えるだけの軽量実装であることの回帰テスト。
+    func testCorpusSampleCountReturnsCountPerSkyType() async {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = RecipeCorpusStore(baseDirectory: tmp)
+
+        for _ in 0 ..< 4 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .sunset), userId: "u1")
+        }
+        for _ in 0 ..< 2 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .cloudy), userId: "u1")
+        }
+
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: "u1",
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            recipeCorpusStore: store
+        )
+        vm.refreshPersonalDefaultAvailability()
+
+        XCTAssertEqual(vm.corpusSampleCount(for: .sunset), 4)
+        XCTAssertEqual(vm.corpusSampleCount(for: .cloudy), 2)
+        XCTAssertEqual(vm.corpusSampleCount(for: .clear), 0, "履歴が無い空タイプは0件")
+    }
+
     /// 🆕 `EditRecipe.mergingPhotoSpecificFields(from:includeSkyCorrection:)` の
     /// `includeSkyCorrection` 引数そのものを検証する（候補パス/サムネイル生成パスの土台となる純関数）。
     /// - `includeSkyCorrection: false`（サムネイル生成用）→ skyCorrectionIntensity は nil になる

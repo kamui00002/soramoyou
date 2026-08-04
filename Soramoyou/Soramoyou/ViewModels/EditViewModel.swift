@@ -505,6 +505,15 @@ class EditViewModel: ObservableObject {
         PersonalDefaultCandidateProvider.candidatePool(from: cachedCorpusEntries, skyType: skyType)
     }
 
+    /// 空タイプごとのコーパス件数（選べない空タイプの「あと何回」表示に使う）。
+    /// `refreshPersonalDefaultAvailability()` でキャッシュした `cachedCorpusEntries` を数えるだけの
+    /// 軽量実装（ディスク再読込はしない・候補シートの空タイプ切替UIから毎回呼ばれても安価）。
+    /// - Parameter skyType: 対象の空タイプ。
+    /// - Returns: その空タイプの履歴件数。
+    func corpusSampleCount(for skyType: SkyType) -> Int {
+        cachedCorpusEntries.filter { $0.skyType == skyType }.count
+    }
+
     /// 「あなたの定番」系の候補（`representative` 単体 or 候補シートで選ばれた `PersonalDefaultCandidate`）を
     /// 実際に適用する共通処理。
     /// - 写真固有の編集（クロップ・トーンカーブ・ダイナミックレンジ・空補正）は

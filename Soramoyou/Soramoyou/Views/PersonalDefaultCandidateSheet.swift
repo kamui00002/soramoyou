@@ -36,6 +36,11 @@ struct PersonalDefaultCandidateSheet: View {
     private let thumbDisplaySize: CGFloat = 140
     /// サムネイル生成時のピクセルサイズ（高 DPI 用）
     private let thumbGenerateSize = CGSize(width: 300, height: 300)
+    /// 常設の説明行（`explanationRow`）の最小高さ（pt）。
+    /// 通常時の1行文言（例:「あなたのこれまでの編集の記録から作りました」）と、選べない空タイプを
+    /// タップしたときの「あと何回」メッセージ（文字数が多く2行に折り返しやすい）を切り替えても、
+    /// 行の高さを2行ぶん確保しておくことでカード群の位置が上下に動かない（跳ねない）ようにする。
+    private let explanationRowMinHeight: CGFloat = 32
 
     // MARK: - 状態
 
@@ -62,6 +67,16 @@ struct PersonalDefaultCandidateSheet: View {
     /// 初めて見る空タイプに切り替えたときは改めて1回送る。
     @State private var loggedShownSkyTypeKeys: Set<String> = []
 
+    /// 選べない空タイプがタップされたとき、常設の説明行に一時的に表示する「あと何回」メッセージの対象。
+    /// nil の間は通常の `explanationText` を表示する。
+    @State private var tapExplanationSkyType: SkyType?
+    /// `tapExplanationSkyType` の自動消去タイマーを再起動させるための単調増加カウンタ。
+    /// 選べない空タイプがタップされるたびに +1 し、それを `.task(id:)` のキーにすることで、
+    /// 同じ空タイプを連打した場合でも SwiftUI が古い自動消去タスクをキャンセルして
+    /// 新しい3秒タイマーに貼り直す（UUID等での値比較方式だと、シート破棄時にタスクが
+    /// 自動キャンセルされない弱点がある。`.task(id:)` はビューの生存期間にひも付くためこれを避けられる）。
+    @State private var tapExplanationTick: Int = 0
+
     /// 初期選択の空タイプは「サンプル数が最多の空タイプ」（`viewModel.selectableSkyTypes.first`）。
     /// 選べる空タイプが1つも無ければ nil（＝先頭候補は「あなたの定番」へフォールバックする）。
     /// シートが開かれる時点（＝「AIで自動編集」ボタンが表示できている時点）で
@@ -77,6 +92,7 @@ struct PersonalDefaultCandidateSheet: View {
         NavigationView {
             VStack(spacing: 0) {
                 skyTypeSwitcher
+                explanationRow
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
                         ForEach(Array(acceptedCandidates.enumerated()), id: \.element.candidate.id) { index, entry in
@@ -151,20 +167,27 @@ struct PersonalDefaultCandidateSheet: View {
         }
     }
 
-    /// 空タイプ切替ボタン1件。`viewModel.selectableSkyTypes` に含まれない空タイプは
-    /// disabled + グレー表示にし、「履歴が溜まれば選べるようになる」ことが伝わるようにする。
+    /// 空タイプ切替ボタン1件。`viewModel.selectableSkyTypes` に含まれない空タイプはグレー表示にし、
+    /// 「履歴が溜まれば選べるようになる」ことが伝わるようにする。
+    /// ⚠️ 選べない空タイプも**タップ自体は受け付ける**（`.disabled` は付けない）。タップされたら
+    /// `selectedSkyType` は変えず、常設の説明行に「あと何回」の理由メッセージを一時的に表示するだけ
+    /// （`showTapExplanation(for:)`）。無効の見た目（グレー文字・非選択の背景）はラベル側でこれまでどおり表現する。
     private func skyTypeToggleButton(_ skyType: SkyType) -> some View {
         let isSelectable = viewModel.selectableSkyTypes.contains(skyType)
         let isSelected = selectedSkyType == skyType
         return Button {
-            guard isSelectable, selectedSkyType != skyType else { return }
-            selectedSkyType = skyType
-            // 空タイプ切替が実際に使われているかを運用で見るための計装（G7）。
-            // 初期選択（init時点のデフォルト）はここを通らないため、ユーザーが実際に
-            // タップして切り替えた操作だけが送られる。
-            LoggingService.shared.logEvent("personal_default_sky_type_changed", parameters: [
-                "sky_type": skyType.rawValue,
-            ])
+            if isSelectable {
+                guard selectedSkyType != skyType else { return }
+                selectedSkyType = skyType
+                // 空タイプ切替が実際に使われているかを運用で見るための計装（G7）。
+                // 初期選択（init時点のデフォルト）はここを通らないため、ユーザーが実際に
+                // タップして切り替えた操作だけが送られる。
+                LoggingService.shared.logEvent("personal_default_sky_type_changed", parameters: [
+                    "sky_type": skyType.rawValue,
+                ])
+            } else {
+                showTapExplanation(for: skyType)
+            }
         } label: {
             Text(skyType.displayName)
                 .font(.subheadline.weight(isSelected ? .semibold : .regular))
@@ -176,8 +199,90 @@ struct PersonalDefaultCandidateSheet: View {
                 )
         }
         .buttonStyle(.plain)
-        .disabled(!isSelectable)
-        .accessibilityLabel(isSelectable ? "\(skyType.displayName)の定番に切り替え" : "\(skyType.displayName)は履歴不足のため選べません")
+        .accessibilityLabel(isSelectable ? "\(skyType.displayName)の定番に切り替え" : remainingSamplesMessage(for: skyType))
+    }
+
+    // MARK: - 常設の説明行
+
+    /// 空タイプ切替の下・候補カードの上に置く常設の説明行。
+    /// 通常時は `explanationText`（実際に表示されている先頭候補の種類に応じた説明）を表示し、
+    /// 選べない空タイプがタップされた直後だけ `currentExplanationText` が一時的に
+    /// `remainingSamplesMessage(for:)` へ差し替わる。`lineLimit(2)` + `explanationRowMinHeight` で
+    /// 2行ぶんの高さを常に確保しているため、文言の長さが変わってもカード群の位置は動かない。
+    private var explanationRow: some View {
+        Text(currentExplanationText)
+            .font(.caption)
+            .foregroundColor(.white.opacity(0.7))
+            .lineLimit(2)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, minHeight: explanationRowMinHeight, alignment: .topLeading)
+            .padding(.horizontal, 20)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+            .animation(.easeInOut(duration: 0.2), value: currentExplanationText)
+            // 選べない空タイプのタップから3秒後に一時メッセージを消して通常表示へ戻す。
+            // `.task(id: tapExplanationTick)` なので、連打で tick が変わるたびにタイマーが
+            // 貼り直され、シートが閉じられればタスクごと自動キャンセルされる。
+            .task(id: tapExplanationTick) {
+                await autoDismissTapExplanation()
+            }
+    }
+
+    /// `explanationRow` に実際に表示するテキスト。
+    /// タップ直後の一時メッセージがあればそちらを優先し、無ければ常設の `explanationText`。
+    private var currentExplanationText: String {
+        if let tapExplanationSkyType {
+            return remainingSamplesMessage(for: tapExplanationSkyType)
+        }
+        return explanationText
+    }
+
+    /// 常設の説明行の通常文言。実際に描画・採用された先頭候補（`acceptedCandidates.first`）の
+    /// 種類に応じて動的に変える。
+    /// ⚠️ 候補プール（`viewModel.personalDefaultCandidatePool(for:)` の中身）ではなく、
+    /// 見た目選別（`PersonalDefaultThumbnailComparer`）を経て**実際に画面に表示されている**
+    /// `acceptedCandidates` で判定する。プール先頭がレンダリング後に「既採用と見た目が同じ」として
+    /// 弾かれ、表示上の先頭候補が入れ替わる可能性があるため。
+    private var explanationText: String {
+        guard let leadingKind = acceptedCandidates.first?.candidate.kind else {
+            // サムネイル生成中でまだ1件も採用されていない間は空文字。
+            // Text 自体は explanationRowMinHeight で高さを確保済みのためレイアウトは動かない。
+            return ""
+        }
+        switch leadingKind {
+        case let .skyType(skyType):
+            return "あなたが\(skyType.displayName)を編集した記録から作りました"
+        case .overallDefault:
+            return "あなたのこれまでの編集の記録から作りました"
+        case .preset:
+            return "使うほど、あなた専用のパターンが増えます"
+        }
+    }
+
+    /// 選べない空タイプの「あと何回投稿すれば選べるようになるか」メッセージ。
+    /// `PersonalRecipeProfile.minimumSamples` を直接参照して差分を計算するため、
+    /// 閾値が変わっても数値のハードコードなしに表示が自動で追従する。
+    /// 「使えない」ではなく「あとN回で使える」という前向きな文言にすることで、
+    /// 履歴を貯める動機付けにする。
+    private func remainingSamplesMessage(for skyType: SkyType) -> String {
+        let remaining = max(PersonalRecipeProfile.minimumSamples - viewModel.corpusSampleCount(for: skyType), 0)
+        return "『\(skyType.displayName)』を選ぶには、あと\(remaining)回 \(skyType.displayName)の写真を投稿してください"
+    }
+
+    /// 選べない空タイプがタップされたときの一時メッセージ表示を開始する。
+    /// `selectedSkyType` はここでは変更しない（選べないのだから選択状態にはしない）。
+    private func showTapExplanation(for skyType: SkyType) {
+        tapExplanationSkyType = skyType
+        tapExplanationTick &+= 1
+    }
+
+    /// `tapExplanationTick` が変わるたび（＝選べない空タイプがタップされるたび）に再起動され、
+    /// 3秒後に一時メッセージを消して常設の `explanationText` へ戻す。
+    private func autoDismissTapExplanation() async {
+        guard tapExplanationSkyType != nil else { return }
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        guard !Task.isCancelled else { return }
+        tapExplanationSkyType = nil
     }
 
     // MARK: - カード
