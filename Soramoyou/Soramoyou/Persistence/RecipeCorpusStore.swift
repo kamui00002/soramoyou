@@ -17,7 +17,6 @@ import Foundation
 /// - 古いエントリは `capacity` 件まで保持（直近を優先）。無限肥大を防ぐ。
 /// - `baseDirectory` を注入可能にし、単体テストで一時ディレクトリを使えるようにする。
 final class RecipeCorpusStore {
-
     // MARK: - Properties
 
     private let corpusDirectory: URL
@@ -31,7 +30,7 @@ final class RecipeCorpusStore {
     init(baseDirectory: URL? = nil, capacity: Int = 300) {
         let base = baseDirectory
             ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        self.corpusDirectory = base.appendingPathComponent("recipes/corpus", isDirectory: true)
+        corpusDirectory = base.appendingPathComponent("recipes/corpus", isDirectory: true)
         self.capacity = max(1, capacity)
 
         try? FileManager.default.createDirectory(
@@ -60,6 +59,23 @@ final class RecipeCorpusStore {
     func append(_ entry: RecipeCorpusEntry, userId: String) -> [RecipeCorpusEntry] {
         var all = entries(userId: userId)
         all.append(entry)
+        if all.count > capacity {
+            all = Array(all.suffix(capacity))
+        }
+        save(all, userId: userId)
+        return all
+    }
+
+    /// 複数エントリを一括追記し、容量超過分を古い順に破棄して保存する。
+    /// `append(_:userId:)` を呼び出し元でループさせると 1 件ごとに全件読み込み→全件書き込みが
+    /// 走ってしまう（1 投稿で N 件記録する場合に N 回の全読み書き）ため、読み込み・書き込みを
+    /// それぞれ 1 回にまとめる（保存先・容量超過時の破棄方針・エラーハンドリングは既存 `append` と同じ）。
+    /// - Returns: 保存後の全エントリ（古い順）。
+    @discardableResult
+    func append(contentsOf newEntries: [RecipeCorpusEntry], userId: String) -> [RecipeCorpusEntry] {
+        guard !newEntries.isEmpty else { return entries(userId: userId) }
+        var all = entries(userId: userId)
+        all.append(contentsOf: newEntries)
         if all.count > capacity {
             all = Array(all.suffix(capacity))
         }

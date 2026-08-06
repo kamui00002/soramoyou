@@ -15,12 +15,14 @@ import SwiftUI
 
 /// What's New（新機能紹介）のコンテンツと永続化キーの定義。
 enum WhatsNewContent {
-
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    // 2026-07-21: 1.9.4 で4新機能（空を整える／空カレンダー／連続記録／共有カード）を紹介。
-    static let currentID = "2026-07-sky-tools"
+    // 2026-08-03: 「AIで自動編集」が候補選択方式に変更。空タイプを選ぶと、その空タイプで
+    // 編集した記録から作った定番パターン（無ければ「あなたの定番」やおまかせプリセットへ
+    // フォールバック）を1件提案する仕様（2026-08-05: description の文言を現行仕様に合わせて修正。
+    // 複数の空タイプ別定番を並べて見比べる旧設計の説明のままだったため）。
+    static let currentID = "2026-08-personal-default-candidates"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -37,51 +39,24 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（1.9.4）の新機能紹介ページ。
-    /// アイコンは各機能の実UIで使われている SF Symbol と揃えている
-    /// （空を整える=EditView の適用ボタン／空カレンダー=SkyCalendarDiaryView／
-    ///   連続記録=SkyStreakChipView・SkyZukanView／共有カード=共有メニューの「共有カードを書き出す」）。
+    /// 今回（2026-08）の新機能紹介ページ。
+    /// アイコンは実UIで使われている SF Symbol と揃えている
+    /// （AI自動編集の候補選択＝EditView の「AIで自動編集」ボタン）。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "cloud.sun.fill",
-            badge: "自動補正",
-            title: "空を整える",
-            description: "編集画面で空の部分だけを自動で見つけて\n明るさや色みをワンタップで整えます",
+            icon: "wand.and.stars",
+            badge: "AI自動編集",
+            title: "パターンを選べるように",
+            // ⚠️ 2026-08-05: currentID は変えていない（同一リリースサイクル内の文言修正であり、
+            // 既読ユーザーへ再表示する必要は無いため）。現行仕様（空タイプを選ぶと、その空タイプ向けの
+            // 定番1枚が提案される）に合わせて description のみ書き直した
+            // （旧文言は「複数の空タイプ別定番を並べて見比べる」という初期設計の説明のままだった）。
+            description: "「AIで自動編集」が候補から選ぶ方式に。\n空のタイプを選ぶと、あなたがその空で編集した記録から作ったパターンを提案します",
             gradientColors: [
-                Color(red: 0.40, green: 0.72, blue: 0.95),
-                Color(red: 0.99, green: 0.75, blue: 0.45)
+                Color(red: 0.55, green: 0.48, blue: 0.90),
+                Color(red: 0.85, green: 0.58, blue: 0.90),
             ]
         ),
-        WhatsNewPage(
-            icon: "calendar",
-            badge: "空図鑑",
-            title: "空カレンダー",
-            description: "プロフィールの「空図鑑」から開くと\nあの日の空をカレンダーで振り返れます",
-            gradientColors: [
-                Color(red: 0.46, green: 0.44, blue: 0.82),
-                Color(red: 0.64, green: 0.60, blue: 0.92)
-            ]
-        ),
-        WhatsNewPage(
-            icon: "flame.fill",
-            badge: "毎日の記録",
-            title: "連続記録",
-            description: "毎日空を投稿すると連続日数が記録され\n達成に応じてバッジがもらえます",
-            gradientColors: [
-                Color(red: 1.00, green: 0.62, blue: 0.32),
-                Color(red: 0.94, green: 0.38, blue: 0.36)
-            ]
-        ),
-        WhatsNewPage(
-            icon: "square.and.arrow.up.on.square",
-            badge: "書き出し",
-            title: "共有カード",
-            description: "共有メニューから日付入りの\nカードをInstagramやXへシェアできます",
-            gradientColors: [
-                Color(red: 0.68, green: 0.55, blue: 0.92),
-                Color(red: 0.95, green: 0.56, blue: 0.76)
-            ]
-        )
     ]
 }
 
@@ -106,7 +81,6 @@ struct WhatsNewPage: Identifiable {
 
 /// What's New を表示すべきかを判定する純関数。UI/永続化に非依存でテスト可能。
 enum WhatsNewGate {
-
     /// 表示すべきかを返す。
     /// - Parameters:
     ///   - currentID: 現在の新機能セット識別子（`WhatsNewContent.currentID`）。

@@ -34,6 +34,10 @@ struct EditView: View {
     @State private var isGeneratingFinal = false
     /// 編集ツール設定画面の表示フラグ
     @State private var showEditToolsSettings = false
+    /// 「AIで自動編集」候補選択シート（柱1 v2）の表示フラグ。
+    /// 従来は即時適用だったが、複数の編集パターンから選ぶ方式に変更したため、
+    /// ボタンタップではこのフラグを立ててシートを開くだけにする。
+    @State private var showPersonalDefaultCandidateSheet = false
     /// Living Sky（空を動かす）プレビューシートの表示フラグ。
     /// 元々はプロトタイプ確認用に #if DEBUG 限定で使っていたが、本番導線化に伴い常時使用する。
     @State private var showLivingSkySheet = false
@@ -43,11 +47,11 @@ struct EditView: View {
     /// DEBUG は常に true、Release/TestFlight は custom claim `skyMotionBeta` 保有者のみ true
     /// （`.task` で `SkyMotionAccess.isEnabled()` を反映）。設計書: docs/sky-motion-design.md §7。
     /// ＝ TestFlight 内部テストで許可済みアカウントだけが使える状態にする（公開はしない）。
-#if DEBUG
-    @State private var skyMotionEnabled = true
-#else
-    @State private var skyMotionEnabled = false
-#endif
+    #if DEBUG
+        @State private var skyMotionEnabled = true
+    #else
+        @State private var skyMotionEnabled = false
+    #endif
     /// Living Sky 初回コーチマークの既読フラグ。
     /// `WhatsNewContent` の永続化キー群と同じ流儀で UserDefaults に永続化し、
     /// 一度タップ or ボタン押下で消したら以後表示しない。
@@ -75,7 +79,7 @@ struct EditView: View {
         postKind: PostKind = .single
     ) {
         self.userId = userId
-        self.originalImages = images
+        originalImages = images
         self.externalEditInfos = externalEditInfos
         self.editingContext = editingContext
         self.postKind = postKind
@@ -97,18 +101,18 @@ struct EditView: View {
                 VStack(spacing: 0) {
                     // 画像プレビュー
                     imagePreviewView
-                        // Living Sky（空を動かす）ボタン＋初回コーチマーク。
-                        // ⚠️ 2026-07-18 一時撤収: 動きモデルを9バージョン検証したが実機の知覚品質が
-                        //    出荷水準に達しなかったため、導線を DEBUG 限定へ再ゲートする
-                        //    （経緯と将来方針=ML版: docs/research/living-sky-research-2026-07-part2-synthesis.md）。
-                        //    エンジン・シェーダ・シート等のコード資産は全て温存（DEBUGで引き続き検証可能）。
-                        // ⚠️ navigationBarTrailing に置くと項目数が5個になり iOS 26 が
-                        // オーバーフローメニューに折りたたむため、toolbar には置かない（過去の教訓）。
-#if DEBUG
+                    // Living Sky（空を動かす）ボタン＋初回コーチマーク。
+                    // ⚠️ 2026-07-18 一時撤収: 動きモデルを9バージョン検証したが実機の知覚品質が
+                    //    出荷水準に達しなかったため、導線を DEBUG 限定へ再ゲートする
+                    //    （経緯と将来方針=ML版: docs/research/living-sky-research-2026-07-part2-synthesis.md）。
+                    //    エンジン・シェーダ・シート等のコード資産は全て温存（DEBUGで引き続き検証可能）。
+                    // ⚠️ navigationBarTrailing に置くと項目数が5個になり iOS 26 が
+                    // オーバーフローメニューに折りたたむため、toolbar には置かない（過去の教訓）。
+                    #if DEBUG
                         .overlay(alignment: .bottom) {
                             livingSkyOverlay
                         }
-#endif
+                    #endif
                         // 「空を動かす（Kling版）」フェーズ2 UI導線。既存 Living Sky（Metal版）の
                         // ボタンは下部中央にあるため、被らないよう右上に配置する。
                         // allowlist ゲート: DEBUG または skyMotionBeta claim 保有者のみ表示（TestFlight内部テスト用）。
@@ -186,12 +190,19 @@ struct EditView: View {
                                 defer { isGeneratingFinal = false }
                                 do {
                                     let finalImages = try await viewModel.generateFinalImages()
+                                    // generateFinalImages() 完了後に呼ぶ（＝ imageStates が最新化済み）。
+                                    // currentEditRecipes() は内部で saveCurrentImageState() を呼ぶ
+                                    // 冪等な関数なので、ここで呼んでも既存状態を壊さない。
+                                    // これにより「複数枚投稿で最後の1枚のレシピしか学習コーパスに
+                                    // 記録されない」既知バグを修正し、全画像分のレシピを渡す。
+                                    let finalRecipes = viewModel.currentEditRecipes()
                                     // 画像生成完了後にペイロードをセット。これが nil でなくなった
                                     // ときだけ fullScreenCover が PostInfoView を構築する。
                                     postInfoPayload = PostInfoPayload(
                                         editedImages: finalImages,
                                         editSettings: viewModel.editSettings,
-                                        editRecipe: viewModel.editRecipe
+                                        editRecipe: viewModel.editRecipe,
+                                        editRecipes: finalRecipes
                                     )
                                 } catch {
                                     viewModel.errorMessage = error.userFriendlyMessage
@@ -213,52 +224,57 @@ struct EditView: View {
             }) {
                 EditToolsSettingsView()
             }
+            // 「AIで自動編集」候補選択シート（柱1 v2）。「あなたの定番」バーのボタンから開く。
+            .sheet(isPresented: $showPersonalDefaultCandidateSheet) {
+                PersonalDefaultCandidateSheet(viewModel: viewModel)
+            }
             // Living Sky（空を動かす）: 現在の編集済みプレビュー画像を渡す。
             // 未生成（読み込み中など）の場合は元画像にフォールバックする。
             // ⚠️ 2026-07-18 一時撤収に伴い DEBUG 限定（上の overlay 側コメント参照）。
-#if DEBUG
+            #if DEBUG
             .sheet(isPresented: $showLivingSkySheet) {
-                if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
-                    LivingSkySheet(sourceImage: sourceImage)
+                    if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
+                        LivingSkySheet(sourceImage: sourceImage)
+                    }
                 }
-            }
-#endif
-            // 「空を動かす（Kling版）」フェーズ2 UI導線。表示は allowlist ゲート（skyMotionEnabled）で
-            // 制御するため、シート修飾子自体は Release にも含める（showSkyMotionSheet はゲート済みの
-            // ボタンからしか true にならないので、未許可ユーザーに提示されることはない）。
-            .sheet(isPresented: $showSkyMotionSheet) {
-                if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
-                    SkyMotionSheet(sourceImage: sourceImage)
+            #endif
+                // 「空を動かす（Kling版）」フェーズ2 UI導線。表示は allowlist ゲート（skyMotionEnabled）で
+                // 制御するため、シート修飾子自体は Release にも含める（showSkyMotionSheet はゲート済みの
+                // ボタンからしか true にならないので、未許可ユーザーに提示されることはない）。
+                .sheet(isPresented: $showSkyMotionSheet) {
+                    if let sourceImage = viewModel.displayPreviewImage ?? viewModel.currentImage {
+                        SkyMotionSheet(sourceImage: sourceImage)
+                    }
                 }
-            }
-            .task {
-                // Release/TestFlight では allowlist(claim skyMotionBeta) 保有者のみ導線を表示する。
-                skyMotionEnabled = await SkyMotionAccess.isEnabled()
-            }
-            .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
-                Button("OK") {
-                    viewModel.errorMessage = nil
+                .task {
+                    // Release/TestFlight では allowlist(claim skyMotionBeta) 保有者のみ導線を表示する。
+                    skyMotionEnabled = await SkyMotionAccess.isEnabled()
                 }
-            } message: {
-                if let errorMessage = viewModel.errorMessage {
-                    Text(errorMessage)
+                .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
+                    Button("OK") {
+                        viewModel.errorMessage = nil
+                    }
+                } message: {
+                    if let errorMessage = viewModel.errorMessage {
+                        Text(errorMessage)
+                    }
                 }
-            }
-            .fullScreenCover(item: $postInfoPayload) { payload in
-                NavigationView {
-                    PostInfoView(
-                        images: originalImages,
-                        editedImages: payload.editedImages,
-                        editSettings: payload.editSettings,
-                        editRecipe: payload.editRecipe,
-                        userId: userId,
-                        externalEditInfos: externalEditInfos,
-                        editingContext: editingContext,
-                        postKind: postKind
-                    )
+                .fullScreenCover(item: $postInfoPayload) { payload in
+                    NavigationView {
+                        PostInfoView(
+                            images: originalImages,
+                            editedImages: payload.editedImages,
+                            editSettings: payload.editSettings,
+                            editRecipe: payload.editRecipe,
+                            editRecipes: payload.editRecipes,
+                            userId: userId,
+                            externalEditInfos: externalEditInfos,
+                            editingContext: editingContext,
+                            postKind: postKind
+                        )
+                    }
+                    .navigationViewStyle(.stack)
                 }
-                .navigationViewStyle(.stack)
-            }
         }
         .navigationViewStyle(.stack)
         .preferredColorScheme(.dark)
@@ -269,14 +285,17 @@ struct EditView: View {
         }
     }
 
-    // MARK: - あなたの定番バー（柱1 v1）
+    // MARK: - あなたの定番バー（柱1 v2）
 
     /// 「あなたの定番」を適用する目立つボタン。
     /// ツールバーのアイコンでは見つけにくかったため、編集コントロール直上に大きく配置する。
-    /// コーパスに十分な学習データがあるときだけ表示する。
+    /// 固定プリセットが最低4件（`minCandidateCount`）を保証するため、コーパスの学習データが
+    /// 無い新規ユーザー・未ログイン時でも候補は必ず出る＝実質常時表示になる
+    /// （`EditViewModel.refreshPersonalDefaultAvailability()` 参照）。
+    /// 押すと候補選択シートを開く（即適用は廃止・候補から選ぶ方式）。
     private var personalDefaultBar: some View {
         Button {
-            viewModel.applyPersonalDefault()
+            showPersonalDefaultCandidateSheet = true
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "wand.and.stars")
@@ -376,7 +395,7 @@ struct EditView: View {
                     get: { viewModel.skyCorrectionIntensityValue },
                     set: { viewModel.updateSkyCorrectionIntensityRealtime($0) }
                 ),
-                in: 0...1,
+                in: 0 ... 1,
                 onEditingChanged: { isEditing in
                     if !isEditing {
                         viewModel.finalizeSkyCorrectionIntensity()
@@ -458,7 +477,7 @@ struct EditView: View {
 
     @ViewBuilder
     private var normalPreviewContent: some View {
-        if viewModel.isLoading && !viewModel.isEditingRealtime {
+        if viewModel.isLoading, !viewModel.isEditingRealtime {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
         } else if let displayImage = viewModel.displayPreviewImage {
@@ -537,18 +556,18 @@ struct EditView: View {
     /// GeometryReader の中身を分離（複雑な let 宣言を含むため）
     private func cropEditorBody(image: UIImage, geoSize: CGSize) -> some View {
         let imageAspect = image.size.width / max(image.size.height, 1)
-        let viewAspect  = geoSize.width / max(geoSize.height, 1)
+        let viewAspect = geoSize.width / max(geoSize.height, 1)
         let drawWidth: CGFloat
         let drawHeight: CGFloat
         if imageAspect > viewAspect {
-            drawWidth  = geoSize.width
+            drawWidth = geoSize.width
             drawHeight = geoSize.width / imageAspect
         } else {
             drawHeight = geoSize.height
-            drawWidth  = geoSize.height * imageAspect
+            drawWidth = geoSize.height * imageAspect
         }
         let imageRect = CGRect(
-            x: (geoSize.width  - drawWidth)  / 2,
+            x: (geoSize.width - drawWidth) / 2,
             y: (geoSize.height - drawHeight) / 2,
             width: drawWidth,
             height: drawHeight
@@ -880,7 +899,7 @@ struct EditView: View {
 
                 Slider(
                     value: $rotationSliderValue,
-                    in: -45...45,
+                    in: -45 ... 45,
                     onEditingChanged: { isEditing in
                         if isEditing {
                             viewModel.setRotationRealtime(rotationSliderValue)
@@ -1059,7 +1078,6 @@ struct EditView: View {
         }
         .accessibilityLabel("空を動かす（Kling版・β）")
     }
-
 }
 
 // MARK: - Living Sky Coach Mark Tail（吹き出しの尻尾）
@@ -1093,6 +1111,7 @@ private struct HDRDynamicRangeModifier: ViewModifier {
 }
 
 // MARK: - Sky Correction Compare Button Style ⭐️
+
 // DragGesture/LongPressGesture の代わりに ButtonStyle を使用し、他のジェスチャーとの競合を回避
 // （HomeView.CardButtonStyle と同じ設計判断）
 
@@ -1127,7 +1146,7 @@ struct TickMarksView: View {
     var body: some View {
         GeometryReader { _ in
             HStack(spacing: 0) {
-                ForEach(0..<tickCount, id: \.self) { index in
+                ForEach(0 ..< tickCount, id: \.self) { index in
                     let highlightIndex = isBidirectional ? tickCount / 2 : 0
                     let isHighlightTick = index == highlightIndex
 
@@ -1266,7 +1285,7 @@ struct ToolButton: View {
                         )
 
                     // 値がある場合のインジケーター
-                    if hasValue && !isSelected {
+                    if hasValue, !isSelected {
                         Circle()
                             .fill(DesignTokens.Colors.sunsetOrange)
                             .frame(width: 8, height: 8)
@@ -1292,16 +1311,16 @@ struct ToolButton: View {
 
     private func iconName(for tool: EditTool) -> String {
         switch tool {
-        case .brightness: return "sun.max"
-        case .contrast: return "circle.lefthalf.filled"
-        case .saturation: return "paintpalette"
-        case .exposure: return "camera.aperture"
-        case .highlight: return "sun.max.circle"
-        case .shadow: return "moon"
-        case .warmth: return "flame"
-        case .sharpness: return "wand.and.stars"
-        case .vignette: return "circle.dashed"
-        default: return "slider.horizontal.3"
+        case .brightness: "sun.max"
+        case .contrast: "circle.lefthalf.filled"
+        case .saturation: "paintpalette"
+        case .exposure: "camera.aperture"
+        case .highlight: "sun.max.circle"
+        case .shadow: "moon"
+        case .warmth: "flame"
+        case .sharpness: "wand.and.stars"
+        case .vignette: "circle.dashed"
+        default: "slider.horizontal.3"
         }
     }
 }
@@ -1364,6 +1383,9 @@ struct PostInfoPayload: Identifiable {
     let editedImages: [UIImage]
     let editSettings: EditSettings
     let editRecipe: EditRecipe
+    /// 全画像分の編集レシピ（複数枚投稿時の学習コーパス記録用）。
+    /// `EditViewModel.currentEditRecipes()` が返す、画像ごとに独立したレシピ配列をそのまま渡す。
+    let editRecipes: [EditRecipe]
 }
 
 // MARK: - Preview

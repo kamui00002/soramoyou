@@ -20,8 +20,9 @@ import Foundation
 ///
 /// 副作用なし・I/O なしの純関数なので単体テストで網羅できる。
 enum PersonalRecipeProfile {
-
     /// 「あなたの定番」を成立させる最小サンプル数。これ未満なら nil。
+    /// private を付けず internal のまま公開する: `PersonalDefaultCandidateProvider` が
+    /// 空タイプ別候補の成立可否を判定する際、ここと同じ閾値を参照して二重定義を防ぐため。
     static let minimumSamples = 3
 
     /// 新しさによる減衰係数。直近の編集ほど定番に強く反映するため。
@@ -35,9 +36,10 @@ enum PersonalRecipeProfile {
 
     /// 指定 skyType の「あなたの定番」レシピを返す。
     ///
-    /// 注: 現状の本番呼び出し(EditViewModel)は `for: nil`（全体の代表値）を渡すため、
-    /// skyType 一致ブランチは将来(v2)の空タイプ別先回りに備えた拡張点であり、
-    /// 現状はテストからのみ実行される（意図的な設計）。
+    /// 注: `EditViewModel` 経由の「あなたの定番」単体適用は引き続き `for: nil`
+    /// （全体の代表値）を渡す。一方 `PersonalDefaultCandidateProvider.candidates(from:)`
+    /// が空タイプ別候補シートのために `for: skyType` を渡して本番から呼び出すようになったため、
+    /// skyType 一致ブランチはテスト専用ではなく本番経路でも実行される。
     ///
     /// - Parameters:
     ///   - skyType: 対象の空タイプ。一致サンプルが `minimumSamples` 未満なら全体へフォールバック。
@@ -52,11 +54,10 @@ enum PersonalRecipeProfile {
         guard !entries.isEmpty else { return nil }
 
         // skyType 一致サンプルを優先。十分に無ければ全体へフォールバック。
-        let matched: [RecipeCorpusEntry]
-        if let skyType {
-            matched = entries.filter { $0.skyType == skyType }
+        let matched: [RecipeCorpusEntry] = if let skyType {
+            entries.filter { $0.skyType == skyType }
         } else {
-            matched = []
+            []
         }
         let sample = matched.count >= minimumSamples ? matched : entries
         guard sample.count >= minimumSamples else { return nil }
@@ -64,41 +65,41 @@ enum PersonalRecipeProfile {
         // savedAt の新しい順に並べ替え、i 番目（0=最新）に減衰重みを付与する。
         let sorted = sample.sorted { $0.savedAt > $1.savedAt }
         let weights = sorted.enumerated().map { pow(recencyDecay, Double($0.offset)) }
-        let recipes = sorted.map { $0.recipe }
+        let recipes = sorted.map(\.recipe)
 
         var result = EditRecipe()
 
         // 物理スケール（常に値あり）→ 新しさで重み付けした加重平均
-        result.exposureEV     = weightedAverage(values: recipes.map { $0.exposureEV }, weights: weights)
-        result.brightnessCI   = weightedAverage(values: recipes.map { $0.brightnessCI }, weights: weights)
-        result.contrastCI     = weightedAverage(values: recipes.map { $0.contrastCI }, weights: weights)
-        result.gamma          = weightedAverage(values: recipes.map { $0.gamma }, weights: weights)
-        result.highlights     = weightedAverage(values: recipes.map { $0.highlights }, weights: weights)
-        result.shadowAmount   = weightedAverage(values: recipes.map { $0.shadowAmount }, weights: weights)
-        result.blackPointBias = weightedAverage(values: recipes.map { $0.blackPointBias }, weights: weights)
-        result.saturationCI   = weightedAverage(values: recipes.map { $0.saturationCI }, weights: weights)
+        result.exposureEV = weightedAverage(values: recipes.map(\.exposureEV), weights: weights)
+        result.brightnessCI = weightedAverage(values: recipes.map(\.brightnessCI), weights: weights)
+        result.contrastCI = weightedAverage(values: recipes.map(\.contrastCI), weights: weights)
+        result.gamma = weightedAverage(values: recipes.map(\.gamma), weights: weights)
+        result.highlights = weightedAverage(values: recipes.map(\.highlights), weights: weights)
+        result.shadowAmount = weightedAverage(values: recipes.map(\.shadowAmount), weights: weights)
+        result.blackPointBias = weightedAverage(values: recipes.map(\.blackPointBias), weights: weights)
+        result.saturationCI = weightedAverage(values: recipes.map(\.saturationCI), weights: weights)
 
         // 正規化 Optional → 重み付き使用率が過半数のときだけ、設定されていた分のみの加重平均を採用
-        result.brillianceNorm        = weightedAverageOptional(recipes.map { $0.brillianceNorm }, weights: weights)
-        result.naturalSaturationNorm = weightedAverageOptional(recipes.map { $0.naturalSaturationNorm }, weights: weights)
-        result.warmthNorm            = weightedAverageOptional(recipes.map { $0.warmthNorm }, weights: weights)
-        result.tintNorm              = weightedAverageOptional(recipes.map { $0.tintNorm }, weights: weights)
-        result.sharpnessNorm         = weightedAverageOptional(recipes.map { $0.sharpnessNorm }, weights: weights)
-        result.vignetteNorm          = weightedAverageOptional(recipes.map { $0.vignetteNorm }, weights: weights)
-        result.colorTemperatureNorm  = weightedAverageOptional(recipes.map { $0.colorTemperatureNorm }, weights: weights)
-        result.whiteBalanceNorm      = weightedAverageOptional(recipes.map { $0.whiteBalanceNorm }, weights: weights)
-        result.textureNorm           = weightedAverageOptional(recipes.map { $0.textureNorm }, weights: weights)
-        result.clarityNorm           = weightedAverageOptional(recipes.map { $0.clarityNorm }, weights: weights)
-        result.dehazeNorm            = weightedAverageOptional(recipes.map { $0.dehazeNorm }, weights: weights)
-        result.grainNorm             = weightedAverageOptional(recipes.map { $0.grainNorm }, weights: weights)
-        result.fadeNorm              = weightedAverageOptional(recipes.map { $0.fadeNorm }, weights: weights)
-        result.noiseReductionNorm    = weightedAverageOptional(recipes.map { $0.noiseReductionNorm }, weights: weights)
-        result.curvesNorm            = weightedAverageOptional(recipes.map { $0.curvesNorm }, weights: weights)
-        result.hslNorm               = weightedAverageOptional(recipes.map { $0.hslNorm }, weights: weights)
-        result.lensCorrectionNorm    = weightedAverageOptional(recipes.map { $0.lensCorrectionNorm }, weights: weights)
-        result.doubleExposureNorm    = weightedAverageOptional(recipes.map { $0.doubleExposureNorm }, weights: weights)
-        result.style2DToneNorm       = weightedAverageOptional(recipes.map { $0.style2DToneNorm }, weights: weights)
-        result.style2DColorNorm      = weightedAverageOptional(recipes.map { $0.style2DColorNorm }, weights: weights)
+        result.brillianceNorm = weightedAverageOptional(recipes.map(\.brillianceNorm), weights: weights)
+        result.naturalSaturationNorm = weightedAverageOptional(recipes.map(\.naturalSaturationNorm), weights: weights)
+        result.warmthNorm = weightedAverageOptional(recipes.map(\.warmthNorm), weights: weights)
+        result.tintNorm = weightedAverageOptional(recipes.map(\.tintNorm), weights: weights)
+        result.sharpnessNorm = weightedAverageOptional(recipes.map(\.sharpnessNorm), weights: weights)
+        result.vignetteNorm = weightedAverageOptional(recipes.map(\.vignetteNorm), weights: weights)
+        result.colorTemperatureNorm = weightedAverageOptional(recipes.map(\.colorTemperatureNorm), weights: weights)
+        result.whiteBalanceNorm = weightedAverageOptional(recipes.map(\.whiteBalanceNorm), weights: weights)
+        result.textureNorm = weightedAverageOptional(recipes.map(\.textureNorm), weights: weights)
+        result.clarityNorm = weightedAverageOptional(recipes.map(\.clarityNorm), weights: weights)
+        result.dehazeNorm = weightedAverageOptional(recipes.map(\.dehazeNorm), weights: weights)
+        result.grainNorm = weightedAverageOptional(recipes.map(\.grainNorm), weights: weights)
+        result.fadeNorm = weightedAverageOptional(recipes.map(\.fadeNorm), weights: weights)
+        result.noiseReductionNorm = weightedAverageOptional(recipes.map(\.noiseReductionNorm), weights: weights)
+        result.curvesNorm = weightedAverageOptional(recipes.map(\.curvesNorm), weights: weights)
+        result.hslNorm = weightedAverageOptional(recipes.map(\.hslNorm), weights: weights)
+        result.lensCorrectionNorm = weightedAverageOptional(recipes.map(\.lensCorrectionNorm), weights: weights)
+        result.doubleExposureNorm = weightedAverageOptional(recipes.map(\.doubleExposureNorm), weights: weights)
+        result.style2DToneNorm = weightedAverageOptional(recipes.map(\.style2DToneNorm), weights: weights)
+        result.style2DColorNorm = weightedAverageOptional(recipes.map(\.style2DColorNorm), weights: weights)
 
         // フィルターは「フィルタなし」も 1 票として含めた重み付き最頻値
         result.appliedFilter = dominantFilter(recipes: recipes, weights: weights)

@@ -5,9 +5,9 @@
 //  Created on 2025-12-06.
 //
 
+import Combine
 import Foundation
 import UIKit
-import Combine
 
 @MainActor
 class PostViewModel: ObservableObject {
@@ -18,6 +18,9 @@ class PostViewModel: ObservableObject {
     /// パーソナルAI編集のコーパス記録・Post.attachedRecipe への添付に使う（旧 editSettings は残す）。
     /// ※ v1 は「代表1枚」: 複数画像投稿でも現在の編集レシピ1件のみを扱う（画像ごとのレシピ配列は将来対応）。
     private var editRecipe: EditRecipe?
+    /// 画像ごとの独立した編集レシピ（EditView「次へ」経由・EditViewModel.currentEditRecipes()）。
+    /// 学習コーパスへの記録に使う。未設定（下書き経路など）なら空のまま。
+    private var editRecipes: [EditRecipe] = []
     /// 各画像の外部編集情報（写真Appバッジ表示用）⭐️ Issue #4
     /// 配列の index は selectedImages と対応する。Photos ライブラリ権限なしや
     /// 解決失敗時は対応する要素が nil。
@@ -44,7 +47,7 @@ class PostViewModel: ObservableObject {
     @Published var hashtags: [String] = []
     @Published var location: Location?
     @Published var visibility: Visibility = .public
-    @Published var saveOriginalImages: Bool = false  // オリジナル画像も保存するかどうか
+    @Published var saveOriginalImages: Bool = false // オリジナル画像も保存するかどうか
     @Published var isUploading = false
     @Published var uploadProgress: Double = 0.0
     @Published var errorMessage: String?
@@ -56,7 +59,7 @@ class PostViewModel: ObservableObject {
     // AI空タイプ判定結果 ☁️
     @Published var skyTypeClassificationResult: SkyTypeClassificationResult?
     @Published var isClassifyingSkyType = false
-    @Published var userSelectedSkyType: SkyType?  // ユーザーが手動選択した場合
+    @Published var userSelectedSkyType: SkyType? // ユーザーが手動選択した場合
 
     private let imageService: ImageServiceProtocol
     private let skyTypeClassifier: SkyTypeClassifierProtocol
@@ -72,8 +75,8 @@ class PostViewModel: ObservableObject {
 
     private var uploadedImageURLs: [String] = []
     private var uploadedThumbnailURLs: [String] = []
-    private var uploadedOriginalImageURLs: [String] = []  // オリジナル画像のパス
-    
+    private var uploadedOriginalImageURLs: [String] = [] // オリジナル画像のパス
+
     init(
         userId: String? = nil,
         imageService: ImageServiceProtocol = ImageService(),
@@ -87,9 +90,9 @@ class PostViewModel: ObservableObject {
         self.firestoreService = firestoreService
         self.skyTypeClassifier = skyTypeClassifier
     }
-    
+
     // MARK: - Image Management
-    
+
     /// 選択された画像を設定
     func setSelectedImages(_ images: [UIImage]) {
         selectedImages = images
@@ -116,7 +119,8 @@ class PostViewModel: ObservableObject {
                     )
                 }
                 if let data = normalized.jpegData(compressionQuality: 1.0),
-                   data.count > maxBytes {
+                   data.count > maxBytes
+                {
                     let compressed = try await imageService.compressImage(normalized, quality: 0.85)
                     if let compressedImage = UIImage(data: compressed) {
                         normalized = compressedImage
@@ -128,19 +132,28 @@ class PostViewModel: ObservableObject {
             }
         }
     }
-    
+
     /// 編集済み画像を設定
-    func setEditedImages(_ images: [UIImage], editSettings: EditSettings, editRecipe: EditRecipe? = nil) {
+    /// - Parameter editRecipes: 画像ごとの独立した編集レシピ（EditView「次へ」経由）。
+    ///   既定値 [] は下書き読込等の旧呼び出し互換のため（未指定なら recipesToRecordInCorpus() が
+    ///   editRecipe へフォールバックする）。
+    func setEditedImages(
+        _ images: [UIImage],
+        editSettings: EditSettings,
+        editRecipe: EditRecipe? = nil,
+        editRecipes: [EditRecipe] = []
+    ) {
         editedImages = images
         self.editSettings = editSettings
         self.editRecipe = editRecipe
+        self.editRecipes = editRecipes
     }
 
     /// 各画像の外部編集情報を設定（PHAsset 由来のメタ情報）⭐️ Issue #4
     func setExternalEditInfos(_ infos: [ExternalEditInfo?]) {
         externalEditInfos = infos
     }
-    
+
     // MARK: - Post Info Management
 
     /// 再編集モードの seed を流し込む（既存投稿の値を投稿情報画面へ復元）。
@@ -173,7 +186,7 @@ class PostViewModel: ObservableObject {
         let regex = try? NSRegularExpression(pattern: hashtagPattern, options: [])
         let nsString = text as NSString
         let results = regex?.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-        
+
         hashtags = results?.compactMap { result in
             if result.numberOfRanges > 1 {
                 let range = result.range(at: 1)
@@ -182,17 +195,17 @@ class PostViewModel: ObservableObject {
             return nil
         } ?? []
     }
-    
+
     /// 位置情報を設定
     func setLocation(_ location: Location) {
         self.location = location
     }
-    
+
     /// 公開設定を設定
     func setVisibility(_ visibility: Visibility) {
         self.visibility = visibility
     }
-    
+
     // MARK: - Image Info Extraction
 
     /// 画像情報を抽出
@@ -200,32 +213,31 @@ class PostViewModel: ObservableObject {
         guard let firstImage = selectedImages.first else { return }
 
         Task { [weak self] in
-            guard let self = self else { return }
+            guard let self else { return }
             do {
                 // EXIF情報の抽出
-                let exifData = try await self.imageService.extractEXIFData(firstImage)
+                let exifData = try await imageService.extractEXIFData(firstImage)
 
                 // 時間帯の判定
-                let timeOfDay: TimeOfDay?
-                if let capturedAt = exifData.capturedAt {
-                    timeOfDay = TimeOfDay.from(date: capturedAt)
+                let timeOfDay: TimeOfDay? = if let capturedAt = exifData.capturedAt {
+                    TimeOfDay.from(date: capturedAt)
                 } else {
-                    timeOfDay = nil
+                    nil
                 }
 
                 // 色の抽出
-                let colors = try await self.imageService.extractColors(firstImage, maxCount: 5)
+                let colors = try await imageService.extractColors(firstImage, maxCount: 5)
 
                 // 色温度の計算
-                let colorTemperature = try await self.imageService.calculateColorTemperature(firstImage)
+                let colorTemperature = try await imageService.calculateColorTemperature(firstImage)
 
                 // AI空タイプ判定（新しい分類器を使用）☁️
-                self.isClassifyingSkyType = true
-                let classificationResult = try await self.skyTypeClassifier.classify(firstImage, timeOfDay: timeOfDay)
-                self.skyTypeClassificationResult = classificationResult
-                self.isClassifyingSkyType = false
+                isClassifyingSkyType = true
+                let classificationResult = try await skyTypeClassifier.classify(firstImage, timeOfDay: timeOfDay)
+                skyTypeClassificationResult = classificationResult
+                isClassifyingSkyType = false
 
-                self.extractedInfo = ExtractedImageInfo(
+                extractedInfo = ExtractedImageInfo(
                     capturedAt: exifData.capturedAt,
                     timeOfDay: timeOfDay,
                     skyColors: colors,
@@ -233,7 +245,7 @@ class PostViewModel: ObservableObject {
                     skyType: classificationResult.skyType
                 )
             } catch {
-                self.isClassifyingSkyType = false
+                isClassifyingSkyType = false
                 // エラーをログに記録（自動抽出はオプションだが、ログ基盤には記録する）
                 ErrorHandler.logError(error, context: "PostViewModel.extractImageInfo")
             }
@@ -245,7 +257,7 @@ class PostViewModel: ObservableObject {
     /// ユーザーがAI判定結果を採用
     func acceptAISkyType() {
         guard let result = skyTypeClassificationResult else { return }
-        userSelectedSkyType = nil  // AI判定を使用
+        userSelectedSkyType = nil // AI判定を使用
         updateExtractedInfoSkyType(result.skyType)
     }
 
@@ -274,19 +286,52 @@ class PostViewModel: ObservableObject {
         }
         return skyTypeClassificationResult?.skyType ?? extractedInfo?.skyType
     }
-    
+
     // MARK: - Post Save
-    
+
+    /// 投稿種別が「配置写真(collage)」かどうかの述語。
+    /// ⚠️ 本 PR で新規追加した corpusSkyType 算出行のみで使用する。ファイル内に既にある
+    /// `postKind == .collage` の直書き箇所（folded 判定・imagesToUpload 分岐・isCollage 変数等）は
+    /// スコープ外のため置換しない。既存箇所の置換は別タスクで行う。
+    private var isCollagePost: Bool { postKind == .collage }
+
+    /// パーソナルAI編集の学習コーパスに記録する対象レシピ一覧を返す（中立レシピ・重複レシピは除外）。
+    /// 複数画像投稿では画像ごとの editRecipes（EditView「次へ」経由）を優先し、
+    /// 未設定（下書き経路など）の場合は従来どおり単数の editRecipe にフォールバックする。
+    ///
+    /// 重複除去（B案）:
+    /// 「あなたの定番」の代表値計算は savedAt 降順ランクに 0.8^k の減衰重みを付けるため
+    /// （`PersonalRecipeProfile.recencyDecay`）、同一レシピをN枚に適用した投稿がN件記録されると
+    /// 上位ランクを独占し（10枚で理論重みの最大89%）、過去の学習を1回の投稿で上書きしてしまう。
+    /// ほぼ同一のN件は情報量が1件分しかないので、`PersonalDefaultCandidateProvider.isSimilar` で
+    /// 既に採用したレシピと"ほぼ同じ"と判定されたものは記録しない＝1件に畳む。
+    /// 画像ごとに本当に異なる編集は isSimilar が偽になり全件記録される。
+    /// collage（配置写真）も同じ扱い（畳み込み後は1枚の見た目なのにNパネル分が全体定番だけを
+    /// 膨張させる問題＝G2 も同時解消）。
+    func recipesToRecordInCorpus() -> [EditRecipe] {
+        let source = editRecipes.isEmpty ? (editRecipe.map { [$0] } ?? []) : editRecipes
+        let nonNeutral = source.filter { !$0.isNeutral }
+
+        var deduped: [EditRecipe] = []
+        for recipe in nonNeutral {
+            let isDuplicate = deduped.contains { PersonalDefaultCandidateProvider.isSimilar($0, recipe) }
+            if !isDuplicate {
+                deduped.append(recipe)
+            }
+        }
+        return deduped
+    }
+
     /// 投稿を保存
     func savePost() async throws {
-        guard let userId = userId else {
+        guard let userId else {
             throw PostViewModelError.userNotAuthenticated
         }
-        
+
         guard !editedImages.isEmpty else {
             throw PostViewModelError.noImages
         }
-        
+
         isUploading = true
         uploadProgress = 0.0
         errorMessage = nil
@@ -304,7 +349,7 @@ class PostViewModel: ObservableObject {
             let folded = foldImagesIfNeeded(editedImages)
             // collage は「1枚に並べて必ず成功」が約束。万一 compose に失敗（folded が1枚にならない）したら、
             // 4枚バラ撒き＋collageメタ不整合の投稿を作らず、明示エラーで中断する（中途半端な保存を防ぐ）。
-            if postKind == .collage && folded.count != 1 {
+            if postKind == .collage, folded.count != 1 {
                 throw PostViewModelError.collageCompositionFailed
             }
 
@@ -316,18 +361,18 @@ class PostViewModel: ObservableObject {
             let imageURLs = try await RetryableOperation.executeIfRetryable(
                 operationName: "PostViewModel.uploadImages"
             ) { [self] in
-                try await self.uploadImages(imagesToUpload)
+                try await uploadImages(imagesToUpload)
             }
 
             // 2. オリジナル画像をアップロード（ユーザーが選択した場合のみ）。
             //    合成投稿(collage/panorama)は素材N枚を原画像として残さない（images=合成1枚との非対称・
             //    再編集導線が postKind を運べず "panorama"/"collage" が消える破綻を防ぐ）。
             var originalImageURLs: [UploadedOriginalImage]? = nil
-            if saveOriginalImages && !selectedImages.isEmpty && !postKind.isComposite {
+            if saveOriginalImages, !selectedImages.isEmpty, !postKind.isComposite {
                 originalImageURLs = try await RetryableOperation.executeIfRetryable(
                     operationName: "PostViewModel.uploadOriginalImages"
                 ) { [self] in
-                    try await self.uploadOriginalImages()
+                    try await uploadOriginalImages()
                 }
             }
 
@@ -339,7 +384,7 @@ class PostViewModel: ObservableObject {
                 _ = try await RetryableOperation.executeIfRetryable(
                     operationName: "PostViewModel.updatePost"
                 ) { [self] in
-                    try await self.firestoreService.updatePost(post)
+                    try await firestoreService.updatePost(post)
                 }
                 // 更新成功後、旧 Storage の孤児ファイルをベストエフォート削除（失敗は無視＝投稿更新は成立済み）。
                 // 再アップロードで画像 URL は変わるため Kingfisher の URL キャッシュは自然に更新される。
@@ -350,7 +395,7 @@ class PostViewModel: ObservableObject {
                 _ = try await RetryableOperation.executeIfRetryable(
                     operationName: "PostViewModel.createPost"
                 ) { [self] in
-                    try await self.firestoreService.createPost(post)
+                    try await firestoreService.createPost(post)
                 }
             }
 
@@ -362,17 +407,26 @@ class PostViewModel: ObservableObject {
 
             // パーソナルAI編集の学習コーパスへ記録（端末内・投稿成功時のみ・ベストエフォート）。
             // 記録に失敗しても投稿成功は妨げない。skyType は AI判定 or ユーザー選択を使う。
-            // ⚠️ 未編集（中立）レシピは学習データを薄めるため記録しない（isNeutral でゲート）。
+            // ⚠️ 未編集（中立）レシピは学習データを薄めるため記録しない（recipesToRecordInCorpus 内でゲート）。
             // 再編集（上書き更新）ではコーパスへ重複記録しない（新規投稿のみ学習に使う）。
-            if editingContext == nil, let recipe = editRecipe, !recipe.isNeutral {
-                RecipeCorpusStore().append(
-                    RecipeCorpusEntry(
-                        recipe: recipe,
-                        skyType: effectiveSkyType,
-                        capturedAt: extractedInfo?.capturedAt
-                    ),
-                    userId: userId
-                )
+            // 複数枚投稿では画像ごとの editRecipes を記録する（旧実装は最後の1枚しか記録されず、
+            // 学習コーパスが投稿枚数分の情報を取りこぼしていた不具合の修正）。ただし見た目上ほぼ同じ
+            // レシピは isSimilar で1件に畳んでから記録する（recipesToRecordInCorpus 内の重複除去）。
+            if editingContext == nil {
+                // collage（配置写真）は素材N枚を1枚に畳んで保存する特別扱いのため、createPost の
+                // skyType 決定式（isCollage ? nil : effectiveSkyType）と揃える。揃えないと
+                // 「複数素材の空タイプを1値で表せない」collage 由来のレコードが特定の空タイプ配下の
+                // 候補として学習データを汚染してしまう。
+                let corpusSkyType: SkyType? = isCollagePost ? nil : effectiveSkyType
+                let recipesToRecord = recipesToRecordInCorpus()
+                if !recipesToRecord.isEmpty {
+                    // append(_:userId:) をN回呼ぶとN回の全読み書きが走るため、
+                    // append(contentsOf:userId:) で読み込み1回・書き込み1回にまとめる（G7）。
+                    let entries = recipesToRecord.map {
+                        RecipeCorpusEntry(recipe: $0, skyType: corpusSkyType, capturedAt: extractedInfo?.capturedAt)
+                    }
+                    RecipeCorpusStore().append(contentsOf: entries, userId: userId)
+                }
             }
 
             // 機能1: mood 付き投稿を計装（LoggingService ファサード経由・PII なし）
@@ -383,7 +437,7 @@ class PostViewModel: ObservableObject {
                     "has_caption": !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                     // フレーム文字のカスタム選択（PII なし・bool/列挙のみ）
                     "has_custom_text_color": frameTextColorHex != nil,
-                    "font_style": frameFontStyle?.rawValue ?? "default"
+                    "font_style": frameFontStyle?.rawValue ?? "default",
                 ])
             }
 
@@ -392,7 +446,7 @@ class PostViewModel: ObservableObject {
                 LoggingService.shared.logEvent("collage_created", parameters: [
                     "layout": collageLayout.rawValue,
                     "panel_count": min(4, selectedImages.count),
-                    "has_labels": panelLabels.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                    "has_labels": panelLabels.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
                 ])
             }
 
@@ -404,23 +458,23 @@ class PostViewModel: ObservableObject {
         } catch {
             // エラーをログに記録
             ErrorHandler.logError(error, context: "PostViewModel.savePost", userId: userId)
-            
+
             // エラー時はアップロード済み画像を削除（ロールバック）
             await rollbackUploadedImages()
-            
+
             // ユーザーフレンドリーなメッセージを設定
             errorMessage = error.userFriendlyMessage
             throw error
         }
     }
-    
+
     /// 画像をアップロード
     ///
     /// 🔧 2026-04-24 修正 (ultrareview bug_002):
     /// アップロード時の Storage パスを返すようにし、Post.images[].storagePath として
     /// Firestore に永続化する。投稿削除時に URL から不正なパスを組み立てる問題を解消。
     private func uploadImages(_ imagesToUpload: [UIImage]) async throws -> [UploadedImage] {
-        guard let userId = userId else {
+        guard let userId else {
             throw PostViewModelError.userNotAuthenticated
         }
 
@@ -428,14 +482,13 @@ class PostViewModel: ObservableObject {
         let totalImages = Double(imagesToUpload.count)
 
         // visibility に基づいてサブパスを決定（storage.rules に合わせる）
-        let visibilityPath: String
-        switch visibility {
+        let visibilityPath = switch visibility {
         case .public:
-            visibilityPath = "public"
+            "public"
         case .followers:
-            visibilityPath = "followers"
+            "followers"
         case .private:
-            visibilityPath = "private"
+            "private"
         }
 
         for (index, image) in imagesToUpload.enumerated() {
@@ -480,7 +533,7 @@ class PostViewModel: ObservableObject {
 
     /// オリジナル画像をアップロード
     private func uploadOriginalImages() async throws -> [UploadedOriginalImage] {
-        guard let userId = userId else {
+        guard let userId else {
             throw PostViewModelError.userNotAuthenticated
         }
 
@@ -491,14 +544,13 @@ class PostViewModel: ObservableObject {
         let totalImages = Double(imagesToUpload.count)
 
         // visibility に基づいてサブパスを決定
-        let visibilityPath: String
-        switch visibility {
+        let visibilityPath = switch visibility {
         case .public:
-            visibilityPath = "public"
+            "public"
         case .followers:
-            visibilityPath = "followers"
+            "followers"
         case .private:
-            visibilityPath = "private"
+            "private"
         }
 
         for (index, image) in imagesToUpload.enumerated() {
@@ -536,7 +588,7 @@ class PostViewModel: ObservableObject {
         imageURLs: [UploadedImage],
         originalImageURLs: [UploadedOriginalImage]? = nil
     ) throws -> Post {
-        guard let userId = userId else {
+        guard let userId else {
             throw PostViewModelError.userNotAuthenticated
         }
 
@@ -600,7 +652,7 @@ class PostViewModel: ObservableObject {
         let savedPanelLabels: [String]? = {
             guard isCollage else { return nil }
             let count = max(1, min(4, selectedImages.count))
-            let trimmed = (0..<count).map { i -> String in
+            let trimmed = (0 ..< count).map { i -> String in
                 i < panelLabels.count ? panelLabels[i].trimmingCharacters(in: .whitespacesAndNewlines) : ""
             }
             return trimmed.contains { !$0.isEmpty } ? trimmed : nil
@@ -632,7 +684,7 @@ class PostViewModel: ObservableObject {
             skyColors: isCollage ? nil : (editing?.skyColors ?? extractedInfo?.skyColors),
             capturedAt: isCollage ? nil : (editing?.capturedAt ?? extractedInfo?.capturedAt),
             timeOfDay: isCollage ? nil : (editing?.timeOfDay ?? extractedInfo?.timeOfDay),
-            skyType: isCollage ? nil : (editing?.skyType ?? effectiveSkyType),  // 再編集=保持 / 新規=選択 or AI判定
+            skyType: isCollage ? nil : (editing?.skyType ?? effectiveSkyType), // 再編集=保持 / 新規=選択 or AI判定
             colorTemperature: isCollage ? nil : (editing?.colorTemperature ?? extractedInfo?.colorTemperature),
             visibility: visibility,
             // カウント・作成日時は再編集で不変（Firestore ルール isValidPostUpdate 要件）。新規は既定(0/now)。
@@ -715,19 +767,19 @@ class PostViewModel: ObservableObject {
         uploadedThumbnailURLs = []
         uploadedOriginalImageURLs = []
     }
-    
+
     // MARK: - Draft Management
-    
+
     /// 下書きを保存
     func saveDraft() async throws {
-        guard let userId = userId else {
+        guard let userId else {
             throw PostViewModelError.userNotAuthenticated
         }
-        
+
         guard !selectedImages.isEmpty else {
             throw PostViewModelError.noImages
         }
-        
+
         // ImageInfo配列を作成（編集済み画像がない場合は元画像を使用）
         let imagesToUse = editedImages.isEmpty ? selectedImages : editedImages
         let imageInfos = imagesToUse.enumerated().map { index, image in
@@ -738,7 +790,7 @@ class PostViewModel: ObservableObject {
                 order: index
             )
         }
-        
+
         // 下書きデータを作成
         let draft = Draft(
             id: UUID().uuidString,
@@ -751,10 +803,10 @@ class PostViewModel: ObservableObject {
             location: location,
             visibility: visibility
         )
-        
+
         _ = try await firestoreService.saveDraft(draft)
     }
-    
+
     /// 下書きを読み込み
     func loadDraft(_ draft: Draft) {
         // 下書きデータをViewModelに設定
@@ -765,15 +817,15 @@ class PostViewModel: ObservableObject {
         visibility = draft.visibility
         editSettings = draft.editSettings
     }
-    
+
     // MARK: - Reset
-    
+
     /// すべてのデータをリセット
     func reset() {
         selectedImages = []
         editedImages = []
         editSettings = nil
-        externalEditInfos = []  // ⭐️ Issue #4
+        externalEditInfos = [] // ⭐️ Issue #4
         caption = ""
         selectedMood = nil
         selectedFrameStyle = .classic
@@ -789,9 +841,9 @@ class PostViewModel: ObservableObject {
         visibility = .public
         saveOriginalImages = false
         extractedInfo = nil
-        skyTypeClassificationResult = nil  // ☁️
-        isClassifyingSkyType = false  // ☁️
-        userSelectedSkyType = nil  // ☁️
+        skyTypeClassificationResult = nil // ☁️
+        isClassifyingSkyType = false // ☁️
+        userSelectedSkyType = nil // ☁️
         isPostSaved = false
         errorMessage = nil
         uploadedImageURLs = []
@@ -844,17 +896,17 @@ enum PostViewModelError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .userNotAuthenticated:
-            return "ログインが必要です"
+            "ログインが必要です"
         case .noImages:
-            return "画像が選択されていません"
+            "画像が選択されていません"
         case .imageCompressionFailed:
-            return "画像の圧縮に失敗しました"
+            "画像の圧縮に失敗しました"
         case .uploadFailed:
-            return "画像のアップロードに失敗しました"
+            "画像のアップロードに失敗しました"
         case .saveFailed:
-            return "投稿の保存に失敗しました"
+            "投稿の保存に失敗しました"
         case .collageCompositionFailed:
-            return "配置写真の作成に失敗しました。写真を選び直してお試しください"
+            "配置写真の作成に失敗しました。写真を選び直してお試しください"
         }
     }
 }

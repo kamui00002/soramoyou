@@ -5,18 +5,18 @@
 //  Created on 2025-12-06.
 //
 
-import XCTest
-@testable import Soramoyou
-import UIKit
 import CoreImage
 import FirebaseFirestore
+@testable import Soramoyou
+import UIKit
+import XCTest
 
 @MainActor
 final class EditViewModelTests: XCTestCase {
     var viewModel: EditViewModel!
     var mockImageService: MockImageService!
     var mockFirestoreService: MockFirestoreService!
-    
+
     override func setUp() {
         super.setUp()
         mockImageService = MockImageService()
@@ -28,93 +28,93 @@ final class EditViewModelTests: XCTestCase {
             firestoreService: mockFirestoreService
         )
     }
-    
+
     override func tearDown() {
         viewModel = nil
         mockImageService = nil
         mockFirestoreService = nil
         super.tearDown()
     }
-    
+
     func testSetImages() async {
         // Given
         let testImages = [createTestImage(), createTestImage()]
-        
+
         // When
         viewModel.setImages(testImages)
-        
+
         // Then
         XCTAssertEqual(viewModel.originalImages.count, 2)
         XCTAssertEqual(viewModel.currentImageIndex, 0)
     }
-    
+
     func testApplyFilter() async {
         // Given
         let testImage = createTestImage()
         viewModel.setImages([testImage])
         await Task.yield() // 非同期処理を待機
-        
+
         // When
         viewModel.applyFilter(.vintage)
-        
+
         // Then
         XCTAssertEqual(viewModel.editSettings.appliedFilter, .vintage)
     }
-    
+
     func testRemoveFilter() async {
         // Given
         let testImage = createTestImage()
         viewModel.setImages([testImage])
         viewModel.applyFilter(.vintage)
         await Task.yield()
-        
+
         // When
         viewModel.removeFilter()
-        
+
         // Then
         XCTAssertNil(viewModel.editSettings.appliedFilter)
     }
-    
+
     func testSetToolValue() async {
         // Given
         let testImage = createTestImage()
         viewModel.setImages([testImage])
         await Task.yield()
-        
+
         // When
         viewModel.setToolValue(0.5, for: .brightness)
-        
+
         // Then
         XCTAssertEqual(viewModel.editSettings.brightness, 0.5)
     }
-    
+
     func testSetToolValueClamping() async {
         // Given
         let testImage = createTestImage()
         viewModel.setImages([testImage])
         await Task.yield()
-        
+
         // When - 範囲外の値を設定
         viewModel.setToolValue(2.0, for: .brightness) // 1.0を超える値
-        
+
         // Then - 1.0にクランプされる
         XCTAssertEqual(viewModel.editSettings.brightness, 1.0)
     }
-    
+
     func testResetToolValue() async {
         // Given
         let testImage = createTestImage()
         viewModel.setImages([testImage])
         viewModel.setToolValue(0.5, for: .brightness)
         await Task.yield()
-        
+
         // When
         viewModel.resetToolValue(for: .brightness)
-        
+
         // Then
         XCTAssertNil(viewModel.editSettings.brightness)
     }
-    
+
     func testResetAllEdits() async {
         // Given
         let testImage = createTestImage()
@@ -122,42 +122,42 @@ final class EditViewModelTests: XCTestCase {
         viewModel.applyFilter(.vintage)
         viewModel.setToolValue(0.5, for: .brightness)
         await Task.yield()
-        
+
         // When
         viewModel.resetAllEdits()
-        
+
         // Then
         XCTAssertNil(viewModel.editSettings.appliedFilter)
         XCTAssertNil(viewModel.editSettings.brightness)
     }
-    
+
     func testNextImage() async {
         // Given
         let testImages = [createTestImage(), createTestImage()]
         viewModel.setImages(testImages)
         await Task.yield()
-        
+
         // When
         viewModel.nextImage()
-        
+
         // Then
         XCTAssertEqual(viewModel.currentImageIndex, 1)
     }
-    
+
     func testPreviousImage() async {
         // Given
         let testImages = [createTestImage(), createTestImage()]
         viewModel.setImages(testImages)
         viewModel.nextImage()
         await Task.yield()
-        
+
         // When
         viewModel.previousImage()
-        
+
         // Then
         XCTAssertEqual(viewModel.currentImageIndex, 0)
     }
-    
+
     /// 新規追加ツール（トーン）の値設定テスト
     func testSetToolValueTone() async {
         let testImage = createTestImage()
@@ -406,16 +406,41 @@ final class EditViewModelTests: XCTestCase {
             imageService: mockImageService,
             firestoreService: mockFirestoreService
         )
-        
+
         // When
         await viewModel.loadEquippedTools()
-        
+
         // Then
         XCTAssertFalse(viewModel.equippedTools.isEmpty)
         // デフォルトツールが設定されていることを確認
         XCTAssertTrue(viewModel.equippedTools.contains(.brightness))
     }
-    
+
+    /// 🆕 G4回帰テスト: `loadEquippedTools()` 内で `refreshPersonalDefaultAvailability()` を
+    /// `guard let userId else { ... return }` より前に呼んでいることが生命線であることを守るテスト。
+    /// この呼び出し順序を入れ替え、ユーザーガードの後ろに `refreshPersonalDefaultAvailability()` を
+    /// 移動すると、未ログイン時はガードで早期 return してしまい候補が一度も算出されなくなる
+    /// （＝このテストが落ちることで順序回帰を検知するのが狙い）。
+    func testLoadEquippedToolsWithoutUserStillPopulatesCandidates() async {
+        // Given
+        viewModel = EditViewModel(
+            images: [],
+            userId: nil,
+            imageService: mockImageService,
+            firestoreService: mockFirestoreService
+        )
+
+        // When
+        await viewModel.loadEquippedTools()
+
+        // Then
+        XCTAssertEqual(
+            viewModel.personalDefaultCandidatePool.count, FixedPresetKind.allCases.count,
+            "未ログインでも固定プリセット全件（プールは打ち切りなし）で候補プールが埋まる"
+        )
+        XCTAssertTrue(viewModel.hasPersonalDefault, "未ログインでも『AIで自動編集』ボタンは表示される")
+    }
+
     // MARK: - ワンタップ空補正: マスクキャッシュのライフサイクル（レビュー keep 対応 #7）
 
     /// 🔧 レビュー指摘2 回帰テスト:
@@ -451,7 +476,9 @@ final class EditViewModelTests: XCTestCase {
         // correctionTask が makeSkyMask の Task.sleep に到達するまで進行させてから、
         // まだ real-time の sleep（100ms）が完了しないうちに（＝完全に同期的に）画像を切り替える。
         // 切替自体は await を挟まないため、100ms のスリープが終わるより確実に先に完了する。
-        for _ in 0..<5 { await Task.yield() }
+        for _ in 0 ..< 5 {
+            await Task.yield()
+        }
         XCTAssertEqual(slowProvider.callCount, 1, "この時点で1回目の makeSkyMask は呼ばれ始めているべき")
         vm.nextImage()
         XCTAssertEqual(vm.currentImageIndex, 1, "画像切替がレース発生前に完了しているべき")
@@ -515,24 +542,8 @@ final class EditViewModelTests: XCTestCase {
 
     func testApplyPersonalDefaultAppliesRepresentativeAndPreservesPhotoSpecific() async {
         // Arrange: 一時コーパスに3件の編集（exposureEV=1.0, saturationCI=1.4）を仕込む
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        let (vm, tmp) = makeCorpusFixture()
         defer { try? FileManager.default.removeItem(at: tmp) }
-        let store = RecipeCorpusStore(baseDirectory: tmp)
-        for _ in 0..<3 {
-            var r = EditRecipe()
-            r.exposureEV = 1.0
-            r.saturationCI = 1.4
-            store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
-        }
-
-        let vm = EditViewModel(
-            images: [createTestImage()],
-            userId: "u1",
-            imageService: MockImageService(),
-            firestoreService: MockFirestoreService(),
-            recipeCorpusStore: store
-        )
         // 写真固有の編集（クロップ・HDR・空補正）を現在値として設定
         vm.editRecipe.cropRectNorm = CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5)
         vm.editRecipe.targetDynamicRange = .hdr
@@ -552,13 +563,110 @@ final class EditViewModelTests: XCTestCase {
                        "空補正の強度は保持（統合レビューで発見した消失バグの回帰防止）")
     }
 
-    func testRefreshPersonalDefaultUnavailableBelowMinimum() async {
-        // 2件のみ → 定番は利用不可（ボタン非表示）
+    /// 🆕 候補プール（柱1 v2）: コーパスに十分な履歴があると、
+    /// 「全体の定番」が先頭 + 固定プリセット全件で埋められることを検証する。
+    /// プール化により件数の打ち切りは無くなったため、件数は「1(全体の定番) + プリセット全件」の
+    /// 固定値になる（空タイプ別「晴れの定番」は全体候補と isSimilar 判定で重複排除される想定）。
+    func testRefreshPersonalDefaultAvailabilityPopulatesCandidates() async {
+        // Arrange: testApplyPersonalDefaultAppliesRepresentativeAndPreservesPhotoSpecific と同じ仕込み
+        // （exposureEV/saturationCI が全件一致するため、空タイプ別「晴れの定番」は全体候補と isSimilar 判定で
+        //   重複排除される）。
+        let (vm, tmp) = makeCorpusFixture()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // Act
+        vm.refreshPersonalDefaultAvailability()
+
+        // Assert
+        XCTAssertEqual(
+            vm.personalDefaultCandidatePool.count, 1 + FixedPresetKind.allCases.count,
+            "候補プールは打ち切りなし：全体の定番1件 + 固定プリセット全件（実際: \(vm.personalDefaultCandidatePool.count)件）"
+        )
+        XCTAssertEqual(vm.personalDefaultCandidatePool.first?.kind, .overallDefault,
+                       "3件以上の履歴があれば先頭候補は全体の『あなたの定番』")
+        XCTAssertTrue(vm.hasPersonalDefault)
+    }
+
+    /// 🆕 候補プール（柱1 v2）: コーパスが0件（新規ユーザー・未ログイン想定）でも
+    /// 固定プリセット全件で候補プールが必ず埋まる新仕様を検証する。
+    func testRefreshPersonalDefaultShowsPresetsWithoutHistory() async {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
         let store = RecipeCorpusStore(baseDirectory: tmp)
-        for _ in 0..<2 {
+
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: nil,
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            recipeCorpusStore: store
+        )
+
+        vm.refreshPersonalDefaultAvailability()
+
+        XCTAssertEqual(
+            vm.personalDefaultCandidatePool.count, FixedPresetKind.allCases.count,
+            "履歴0件では固定プリセット全件（プールは打ち切りなし）で埋まる"
+        )
+        XCTAssertTrue(
+            vm.personalDefaultCandidatePool.allSatisfy { candidate in
+                if case .preset = candidate.kind { return true }
+                return false
+            },
+            "履歴0件では『あなたの定番』系は1件も成立せず、全候補が固定プリセットになる"
+        )
+        XCTAssertTrue(vm.hasPersonalDefault, "履歴が無くても固定プリセットでボタンは表示される（新規ユーザー常時表示の確定仕様）")
+    }
+
+    /// 🆕 候補シート経由の適用パス（applyPersonalDefaultCandidate）版の回帰テスト。
+    /// testApplyPersonalDefaultAppliesRepresentativeAndPreservesPhotoSpecific と同型だが、
+    /// 「あなたの定番」単体適用（applyPersonalDefault）ではなく候補シートで選択した候補を適用する
+    /// 経路（本番でUIから実際に呼ばれる経路）でも 913a3cd 回帰（写真固有フィールド消失）が
+    /// 起きないことを確認する。
+    func testApplyPersonalDefaultCandidatePreservesPhotoSpecificFields() async {
+        // Arrange
+        let (vm, tmp) = makeCorpusFixture()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        // 写真固有の編集（クロップ・HDR・空補正）を現在値として設定
+        vm.editRecipe.cropRectNorm = CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5)
+        vm.editRecipe.targetDynamicRange = .hdr
+        vm.editRecipe.skyCorrectionIntensity = 0.6
+
+        // Act: 候補プールから「全体の定番」候補を選んで適用
+        vm.refreshPersonalDefaultAvailability()
+        guard let overallCandidate = vm.personalDefaultCandidatePool.first(where: { $0.kind == .overallDefault }) else {
+            XCTFail("『全体の定番』候補が候補プールに見つからない")
+            return
+        }
+        // displayIndex はシート側で描画後に選別した表示リスト内の位置。
+        // このテストは候補プールから直接取得しているためシートの選別を経ていないが、
+        // applyPersonalDefaultCandidate 自体は displayIndex を計装にしか使わないため、
+        // 適用結果の検証（写真固有フィールドの保持）には影響しない。
+        vm.applyPersonalDefaultCandidate(overallCandidate, displayIndex: 0)
+
+        // Assert: 代表値が適用され、写真固有編集は保持される
+        XCTAssertEqual(vm.editRecipe.exposureEV, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(vm.editRecipe.saturationCI, 1.4, accuracy: 0.0001)
+        XCTAssertEqual(vm.editRecipe.cropRectNorm, CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.5), "クロップは保持")
+        XCTAssertEqual(vm.editRecipe.targetDynamicRange, .hdr, "HDR指定は保持")
+        XCTAssertEqual(vm.editRecipe.skyCorrectionIntensity ?? -1, 0.6, accuracy: 0.0001,
+                       "空補正の強度は保持（候補シート経由の適用パスでも913a3cd回帰が起きないことの確認）")
+    }
+
+    /// 【仕様変更に伴う書き換え】旧テスト `testRefreshPersonalDefaultUnavailableBelowMinimum` は
+    /// 「3件未満なら hasPersonalDefault=false（ボタン非表示）」という旧仕様を検証していたが、
+    /// 候補プール導入（柱1 v2 / `PersonalDefaultCandidateProvider`）で
+    /// 「履歴不足でも固定プリセット全件を保証し常時表示する」に仕様が変わったため、
+    /// 新仕様に合わせて内容を書き換えた（テスト名も実態に合わせて変更）。
+    func testRefreshPersonalDefaultBelowMinimumShowsPresetOnly() async {
+        // 2件のみ（minimumSamples=3 未満）→ 全体/空タイプ別の「あなたの定番」は不成立だが、
+        // 固定プリセットのみで候補プールが埋まることを検証する。
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = RecipeCorpusStore(baseDirectory: tmp)
+        for _ in 0 ..< 2 {
             var r = EditRecipe(); r.exposureEV = 1.0
             store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
         }
@@ -570,7 +678,116 @@ final class EditViewModelTests: XCTestCase {
             recipeCorpusStore: store
         )
         vm.refreshPersonalDefaultAvailability()
-        XCTAssertFalse(vm.hasPersonalDefault, "データ不足ではボタンを出さない")
+
+        XCTAssertTrue(vm.hasPersonalDefault, "履歴不足でも固定プリセットでボタンは表示される（新仕様）")
+        XCTAssertEqual(
+            vm.personalDefaultCandidatePool.count, FixedPresetKind.allCases.count,
+            "『あなたの定番』系が不成立のため固定プリセット全件のみになる（プールは打ち切りなし）"
+        )
+        XCTAssertTrue(
+            vm.personalDefaultCandidatePool.allSatisfy { candidate in
+                if case .preset = candidate.kind { return true }
+                return false
+            },
+            "2件（3件未満）では『あなたの定番』系候補は成立せず、全て固定プリセットになる"
+        )
+    }
+
+    /// 🆕 空タイプ切替UI（G7）: `selectableSkyTypes` はサンプル数降順で並ぶことを検証する。
+    /// 候補シートの初期選択（`selectableSkyTypes.first`）がこの順序に依存するため、
+    /// 「件数が多い空タイプほど先頭に来る」という契約そのものをここで確認する。
+    func testSelectableSkyTypesOrderedBySampleCountDescending() async {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = RecipeCorpusStore(baseDirectory: tmp)
+
+        // sunset 4件・clear 3件・cloudy は minimumSamples(3) 未満の2件のみ（選択肢に出ないはず）
+        for _ in 0 ..< 4 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .sunset), userId: "u1")
+        }
+        for _ in 0 ..< 3 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
+        }
+        for _ in 0 ..< 2 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .cloudy), userId: "u1")
+        }
+
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: "u1",
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            recipeCorpusStore: store
+        )
+        vm.refreshPersonalDefaultAvailability()
+
+        XCTAssertEqual(vm.selectableSkyTypes, [.sunset, .clear],
+                       "サンプル数降順（sunset=4件 > clear=3件）で並ぶべき。cloudy(2件)は不足のため含まれない")
+    }
+
+    /// 🆕 `corpusSampleCount(for:)`: 候補シートで選べない空タイプの「あと何回」表示に使う
+    /// 空タイプ別の履歴件数取得を検証する。`cachedCorpusEntries`（`refreshPersonalDefaultAvailability()`
+    /// でキャッシュ済み）をフィルタして数えるだけの軽量実装であることの回帰テスト。
+    func testCorpusSampleCountReturnsCountPerSkyType() async {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let store = RecipeCorpusStore(baseDirectory: tmp)
+
+        for _ in 0 ..< 4 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .sunset), userId: "u1")
+        }
+        for _ in 0 ..< 2 {
+            var r = EditRecipe(); r.exposureEV = 1.0
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .cloudy), userId: "u1")
+        }
+
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: "u1",
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            recipeCorpusStore: store
+        )
+        vm.refreshPersonalDefaultAvailability()
+
+        XCTAssertEqual(vm.corpusSampleCount(for: .sunset), 4)
+        XCTAssertEqual(vm.corpusSampleCount(for: .cloudy), 2)
+        XCTAssertEqual(vm.corpusSampleCount(for: .clear), 0, "履歴が無い空タイプは0件")
+    }
+
+    /// 🆕 `EditRecipe.mergingPhotoSpecificFields(from:includeSkyCorrection:)` の
+    /// `includeSkyCorrection` 引数そのものを検証する（候補パス/サムネイル生成パスの土台となる純関数）。
+    /// - `includeSkyCorrection: false`（サムネイル生成用）→ skyCorrectionIntensity は nil になる
+    ///   （skyMask なしで描画するため intensity を転写しても見た目に反映されず、
+    ///   「レシピは値あり・見た目は補正なし」の食い違いになるのを防ぐ挙動）。
+    /// - `includeSkyCorrection` 省略時（既定 true・本適用用）→ 現在値をそのまま転写する。
+    func testMergingPhotoSpecificFields_excludesSkyCorrectionWhenRequested() async {
+        var candidateRecipe = EditRecipe()
+        candidateRecipe.exposureEV = 0.5
+
+        var current = EditRecipe()
+        current.skyCorrectionIntensity = 0.7
+        current.cropRectNorm = CGRect(x: 0.1, y: 0.1, width: 0.6, height: 0.6)
+        current.targetDynamicRange = .hdr
+
+        // includeSkyCorrection: false を明示 → skyCorrectionIntensity は転写されず nil
+        let mergedWithoutSkyCorrection = candidateRecipe.mergingPhotoSpecificFields(
+            from: current, includeSkyCorrection: false
+        )
+        XCTAssertNil(mergedWithoutSkyCorrection.skyCorrectionIntensity, "includeSkyCorrection: false では空補正強度を転写しない")
+        XCTAssertEqual(mergedWithoutSkyCorrection.cropRectNorm, current.cropRectNorm, "クロップは includeSkyCorrection に関わらず常に転写される")
+        XCTAssertEqual(mergedWithoutSkyCorrection.targetDynamicRange, current.targetDynamicRange, "HDR指定も常に転写される")
+
+        // includeSkyCorrection 省略（既定 true）→ 現在値を転写する
+        let mergedWithSkyCorrection = candidateRecipe.mergingPhotoSpecificFields(from: current)
+        XCTAssertEqual(mergedWithSkyCorrection.skyCorrectionIntensity ?? -1, 0.7, accuracy: 0.0001,
+                       "既定(true)では空補正強度を転写する")
     }
 
     // MARK: - レシピ共有シード（initialRecipe）
@@ -624,6 +841,33 @@ final class EditViewModelTests: XCTestCase {
             context.fill(CGRect(origin: .zero, size: size))
         }
     }
+
+    /// 🆕 S4対応: 「あなたの定番」系テストで繰り返し使うコーパス fixture 構築を1箇所に集約する。
+    /// exposureEV=1.0 / saturationCI=1.4 の編集レシピを skyType=.clear・userId="u1" で3件
+    /// コーパスに積んだ状態の `EditViewModel` を返す。呼び出し側は返却された一時ディレクトリを
+    /// `defer { try? FileManager.default.removeItem(at: tmp) }` で必ず削除すること
+    /// （元の各テストで tmp 生成直後に defer していたのと同じ後始末をテスト側に残すため）。
+    /// - Returns: (vm: 構築済み EditViewModel, tmp: 一時コーパスディレクトリ)
+    private func makeCorpusFixture() -> (vm: EditViewModel, tmp: URL) {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("epd-\(UUID().uuidString)", isDirectory: true)
+        let store = RecipeCorpusStore(baseDirectory: tmp)
+        for _ in 0 ..< 3 {
+            var r = EditRecipe()
+            r.exposureEV = 1.0
+            r.saturationCI = 1.4
+            store.append(RecipeCorpusEntry(recipe: r, skyType: .clear), userId: "u1")
+        }
+
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: "u1",
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            recipeCorpusStore: store
+        )
+        return (vm, tmp)
+    }
 }
 
 // MARK: - Mock Services
@@ -635,19 +879,19 @@ class MockImageService: ImageServiceProtocol {
     /// 現行実装では applyEditRecipe が呼ばれたときに true になる。
     var applyEditSettingsCalled = false
 
-    func applyFilter(_ filter: FilterType, to image: UIImage) async throws -> UIImage {
+    func applyFilter(_: FilterType, to image: UIImage) async throws -> UIImage {
         applyFilterCalled = true
         return image
     }
 
     /// - Parameter skyMask: ワンタップ空補正のモックでは未使用（呼び出しの有無のみ確認する既存テストのため）
-    func generatePreview(_ image: UIImage, recipe: EditRecipe, skyMask: CIImage?) async throws -> UIImage {
+    func generatePreview(_ image: UIImage, recipe _: EditRecipe, skyMask _: CIImage?) async throws -> UIImage {
         generatePreviewCalled = true
         return image
     }
 
     /// - Parameter skyMask: ワンタップ空補正のモックでは未使用（呼び出しの有無のみ確認する既存テストのため）
-    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe: EditRecipe, skyMask: CIImage?) -> UIImage? {
+    func generatePreviewFromCIImage(_ ciImage: CIImage, recipe _: EditRecipe, skyMask _: CIImage?) -> UIImage? {
         generatePreviewCalled = true
         let context = CIContext()
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
@@ -657,79 +901,79 @@ class MockImageService: ImageServiceProtocol {
     }
 
     /// - Parameter skyMask: ワンタップ空補正のモックでは未使用（呼び出しの有無のみ確認する既存テストのため）
-    func applyEditRecipe(_ recipe: EditRecipe, to image: UIImage, skyMask: CIImage?) async throws -> UIImage {
+    func applyEditRecipe(_: EditRecipe, to image: UIImage, skyMask _: CIImage?) async throws -> UIImage {
         applyEditSettingsCalled = true
         return image
     }
 
-    func resizeCIImage(_ ciImage: CIImage, maxSize: CGSize) -> CIImage {
-        return ciImage
+    func resizeCIImage(_ ciImage: CIImage, maxSize _: CGSize) -> CIImage {
+        ciImage
     }
 
-    func resizeImage(_ image: UIImage, maxSize: CGSize) async throws -> UIImage {
-        return image
-    }
-    
-    func compressImage(_ image: UIImage, quality: CGFloat) async throws -> Data {
-        return Data()
+    func resizeImage(_ image: UIImage, maxSize _: CGSize) async throws -> UIImage {
+        image
     }
 
-    func extractColors(_ image: UIImage, maxCount: Int) async throws -> [String] {
-        return ["#87CEEB", "#F0F8FF", "#FFFFFF"]
+    func compressImage(_: UIImage, quality _: CGFloat) async throws -> Data {
+        Data()
     }
 
-    func calculateColorTemperature(_ image: UIImage) async throws -> Int {
-        return 6500
+    func extractColors(_: UIImage, maxCount _: Int) async throws -> [String] {
+        ["#87CEEB", "#F0F8FF", "#FFFFFF"]
     }
 
-    func detectSkyType(_ image: UIImage) async throws -> SkyType {
-        return .clear
+    func calculateColorTemperature(_: UIImage) async throws -> Int {
+        6500
     }
 
-    func extractEXIFData(_ image: UIImage) async throws -> EXIFData {
-        return EXIFData()
+    func detectSkyType(_: UIImage) async throws -> SkyType {
+        .clear
+    }
+
+    func extractEXIFData(_: UIImage) async throws -> EXIFData {
+        EXIFData()
     }
 }
 
 class MockFirestoreService: FirestoreServiceProtocol {
     func fetchUser(userId: String) async throws -> User {
-        return User(id: userId, email: "test@example.com")
+        User(id: userId, email: "test@example.com")
     }
 
     // その他のメソッドは空実装
-    func createPost(_ post: Post) async throws -> Post { return post }
-    func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
-    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) { return ([], nil) }
-    func fetchPost(postId: String) async throws -> Post { throw FirestoreServiceError.notFound }
-    func deletePost(postId: String, userId: String) async throws {}
-    func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
-    func saveDraft(_ draft: Draft) async throws -> Draft { return draft }
-    func fetchDrafts(userId: String) async throws -> [Draft] { return [] }
-    func loadDraft(draftId: String) async throws -> Draft { throw FirestoreServiceError.notFound }
-    func deleteDraft(draftId: String) async throws {}
-    func updateUser(_ user: User) async throws -> User { return user }
-    func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws {}
-    func syncPostsCount(userId: String, count: Int) async throws {}
-    func fetchPublicProfile(userId: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
-    func updatePublicProfile(_ profile: PublicProfile) async throws {}
-    func createPublicProfile(from user: User) async throws {}
-    func deleteUserData(userId: String) async throws {}
-    func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {}
-    func blockUser(userId: String, blockedUserId: String) async throws {}
-    func unblockUser(userId: String, blockedUserId: String) async throws {}
-    func fetchBlockedUserIds(userId: String) async throws -> [String] { return [] }
-    func searchByHashtag(_ hashtag: String) async throws -> [Post] { return [] }
-    func searchByColor(_ color: String, threshold: Double?) async throws -> [Post] { return [] }
-    func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] { return [] }
-    func searchBySkyType(_ skyType: SkyType) async throws -> [Post] { return [] }
+    func createPost(_ post: Post) async throws -> Post { post }
+    func fetchPosts(limit _: Int, lastDocument _: DocumentSnapshot?) async throws -> [Post] { [] }
+    func fetchPostsWithSnapshot(limit _: Int, lastDocument _: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) { ([], nil) }
+    func fetchPost(postId _: String) async throws -> Post { throw FirestoreServiceError.notFound }
+    func deletePost(postId _: String, userId _: String) async throws {}
+    func fetchUserPosts(userId _: String, limit _: Int, lastDocument _: DocumentSnapshot?) async throws -> [Post] { [] }
+    func saveDraft(_ draft: Draft) async throws -> Draft { draft }
+    func fetchDrafts(userId _: String) async throws -> [Draft] { [] }
+    func loadDraft(draftId _: String) async throws -> Draft { throw FirestoreServiceError.notFound }
+    func deleteDraft(draftId _: String) async throws {}
+    func updateUser(_ user: User) async throws -> User { user }
+    func updateEditTools(userId _: String, tools _: [EditTool], order _: [String]) async throws {}
+    func syncPostsCount(userId _: String, count _: Int) async throws {}
+    func fetchPublicProfile(userId _: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
+    func updatePublicProfile(_: PublicProfile) async throws {}
+    func createPublicProfile(from _: User) async throws {}
+    func deleteUserData(userId _: String) async throws {}
+    func reportPost(postId _: String, reporterId _: String, reportedUserId _: String, reason _: String) async throws {}
+    func blockUser(userId _: String, blockedUserId _: String) async throws {}
+    func unblockUser(userId _: String, blockedUserId _: String) async throws {}
+    func fetchBlockedUserIds(userId _: String) async throws -> [String] { [] }
+    func searchByHashtag(_: String) async throws -> [Post] { [] }
+    func searchByColor(_: String, threshold _: Double?) async throws -> [Post] { [] }
+    func searchByTimeOfDay(_: TimeOfDay) async throws -> [Post] { [] }
+    func searchBySkyType(_: SkyType) async throws -> [Post] { [] }
     func searchPosts(
-        hashtag: String?,
-        color: String?,
-        timeOfDay: TimeOfDay?,
-        skyType: SkyType?,
-        colorThreshold: Double?,
-        limit: Int
-    ) async throws -> [Post] { return [] }
+        hashtag _: String?,
+        color _: String?,
+        timeOfDay _: TimeOfDay?,
+        skyType _: SkyType?,
+        colorThreshold _: Double?,
+        limit _: Int
+    ) async throws -> [Post] { [] }
 }
 
 // MARK: - Mock SkyMaskProvider（ワンタップ空補正: レビュー keep 対応 #7）
@@ -745,7 +989,7 @@ final class MockSkyMaskProvider: SkyMaskProviderProtocol {
     /// makeSkyMask が呼ばれた回数（キャッシュ再利用の検証に使う）
     private(set) var callCount = 0
 
-    func makeSkyMask(for image: CIImage, quality: SkyMaskQuality) async throws -> SkyMask {
+    func makeSkyMask(for image: CIImage, quality _: SkyMaskQuality) async throws -> SkyMask {
         callCount += 1
         if delayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: delayNanoseconds)
@@ -755,5 +999,3 @@ final class MockSkyMaskProvider: SkyMaskProviderProtocol {
         return SkyMask(mask: mask, skyCoverage: coverage, confidence: confidence)
     }
 }
-
-
