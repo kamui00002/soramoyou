@@ -57,29 +57,6 @@
 
 ---
 
-## ポート設定（Web開発時）
-
-### React Native / Expo
-- **Metro Bundler**: `http://localhost:8081`
-- **Expo Dev Server**: `http://localhost:19000`
-
-### Webアプリ開発時
-- **フロントエンド**: `http://localhost:3000`
-- **バックエンドAPI**: `http://localhost:8000`
-
-⚠️ **これらのポート番号は変更しないこと**
-
-### ポート使用中の場合
-```bash
-# ポート確認
-lsof -i :[ポート番号]
-
-# プロセス終了
-kill -9 <PID>
-```
-
----
-
 ## PR作成時のガイドライン
 
 ### PRタイトル
@@ -111,59 +88,7 @@ kill -9 <PID>
 
 ---
 
-## .gitignore 管理
-
-### 必ず除外すべきファイル（iOS開発）
-```gitignore
-# Xcode
-*.xcworkspace/xcuserdata/
-*.xcuserstate
-DerivedData/
-*.xccheckout
-*.moved-aside
-*.hmap
-*.ipa
-*.dSYM.zip
-*.dSYM
-
-# CocoaPods
-Pods/
-*.podspec
-Podfile.lock
-
-# Swift Package Manager
-.swiftpm/
-.build/
-Package.resolved
-
-# Firebase設定ファイル（APIキー含む場合は除外）
-GoogleService-Info.plist  # 要確認：公開するかどうか
-
-# 環境変数
-.env
-.env.local
-.env.*.local
-
-# ビルド生成物
-build/
-dist/
-
-# OS生成ファイル
-.DS_Store
-Thumbs.db
-
-# ログファイル
-*.log
-
-# テスト結果
-*.xcresult
-fastlane/report.xml
-fastlane/Preview.html
-fastlane/screenshots
-fastlane/test_output
-```
-
-**新規ファイル作成時**: GitHubに上げるべきでないファイルは必ず`.gitignore`に追加
+> 除外設定は実際の `.gitignore` を参照。新規ファイル作成時、GitHubに上げるべきでないものは必ず追記すること。
 
 ---
 
@@ -216,13 +141,6 @@ fastlane/test_output
 ```
 問題: "Permission denied"
 対処: Firestoreセキュリティルールを確認
-```
-
-#### ビルドエラー
-```
-問題: "Module not found"
-対処: 依存関係を再インストール
-npm install / pod install
 ```
 
 ---

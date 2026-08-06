@@ -4,47 +4,12 @@
 ```yaml
 プロジェクト名: そらもよう - 空を撮る、空を集める
 アプリ概要: 空の写真を投稿・編集・共有するSNSアプリ
-リポジトリ名: [GitHubリポジトリ名を記入]
-GitHubユーザー名: [ユーザー名を記入]
 開発フェーズ: Phase 1 (MVP)
 ```
 
-## 技術スタック
-```yaml
-プラットフォーム: iOS
-メイン言語: Swift
-UIフレームワーク: SwiftUI
-バックエンド: Firebase (Authentication, Firestore, Storage)
-開発ツール: Xcode, Cursor, CC-SSD
-収益モデル: AdMob広告（バナー広告）
-```
+## 非自明な依存（コードからは読み取れない事情）
 
-## 使用ライブラリ・SDK
-```yaml
-Firebase:
-  - Firebase Authentication
-  - Cloud Firestore
-  - Firebase Storage
-  - Google Mobile Ads SDK (AdMob)
-
-iOSフレームワーク:
-  - SwiftUI
-  - Core Image / CIFilter (画像編集)
-  - Photos (カメラロール保存)
-  - CoreLocation (位置情報)
-  - MapKit (地図表示)
-
-その他:
-  - Kingfisher or SDWebImageSwiftUI (画像キャッシュ)
-  - opencv-spm 5.0.0 (広角合成 cv::Stitcher。ObjC++ ブリッジ + Bridging Header 経由、
-    SORAMOYOU_OPENCV フラグで条件コンパイル。静的リンクで実出荷サイズは IPA +約1.7MB)
-```
-
-## MCP GitHub API 設定
-```yaml
-対象リポジトリ: [上記のリポジトリ名]
-デフォルトブランチ: main
-```
+- **opencv-spm 5.0.0**（広角合成 cv::Stitcher）: ObjC++ ブリッジ + Bridging Header 経由で利用し、`SORAMOYOU_OPENCV` フラグで条件コンパイルする。静的リンクのため実出荷サイズは IPA +約1.7MB。
 
 ## コーディング規約
 
@@ -147,17 +112,5 @@ func applyFilter(to image: UIImage, filterName: String) -> UIImage? {
 func saveSkyPhoto(image: UIImage) -> Bool {
     // Firebaseに画像をアップロード
     // エラーハンドリングを実装
-}
-```
-
-#### JavaScript/TypeScript の場合
-```javascript
-/**
- * 空の写真一覧を取得する
- * @returns {Promise<Array>} 写真データの配列
- */
-const fetchSkyPhotos = async () => {
-  // Firestoreから取得
-  // キャッシュ処理を含む
 }
 ```

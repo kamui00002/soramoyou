@@ -36,12 +36,14 @@
 
 ## 📚 外部ドキュメント（必要に応じて参照）
 
+> `@` 付きは毎セッション自動で読み込まれる。`@` なしは必要になった時点で Claude が読む（常時ロードの削減）。
+
 | ドキュメント | 内容 |
 |---|---|
 | @docs/tech-spec.md | 技術スタック / ライブラリ / コーディング規約（命名・SwiftUI構造・Firebase実装・画像処理・コメント規則） |
-| @docs/ui-spec.md | 画面構成 / 遷移 / デザインガイドライン / 「そらもよう」特有の機能仕様（フィルター・編集ツール・装備・検索・位置情報） |
-| @docs/firestore-schema.md | Firestore コレクションスキーマ / セキュリティ / パフォーマンス / 画像処理方針 |
-| @docs/build-deploy.md | テスト・動作確認 / ポート設定 / PR / .gitignore / Info.plist / デバッグ / Issue / 最終確認チェックリスト |
+| docs/ui-spec.md | 画面構成 / 遷移 / デザインガイドライン / 「そらもよう」特有の機能仕様（フィルター・編集ツール・装備・検索・位置情報） |
+| docs/firestore-schema.md | Firestore コレクションスキーマ / セキュリティ / パフォーマンス / 画像処理方針 |
+| docs/build-deploy.md | テスト・動作確認 / ポート設定 / PR / .gitignore / Info.plist / デバッグ / Issue / 最終確認チェックリスト |
 | @docs/pre-release-checklist.md | リリース前チェックリスト（実データでハッピーパス / Firestore index / 著者表示 / 蓄積系MVP / 提出メカニクス）。新機能PR・提出前に確認 |
 | @docs/roadmap.md | Phase 1 開発ロードマップ / Phase 2・3 実装予定 |
 | @docs/user-context.md | ユーザー開発スタイル / Claude の対応方針 |
@@ -64,7 +66,7 @@ git checkout -b [ブランチ名]
 
 ### 2️⃣ 実装中
 1. コードを実装
-2. **必ず動作確認・テストを実施**（詳細は @docs/build-deploy.md）
+2. **必ず動作確認・テストを実施**（詳細は docs/build-deploy.md）
 3. 他の機能への影響を確認
 4. エラーがないことを確認
 
@@ -107,7 +109,7 @@ git push -u origin [ブランチ名]
 - ✅ Swift/SwiftUIコードには詳細な日本語コメント
 - ✅ Firebase 書き込み前にセキュリティ・バリデーションを確認
 - ✅ 画像は JPEG 80-90%、最大 5MB に圧縮
-- ✅ `.gitignore` に必要ファイルを追加（詳細は @docs/build-deploy.md）
+- ✅ `.gitignore` に必要ファイルを追加（詳細は docs/build-deploy.md）
 
 ### ビルドエラー・テスト失敗時
 1. エラーメッセージを正確に確認
