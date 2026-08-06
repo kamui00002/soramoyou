@@ -5,9 +5,17 @@
 
   ■ 宣言の根拠（2026-08-03 にコードを実査して作成。推測で書かない）
 
+  ⚠️ このコメント内に連続ハイフン (ハイフン2つ) を書いてはいけない。
+     XML の仕様でコメント内に連続ハイフンを含めることは禁止されており、厳密な XML パーサでは
+     ファイル全体が壊れる。plutil -lint は寛容なので通ってしまい、TestFlight のアップロードも
+     通過するが、App Store 審査の検査で ITMS-91056 (Invalid privacy manifest) として却下される。
+     実際に 1.9.5 (build 90) がこれで却下された (2026-08-06)。
+     grep のオプションなどを書く必要があるときは、必ずスペースを挟むか言葉で書くこと。
+
   1) NSPrivacyAccessedAPITypes（Required Reason API）
      実査コマンド: grep -rnE 'UserDefaults|@AppStorage|contentModificationDate|
-       volumeAvailableCapacity|systemUptime|activeProcessorCount' --include='*.swift'
+       volumeAvailableCapacity|systemUptime|activeProcessorCount' で include オプションに
+       *.swift を指定して実査した。
      結果:
        - UserDefaults / @AppStorage … 本体ターゲットに 22 箇所 → **宣言が必要**
        - ファイルのタイムスタンプ / 空き容量 / 起動時刻 / CPU数 … **0 箇所**（宣言不要）
