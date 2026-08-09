@@ -438,7 +438,9 @@ class PostViewModel: ObservableObject {
             LoggingService.shared.logEvent("post_completed", parameters: [
                 "post_kind": postKind.rawValue,
                 "is_reedit": editingContext != nil,
-                // 実際に投稿された画像の枚数（collage / panorama は1枚に畳んだ後の値＝常に 1）
+                // 実際に投稿された画像の枚数。合成系は畳み込み後なので常に 1 になる
+                // （collage=直上の foldImagesIfNeeded / panorama=合成時に PostView が
+                //   selectedImages を合成済み1枚へ差し替え済み）。素材の枚数ではない。
                 "image_count": imagesToUpload.count,
                 "visibility": visibility.rawValue,
                 "has_mood": selectedMood != nil,
