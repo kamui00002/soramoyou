@@ -1412,7 +1412,16 @@ class EditViewModel: ObservableObject {
             if let intensity = editRecipe.skyCorrectionIntensity,
                intensity > skyCorrectionActiveThreshold
             {
-                try? await ensureSkyMaskCached(quality: .preview)
+                do {
+                    try await ensureSkyMaskCached(quality: .preview)
+                } catch {
+                    // ⚠️ 継続する挙動は従来（`try?`）のまま。ただし旧実装は失敗を完全に握りつぶして
+                    //    いたため、「空補正を設定したのに黙って効いていない」状態を運用で検知できな
+                    //    かった（クラッシュしないが壊れている典型）。エラーの記録だけを足す。
+                    //    書き出し経路の `makeExportSkyMask` とは別 context にして、プレビューで
+                    //    落ちたのか書き出しで落ちたのかを分析側で区別できるようにする。
+                    ErrorHandler.logError(error, context: "EditViewModel.generatePreview.skyMask")
+                }
                 guard requestId == currentPreviewRequestId else { return }
             }
 
