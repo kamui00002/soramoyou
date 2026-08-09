@@ -79,7 +79,17 @@ struct MainTabView: View {
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .task {
+            // 画面計測: 起動直後に表示されているタブを1回だけ記録する（切替は下の onChange が拾う）。
+            // ⭐️ `selectedTab` を単一の真実源にすることで、各画面側の `.onAppear`
+            //    （SwiftUI の仕様で複数回発火しうる）に依存せず「切替1回＝イベント1回」を保証できる。
+            //    このタブバーは TabView ではなく `switch selectedTab` で View を出し分けており、
+            //    切替のたびに各画面が作り直される＝onAppear 方式だと重複計上の温床になる。
+            LoggingService.shared.logScreen(selectedTab.title)
             await maybeShowWhatsNew()
+        }
+        .onChange(of: selectedTab) { newTab in
+            // タブ切替。画面名は Tab.title の日本語をそのまま使う（PostHog 上の表示名）。
+            LoggingService.shared.logScreen(newTab.title)
         }
         // iPad では .sheet が中央フォームカードになり全画面グラデが崩れるため、
         // 全プラットフォームで全画面になる .fullScreenCover を使う（オンボ用途にも適切）。

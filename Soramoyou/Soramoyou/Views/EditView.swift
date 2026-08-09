@@ -283,6 +283,13 @@ struct EditView: View {
                 await viewModel.loadEquippedTools()
             }
         }
+        .task {
+            // 画面計測。上の `.onAppear` は SwiftUI の仕様で複数回発火しうるため、
+            // 「表示1回＝イベント1回」を担保できる `.task` 側に置く
+            // （編集画面は sheet / fullScreenCover / NavigationLink いずれの経路でも
+            //   表示のたびに新規生成される）。
+            LoggingService.shared.logScreen("編集")
+        }
     }
 
     // MARK: - あなたの定番バー（柱1 v2）
