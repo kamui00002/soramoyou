@@ -429,6 +429,25 @@ class PostViewModel: ObservableObject {
                 }
             }
 
+            // 投稿完了の母数イベント（種別を問わず「投稿が1件成立した」ら必ず1回だけ出す）。
+            // post_mode_selected は「モードを切り替えた」操作の計測であり、既定の .single からは
+            // 発火しない（selectMode の guard で弾かれる）ため母数には使えない。母数はここが正。
+            // ⚠️ savePost は再編集（updatePost）でもここに到達する。新規投稿の母数を膨らませないよう、
+            //    is_reedit で必ず区別する（PostHog 側でどちらにも絞れるよう、除外ではなく属性で持つ）。
+            // PII は入れない（原則4）: 位置は Bool のみ・キャプション本文やハッシュタグは送らない。
+            LoggingService.shared.logEvent("post_completed", parameters: [
+                "post_kind": postKind.rawValue,
+                "is_reedit": editingContext != nil,
+                // 実際に投稿された画像の枚数（collage / panorama は1枚に畳んだ後の値＝常に 1）
+                "image_count": imagesToUpload.count,
+                "visibility": visibility.rawValue,
+                "has_mood": selectedMood != nil,
+                "mood": selectedMood?.rawValue ?? "none",
+                "has_caption": !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                "has_location": location != nil,
+                "saved_original_images": saveOriginalImages,
+            ])
+
             // 機能1: mood 付き投稿を計装（LoggingService ファサード経由・PII なし）
             if let mood = selectedMood {
                 LoggingService.shared.logEvent("post_with_mood", parameters: [
