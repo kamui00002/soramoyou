@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A776EF40BE7A9AE95FECE753 /* OpenCV in Frameworks */ = {isa = PBXBuildFile; productRef = 339305E0AFD13F7BCE8948CF /* OpenCV */; };
+		B05705100000000000000003 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = B05705100000000000000002 /* PostHog */; };
 		E051CA452EE49ACB00CC78AB /* FirebaseAI in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA442EE49ACB00CC78AB /* FirebaseAI */; };
 		E051CA472EE49ACB00CC78AB /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA462EE49ACB00CC78AB /* FirebaseAnalytics */; };
 		E051CA492EE49ACB00CC78AB /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA482EE49ACB00CC78AB /* FirebaseAuth */; };
@@ -145,6 +146,7 @@
 				E051CA542EE49B3500CC78AB /* FirebaseStorage in Frameworks */,
 				FCEE0A0100000000000000B1 /* FirebaseMessaging in Frameworks */,
 				A776EF40BE7A9AE95FECE753 /* OpenCV in Frameworks */,
+				B05705100000000000000003 /* PostHog in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -240,6 +242,7 @@
 				E051CA552EE49B3500CC78AB /* FirebaseStorage */,
 				FCEE0A0200000000000000B2 /* FirebaseMessaging */,
 				339305E0AFD13F7BCE8948CF /* OpenCV */,
+				B05705100000000000000002 /* PostHog */,
 			);
 			productName = Soramoyou;
 			productReference = E051C9D62EE497CA00CC78AB /* Soramoyou.app */;
@@ -349,6 +352,7 @@
 				E051CA4E2EE49B0200CC78AB /* XCRemoteSwiftPackageReference "Kingfisher" */,
 				E051CA512EE49B3400CC78AB /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */,
 				5146A8BEE2068F396EF810AA /* XCRemoteSwiftPackageReference "opencv-spm" */,
+				B05705100000000000000001 /* XCRemoteSwiftPackageReference "posthog-ios" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E051C9D72EE497CA00CC78AB /* Products */;
@@ -908,6 +912,14 @@
 				minimumVersion = 12.14.0;
 			};
 		};
+		B05705100000000000000001 /* XCRemoteSwiftPackageReference "posthog-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/PostHog/posthog-ios";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.59.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -960,6 +972,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E051CA432EE49ACB00CC78AB /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseMessaging;
+		};
+		B05705100000000000000002 /* PostHog */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B05705100000000000000001 /* XCRemoteSwiftPackageReference "posthog-ios" */;
+			productName = PostHog;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
