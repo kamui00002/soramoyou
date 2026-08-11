@@ -736,6 +736,27 @@ class EditViewModel: ObservableObject {
         applyTransform(to: normalizeImageOrientation(image), rotation: rotation, flipH: flipH, flipV: flipV)
     }
 
+    /// プレビュー経路の空マスク生成失敗を既にログ済みの状態キー（重複ログ防止）。
+    ///
+    /// `ensureSkyMaskCached` は失敗時にキャッシュを nil のままにするため、`generatePreview` が
+    /// 走るたびに再試行し、決定的な失敗（`SkyMaskError.invalidInput` 等）では毎回失敗する。
+    /// `generatePreview` はスライダー操作のたびに `debouncePreview` 経由で呼ばれるので、
+    /// 素直にログすると1回の編集で積み上がる（実測: スライダー3往復で4件 → 本ガードで1件）。
+    /// `error_occurred` が水増しされるだけでなく、`ErrorHandler.logError` は systemError を
+    /// Crashlytics の非致命的レコードにも送るため、実バグの記録をセッション上限から
+    /// 押し出してしまう。同じ画像・同じ変換状態では1回だけ記録する。
+    private var loggedSkyMaskFailureKey: String?
+
+    /// プレビュー経路の空マスク生成失敗を、同一状態につき1回だけ記録する。
+    private func logSkyMaskFailureOncePerState(_ error: Error) {
+        // 再生成の判定条件（画像インデックス＋変換状態）と同じ粒度でキーを作る。
+        // 別の画像に切り替えた／回転したあとの失敗は、別の事象として改めて記録する。
+        let failureKey = "\(currentImageIndex)_\(makeTransformKey())"
+        guard loggedSkyMaskFailureKey != failureKey else { return }
+        loggedSkyMaskFailureKey = failureKey
+        ErrorHandler.logError(error, context: "EditViewModel.generatePreview.skyMask")
+    }
+
     /// プレビュー用の空マスクを（未生成なら）生成してキャッシュする。
     /// `currentImageIndex` と変換状態（回転・反転）のどちらかが変わっていれば再生成する。
     /// 生成した空マスクの extent は呼び出し時点の「向き正規化＋回転反転適用後」の画像と一致する
@@ -1412,7 +1433,16 @@ class EditViewModel: ObservableObject {
             if let intensity = editRecipe.skyCorrectionIntensity,
                intensity > skyCorrectionActiveThreshold
             {
-                try? await ensureSkyMaskCached(quality: .preview)
+                do {
+                    try await ensureSkyMaskCached(quality: .preview)
+                } catch {
+                    // ⚠️ 継続する挙動は従来（`try?`）のまま。ただし旧実装は失敗を完全に握りつぶして
+                    //    いたため、「空補正を設定したのに黙って効いていない」状態を運用で検知できな
+                    //    かった（クラッシュしないが壊れている典型）。エラーの記録だけを足す。
+                    //    書き出し経路の `makeExportSkyMask` とは別 context にして、プレビューで
+                    //    落ちたのか書き出しで落ちたのかを分析側で区別できるようにする。
+                    logSkyMaskFailureOncePerState(error)
+                }
                 guard requestId == currentPreviewRequestId else { return }
             }
 

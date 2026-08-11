@@ -208,12 +208,40 @@ class PostViewModel: ObservableObject {
 
     // MARK: - Image Info Extraction
 
+    /// 画像情報の自動抽出の段階（エラー計装用）☁️
+    ///
+    /// 4 つの抽出処理を 1 つの do/catch で囲んでいるため、`error_occurred` の
+    /// `error_context` が `PostViewModel.extractImageInfo` の 1 種類しか出ず、
+    /// 「どの段階で落ちたか」を運用で切り分けられなかった。
+    /// 特にエラー文言「画像処理に失敗しました」は `ImageServiceError.processingFailed` と
+    /// `SkyTypeClassifierError.processingFailed` という **別々の 2 型・計 4 箇所**から出るため、
+    /// `error_description` だけでは出所を特定できない。
+    ///
+    /// `rawValue` はそのまま `error_context` の接尾辞になる（例: `PostViewModel.extractImageInfo.colors`）。
+    /// 既存の `型名.メソッド名` 規約を接頭辞として保つことで、分析側では前方一致で
+    /// 「抽出全体の失敗数」も、完全一致で「段階ごとの失敗数」も取れる。
+    private enum ImageInfoExtractionStage: String {
+        /// EXIF 情報の抽出（`ImageService.extractEXIFData`）
+        case exif
+        /// 主要色の抽出（`ImageService.extractColors`）
+        case colors
+        /// 色温度の計算（`ImageService.calculateColorTemperature`）
+        case colorTemperature = "color_temperature"
+        /// AI 空タイプ判定（`SkyTypeClassifier.classify`）
+        case skyType = "sky_type"
+    }
+
     /// 画像情報を抽出
     private func extractImageInfo() {
         guard let firstImage = selectedImages.first else { return }
 
         Task { [weak self] in
             guard let self else { return }
+            // 失敗した段階を `error_context` に載せるため、各処理の直前で更新する。
+            // ⚠️ 挙動は従来どおり（最初の失敗で以降の抽出を中断する）。段階ごとに catch して
+            //    部分成功を許す形にすると `extractedInfo` の中身が変わってしまうため、
+            //    ここでは計装だけを足す。
+            var stage: ImageInfoExtractionStage = .exif
             do {
                 // EXIF情報の抽出
                 let exifData = try await imageService.extractEXIFData(firstImage)
@@ -226,12 +254,15 @@ class PostViewModel: ObservableObject {
                 }
 
                 // 色の抽出
+                stage = .colors
                 let colors = try await imageService.extractColors(firstImage, maxCount: 5)
 
                 // 色温度の計算
+                stage = .colorTemperature
                 let colorTemperature = try await imageService.calculateColorTemperature(firstImage)
 
                 // AI空タイプ判定（新しい分類器を使用）☁️
+                stage = .skyType
                 isClassifyingSkyType = true
                 let classificationResult = try await skyTypeClassifier.classify(firstImage, timeOfDay: timeOfDay)
                 skyTypeClassificationResult = classificationResult
@@ -247,7 +278,8 @@ class PostViewModel: ObservableObject {
             } catch {
                 isClassifyingSkyType = false
                 // エラーをログに記録（自動抽出はオプションだが、ログ基盤には記録する）
-                ErrorHandler.logError(error, context: "PostViewModel.extractImageInfo")
+                // 失敗した段階まで含めて記録し、どの処理が落ちたかを分析側で特定できるようにする
+                ErrorHandler.logError(error, context: "PostViewModel.extractImageInfo.\(stage.rawValue)")
             }
         }
     }
