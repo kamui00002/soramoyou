@@ -350,8 +350,14 @@ class SkyTypeClassifier: SkyTypeClassifierProtocol {
         filter.inputImage = ciImage
         filter.extent = ciImage.extent
 
+        // ⚠️ 切り出し矩形に `ciImage.extent` を使ってはならない。
+        //    `areaAverage` の出力は入力範囲によらず**常に原点 (0,0) の 1×1 画像**になる。
+        //    一方この関数に渡ってくるのは `extractSkyRegion` が上部60%を crop した画像で、
+        //    その extent は `origin.y = 高さ×0.4`（非ゼロ）。両者は交差しないため
+        //    `createCGImage` が必ず nil を返し、空タイプ判定が構造的に毎回失敗していた。
+        //    同じファイルの `getAverageColor` は正しく 1×1 を指定している（そちらが正）。
         guard let outputImage = filter.outputImage,
-              let cgImage = context.createCGImage(outputImage, from: ciImage.extent) else {
+              let cgImage = context.createCGImage(outputImage, from: CGRect(x: 0, y: 0, width: 1, height: 1)) else {
             throw SkyTypeClassifierError.processingFailed
         }
 
