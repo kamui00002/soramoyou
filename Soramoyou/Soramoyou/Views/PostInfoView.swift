@@ -41,26 +41,38 @@ struct PostInfoView: View {
         postKind: PostKind = .single,
         locationService: LocationServiceProtocol = LocationService()
     ) {
-        let postViewModel = PostViewModel(userId: userId)
-        postViewModel.setSelectedImages(images)
-        // 投稿種別（通常/配置写真/広角合成）を入口モードから引き継ぐ。savePost の畳み込み・保存メタを駆動。
-        postViewModel.postKind = postKind
-        // 各画像の外部編集情報を保持（ギャラリーで写真Appバッジ表示用）⭐️ Issue #4
-        postViewModel.setExternalEditInfos(externalEditInfos)
-        if !editedImages.isEmpty {
-            // 通常経路: EditView から生成済みの編集後画像を受け取る（全編集を保持）。
-            // editRecipes は複数枚投稿時の学習コーパス記録用（既定 [] は下書き経路等の互換維持）。
-            postViewModel.setEditedImages(editedImages, editSettings: editSettings, editRecipe: editRecipe, editRecipes: editRecipes)
-        }
-        // 再編集（投稿済み画像の上書き更新）の場合は、元投稿の caption / frameCaption / mood /
-        // 枠スタイル / 公開範囲 / ハッシュタグ / 保持メタを seed する。以降 savePost は updatePost になる。
-        if let editingContext {
-            postViewModel.seedForEditing(editingContext)
-        }
-        // 編集済み画像が無い場合（下書き編集など）は onAppear で editSettings を適用して再生成する。
-        // ⚠️ ここで再生成 Task を起こさないこと。@StateObject の throwaway インスタンス上で
-        //    副作用を起こすと、editSettings 未適用の素通し画像が確定する不具合があった。
-        _viewModel = StateObject(wrappedValue: postViewModel)
+        // ⚠️ PostViewModel の生成と初期設定は、必ずこの `wrappedValue:` の中で完結させること。
+        //    `StateObject(wrappedValue:)` は @autoclosure @escaping であり、SwiftUI は
+        //    このビューの identity につき**一度だけ**評価する。
+        //    init 本体で組み立ててから渡す書き方だと、親（EditView の `.fullScreenCover(item:)` の
+        //    content closure）の body 再評価のたびに init が走り、そのたびに使い捨ての
+        //    PostViewModel が生成される。`setSelectedImages` は `extractImageInfo()` を起動するため、
+        //    捨てられるインスタンスが毎回 EXIF・主要色・色温度・AI空タイプ判定のパイプラインを
+        //    走らせていた（1投稿で抽出が複数回走る原因。回数は body 再評価回数に依存し非決定的）。
+        _viewModel = StateObject(wrappedValue: {
+            let postViewModel = PostViewModel(userId: userId)
+            postViewModel.setSelectedImages(images)
+            // 投稿種別（通常/配置写真/広角合成）を入口モードから引き継ぐ。savePost の畳み込み・保存メタを駆動。
+            postViewModel.postKind = postKind
+            // 各画像の外部編集情報を保持（ギャラリーで写真Appバッジ表示用）⭐️ Issue #4
+            postViewModel.setExternalEditInfos(externalEditInfos)
+            if !editedImages.isEmpty {
+                // 通常経路: EditView から生成済みの編集後画像を受け取る（全編集を保持）。
+                // editRecipes は複数枚投稿時の学習コーパス記録用（既定 [] は下書き経路等の互換維持）。
+                postViewModel.setEditedImages(editedImages, editSettings: editSettings, editRecipe: editRecipe, editRecipes: editRecipes)
+            }
+            // 再編集（投稿済み画像の上書き更新）の場合は、元投稿の caption / frameCaption / mood /
+            // 枠スタイル / 公開範囲 / ハッシュタグ / 保持メタを seed する。以降 savePost は updatePost になる。
+            if let editingContext {
+                postViewModel.seedForEditing(editingContext)
+            }
+            // 編集済み画像が無い場合（下書き編集など）は onAppear で editSettings を適用して再生成する。
+            // ⚠️ ここで再生成 Task を起こさないこと。生成は onAppear 側の責務に寄せてある
+            //    （かつて init 本体で副作用を起こし、editSettings 未適用の素通し画像が確定する
+            //      不具合があった）。上記のとおり使い捨てインスタンス自体は解消済みだが、
+            //    「生成の起点を1箇所に保つ」方針は維持する。
+            return postViewModel
+        }())
         self.locationService = locationService
         self.userId = userId
     }
