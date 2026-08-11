@@ -262,10 +262,24 @@ class PostViewModel: ObservableObject {
                 let colorTemperature = try await imageService.calculateColorTemperature(firstImage)
 
                 // AI空タイプ判定（新しい分類器を使用）☁️
+                // ⚠️ ここだけはベストエフォートにして、失敗を do ブロックの外へ伝播させない。
+                //    空タイプは Optional（ユーザーが投稿画面で手動選択できる）なのに対し、
+                //    EXIF・色・色温度はこの時点で既に取得できている。判定の失敗で抜けると
+                //    下の extractedInfo の代入ごと失われ、取得済みの情報まで道連れになる。
+                //    実際にそれが起きていた（判定が構造的に必ず失敗しており、全投稿で
+                //    撮影日時・時間帯・空の色・色温度が欠落）。原因は修正済みだが、
+                //    「判定1つの失敗が無関係な4項目を巻き添えにする」構造自体を残さない。
                 stage = .skyType
                 isClassifyingSkyType = true
-                let classificationResult = try await skyTypeClassifier.classify(firstImage, timeOfDay: timeOfDay)
-                skyTypeClassificationResult = classificationResult
+                var classifiedSkyType: SkyType?
+                do {
+                    let classificationResult = try await skyTypeClassifier.classify(firstImage, timeOfDay: timeOfDay)
+                    skyTypeClassificationResult = classificationResult
+                    classifiedSkyType = classificationResult.skyType
+                } catch {
+                    // 握りつぶさず、従来と同じ段階付き context で記録する（黙って効かない状態を作らない）。
+                    ErrorHandler.logError(error, context: "PostViewModel.extractImageInfo.\(ImageInfoExtractionStage.skyType.rawValue)")
+                }
                 isClassifyingSkyType = false
 
                 extractedInfo = ExtractedImageInfo(
@@ -273,7 +287,7 @@ class PostViewModel: ObservableObject {
                     timeOfDay: timeOfDay,
                     skyColors: colors,
                     colorTemperature: colorTemperature,
-                    skyType: classificationResult.skyType
+                    skyType: classifiedSkyType
                 )
             } catch {
                 isClassifyingSkyType = false
