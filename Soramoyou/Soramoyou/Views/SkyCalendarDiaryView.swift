@@ -59,7 +59,11 @@ struct SkyCalendarDiaryView: View {
         }
         .task {
             // 計装: sheet 表示時に1回（読み込み完了を待たず、表示された事実を記録する）
+            // ⚠️ `sky_calendar_viewed`（機能別の既存イベント・ダッシュボードが依存）と
+            //    `logScreen`（全画面横断の screen 計測）は役割が違うため併存させる。
+            //    同じ行動を2つの「同種」イベントで送っているわけではない。
             LoggingService.shared.logEvent("sky_calendar_viewed")
+            LoggingService.shared.logScreen("空カレンダー")
             await viewModel.load(userId: userId)
         }
     }

@@ -40,7 +40,12 @@ struct SkyZukanView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
-        .task { await viewModel.load(userId: userId) }
+        .task {
+            // 画面計測。`.onAppear` は SwiftUI の仕様で複数回発火しうるため `.task` を使う
+            // （このシートは表示のたびに新規生成されるので「表示1回＝イベント1回」になる）。
+            LoggingService.shared.logScreen("空図鑑")
+            await viewModel.load(userId: userId)
+        }
     }
 
     // MARK: - 背景
