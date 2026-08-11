@@ -5,9 +5,9 @@
 //  Created on 2025-12-06.
 //
 
-import SwiftUI
 import FirebaseCore
 import FirebaseCrashlytics
+import SwiftUI
 import UserNotifications
 
 @main
@@ -31,6 +31,11 @@ struct SoramoyouApp: App {
         // Crashlyticsの設定
         setupCrashlytics()
 
+        // PostHog（行動分析）の初期化。
+        // Crashlytics は「アプリが落ちたとき」しか拾えないため、
+        // 落ちないまま失敗している不具合を拾う受け皿としてここで有効化する。
+        LoggingService.shared.configurePostHog()
+
         // ゴールデンアワー通知のデリゲート設定
         // （通知タップからのコールドローンチに応答するため、起動完了前に設定する必要がある）
         UNUserNotificationCenter.current().delegate = GoldenHourNotificationManager.shared
@@ -39,23 +44,23 @@ struct SoramoyouApp: App {
         // init()ではビューが表示されていないため、ATTダイアログが表示されない
 
         #if DEBUG
-        // シミュレータ確認用：launchArg SEED_WIDGET でサンプルの空をウィジェットキャッシュへ投入する。
-        if ProcessInfo.processInfo.arguments.contains("SEED_WIDGET") {
-            WidgetCacheManager.shared.debugSeed()
-        }
-        // 一バケット偏り（evening 5枚）を再現し、アルバムと今の空が別写真を選ぶか検証ログを出す。
-        if ProcessInfo.processInfo.arguments.contains("SEED_WIDGET_ONE_BUCKET") {
-            WidgetCacheManager.shared.debugSeedOneBucket()
-        }
+            // シミュレータ確認用：launchArg SEED_WIDGET でサンプルの空をウィジェットキャッシュへ投入する。
+            if ProcessInfo.processInfo.arguments.contains("SEED_WIDGET") {
+                WidgetCacheManager.shared.debugSeed()
+            }
+            // 一バケット偏り（evening 5枚）を再現し、アルバムと今の空が別写真を選ぶか検証ログを出す。
+            if ProcessInfo.processInfo.arguments.contains("SEED_WIDGET_ONE_BUCKET") {
+                WidgetCacheManager.shared.debugSeedOneBucket()
+            }
         #endif
     }
-    
+
     /// Crashlyticsの設定
     private func setupCrashlytics() {
         // CrashlyticsはFirebaseApp.configure()で自動的に有効化される
         // 追加の設定が必要な場合はここに記述
     }
-    
+
     var body: some Scene {
         WindowGroup {
             ContentView()
