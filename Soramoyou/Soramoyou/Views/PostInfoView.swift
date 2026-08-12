@@ -49,7 +49,9 @@ struct PostInfoView: View {
         //    PostViewModel が生成される。`setSelectedImages` は `extractImageInfo()` を起動するため、
         //    捨てられるインスタンスが毎回 EXIF・主要色・色温度・AI空タイプ判定のパイプラインを
         //    走らせていた（1投稿で抽出が複数回走る原因。回数は body 再評価回数に依存し非決定的）。
-        _viewModel = StateObject(wrappedValue: {
+        //    戻り値型を明示しているのは、複数文クロージャの型推論に依存させないため
+        //    （`wrappedValue:` 側が autoclosure なので、推論の失敗はここでは分かりにくい）。
+        _viewModel = StateObject(wrappedValue: { () -> PostViewModel in
             let postViewModel = PostViewModel(userId: userId)
             postViewModel.setSelectedImages(images)
             // 投稿種別（通常/配置写真/広角合成）を入口モードから引き継ぐ。savePost の畳み込み・保存メタを駆動。
