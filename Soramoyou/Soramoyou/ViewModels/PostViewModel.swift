@@ -238,9 +238,12 @@ class PostViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             // 失敗した段階を `error_context` に載せるため、各処理の直前で更新する。
-            // ⚠️ 挙動は従来どおり（最初の失敗で以降の抽出を中断する）。段階ごとに catch して
-            //    部分成功を許す形にすると `extractedInfo` の中身が変わってしまうため、
-            //    ここでは計装だけを足す。
+            // ⚠️ EXIF・色・色温度の3段階は「最初の失敗で以降を中断」のまま。これらは
+            //    `ExtractedImageInfo` の非Optionalな土台であり、段階ごとに catch して
+            //    部分成功を許すと `extractedInfo` の中身の意味が変わってしまうため。
+            //    例外は最後の空タイプ判定のみで、そこだけは内側で catch して先へ進む
+            //    （理由は該当箇所のコメント参照）。したがって外側の catch に届く `stage` は
+            //    .exif / .colors / .colorTemperature のいずれかになる。
             var stage: ImageInfoExtractionStage = .exif
             do {
                 // EXIF情報の抽出
@@ -262,10 +265,24 @@ class PostViewModel: ObservableObject {
                 let colorTemperature = try await imageService.calculateColorTemperature(firstImage)
 
                 // AI空タイプ判定（新しい分類器を使用）☁️
+                // ⚠️ ここだけはベストエフォートにして、失敗を do ブロックの外へ伝播させない。
+                //    空タイプは Optional（ユーザーが投稿画面で手動選択できる）なのに対し、
+                //    EXIF・色・色温度はこの時点で既に取得できている。判定の失敗で抜けると
+                //    下の extractedInfo の代入ごと失われ、取得済みの情報まで道連れになる。
+                //    実際にそれが起きていた（判定が構造的に必ず失敗しており、全投稿で
+                //    撮影日時・時間帯・空の色・色温度が欠落）。原因は修正済みだが、
+                //    「判定1つの失敗が無関係な4項目を巻き添えにする」構造自体を残さない。
                 stage = .skyType
                 isClassifyingSkyType = true
-                let classificationResult = try await skyTypeClassifier.classify(firstImage, timeOfDay: timeOfDay)
-                skyTypeClassificationResult = classificationResult
+                var classifiedSkyType: SkyType?
+                do {
+                    let classificationResult = try await skyTypeClassifier.classify(firstImage, timeOfDay: timeOfDay)
+                    skyTypeClassificationResult = classificationResult
+                    classifiedSkyType = classificationResult.skyType
+                } catch {
+                    // 握りつぶさず、従来と同じ段階付き context で記録する（黙って効かない状態を作らない）。
+                    ErrorHandler.logError(error, context: "PostViewModel.extractImageInfo.\(ImageInfoExtractionStage.skyType.rawValue)")
+                }
                 isClassifyingSkyType = false
 
                 extractedInfo = ExtractedImageInfo(
@@ -273,7 +290,7 @@ class PostViewModel: ObservableObject {
                     timeOfDay: timeOfDay,
                     skyColors: colors,
                     colorTemperature: colorTemperature,
-                    skyType: classificationResult.skyType
+                    skyType: classifiedSkyType
                 )
             } catch {
                 isClassifyingSkyType = false

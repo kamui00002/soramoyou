@@ -11,6 +11,21 @@ struct GuestTabView: View {
     @EnvironmentObject var authViewModel: AuthViewModel
     @State private var selectedTab = 0
 
+    /// ゲストタブの画面名（PostHog 上の表示名）☁️
+    ///
+    /// ⭐️ ログイン後の「ホーム」「検索」とは**あえて別名**にしている。
+    ///    同名にするとログイン済みユーザーの画面数にゲストの閲覧が混ざり、
+    ///    「ログイン済みだけの数」を後から取り出せなくなる（情報が失われる）。
+    ///    別名にしておけば、合算も分離もダッシュボード側で選べる。
+    private func screenName(for tab: Int) -> String {
+        switch tab {
+        case 0: return "ゲスト: ホーム"
+        case 1: return "ゲスト: 検索"
+        case 2: return "ゲスト: ログイン促進"
+        default: return "ゲスト: 不明"
+        }
+    }
+
     var body: some View {
         TabView(selection: $selectedTab) {
             // ホーム（空の写真一覧を閲覧可能）
@@ -38,6 +53,18 @@ struct GuestTabView: View {
                 .tag(2)
         }
         .tint(Color(red: 0.39, green: 0.58, blue: 0.93))
+        .task {
+            // 画面計測: 起動直後に表示されているタブを1回だけ記録する（切替は下の onChange が拾う）。
+            // ⭐️ MainTabView と同じく `selectedTab` を単一の真実源にする。各画面側の `.onAppear`
+            //    （SwiftUI の仕様で複数回発火しうる）に置く方式より重複計上に強い。
+            //    GuestTabView と MainTabView は ContentView の排他分岐なので二重計上はしない。
+            LoggingService.shared.logScreen(screenName(for: selectedTab))
+        }
+        .onChange(of: selectedTab) { newTab in
+            // タブ切替。1引数クロージャ形式は本コードベース既存の書き方に合わせている
+            // （deployment target は iOS 16.0 のため 2引数形式は使えない）。
+            LoggingService.shared.logScreen(screenName(for: newTab))
+        }
     }
 }
 
