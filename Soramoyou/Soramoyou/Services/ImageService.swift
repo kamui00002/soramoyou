@@ -17,13 +17,13 @@
 //     toneCurvePoints / targetDynamicRange 脱落の再発を防ぐ。
 //
 
-import Foundation
-import UIKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import Foundation
 import ImageIO
-import Vision
 import Metal
+import UIKit
+import Vision
 
 protocol ImageServiceProtocol {
     // Filter
@@ -83,7 +83,7 @@ final class ImageService: ImageServiceProtocol {
     private let context: CIContext
 
     init(context: CIContext? = nil) {
-        if let context = context {
+        if let context {
             // テスト時など外部からの注入を許容
             self.context = context
         } else {
@@ -95,7 +95,7 @@ final class ImageService: ImageServiceProtocol {
     // MARK: - Filter
 
     func applyFilter(_ filter: FilterType, to image: UIImage) async throws -> UIImage {
-        return try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { continuation in
             Task.detached(priority: .userInitiated) {
                 do {
                     guard let ciImage = CIImage(image: image) else {
@@ -120,25 +120,25 @@ final class ImageService: ImageServiceProtocol {
     private func processFilter(_ filter: FilterType, on ciImage: CIImage) async throws -> CIImage {
         switch filter {
         case .natural:
-            return ciImage
+            ciImage
         case .clear:
-            return applyClearFilter(to: ciImage)
+            applyClearFilter(to: ciImage)
         case .drama:
-            return applyDramaFilter(to: ciImage)
+            applyDramaFilter(to: ciImage)
         case .soft:
-            return applySoftFilter(to: ciImage)
+            applySoftFilter(to: ciImage)
         case .warm:
-            return applyWarmFilter(to: ciImage)
+            applyWarmFilter(to: ciImage)
         case .cool:
-            return applyCoolFilter(to: ciImage)
+            applyCoolFilter(to: ciImage)
         case .vintage:
-            return applyVintageFilter(to: ciImage)
+            applyVintageFilter(to: ciImage)
         case .monochrome:
-            return applyMonochromeFilter(to: ciImage)
+            applyMonochromeFilter(to: ciImage)
         case .pastel:
-            return applyPastelFilter(to: ciImage)
+            applyPastelFilter(to: ciImage)
         case .vivid:
-            return applyVividFilter(to: ciImage)
+            applyVividFilter(to: ciImage)
         }
     }
 
@@ -227,6 +227,7 @@ final class ImageService: ImageServiceProtocol {
     }
 
     // MARK: - EditRecipe 直接パス（toneCurvePoints 等を保全）
+
     //
     // 🔧 2026-04-24 H1 削除:
     // 旧 applyEditTool / processEditTool / 27 個の applyXxx 独自実装は FilterGraphBuilder と
@@ -340,48 +341,47 @@ final class ImageService: ImageServiceProtocol {
     private func processFilterSync(_ filter: FilterType, on ciImage: CIImage) -> CIImage {
         switch filter {
         case .natural:
-            return ciImage
+            ciImage
         case .clear:
-            return applyClearFilter(to: ciImage)
+            applyClearFilter(to: ciImage)
         case .drama:
-            return applyDramaFilter(to: ciImage)
+            applyDramaFilter(to: ciImage)
         case .soft:
-            return applySoftFilter(to: ciImage)
+            applySoftFilter(to: ciImage)
         case .warm:
-            return applyWarmFilter(to: ciImage)
+            applyWarmFilter(to: ciImage)
         case .cool:
-            return applyCoolFilter(to: ciImage)
+            applyCoolFilter(to: ciImage)
         case .vintage:
-            return applyVintageFilter(to: ciImage)
+            applyVintageFilter(to: ciImage)
         case .monochrome:
-            return applyMonochromeFilter(to: ciImage)
+            applyMonochromeFilter(to: ciImage)
         case .pastel:
-            return applyPastelFilter(to: ciImage)
+            applyPastelFilter(to: ciImage)
         case .vivid:
-            return applyVividFilter(to: ciImage)
+            applyVividFilter(to: ciImage)
         }
     }
 
     // MARK: - Compression & Resize
 
     func resizeImage(_ image: UIImage, maxSize: CGSize) async throws -> UIImage {
-        return try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { continuation in
             Task.detached(priority: .userInitiated) {
                 let size = image.size
                 let aspectRatio = size.width / size.height
 
-                var newSize: CGSize
-                if size.width > size.height {
+                var newSize: CGSize = if size.width > size.height {
                     if size.width > maxSize.width {
-                        newSize = CGSize(width: maxSize.width, height: maxSize.width / aspectRatio)
+                        CGSize(width: maxSize.width, height: maxSize.width / aspectRatio)
                     } else {
-                        newSize = size
+                        size
                     }
                 } else {
                     if size.height > maxSize.height {
-                        newSize = CGSize(width: maxSize.height * aspectRatio, height: maxSize.height)
+                        CGSize(width: maxSize.height * aspectRatio, height: maxSize.height)
                     } else {
-                        newSize = size
+                        size
                     }
                 }
 
@@ -409,19 +409,19 @@ final class ImageService: ImageServiceProtocol {
     }
 
     func compressImage(_ image: UIImage, quality: CGFloat) async throws -> Data {
-        return try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { continuation in
             Task.detached(priority: .userInitiated) {
                 guard let imageData = image.jpegData(compressionQuality: quality) else {
                     continuation.resume(throwing: ImageServiceError.compressionFailed)
                     return
                 }
 
-                let maxSize: Int = 5 * 1024 * 1024
+                let maxSize = 5 * 1024 * 1024
                 if imageData.count > maxSize {
                     var currentQuality = quality
                     var compressedData = imageData
 
-                    while compressedData.count > maxSize && currentQuality > 0.5 {
+                    while compressedData.count > maxSize, currentQuality > 0.5 {
                         currentQuality -= 0.1
                         if let newData = image.jpegData(compressionQuality: currentQuality) {
                             compressedData = newData
@@ -441,21 +441,13 @@ final class ImageService: ImageServiceProtocol {
     // MARK: - Analysis
 
     func extractColors(_ image: UIImage, maxCount: Int) async throws -> [String] {
-        return try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { continuation in
             Task.detached(priority: .userInitiated) {
                 do {
-                    guard let ciImage = CIImage(image: image) else {
-                        throw ImageServiceError.invalidImage
-                    }
-
                     let resizedImage = try await self.resizeImage(image, maxSize: CGSize(width: 512, height: 512))
                     guard let resizedCIImage = CIImage(image: resizedImage) else {
                         throw ImageServiceError.invalidImage
                     }
-
-                    let filter = CIFilter.areaAverage()
-                    filter.inputImage = resizedCIImage
-                    filter.extent = resizedCIImage.extent
 
                     let colors = try await self.extractDominantColors(from: resizedCIImage, maxCount: maxCount)
                     continuation.resume(returning: colors)
@@ -472,10 +464,19 @@ final class ImageService: ImageServiceProtocol {
         let cellWidth = extent.width / CGFloat(gridSize)
         let cellHeight = extent.height / CGFloat(gridSize)
 
-        var colorMap: [String: Int] = [:]
+        // 量子化キー -> (出現数, 代表色)。
+        // ⚠️ セルの平均色そのものをキーにしてはならない。25セルの平均が完全一致することは
+        //    まず無いため、全エントリが count=1 になり、下の prefix(maxCount) が
+        //    「上位5色」ではなく「順序の定まらない任意の5セル」を返してしまう
+        //    （Dictionary.sorted は値が同じときの順序を保証しない＝同じ写真から毎回違う
+        //     skyColors が出る）。各チャンネルを32段階に丸めたキーでまとめることで、
+        //    初めて「よく出ている色」という集計の意味が成立する。
+        //    返す値は量子化後の色ではなく、そのグループで最初に観測した実際の色にする
+        //    （丸めた色をそのまま保存すると、実際の空の色から目に見えてズレるため）。
+        var buckets: [String: (count: Int, representative: String)] = [:]
 
-        for i in 0..<gridSize {
-            for j in 0..<gridSize {
+        for i in 0 ..< gridSize {
+            for j in 0 ..< gridSize {
                 let cellRect = CGRect(
                     x: extent.origin.x + CGFloat(i) * cellWidth,
                     y: extent.origin.y + CGFloat(j) * cellHeight,
@@ -487,8 +488,16 @@ final class ImageService: ImageServiceProtocol {
                 filter.inputImage = ciImage.cropped(to: cellRect)
                 filter.extent = cellRect
 
+                // ⚠️ 切り出し矩形に cellRect を使ってはならない。
+                //    `areaAverage` の出力は入力範囲によらず**常に原点 (0,0) の 1×1 画像**である。
+                //    一方 cellRect は i>0 / j>0 のセルでは原点が非ゼロなので両者が交差せず、
+                //    取り出せるのは範囲外＝透明黒だけになる。これが「skyColors が全件 #000000、
+                //    色温度が常に 2021K」の真因（2026-08-14 に実データで確認）。
+                //    同じ間違いを SkyTypeClassifier で直したのが PR #79。そちらの
+                //    `getAverageColor` と同じく 1×1 を指定するのが正しい。
                 guard let outputImage = filter.outputImage,
-                      let cgImage = context.createCGImage(outputImage, from: cellRect) else {
+                      let cgImage = context.createCGImage(outputImage, from: CGRect(x: 0, y: 0, width: 1, height: 1))
+                else {
                     continue
                 }
 
@@ -497,7 +506,9 @@ final class ImageService: ImageServiceProtocol {
                 let bytesPerRow = bytesPerPixel
                 var pixelData = [UInt8](repeating: 0, count: bytesPerPixel)
 
-                guard let context = CGContext(
+                // 変数名を pixelContext にしているのは、上で使っている `context`（CIContext）と
+                // 取り違えないため。calculateColorTemperature 側と命名を揃えてある。
+                guard let pixelContext = CGContext(
                     data: &pixelData,
                     width: 1,
                     height: 1,
@@ -509,23 +520,36 @@ final class ImageService: ImageServiceProtocol {
                     continue
                 }
 
-                context.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                pixelContext.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
 
                 let r = Int(pixelData[0])
                 let g = Int(pixelData[1])
                 let b = Int(pixelData[2])
                 let hexColor = String(format: "#%02X%02X%02X", r, g, b)
 
-                colorMap[hexColor, default: 0] += 1
+                // 各チャンネルを 8 刻み（0-31 の32段階）に丸めたキー。近い色を1グループにまとめる。
+                let bucketKey = String(format: "%02X%02X%02X", r / 8, g / 8, b / 8)
+                if let existing = buckets[bucketKey] {
+                    buckets[bucketKey] = (existing.count + 1, existing.representative)
+                } else {
+                    buckets[bucketKey] = (1, hexColor)
+                }
             }
         }
 
-        let sortedColors = colorMap.sorted { $0.value > $1.value }
-        return Array(sortedColors.prefix(maxCount).map { $0.key })
+        // 出現数の降順。同数のときはキーの昇順で並びを確定させる
+        // （Dictionary.sorted は同値の順序が不定なため、ここを決めないと結果が毎回変わる）。
+        let sortedBuckets = buckets.sorted { lhs, rhs in
+            if lhs.value.count != rhs.value.count {
+                return lhs.value.count > rhs.value.count
+            }
+            return lhs.key < rhs.key
+        }
+        return Array(sortedBuckets.prefix(maxCount).map(\.value.representative))
     }
 
     func calculateColorTemperature(_ image: UIImage) async throws -> Int {
-        return try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { continuation in
             Task.detached(priority: .userInitiated) {
                 do {
                     guard let ciImage = CIImage(image: image) else {
@@ -541,8 +565,15 @@ final class ImageService: ImageServiceProtocol {
                     filter.inputImage = resizedCIImage
                     filter.extent = resizedCIImage.extent
 
+                    // ⚠️ 切り出し矩形に resizedCIImage.extent（512×512）を使ってはならない。
+                    //    `areaAverage` の出力は常に原点 (0,0) の 1×1 画像なので、512×512 を要求すると
+                    //    平均色は左下1ピクセルだけ、残りは範囲外＝透明黒で埋まった画像が返る。
+                    //    それを 1×1 に縮小描画するとほぼ真っ黒になり、下の式が必ず約2020Kを返していた
+                    //    （実データでも全投稿が colorTemperature: 2021 で固定。2026-08-14 確認）。
+                    //    extractDominantColors / SkyTypeClassifier.getAverageColor と同じく 1×1 が正しい。
                     guard let outputImage = filter.outputImage,
-                          let cgImage = self.context.createCGImage(outputImage, from: resizedCIImage.extent) else {
+                          let cgImage = self.context.createCGImage(outputImage, from: CGRect(x: 0, y: 0, width: 1, height: 1))
+                    else {
                         throw ImageServiceError.processingFailed
                     }
 
@@ -569,15 +600,43 @@ final class ImageService: ImageServiceProtocol {
                     let g = Double(pixelData[1]) / 255.0
                     let b = Double(pixelData[2]) / 255.0
 
-                    // ゼロ除算防止: 除数 (0.1858 - b) が0近傍の場合はデフォルト値（昼光 5500K）を返す
-                    let divisor = 0.1858 - b
+                    // McCamy の近似式は「CIE xy 色度座標」を入力に取る式であり、RGB をそのまま
+                    // x, y として渡してはならない（旧実装は x に r、y に b を入れていた＝単位の取り違え）。
+                    // 誤用したままだと暖色で除数が負に振れて式が破綻し、夕焼けが常に下限 2000K に
+                    // 張り付いていた。sRGB → 線形RGB → CIE XYZ(D65) → xy と正しく変換してから渡す。
+                    // 検証: D65 の無彩色 #808080 を通すと 6504K（D65 の定義値）が返ることを確認済み。
+
+                    // sRGB のガンマを外して線形 RGB にする
+                    func linearize(_ channel: Double) -> Double {
+                        channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+                    }
+                    let rLinear = linearize(r)
+                    let gLinear = linearize(g)
+                    let bLinear = linearize(b)
+
+                    // 線形 sRGB → CIE XYZ（D65 基準の標準変換行列）
+                    let xyzX = 0.4124 * rLinear + 0.3576 * gLinear + 0.1805 * bLinear
+                    let xyzY = 0.2126 * rLinear + 0.7152 * gLinear + 0.0722 * bLinear
+                    let xyzZ = 0.0193 * rLinear + 0.1192 * gLinear + 0.9505 * bLinear
+
                     let epsilon = 1e-10
+                    // 真っ黒（XYZ 合計が 0）では色度が定義できないため、既定値（昼光 5500K）を返す
+                    let xyzSum = xyzX + xyzY + xyzZ
+                    guard xyzSum > epsilon else {
+                        continuation.resume(returning: 5500)
+                        return
+                    }
+                    let chromaticityX = xyzX / xyzSum
+                    let chromaticityY = xyzY / xyzSum
+
+                    // ゼロ除算防止: 除数 (0.1858 - y) が0近傍の場合はデフォルト値（昼光 5500K）を返す
+                    let divisor = 0.1858 - chromaticityY
                     guard abs(divisor) > epsilon else {
                         continuation.resume(returning: 5500)
                         return
                     }
 
-                    let n = (r - 0.3320) / divisor
+                    let n = (chromaticityX - 0.3320) / divisor
                     let nSquared = n * n
                     let nCubed = nSquared * n
                     let colorTemperature = (449.0 * nCubed) + (3525.0 * nSquared) + (6823.3 * n) + 5520.33
@@ -598,7 +657,7 @@ final class ImageService: ImageServiceProtocol {
     }
 
     func detectSkyType(_ image: UIImage) async throws -> SkyType {
-        return try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { continuation in
             Task.detached(priority: .userInitiated) {
                 do {
                     guard let ciImage = CIImage(image: image) else {
@@ -634,7 +693,8 @@ final class ImageService: ImageServiceProtocol {
         filter.extent = ciImage.extent
 
         guard let outputImage = filter.outputImage,
-              let cgImage = context.createCGImage(outputImage, from: ciImage.extent) else {
+              let cgImage = context.createCGImage(outputImage, from: ciImage.extent)
+        else {
             throw ImageServiceError.processingFailed
         }
 
@@ -685,14 +745,14 @@ final class ImageService: ImageServiceProtocol {
 
     private func determineSkyType(
         colorTemperature: Int,
-        colors: [String],
+        colors _: [String],
         hsvAnalysis: (hue: Double, saturation: Double, brightness: Double)
     ) -> SkyType {
         let hue = hsvAnalysis.hue
         let saturation = hsvAnalysis.saturation
         let brightness = hsvAnalysis.brightness
 
-        if colorTemperature < 4000 && (hue >= 0 && hue <= 60 || hue >= 300 && hue <= 360) {
+        if colorTemperature < 4000, hue >= 0 && hue <= 60 || hue >= 300 && hue <= 360 {
             if colorTemperature < 3000 {
                 return .sunset
             } else {
@@ -700,7 +760,7 @@ final class ImageService: ImageServiceProtocol {
             }
         }
 
-        if brightness < 0.3 && saturation > 0.5 {
+        if brightness < 0.3, saturation > 0.5 {
             return .storm
         }
 
@@ -708,7 +768,7 @@ final class ImageService: ImageServiceProtocol {
             return .cloudy
         }
 
-        if colorTemperature >= 5000 && (hue >= 180 && hue <= 240) {
+        if colorTemperature >= 5000, hue >= 180, hue <= 240 {
             return .clear
         }
 
@@ -716,11 +776,12 @@ final class ImageService: ImageServiceProtocol {
     }
 
     func extractEXIFData(_ image: UIImage) async throws -> EXIFData {
-        return try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { continuation in
             Task.detached(priority: .userInitiated) {
                 do {
                     guard let imageData = image.jpegData(compressionQuality: 1.0),
-                          let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil) else {
+                          let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil)
+                    else {
                         throw ImageServiceError.invalidImage
                     }
 
@@ -787,13 +848,13 @@ enum ImageServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidImage:
-            return "無効な画像です"
+            "無効な画像です"
         case .processingFailed:
-            return "画像処理に失敗しました"
+            "画像処理に失敗しました"
         case .compressionFailed:
-            return "画像の圧縮に失敗しました"
+            "画像の圧縮に失敗しました"
         case .resizeFailed:
-            return "画像のリサイズに失敗しました"
+            "画像のリサイズに失敗しました"
         }
     }
 }
