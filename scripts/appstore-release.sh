@@ -225,6 +225,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ロケールを UTF-8 に固定する。
+# 本リポジトリのパスには日本語（"開発/iOSアプリ/そらもよう"）が含まれるため、
+# LANG 未設定（LC_CTYPE=C）の非対話シェルから実行すると Fastfile 側の
+# File.expand_path(..., __dir__) が「US-ASCII の文字列」と「UTF-8 の日本語パス」を
+# 連結できず Encoding::CompatibilityError で落ちる（2026-08-14 の 1.9.6 提出時に実際に発生）。
+# fastlane 公式も UTF-8 ロケールを要求しているため、ここで明示的に固定する。
+export LANG="${LANG:-en_US.UTF-8}"
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+
 # fastlane のテレメトリ・自動アップデートチェックを無効化（非対話実行のため）
 export FASTLANE_OPT_OUT_USAGE=1
 export FASTLANE_SKIP_UPDATE_CHECK=1
