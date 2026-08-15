@@ -20,8 +20,12 @@
        - UserDefaults / @AppStorage … 本体ターゲットに 22 箇所 → **宣言が必要**
        - ファイルのタイムスタンプ / 空き容量 / 起動時刻 / CPU数 … **0 箇所**（宣言不要）
      理由コード: `UserDefaults(suiteName:)`（App Group 共有）は 0 箇所で、
-       保存しているのはこのアプリ自身の設定・既読フラグのみ。他社アプリとは共有しない。
-       → CA92.1（App Group 共有）ではなく **1C8F.1**（自アプリのデータのみ）が正しい。
+       保存しているのはこのアプリ自身の設定・既読フラグのみ。App Group 共有は
+       ファイルベース（AppGroup.swift の containerURL）で UserDefaults を使わない。
+       Apple 公式定義: CA92.1 = 自アプリ専用 / 1C8F.1 = App Group 内のアプリ・拡張と共有。
+       → suiteName 不使用のこのアプリは **CA92.1** が正しい。
+       （build 94 までは定義を逆に理解して 1C8F.1 を宣言していたが審査は通過していた。
+       2026-08-16 に CA92.1 へ修正。）
 
   2) NSPrivacyTrackingDomains は**キーごと省略している**
      ⚠️ 空配列で提出すると ITMS-91064 で Invalid Binary 却下される（2026-06-17 に実際に食らった）。
@@ -54,8 +58,8 @@
 			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
-				<!-- 1C8F.1: このアプリ自身のデータのみを読み書きする（設定・既読フラグ等） -->
-				<string>1C8F.1</string>
+				<!-- CA92.1: このアプリ自身のデータのみを読み書きする（設定・既読フラグ等） -->
+				<string>CA92.1</string>
 			</array>
 		</dict>
 	</array>
