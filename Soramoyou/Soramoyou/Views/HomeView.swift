@@ -1115,7 +1115,10 @@ struct PostDetailView: View {
     
     // MARK: - Author Section
     
-    private func authorSection(user: User) -> some View {
+    /// 投稿者ヘッダー。
+    /// 引数は `User` ではなく `PublicProfile`（他人の `users` は権限で読めないため）。
+    /// 表示に使うのは displayName / photoURL の 2 つだけなので、公開プロフィールで足りる。
+    private func authorSection(user: PublicProfile) -> some View {
         HStack(spacing: 12) {
             // プロフィール画像
             if let photoURL = user.photoURL, let url = URL(string: photoURL) {
