@@ -80,7 +80,7 @@ final class PostDetailViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isLoadingAuthor, "読み込み完了後はローディング表示を畳むべき")
     }
 
-    func testLoadAuthorLogsErrorWithoutSurfacingMessage() async {
+    func testLoadAuthorKeepsErrorMessageNilOnFailure() async {
         // Arrange: 公開プロフィールの取得が失敗する（未作成ユーザー・ネットワーク断など）
         let mock = MockFirestoreServiceForPostDetail()
         mock.stubbedPublicProfileError = FirestoreServiceError.notFound
