@@ -5,8 +5,8 @@
 //  Created on 2025-12-06.
 //
 
-import SwiftUI
 import Kingfisher
+import SwiftUI
 
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
@@ -16,9 +16,11 @@ struct HomeView: View {
     @State private var selectedPost: Post?
     /// 他ユーザープロフィール画面表示用 ⭐️ Issue #2
     @State private var selectedAuthorUserId: String?
+    /// タップされたハッシュタグ。non-nil でタグ詳細画面を全画面提示する ⭐️
+    @State private var selectedTag: String?
     /// ストリークチップから開く空図鑑の表示フラグ
     @State private var showingStreakZukan = false
-    @State private var animateCards = false  // フィードアニメーション用 ☀️
+    @State private var animateCards = false // フィードアニメーション用 ☀️
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
@@ -34,7 +36,7 @@ struct HomeView: View {
 
                 VStack(spacing: 0) {
                     ZStack {
-                        if viewModel.isLoading && viewModel.posts.isEmpty {
+                        if viewModel.isLoading, viewModel.posts.isEmpty {
                             // 初回読み込み中 ☁️
                             LoadingStateView(type: .initial)
                         } else if let error = viewModel.lastError, viewModel.posts.isEmpty {
@@ -105,6 +107,15 @@ struct HomeView: View {
                 PostDetailView(post: post)
                     .environmentObject(likeManager)
             }
+            // ハッシュタグ → タグ詳細画面 ⭐️
+            // HomeView は NavigationView（NavigationStack ではない）ため
+            // .navigationDestination は無反応になる。全画面カバーで開く。
+            .fullScreenCover(item: Binding<IdentifiableString?>(
+                get: { selectedTag.map(IdentifiableString.init) },
+                set: { selectedTag = $0?.id }
+            )) { wrapper in
+                TagDetailView(tag: wrapper.id, source: "home_card", likeManager: likeManager)
+            }
             // ストリークチップ → 空図鑑（カレンダー詳細）⭐️
             .sheet(isPresented: $showingStreakZukan) {
                 if let uid = viewModel.currentUserId {
@@ -132,7 +143,7 @@ struct HomeView: View {
         }
         .navigationViewStyle(.stack)
     }
-    
+
     // MARK: - Feed View ☀️
 
     private var feedView: some View {
@@ -141,7 +152,7 @@ struct HomeView: View {
                 // ストリークチップ（🔥◯日連続）— 継続中のみ表示、タップで図鑑へ ⭐️
                 SkyStreakChipView(streak: onThisDayViewModel.streak) {
                     LoggingService.shared.logEvent("streak_chip_tapped", parameters: [
-                        "current_streak": onThisDayViewModel.streak.currentStreak
+                        "current_streak": onThisDayViewModel.streak.currentStreak,
                     ])
                     showingStreakZukan = true
                 }
@@ -170,11 +181,15 @@ struct HomeView: View {
                             // 自分の投稿の場合はプロフィールタブへの遷移を促すか
                             // 既存仕様に任せる。ここでは他ユーザーであれば UserProfileView を開く
                             if let currentUserId = viewModel.currentUserId,
-                               currentUserId == post.userId {
+                               currentUserId == post.userId
+                            {
                                 // 自分の投稿: プロフィールタブで見るほうが自然なので何もしない
                                 return
                             }
                             selectedAuthorUserId = post.userId
+                        },
+                        onHashtagTapped: { tag in
+                            selectedTag = tag
                         }
                     )
                     // スタガードアニメーション（改善）
@@ -183,24 +198,25 @@ struct HomeView: View {
                     .scaleEffect(animateCards ? 1 : 0.95)
                     .animation(
                         DesignTokens.Animation.smoothSpring
-                        .delay(Double(index) * DesignTokens.Animation.staggerDelay),
+                            .delay(Double(index) * DesignTokens.Animation.staggerDelay),
                         value: animateCards
                     )
                     .onAppear {
-                            // ページネーション: 最後の投稿が表示されたら次のページを読み込む ☁️
-                            // 重複リクエスト防止: 読み込み中の場合はスキップ
-                            if post.id == viewModel.posts.last?.id
-                                && !viewModel.isLoadingMore
-                                && viewModel.hasMorePosts {
-                                Task {
-                                    let previousCount = viewModel.posts.count
-                                    await viewModel.loadMorePosts()
-                                    // 新しく読み込んだ投稿のいいね状態をチェック
-                                    let newPosts = Array(viewModel.posts.dropFirst(previousCount))
-                                    await likeManager.checkLikeStatus(for: newPosts)
-                                }
+                        // ページネーション: 最後の投稿が表示されたら次のページを読み込む ☁️
+                        // 重複リクエスト防止: 読み込み中の場合はスキップ
+                        if post.id == viewModel.posts.last?.id,
+                           !viewModel.isLoadingMore,
+                           viewModel.hasMorePosts
+                        {
+                            Task {
+                                let previousCount = viewModel.posts.count
+                                await viewModel.loadMorePosts()
+                                // 新しく読み込んだ投稿のいいね状態をチェック
+                                let newPosts = Array(viewModel.posts.dropFirst(previousCount))
+                                await likeManager.checkLikeStatus(for: newPosts)
                             }
                         }
+                    }
                 }
 
                 // 追加読み込み中のインジケーター
@@ -217,7 +233,7 @@ struct HomeView: View {
                 }
 
                 // これ以上投稿がない場合
-                if !viewModel.hasMorePosts && !viewModel.posts.isEmpty {
+                if !viewModel.hasMorePosts, !viewModel.posts.isEmpty {
                     VStack(spacing: DesignTokens.Spacing.sm) {
                         Image(systemName: "checkmark.circle")
                             .font(.system(size: 24))
@@ -246,13 +262,16 @@ struct PostCard: View {
     let post: Post
     /// 投稿者情報（HomeViewModel.authorsByUserId から渡される）⭐️ Issue #2
     /// `users` コレクションは isOwner 制限のため、公開可能な PublicProfile を渡す。
-    var author: PublicProfile? = nil
+    var author: PublicProfile?
     var isLiked: Bool = false
-    var likeCount: Int? = nil
-    var onLikeTapped: (() -> Void)? = nil
-    var onCardTapped: (() -> Void)? = nil
+    var likeCount: Int?
+    var onLikeTapped: (() -> Void)?
+    var onCardTapped: (() -> Void)?
     /// 投稿者ヘッダーをタップしたときのハンドラ（他ユーザープロフィールへ遷移）
-    var onAuthorTapped: (() -> Void)? = nil
+    var onAuthorTapped: (() -> Void)?
+    /// ハッシュタグをタップしたときのハンドラ（タグ詳細へ遷移）⭐️
+    /// nil の場合はチップが表示のみになる（タグ詳細画面内の再帰的な遷移を避けるため）。
+    var onHashtagTapped: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -312,24 +331,14 @@ struct PostCard: View {
                         .onTapGesture { onCardTapped?() }
                 }
 
-                // ハッシュタグ
+                // ハッシュタグ（onHashtagTapped がある場合のみタップでタグ詳細へ）⭐️
                 if let hashtags = post.hashtags, !hashtags.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: DesignTokens.Spacing.sm) {
-                            ForEach(hashtags, id: \.self) { hashtag in
-                                Text("#\(hashtag)")
-                                    // Dynamic Type 対応: .caption はユーザーの文字サイズ設定に追従
-                                    .font(.system(.caption, design: .rounded, weight: .medium))
-                                    .foregroundColor(DesignTokens.Colors.selectionAccent)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(
-                                        Capsule()
-                                            .fill(DesignTokens.Colors.selectionAccent.opacity(0.12))
-                                    )
-                            }
-                        }
-                    }
+                    HashtagChipRow(
+                        hashtags: hashtags,
+                        style: .compact,
+                        layout: .scroll,
+                        onTap: onHashtagTapped
+                    )
                 }
 
                 // メタ情報行
@@ -422,7 +431,7 @@ struct PostCard: View {
                         LinearGradient(
                             colors: [
                                 Color.white.opacity(0.5),
-                                Color.white.opacity(0.15)
+                                Color.white.opacity(0.15),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -484,7 +493,7 @@ struct PostCard: View {
         if let urlString = author?.photoURL, let url = URL(string: urlString) {
             AsyncImage(url: url) { phase in
                 switch phase {
-                case .success(let image):
+                case let .success(image):
                     image.resizable().scaledToFill()
                 default:
                     avatarPlaceholder
@@ -534,11 +543,11 @@ struct PostImageView: View {
     /// - iPad: horizontalSizeClass == .regular
     private var imageHeight: CGFloat {
         if verticalSizeClass == .compact {
-            return 160  // ランドスケープiPhone: 画面高さが制限されるため短く
+            160 // ランドスケープiPhone: 画面高さが制限されるため短く
         } else if horizontalSizeClass == .regular {
-            return 360  // iPad縦向き
+            360 // iPad縦向き
         } else {
-            return 240  // ポートレートiPhone
+            240 // ポートレートiPhone
         }
     }
 
@@ -577,6 +586,7 @@ struct PostImageView: View {
 }
 
 // MARK: - Card Button Style ☀️
+
 // ScrollView内で安全に動作するタップアニメーション
 // DragGesture/LongPressGestureの代わりにButtonStyleを使用し、スクロール競合を回避
 
@@ -611,6 +621,8 @@ struct PostDetailView: View {
     @State private var showingSaveResult = false
     @State private var shareImages: [UIImage] = []
     @State private var commentText = ""
+    /// タップされたハッシュタグ。non-nil でタグ詳細画面を全画面提示する ⭐️
+    @State private var selectedTag: String?
     /// 再編集（投稿済み画像の上書き）起動ペイロード。non-nil で EditView を全画面提示。
     @State private var reEditLaunch: ReEditLaunchPayload?
     /// 空カード共有パック ⭐️: 書き出し元画像のダウンロード完了後にセットして
@@ -659,7 +671,7 @@ struct PostDetailView: View {
                             if success { dismiss() }
                         }
                     }
-                    Button("キャンセル", role: .cancel) { }
+                    Button("キャンセル", role: .cancel) {}
                 } message: {
                     Text("この投稿を削除しますか？この操作は取り消せません。")
                 }
@@ -678,10 +690,10 @@ struct PostDetailView: View {
                             Task { await submitReport(reason: reason) }
                         }
                     }
-                    Button("キャンセル", role: .cancel) { }
+                    Button("キャンセル", role: .cancel) {}
                 }
                 .alert("ユーザーをブロック", isPresented: $showingBlockConfirmation) {
-                    Button("キャンセル", role: .cancel) { }
+                    Button("キャンセル", role: .cancel) {}
                     Button("ブロック", role: .destructive) {
                         Task { await blockPostAuthor() }
                     }
@@ -689,7 +701,7 @@ struct PostDetailView: View {
                     Text("このユーザーをブロックすると、このユーザーの投稿がフィードに表示されなくなります。")
                 }
                 .alert("通報しました", isPresented: $showingReportConfirmation) {
-                    Button("OK") { }
+                    Button("OK") {}
                 } message: {
                     Text("ご報告ありがとうございます。内容を確認いたします。")
                 }
@@ -706,12 +718,20 @@ struct PostDetailView: View {
                 .sheet(item: $shareCardExportPayload) { payload in
                     ShareCardExportView(post: post, sourceImage: payload.image)
                 }
+                // ハッシュタグ → タグ詳細画面 ⭐️
+                // この画面自体がシート上に載るため、全画面カバーで開く。
+                .fullScreenCover(item: Binding<IdentifiableString?>(
+                    get: { selectedTag.map(IdentifiableString.init) },
+                    set: { selectedTag = $0?.id }
+                )) { wrapper in
+                    TagDetailView(tag: wrapper.id, source: "post_detail", likeManager: likeManager)
+                }
                 // 再編集: 元画像＋レシピをエディタへ。保存時は既存投稿を上書き更新する。
                 // item: 方式で「画像が確実に揃ってから」EditView を構築する（stale-state 回避）。
                 .fullScreenCover(item: $reEditLaunch) { launch in
                     EditView(
                         images: launch.images,
-                        userId: launch.post.userId,          // 自分の投稿のみ編集可なので post.userId = 自分
+                        userId: launch.post.userId, // 自分の投稿のみ編集可なので post.userId = 自分
                         initialRecipe: launch.post.attachedRecipe,
                         editingContext: launch.editingContext
                     )
@@ -749,12 +769,12 @@ struct PostDetailView: View {
                 Task { await saveImage(edited: true, all: true) }
             }
         }
-        if hasOriginalImages && (post.originalImages?.count ?? 0) > 1 {
+        if hasOriginalImages, (post.originalImages?.count ?? 0) > 1 {
             Button("すべての画像を保存（オリジナル）") {
                 Task { await saveImage(edited: false, all: true) }
             }
         }
-        Button("キャンセル", role: .cancel) { }
+        Button("キャンセル", role: .cancel) {}
     }
 
     /// savingOverlay に表示するメッセージ（状態に応じて出し分け）
@@ -824,6 +844,7 @@ struct PostDetailView: View {
     }
 
     // MARK: - Multi Image Carousel ⭐️
+
     // 複数画像投稿で 2 枚目以降が見えなくなっていたバグ対応。
     // TabView + .page スタイルで横スワイプ閲覧を可能にし、
     // 配列内で最も縦長なアスペクト比に TabView 全体の高さを合わせる。
@@ -858,19 +879,10 @@ struct PostDetailView: View {
                     .font(.body)
                     .foregroundColor(.white)
             }
+            // ハッシュタグ（タップでタグ詳細画面へ）⭐️
             if let hashtags = post.hashtags, !hashtags.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(hashtags, id: \.self) { hashtag in
-                            Text("#\(hashtag)")
-                                .font(.body)
-                                .foregroundColor(DesignTokens.Colors.skyBlue)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color.white.opacity(0.1))
-                                .cornerRadius(12)
-                        }
-                    }
+                HashtagChipRow(hashtags: hashtags, style: .detail, layout: .scroll) { tag in
+                    selectedTag = tag
                 }
             }
             if let location = post.location {
@@ -1049,7 +1061,7 @@ struct PostDetailView: View {
     /// DL待ち中に Menu から他方を選べてしまい、二重モーダルが起き得た）。
     @MainActor
     private func exportShareCard() async {
-        guard !isPreparingShareCard && !isPreparingReEdit else { return }
+        guard !isPreparingShareCard, !isPreparingReEdit else { return }
         isPreparingShareCard = true
         defer { isPreparingShareCard = false }
 
@@ -1072,12 +1084,12 @@ struct PostDetailView: View {
     /// 共有カード書き出しの元画像DL（isPreparingShareCard）とも排他にする（統合レビューで発見）。
     @MainActor
     private func prepareReEdit() async {
-        guard !isPreparingReEdit && !isPreparingShareCard, hasOriginalImages else { return }
+        guard !isPreparingReEdit, !isPreparingShareCard, hasOriginalImages else { return }
         isPreparingReEdit = true
         defer { isPreparingReEdit = false }
 
         let infos = (post.originalImages ?? []).sorted { $0.order < $1.order }
-        let urls = infos.map { $0.url }.filter { !$0.isEmpty }
+        let urls = infos.map(\.url).filter { !$0.isEmpty }
         guard !urls.isEmpty else {
             saveResultMessage = "元画像が見つかりませんでした"
             showingSaveResult = true
@@ -1112,9 +1124,9 @@ struct PostDetailView: View {
             dismiss()
         }
     }
-    
+
     // MARK: - Author Section
-    
+
     private func authorSection(user: User) -> some View {
         HStack(spacing: 12) {
             // プロフィール画像
@@ -1141,7 +1153,7 @@ struct PostDetailView: View {
                             .foregroundColor(.gray)
                     )
             }
-            
+
             // ユーザー情報 ☁️
             // セキュリティ: メールアドレスは表示しない
             VStack(alignment: .leading, spacing: 4) {
@@ -1163,7 +1175,7 @@ struct PostDetailView: View {
 struct PostDetailImageView: View {
     let imageInfo: ImageInfo
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    
+
     var body: some View {
         // フルサイズ画像を表示
         if let imageURL = URL(string: imageInfo.url) {
@@ -1211,9 +1223,9 @@ struct GradientTitleView: View {
             .foregroundStyle(
                 LinearGradient(
                     colors: [
-                        Color(red: 0.4, green: 0.6, blue: 0.9),   // 明るい空色
-                        Color(red: 0.3, green: 0.5, blue: 0.85),  // 中間の青
-                        Color(red: 0.5, green: 0.3, blue: 0.8)    // 夕暮れのパープル
+                        Color(red: 0.4, green: 0.6, blue: 0.9), // 明るい空色
+                        Color(red: 0.3, green: 0.5, blue: 0.85), // 中間の青
+                        Color(red: 0.5, green: 0.3, blue: 0.8), // 夕暮れのパープル
                     ],
                     startPoint: .leading,
                     endPoint: .trailing
@@ -1246,5 +1258,3 @@ struct ShareCardExportPayload: Identifiable {
     let id = UUID()
     let image: UIImage
 }
-
-

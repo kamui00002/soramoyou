@@ -312,17 +312,9 @@ struct PostInfoView: View {
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
             } else {
-                FlowLayout(spacing: 8) {
-                    ForEach(viewModel.hashtags, id: \.self) { hashtag in
-                        Text("#\(hashtag)")
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(.white.opacity(0.2))
-                            .foregroundColor(.white)
-                            .cornerRadius(12)
-                    }
-                }
+                // ⚠️ ここは投稿作成中のプレビューなので、チップの見た目だけ共通化し
+                //    タップ遷移はさせない（投稿中に他画面へ飛ぶと入力内容が失われるため）。
+                HashtagChipRow(hashtags: viewModel.hashtags, style: .editor, layout: .flow)
             }
         }
     }

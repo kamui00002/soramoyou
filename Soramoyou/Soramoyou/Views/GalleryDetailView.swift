@@ -6,13 +6,13 @@
 //
 //  エラー/ロード状態の統一対応・セキュリティ改善
 
-import SwiftUI
 import Kingfisher
+import SwiftUI
 
 struct GalleryDetailView: View {
     let post: Post
     /// 投稿削除時に呼ばれるコールバック（一覧からの除去などに使用）
-    var onPostDeleted: (() -> Void)? = nil
+    var onPostDeleted: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var likeManager: LikeManager
     /// 投稿者情報の取得にはPostDetailViewModelを使用（GalleryDetailViewModelとの二重定義を解消）
@@ -34,6 +34,8 @@ struct GalleryDetailView: View {
     @State private var editLaunch: ReEditLaunchPayload?
     /// 元画像ダウンロード中フラグ（編集準備中の二重起動防止＋表示用）。
     @State private var isPreparingEdit = false
+    /// タップされたハッシュタグ。non-nil でタグ詳細画面を全画面提示する ⭐️
+    @State private var selectedTag: String?
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
@@ -176,10 +178,19 @@ struct GalleryDetailView: View {
             .fullScreenCover(item: $editLaunch) { launch in
                 EditView(
                     images: launch.images,
-                    userId: launch.post.userId,          // 自分の投稿のみ編集可なので post.userId = 自分
+                    userId: launch.post.userId, // 自分の投稿のみ編集可なので post.userId = 自分
                     initialRecipe: launch.post.attachedRecipe,
                     editingContext: launch.editingContext
                 )
+            }
+            // ハッシュタグ → タグ詳細画面 ⭐️
+            // この画面は NavigationView 配下ではなくシート上に載るため、
+            // .navigationDestination ではなく全画面カバーで開く（UserProfileView と同じ方式）。
+            .fullScreenCover(item: Binding<IdentifiableString?>(
+                get: { selectedTag.map(IdentifiableString.init) },
+                set: { selectedTag = $0?.id }
+            )) { wrapper in
+                TagDetailView(tag: wrapper.id, source: "gallery_detail", likeManager: likeManager)
             }
             // 投稿削除確認アラート
             .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
@@ -193,7 +204,7 @@ struct GalleryDetailView: View {
                         // 失敗時は viewModel.deleteError がセットされ、下の alert で表示
                     }
                 }
-                Button("キャンセル", role: .cancel) { }
+                Button("キャンセル", role: .cancel) {}
             } message: {
                 Text("この投稿を削除しますか？この操作は取り消せません。")
             }
@@ -218,11 +229,11 @@ struct GalleryDetailView: View {
                         }
                     }
                 }
-                Button("キャンセル", role: .cancel) { }
+                Button("キャンセル", role: .cancel) {}
             }
             // ブロック確認アラート
             .alert("ユーザーをブロック", isPresented: $showingBlockConfirmation) {
-                Button("キャンセル", role: .cancel) { }
+                Button("キャンセル", role: .cancel) {}
                 Button("ブロック", role: .destructive) {
                     Task {
                         await viewModel.blockPostAuthor(post: post)
@@ -236,7 +247,7 @@ struct GalleryDetailView: View {
             }
             // 通報完了アラート
             .alert("通報しました", isPresented: $showingReportConfirmation) {
-                Button("OK") { }
+                Button("OK") {}
             } message: {
                 Text("ご報告ありがとうございます。内容を確認いたします。")
             }
@@ -255,12 +266,12 @@ struct GalleryDetailView: View {
                         Task { await saveImage(edited: true, all: true) }
                     }
                 }
-                if hasOriginalImages && (post.originalImages?.count ?? 0) > 1 {
+                if hasOriginalImages, (post.originalImages?.count ?? 0) > 1 {
                     Button("すべての画像を保存（オリジナル）") {
                         Task { await saveImage(edited: false, all: true) }
                     }
                 }
-                Button("キャンセル", role: .cancel) { }
+                Button("キャンセル", role: .cancel) {}
             }
             // 保存結果アラート
             .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {
@@ -331,7 +342,7 @@ struct GalleryDetailView: View {
         defer { isPreparingEdit = false }
 
         let infos = (post.originalImages ?? []).sorted { $0.order < $1.order }
-        let urls = infos.map { $0.url }.filter { !$0.isEmpty }
+        let urls = infos.map(\.url).filter { !$0.isEmpty }
         guard !urls.isEmpty else {
             saveResultMessage = "元画像が見つかりませんでした"
             showingSaveResult = true
@@ -415,6 +426,7 @@ struct GalleryDetailView: View {
     }
 
     // MARK: - Multi Image Carousel ⭐️
+
     // 複数画像投稿を横スワイプで閲覧可能にするカルーセル。
     // 縦長・横長が混在しても画像が切れないよう、配列内で最も縦長な
     // アスペクト比に TabView 全体の高さを合わせる。
@@ -651,20 +663,10 @@ struct GalleryDetailView: View {
                     .foregroundColor(.white)
             }
 
-            // ハッシュタグ
+            // ハッシュタグ（タップでタグ詳細画面へ）⭐️
             if let hashtags = post.hashtags, !hashtags.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(hashtags, id: \.self) { hashtag in
-                            Text("#\(hashtag)")
-                                .font(.body)
-                                .foregroundColor(DesignTokens.Colors.skyBlue)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color.white.opacity(0.1))
-                                .cornerRadius(12)
-                        }
-                    }
+                HashtagChipRow(hashtags: hashtags, style: .detail, layout: .scroll) { tag in
+                    selectedTag = tag
                 }
             }
 

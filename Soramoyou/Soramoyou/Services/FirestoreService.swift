@@ -5,8 +5,8 @@
 //  Created on 2025-12-06.
 //
 
-import Foundation
 import FirebaseFirestore
+import Foundation
 
 protocol FirestoreServiceProtocol {
     // Posts
@@ -27,13 +27,13 @@ protocol FirestoreServiceProtocol {
     func fetchPost(postId: String) async throws -> Post
     func deletePost(postId: String, userId: String) async throws
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
-    
+
     // Drafts
     func saveDraft(_ draft: Draft) async throws -> Draft
     func fetchDrafts(userId: String) async throws -> [Draft]
     func loadDraft(draftId: String) async throws -> Draft
     func deleteDraft(draftId: String) async throws
-    
+
     // Users (機密情報含む - 所有者のみ)
     func fetchUser(userId: String) async throws -> User
     func updateUser(_ user: User) async throws -> User
@@ -42,21 +42,26 @@ protocol FirestoreServiceProtocol {
     /// User 全体を書く updateUser と違い、followersCount 等の他フィールドを古い値で巻き戻さない。
     func updateNotificationPreferences(userId: String, notifyReactions: Bool, notifyNewPostsFromFollowing: Bool, notifyNewPostsFromEveryone: Bool) async throws
     func syncPostsCount(userId: String, count: Int) async throws
+    /// ハッシュタグをフォローする（users/{uid}.followedTags へ arrayUnion）⭐️
+    /// ⚠️ 30件の上限チェックは呼び出し側で行うこと（arrayUnion は上限を知らない）。
+    func followTag(userId: String, tag: String) async throws
+    /// ハッシュタグのフォローを解除する（users/{uid}.followedTags から arrayRemove）⭐️
+    func unfollowTag(userId: String, tag: String) async throws
 
     // Public Profiles (公開情報のみ - 認証済みユーザー)
     func fetchPublicProfile(userId: String) async throws -> PublicProfile
     func updatePublicProfile(_ profile: PublicProfile) async throws
     func createPublicProfile(from user: User) async throws
-    
+
     // Account
     func deleteUserData(userId: String) async throws
-    
+
     // Report / Block
     func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws
     func blockUser(userId: String, blockedUserId: String) async throws
     func unblockUser(userId: String, blockedUserId: String) async throws
     func fetchBlockedUserIds(userId: String) async throws -> [String]
-    
+
     // Search
     func searchByHashtag(_ hashtag: String) async throws -> [Post]
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post]
@@ -119,9 +124,9 @@ class FirestoreService: FirestoreServiceProtocol {
         self.db = db
         self.authService = authService
     }
-    
+
     // MARK: - Posts
-    
+
     func createPost(_ post: Post) async throws -> Post {
         do {
             let data = post.toFirestoreData()
@@ -165,14 +170,14 @@ class FirestoreService: FirestoreServiceProtocol {
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
                 .order(by: "createdAt", descending: true)
                 .limit(to: limit)
-            
+
             // ページネーション: lastDocumentが指定されている場合は、そのドキュメントの後に続くドキュメントを取得
-            if let lastDocument = lastDocument {
+            if let lastDocument {
                 query = query.start(afterDocument: lastDocument)
             }
-            
+
             let snapshot = try await query.getDocuments()
-            
+
             return try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
@@ -180,7 +185,7 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-    
+
     /// 投稿を取得（DocumentSnapshotも返す）
     func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
         do {
@@ -188,21 +193,21 @@ class FirestoreService: FirestoreServiceProtocol {
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
                 .order(by: "createdAt", descending: true)
                 .limit(to: limit)
-            
+
             // ページネーション: lastDocumentが指定されている場合は、そのドキュメントの後に続くドキュメントを取得
-            if let lastDocument = lastDocument {
+            if let lastDocument {
                 query = query.start(afterDocument: lastDocument)
             }
-            
+
             let snapshot = try await query.getDocuments()
-            
+
             let posts = try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
-            
+
             // 最後のドキュメントを取得
             let lastDoc = snapshot.documents.last
-            
+
             return (posts: posts, lastDocument: lastDoc)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
@@ -245,12 +250,13 @@ class FirestoreService: FirestoreServiceProtocol {
     func fetchPost(postId: String) async throws -> Post {
         do {
             let document = try await postsCollection.document(postId).getDocument()
-            
+
             guard document.exists,
-                  let data = document.data() else {
+                  let data = document.data()
+            else {
                 throw FirestoreServiceError.notFound
             }
-            
+
             return try Post(from: data)
         } catch let error as FirestoreServiceError {
             throw error
@@ -258,13 +264,14 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-    
+
     func deletePost(postId: String, userId: String) async throws {
         do {
             // 投稿の所有者を確認
             let document = try await postsCollection.document(postId).getDocument()
             guard let data = document.data(),
-                  let postUserId = data["userId"] as? String else {
+                  let postUserId = data["userId"] as? String
+            else {
                 throw FirestoreServiceError.notFound
             }
 
@@ -285,21 +292,21 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.deleteFailed(error)
         }
     }
-    
+
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
         do {
             var query: Query = postsCollection
                 .whereField("userId", isEqualTo: userId)
                 .order(by: "createdAt", descending: true)
                 .limit(to: limit)
-            
+
             // ページネーション
-            if let lastDocument = lastDocument {
+            if let lastDocument {
                 query = query.start(afterDocument: lastDocument)
             }
-            
+
             let snapshot = try await query.getDocuments()
-            
+
             return try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
@@ -307,29 +314,29 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-    
+
     // MARK: - Drafts
-    
+
     func saveDraft(_ draft: Draft) async throws -> Draft {
         do {
             let data = draft.toFirestoreData()
             let docRef = draftsCollection.document(draft.id)
-            
+
             try await docRef.setData(data)
-            
+
             return draft
         } catch {
             throw FirestoreServiceError.createFailed(error)
         }
     }
-    
+
     func fetchDrafts(userId: String) async throws -> [Draft] {
         do {
             let snapshot = try await draftsCollection
                 .whereField("userId", isEqualTo: userId)
                 .order(by: "updatedAt", descending: true)
                 .getDocuments()
-            
+
             return try snapshot.documents.compactMap { document in
                 try Draft(from: document.data())
             }
@@ -337,16 +344,17 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-    
+
     func loadDraft(draftId: String) async throws -> Draft {
         do {
             let document = try await draftsCollection.document(draftId).getDocument()
-            
+
             guard document.exists,
-                  let data = document.data() else {
+                  let data = document.data()
+            else {
                 throw FirestoreServiceError.notFound
             }
-            
+
             return try Draft(from: data)
         } catch let error as FirestoreServiceError {
             throw error
@@ -354,7 +362,7 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-    
+
     func deleteDraft(draftId: String) async throws {
         do {
             try await draftsCollection.document(draftId).delete()
@@ -362,18 +370,19 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.deleteFailed(error)
         }
     }
-    
+
     // MARK: - Users
-    
+
     func fetchUser(userId: String) async throws -> User {
         do {
             let document = try await usersCollection.document(userId).getDocument()
-            
+
             guard document.exists,
-                  let data = document.data() else {
+                  let data = document.data()
+            else {
                 throw FirestoreServiceError.notFound
             }
-            
+
             return try User(from: data)
         } catch let error as FirestoreServiceError {
             throw error
@@ -381,14 +390,14 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-    
+
     func updateUser(_ user: User) async throws -> User {
         do {
             let data = user.toFirestoreData()
             let docRef = usersCollection.document(user.id)
-            
+
             try await docRef.setData(data, merge: true)
-            
+
             return user
         } catch {
             throw FirestoreServiceError.updateFailed(error)
@@ -403,7 +412,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 "notifyReactions": notifyReactions,
                 "notifyNewPostsFromFollowing": notifyNewPostsFromFollowing,
                 "notifyNewPostsFromEveryone": notifyNewPostsFromEveryone,
-                "updatedAt": Timestamp(date: Date())
+                "updatedAt": Timestamp(date: Date()),
             ])
         } catch {
             throw FirestoreServiceError.updateFailed(error)
@@ -413,7 +422,7 @@ class FirestoreService: FirestoreServiceProtocol {
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws {
         do {
             let docRef = usersCollection.document(userId)
-            let toolsStrings = tools.map { $0.rawValue }
+            let toolsStrings = tools.map(\.rawValue)
 
             // まずドキュメントの存在を確認
             let document = try await docRef.getDocument()
@@ -422,7 +431,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 // ドキュメントが存在する場合はupdateData()で更新
                 try await docRef.updateData([
                     "customEditTools": toolsStrings,
-                    "customEditToolsOrder": order
+                    "customEditToolsOrder": order,
                 ])
             } else {
                 // ドキュメントが存在しない場合は、必要なフィールドを含めて作成
@@ -437,7 +446,7 @@ class FirestoreService: FirestoreServiceProtocol {
                     "id": userId,
                     "createdAt": Timestamp(date: Date()),
                     "customEditTools": toolsStrings,
-                    "customEditToolsOrder": order
+                    "customEditToolsOrder": order,
                 ]
 
                 if let email = currentUser.email {
@@ -452,13 +461,52 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.updateFailed(error)
         }
     }
-    
+
     /// 投稿数カウンターをFirestoreと同期する（既存データの不整合を修正）
     func syncPostsCount(userId: String, count: Int) async throws {
         do {
             let countData: [String: Any] = ["postsCount": count]
             try await usersCollection.document(userId).updateData(countData)
             try? await publicProfilesCollection.document(userId).updateData(countData)
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    // MARK: - Followed Tags ⭐️
+
+    /// ハッシュタグをフォローする
+    ///
+    /// `users/{uid}.followedTags` に arrayUnion で追加する。既にフォロー済みの場合は
+    /// arrayUnion が重複を作らないため何度呼んでも安全（冪等）。
+    ///
+    /// ⚠️ 上限（`User.maxFollowedTags` = 30件）のチェックはここでは行わない。
+    ///    arrayUnion は配列長を知らないため、呼び出し側で現在値を取得して判定すること。
+    /// ⚠️ タグは正規化しない。保存済み `posts.hashtags` と完全一致させる必要がある。
+    ///
+    /// firestore.rules: users の所有者 update が既に許可済みのため、ルール追加は不要
+    /// （id / email を変更しないので `isOwner` 条件を満たす。updateEditTools と同じ経路）。
+    func followTag(userId: String, tag: String) async throws {
+        do {
+            try await usersCollection.document(userId).updateData([
+                "followedTags": FieldValue.arrayUnion([tag]),
+                "updatedAt": Timestamp(date: Date()),
+            ])
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// ハッシュタグのフォローを解除する
+    ///
+    /// `users/{uid}.followedTags` から arrayRemove で取り除く。
+    /// 未フォローのタグを渡しても何も起きない（冪等）。
+    func unfollowTag(userId: String, tag: String) async throws {
+        do {
+            try await usersCollection.document(userId).updateData([
+                "followedTags": FieldValue.arrayRemove([tag]),
+                "updatedAt": Timestamp(date: Date()),
+            ])
         } catch {
             throw FirestoreServiceError.updateFailed(error)
         }
@@ -473,7 +521,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
-            
+
             return try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
@@ -481,7 +529,7 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.searchFailed(error)
         }
     }
-    
+
     func searchByColor(_ color: String, threshold: Double? = nil) async throws -> [Post] {
         do {
             // まず、色を含む投稿を取得（完全一致）
@@ -496,7 +544,7 @@ class FirestoreService: FirestoreServiceProtocol {
             }
 
             // 閾値が指定されている場合は、ColorMatchingでRGB距離フィルタリングを適用
-            if let threshold = threshold {
+            if let threshold {
                 posts = ColorMatching.filterPostsByColorDistance(
                     posts: posts, targetColor: color, threshold: threshold
                 )
@@ -580,9 +628,9 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.searchFailed(error)
         }
     }
-    
+
     // MARK: - Account Deletion
-    
+
     /// ユーザーの全データを削除（投稿、下書き、ユーザードキュメント）
     func deleteUserData(userId: String) async throws {
         do {
@@ -617,7 +665,7 @@ class FirestoreService: FirestoreServiceProtocol {
             let batch = db.batch()
             let end = min(index + batchSize, documents.count)
 
-            for i in index..<end {
+            for i in index ..< end {
                 batch.deleteDocument(documents[i].reference)
             }
 
@@ -625,9 +673,9 @@ class FirestoreService: FirestoreServiceProtocol {
             index = end
         }
     }
-    
+
     // MARK: - Report
-    
+
     /// 投稿を通報する
     func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {
         do {
@@ -636,7 +684,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 "reporterId": reporterId,
                 "reportedUserId": reportedUserId,
                 "reason": reason,
-                "createdAt": FieldValue.serverTimestamp()
+                "createdAt": FieldValue.serverTimestamp(),
             ]
             try await db.collection("reports").addDocument(data: reportData)
         } catch {
@@ -658,29 +706,29 @@ class FirestoreService: FirestoreServiceProtocol {
     }
 
     // MARK: - Block
-    
+
     /// ユーザーをブロックする
     func blockUser(userId: String, blockedUserId: String) async throws {
         do {
             try await usersCollection.document(userId).updateData([
-                "blockedUserIds": FieldValue.arrayUnion([blockedUserId])
+                "blockedUserIds": FieldValue.arrayUnion([blockedUserId]),
             ])
         } catch {
             throw FirestoreServiceError.updateFailed(error)
         }
     }
-    
+
     /// ユーザーのブロックを解除する
     func unblockUser(userId: String, blockedUserId: String) async throws {
         do {
             try await usersCollection.document(userId).updateData([
-                "blockedUserIds": FieldValue.arrayRemove([blockedUserId])
+                "blockedUserIds": FieldValue.arrayRemove([blockedUserId]),
             ])
         } catch {
             throw FirestoreServiceError.updateFailed(error)
         }
     }
-    
+
     /// ブロックしているユーザーIDのリストを取得
     func fetchBlockedUserIds(userId: String) async throws -> [String] {
         do {
@@ -799,7 +847,7 @@ class FirestoreService: FirestoreServiceProtocol {
             for postId in postIds {
                 group.addTask { [self] in
                     let likeDocId = Like.documentId(userId: userId, postId: postId)
-                    let document = try await self.likesCollection.document(likeDocId).getDocument()
+                    let document = try await likesCollection.document(likeDocId).getDocument()
                     return (postId, document.exists)
                 }
             }
@@ -824,7 +872,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "createdAt", descending: true)
                 .limit(to: limit)
 
-            if let lastDocument = lastDocument {
+            if let lastDocument {
                 query = query.start(afterDocument: lastDocument)
             }
 
@@ -872,7 +920,7 @@ class FirestoreService: FirestoreServiceProtocol {
     }
 
     /// コメントを削除
-    func deleteComment(commentId: String, postId: String, userId: String) async throws {
+    func deleteComment(commentId: String, postId: String, userId _: String) async throws {
         do {
             let batch = db.batch()
 
@@ -901,23 +949,23 @@ enum FirestoreServiceError: LocalizedError {
     case deleteFailed(Error)
     case searchFailed(Error)
     case unauthorized
-    
+
     var errorDescription: String? {
         switch self {
         case .notFound:
-            return "データが見つかりませんでした"
-        case .createFailed(let error):
-            return "データの作成に失敗しました: \(error.localizedDescription)"
-        case .fetchFailed(let error):
-            return "データの取得に失敗しました: \(error.localizedDescription)"
-        case .updateFailed(let error):
-            return "データの更新に失敗しました: \(error.localizedDescription)"
-        case .deleteFailed(let error):
-            return "データの削除に失敗しました: \(error.localizedDescription)"
-        case .searchFailed(let error):
-            return "検索に失敗しました: \(error.localizedDescription)"
+            "データが見つかりませんでした"
+        case let .createFailed(error):
+            "データの作成に失敗しました: \(error.localizedDescription)"
+        case let .fetchFailed(error):
+            "データの取得に失敗しました: \(error.localizedDescription)"
+        case let .updateFailed(error):
+            "データの更新に失敗しました: \(error.localizedDescription)"
+        case let .deleteFailed(error):
+            "データの削除に失敗しました: \(error.localizedDescription)"
+        case let .searchFailed(error):
+            "検索に失敗しました: \(error.localizedDescription)"
         case .unauthorized:
-            return "この操作を行う権限がありません"
+            "この操作を行う権限がありません"
         }
     }
 }
