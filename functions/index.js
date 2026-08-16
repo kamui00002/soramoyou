@@ -1,10 +1,12 @@
 //
 // そらもよう Cloud Functions（プッシュ通知の送信側）
 //
-// トリガー（Firestore ドキュメント作成）:
+// トリガー（Firestore ドキュメント作成 / 削除）:
 //   - onLikeCreated           likes/{likeId}      → 投稿者へ「いいねされました」
 //   - onCommentCreated        comments/{commentId}→ 投稿者へ「コメントされました」
 //   - onPostCreated           posts/{postId}      → フォロワー / 全員（オプトイン）へ「新しい空」
+//   - onFollowCreated         follows/{followId}  → フォローカウンタを整合 ＋ 相手へ「フォローされました」
+//   - onFollowDeleted         follows/{followId}  → フォローカウンタを整合（通知はしない）
 //   - notifyFeedbackToDiscord feedback/{id}       → 開発者の Discord へ「ご意見・ご要望が届いた」（Webhook）
 //
 // 設計メモ:
@@ -15,6 +17,9 @@
 //   - 送信トークンが無い（未登録/未許可）ユーザーはスキップ。
 //   - 無効トークン（registration-token-not-registered 等）は users/{uid}.fcmToken を掃除する。
 //   - 新規投稿の配信は重複排除のうえ 500 件ずつ multicast。
+//   - フォローカウンタは follows を「数え直して代入」する（±1 の increment ではない）。冪等なので
+//     再実行しても壊れず、旧バージョンのアプリがクライアント側で ±1 しても真値で上書きされる。
+//     ＝二重計上が原理的に起きないため、アプリ配信を待たずにこの Functions だけ先行デプロイできる。
 //
 // ⚠️ デプロイ前提:
 //   1. Firebase を Blaze プランにする（Cloud Functions は無料 Spark 不可）。
@@ -23,7 +28,7 @@
 //
 
 const { setGlobalOptions } = require("firebase-functions/v2");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
@@ -226,6 +231,133 @@ exports.onPostCreated = onDocumentCreated("posts/{postId}", async (event) => {
     });
     await cleanupInvalidTokens(batch, tokenToUid, resp.responses);
   }
+});
+
+// MARK: - フォローカウンタの整合 ＋ 新規フォロー通知
+
+/**
+ * 指定ユーザーのフォロー系カウンタを follows から数え直して users / publicProfiles へ代入する。
+ *
+ * ■ なぜ FieldValue.increment ではなく「数え直して代入」なのか
+ *   1. 冪等: Functions が再実行（リトライ・重複配信）されても結果が同じ。
+ *   2. 先行デプロイ可能: 旧バージョンのアプリはクライアント側トランザクションで ±1 し続けるが、
+ *      その直後にこの関数が真値で上書きするため二重計上が原理的に起きない。
+ *      ＝ アプリの配信を待たずに Functions だけ先にデプロイしてバグを止められる。
+ *   3. 過去のズレも自己修復する（±1 方式は一度ズレると永久に直らない）。
+ *   4. フォロー解除（follows の削除）でも同じ経路を通るので、増減で別実装を持たなくて済む。
+ *
+ * ■ なぜ publicProfiles にも書くのか
+ *   他人のプロフィール画面（UserProfileView）が読むのは publicProfiles 側で、
+ *   firestore.rules は publicProfiles の update を所有者のみに限定している。
+ *   つまり「相手のフォロワー数」はクライアントからは原理的に書けない＝サーバーでしか直せない。
+ *
+ * ⚠️ ドキュメントが存在しないユーザーには書かない（users / publicProfiles とも）。
+ *    カウンタだけの器を作ると、表示名やアイコンが永久に空のまま固定された
+ *    「幽霊プロフィール」が残り、iOS 側の Codable デコードも失敗する。
+ *    退会直後の follows 削除で実際にこの経路に入りうる。
+ *
+ * ⚠️ 冪等ではあるがレースフリーではない。同一ユーザーに対する 2 つのイベントが同時に走ると
+ *    双方が同じ count() を読んで同じ値を書き、一時的に 1 件少ない値で止まることがある。
+ *    次のフォロー/解除イベントで自動的に直り、手動修復は scripts/backfill-follow-counters.js。
+ *    この規模のトラフィックでロック/リトライを足すのは割に合わないため、あえて許容する。
+ *
+ * @param {string[]} userIds カウンタを直したいユーザー ID（重複・空値は内部で除去する）
+ */
+async function reconcileFollowCounters(userIds) {
+  // フォロー操作は必ず 2 人（follower / followee）が絡むが、自分自身をフォローする等で
+  // 同じ ID が 2 回来る可能性があるため重複を除く。
+  const uniqueIds = Array.from(new Set((userIds || []).filter(Boolean)));
+
+  for (const uid of uniqueIds) {
+    // 1 人失敗しても他のユーザーの修復を止めない（全滅より部分成功のほうが望ましい）。
+    try {
+      // count() は集計クエリ。ドキュメント本体を読まないので、フォロワーが増えても課金・遅延が伸びにくい。
+      const [followersAgg, followingAgg] = await Promise.all([
+        db.collection("follows").where("followeeId", "==", uid).count().get(),
+        db.collection("follows").where("followerId", "==", uid).count().get(),
+      ]);
+      const counters = {
+        followersCount: followersAgg.data().count, // この人をフォローしている人数
+        followingCount: followingAgg.data().count, // この人がフォローしている人数
+      };
+
+      const userRef = db.collection("users").doc(uid);
+      const publicRef = db.collection("publicProfiles").doc(uid);
+      const [userSnap, publicSnap] = await Promise.all([userRef.get(), publicRef.get()]);
+
+      // 存在確認してから書く。set(..., { merge: true }) は存在しなければ「作ってしまう」ため、
+      // 退会済みユーザーに対してカウンタだけの不完全なドキュメントを新規作成しないよう防ぐ。
+      if (userSnap.exists) {
+        await userRef.set(counters, { merge: true });
+      } else {
+        logger.warn("users が存在しないためカウンタ更新をスキップ", { uid });
+      }
+      if (publicSnap.exists) {
+        await publicRef.set(counters, { merge: true });
+      } else {
+        // 移行未実施ユーザー（publicProfiles 未作成）もここに来る。作らずに記録だけ残す。
+        logger.warn("publicProfiles が存在しないためカウンタ更新をスキップ", { uid });
+      }
+    } catch (err) {
+      logger.error("フォローカウンタの整合に失敗", { uid, error: err.message });
+    }
+  }
+}
+
+/**
+ * フォローされた人へ「フォローされました」を通知する。
+ *
+ * 配信プレフは既存の notifyReactions を流用する。
+ * ⚠️ ここで新しいプレフを足さないこと。PREF_DEFAULTS（このファイル上部）と
+ *    iOS の Models/User.swift は「必ず一致させる」ことを両側のコメントで約束しており、
+ *    プレフを増やすと二重管理の対象がもう 1 つ増える。
+ *
+ * @param {string} followerId フォローした人
+ * @param {string} followeeId フォローされた人（通知の宛先）
+ */
+async function notifyNewFollower(followerId, followeeId) {
+  // 自分自身へのフォローは通知しない（いいね・コメントと同じ方針）。
+  if (!followerId || !followeeId || followerId === followeeId) return;
+
+  const followee = await getUser(followeeId);
+  if (!followee || !followee.fcmToken || !prefEnabled(followee, "notifyReactions")) return;
+  // フォローされた側が相手をブロックしているなら、プッシュで再浮上させない。
+  if (isBlocked(followee, followerId)) return;
+
+  const follower = await getUser(followerId);
+  await sendToUser(
+    followeeId,
+    followee,
+    { title: "そらもよう", body: `${displayNameOf(follower)}さんがあなたをフォローしました` },
+    // data の値は文字列必須（FCM の制約）。この通知に postId は無い。
+    // rules で followerId は uid 文字列に固定されているが、万一の型崩れで送信全体が
+    // 失敗しないよう String() で通す。
+    { type: "follow", followerId: String(followerId) }
+  );
+}
+
+exports.onFollowCreated = onDocumentCreated("follows/{followId}", async (event) => {
+  const follow = event.data && event.data.data();
+  if (!follow) return;
+  const followerId = follow.followerId;
+  const followeeId = follow.followeeId;
+  if (!followerId || !followeeId) return;
+
+  // カウンタ整合を先に行う。通知は「送れたら嬉しい」おまけで、数字の正しさのほうが優先度が高い。
+  await reconcileFollowCounters([followerId, followeeId]);
+  await notifyNewFollower(followerId, followeeId);
+});
+
+exports.onFollowDeleted = onDocumentDeleted("follows/{followId}", async (event) => {
+  // 削除トリガーの event.data は「削除される直前のスナップショット」。
+  const follow = event.data && event.data.data();
+  if (!follow) return;
+  const followerId = follow.followerId;
+  const followeeId = follow.followeeId;
+  if (!followerId || !followeeId) return;
+
+  // フォロー解除は通知しない（される側にとって嬉しい知らせではない）。カウンタだけ直す。
+  await reconcileFollowCounters([followerId, followeeId]);
 });
 
 // MARK: - フィードバック → Discord 通知（開発者向け）
