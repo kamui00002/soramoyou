@@ -68,6 +68,15 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.fetchUserPosts は未実装です")
     }
 
+    func fetchVisibleUserPosts(
+        userId: String,
+        visibilities: [Visibility],
+        limit: Int,
+        lastDocument: DocumentSnapshot?
+    ) async throws -> [Post] {
+        fatalError("MockFirestoreService.fetchVisibleUserPosts は未実装です")
+    }
+
     // MARK: - Drafts
 
     func saveDraft(_ draft: Draft) async throws -> Draft {

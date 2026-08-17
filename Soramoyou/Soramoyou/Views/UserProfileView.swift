@@ -168,10 +168,10 @@ struct UserProfileView: View {
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     .padding(.top, 40)
             } else if viewModel.posts.isEmpty {
-                Text("投稿がありません")
-                    .font(.body)
-                    .foregroundColor(.white.opacity(0.7))
-                    .padding(.top, 40)
+                // 共通の空状態コンポーネントに統一（.userPosts＝「まだ投稿がありません」）。
+                // action を渡さないため、他人のプロフィールに「投稿する」ボタンは出ない。
+                EmptyStateView(type: .userPosts)
+                    .padding(.top, 24)
             } else {
                 LazyVGrid(
                     columns: [
