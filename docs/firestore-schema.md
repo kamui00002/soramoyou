@@ -204,6 +204,12 @@
 }
 ```
 
+## publicProfiles コレクション — 書き込み契約 ⭐️
+
+- **`followersCount` / `followingCount` はクライアント書き込み対象外**。正典はCloud Functions（`onFollowCreated` / `onFollowDeleted`）が `follows` を `count()` した結果を代入する値。
+- クライアントからプロフィールを更新するときは `updatePublicProfileFields`（`displayName` / `photoURL` / `bio` のみを `updateData`）を使う。`PublicProfile` 全体を書くとクライアントが持つ古いカウンタでサーバーの真値を潰す。
+- 更新失敗時は `publicProfiles/{userId}` の存在を `get` で確認して分岐する（不在＝新規作成、存在＝更新失敗）。`update` ルールが `resource.data.id` を参照するため、ドキュメント不在でも `NOT_FOUND` ではなく `PERMISSION_DENIED` が返りうるので、**エラーコードで不在判定してはいけない**。
+
 ---
 
 ## Firebase使用時の重要事項
