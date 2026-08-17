@@ -243,7 +243,9 @@ exports.onPostCreated = onDocumentCreated("posts/{postId}", async (event) => {
  *   2. 先行デプロイ可能: 旧バージョンのアプリはクライアント側トランザクションで ±1 し続けるが、
  *      その直後にこの関数が真値で上書きするため二重計上が原理的に起きない。
  *      ＝ アプリの配信を待たずに Functions だけ先にデプロイしてバグを止められる。
- *   3. 過去のズレも自己修復する（±1 方式は一度ズレると永久に直らない）。
+ *   3. 過去のズレも「その uid に次のイベントが来たとき」に自己修復する（±1 方式は一度
+ *      ズレると永久に直らない）。逆に言えばイベントが来ない限り直らないので、
+ *      まとめて直すときは scripts/backfill-follow-counters.js を使う。
  *   4. フォロー解除（follows の削除）でも同じ経路を通るので、増減で別実装を持たなくて済む。
  *
  * ■ なぜ publicProfiles にも書くのか
@@ -299,6 +301,10 @@ async function reconcileFollowCounters(userIds) {
         logger.warn("publicProfiles が存在しないためカウンタ更新をスキップ", { uid });
       }
     } catch (err) {
+      // ⚠️ リトライは設定していないため、一過性の障害（Firestore の瞬断など）でここに来ると、
+      //    この uid のカウンタは「次のフォロー/解除イベントが来る」か
+      //    「scripts/backfill-follow-counters.js を手動実行する」まで ズレたままになる。
+      //    このログを見つけたら、どちらかで整合を取り直すこと。
       logger.error("フォローカウンタの整合に失敗", { uid, error: err.message });
     }
   }
