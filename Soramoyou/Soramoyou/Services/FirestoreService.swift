@@ -330,7 +330,9 @@ class FirestoreService: FirestoreServiceProtocol {
     ///   - userId: 対象ユーザーの ID
     ///   - visibilities: 取得したい公開範囲（呼び出し側が rules を満たせるものだけを渡す）
     ///   - limit: 取得件数の上限
-    ///   - lastDocument: ページネーション用の直前ページ末尾ドキュメント
+    ///   - lastDocument: ページネーション用の直前ページ末尾ドキュメント。
+    ///     ⚠️ 同一の visibilities 集合で取得したカーソルのみ有効（要素 1 件は isEqualTo・
+    ///     複数件は in とクエリ形状が変わるため、フォロー状態が変わったらカーソルは破棄すること）
     /// - Returns: 新しい順（createdAt 降順）の投稿配列
     /// - Note: 複合インデックス `visibility ASC + userId ASC + createdAt DESC` が必要。
     ///   `firestore.indexes.json` に追加済みだが **deploy は別作業**（未 deploy だと
@@ -375,10 +377,21 @@ class FirestoreService: FirestoreServiceProtocol {
             
             let snapshot = try await query.getDocuments()
             
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
+            // ⚠️ 壊れたドキュメント 1 件でクエリ全体を落とさない。
+            //    ここで throw すると「rules 拒否 / インデックス欠落 / 不正データ」が
+            //    すべて同じ fetchFailed に潰れ、失敗原因の切り分け（followers 枝が
+            //    rules を通るかを確かめる R1 プローブ）ができなくなる。
+            //    デコードに失敗したドキュメントはパスをログに残し 1 件だけスキップする。
+            return snapshot.documents.compactMap { document in
+                do {
+                    return try Post(from: document.data())
+                } catch {
+                    print("❌ 投稿デコード失敗 path=\(document.reference.path) error=\(error.localizedDescription)")
+                    return nil
+                }
             }
         } catch {
+            // クエリ全体の失敗（権限・インデックス欠落・ネットワーク）は呼び出し側に伝播する。
             throw FirestoreServiceError.fetchFailed(error)
         }
     }

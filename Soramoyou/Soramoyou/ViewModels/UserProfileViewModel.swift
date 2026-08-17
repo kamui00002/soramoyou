@@ -118,12 +118,21 @@ class UserProfileViewModel: ObservableObject {
         }
     }
 
+    /// フォロー状態を取得する。失敗しても安全側（未フォロー扱い）に倒すが、必ず可視化する ⭐️
+    ///
+    /// `isFollowing` は投稿クエリに渡す visibility 集合を決める入力である。
+    /// 取得失敗を無言で「未フォロー」に倒すと、フォロワー限定投稿が理由も分からないまま
+    /// 不可視に消え（＝「グリッドが常に空」と同じ見え方になる）、さらに
+    /// 「rules の followers 枝が通るか」を確かめる R1 プローブの結果まで誤読させる。
+    /// そのため安全側への降格そのものは維持しつつ、原因は必ずユーザーとログの両方に出す。
     private func fetchIsFollowingSafe() async -> Bool {
         guard let ownUserId = ownUserId, ownUserId != targetUserId else { return false }
         do {
             return try await followRepository.isFollowing(targetUserId, by: ownUserId)
         } catch {
             logger.error("isFollowing 失敗: \(error.localizedDescription)")
+            // 未フォロー扱い（public のみ要求）に降格するが、握りつぶさず必ず見せる。
+            errorMessage = error.userFriendlyMessage
             return false
         }
     }

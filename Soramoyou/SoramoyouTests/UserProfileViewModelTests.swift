@@ -98,6 +98,35 @@ final class UserProfileViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isLoading)
     }
 
+    /// フォロー状態の取得失敗を可視化しつつ、安全側（public のみ）に降格すること ⭐️
+    ///
+    /// `isFollowing` は投稿クエリの visibility 集合を決める入力なので、取得失敗を
+    /// 無言で「未フォロー」に倒すとフォロワー限定投稿が理由も分からず不可視に消え、
+    /// 「rules の followers 枝が通るか」を確かめる R1 プローブの誤読も生む。
+    /// 降格はするが errorMessage には必ず出す、という約束を固定する。
+    func testLoadSurfacesIsFollowingErrorAndFallsBackToPublicOnly() async {
+        // Arrange: フォロー中の相手だが、フォロー状態の取得に失敗する
+        let firestore = MockFirestoreServiceForUserProfile()
+        let follows = MockFollowRepository(isFollowingResult: true)
+        follows.isFollowingError = NSError(
+            domain: "test", code: 14,
+            userInfo: [NSLocalizedDescriptionKey: "unavailable"]
+        )
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert: 失敗を握りつぶさない
+        XCTAssertNotNil(viewModel.errorMessage,
+                        "isFollowing の失敗を無言で未フォローに倒すと、原因不明のまま投稿が消える")
+
+        // Assert: 降格挙動は維持（証明できる public だけを要求する）
+        XCTAssertEqual(firestore.capturedVisibilities, [[.public]],
+                       "取得できなかったフォロー状態を根拠に followers を混ぜてはいけない")
+        XCTAssertFalse(viewModel.isFollowing)
+    }
+
     // MARK: - フォロー操作後の再取得
 
     /// フォロー成功後は新しい公開範囲で投稿を取り直す
@@ -186,6 +215,8 @@ final class MockFirestoreServiceForUserProfile: FirestoreServiceProtocol {
 /// （テストは @MainActor 上でのみ触るので実質的な競合は起きない）。
 final class MockFollowRepository: FollowRepositoryProtocol, @unchecked Sendable {
     private var isFollowingResult: Bool
+    /// isFollowing が投げるエラー（フォロー状態の取得失敗を再現する）
+    var isFollowingError: Error?
 
     init(isFollowingResult: Bool) {
         self.isFollowingResult = isFollowingResult
@@ -200,6 +231,7 @@ final class MockFollowRepository: FollowRepositoryProtocol, @unchecked Sendable 
     }
 
     func isFollowing(_: String, by _: String) async throws -> Bool {
-        isFollowingResult
+        if let isFollowingError { throw isFollowingError }
+        return isFollowingResult
     }
 }

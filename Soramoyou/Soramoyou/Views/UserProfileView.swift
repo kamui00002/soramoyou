@@ -168,10 +168,19 @@ struct UserProfileView: View {
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     .padding(.top, 40)
             } else if viewModel.posts.isEmpty {
-                // 共通の空状態コンポーネントに統一（.userPosts＝「まだ投稿がありません」）。
-                // action を渡さないため、他人のプロフィールに「投稿する」ボタンは出ない。
-                EmptyStateView(type: .userPosts)
-                    .padding(.top, 24)
+                // ⚠️ .userPosts の説明文「空の写真を投稿してみましょう」は閲覧者本人への
+                //    促し文言で、他人のプロフィールには噛み合わない。アイコンは .userPosts と
+                //    同じ "camera" のまま、文言だけ第三者視点に差し替える。
+                //    action / actionTitle を渡さないため「投稿する」ボタンは出ない。
+                EmptyStateView(
+                    type: .custom(
+                        icon: "camera",
+                        title: "まだ投稿がありません",
+                        description: "このユーザーはまだ空の写真を投稿していません",
+                        actionTitle: nil
+                    )
+                )
+                .padding(.top, 24)
             } else {
                 LazyVGrid(
                     columns: [
