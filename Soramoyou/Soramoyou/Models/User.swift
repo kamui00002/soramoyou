@@ -147,13 +147,11 @@ struct User: Identifiable, Codable {
             data["blockedUserIds"] = blockedUserIds
         }
 
-        // フォロー中タグ ⭐️: nil のときは書かない。
-        // updateUser は本メソッドの戻り値でドキュメントを更新するため、ここで無条件に
-        // 空配列を書くと followTag/unfollowTag（arrayUnion/arrayRemove）の結果を
-        // 巻き戻してしまう。blockedUserIds と同じ「nil なら触らない」方針に揃える。
-        if let followedTags {
-            data["followedTags"] = followedTags
-        }
+        // フォロー中タグ ⭐️: followedTags はここでは書かない（読み取り専用）。
+        // このフィールドは followTag/unfollowTag の arrayUnion/arrayRemove 専用で、
+        // User 全体を setData(merge) する updateUser 経由で書くと、キャッシュ済みの旧配列が
+        // サーバーの最新値を巻き戻してしまうため
+        // （updateNotificationPreferences が field-scoped に切られているのと同じ理由）。
 
         return data
     }

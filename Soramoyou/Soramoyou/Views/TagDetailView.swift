@@ -113,9 +113,10 @@ struct TagDetailView: View {
                 "tag": tag,
                 "source": source,
             ])
+            // フォローボタンの活性を一覧ロードの完了に縛らないよう、フォロー状態を先に読む
+            await viewModel.loadFollowState()
             await viewModel.fetchPosts()
             await likeManager.checkLikeStatus(for: viewModel.posts)
-            await viewModel.loadFollowState()
         }
     }
 
@@ -151,7 +152,12 @@ struct TagDetailView: View {
         } else if let error = viewModel.lastError, viewModel.posts.isEmpty {
             ErrorStateView(
                 error: error,
-                retryAction: { await viewModel.refresh() },
+                // ⚠️ .task と同じく、再取得後は いいね状態も取り直す
+                //    （ここで省くと再試行で出た一覧のハートが未取得のままになる）
+                retryAction: {
+                    await viewModel.refresh()
+                    await likeManager.checkLikeStatus(for: viewModel.posts)
+                },
                 secondaryAction: nil,
                 secondaryActionTitle: nil
             )
@@ -203,8 +209,9 @@ struct TagDetailView: View {
     /// 投稿カード 1 枚
     ///
     /// ⚠️ ハッシュタグのタップ導線（onHashtagTapped）はここでは渡さない。
-    ///    タグ詳細からさらにタグ詳細を開くと全画面カバーが際限なく積み重なるため、
-    ///    この画面ではチップを表示のみにする。
+    ///    カード層のチップのみ非タップ化。カードタップ → PostDetailView 経由では
+    ///    タグ遷移が有効なため、タグ詳細 → 投稿詳細 → タグ詳細の再帰は成立し得るが、
+    ///    各層とも個別に閉じられるため許容する。
     @ViewBuilder
     private func postCard(for post: Post) -> some View {
         PostCard(

@@ -147,6 +147,10 @@ final class TagFeedService: TagFeedServiceProtocol {
             // ⚠️ compactMap { try? ... } は壊れたドキュメントを無言で落とすため使わない。
             //    1件のデコード失敗でページ全体を捨てると一覧が真っ白になるので、
             //    パスをログに残したうえでその1件だけスキップする（tech-spec.md の方針）。
+            // ⚠️ スキップにより posts.count が limit を割ると、基底 PaginatedPostsViewModel
+            //    （posts.count < pageSize で hasMorePosts=false）がページングを早期に打ち切る。
+            //    壊れたドキュメントは現状想定されないため graceful degradation として許容し、
+            //    PR-7 のマージ層（0件ページ禁止）と併せて見直す。
             let posts = snapshot.documents.compactMap { document -> Post? in
                 do {
                     return try Post(from: document.data())
@@ -170,6 +174,10 @@ final class TagFeedService: TagFeedServiceProtocol {
     ///
     /// フォロー中タグが 0 件のユーザーに「あなたがよく使うタグ」を出すための補完に使う。
     /// 集計自体は純関数 `HashtagFrequencyRanker` が行う。
+    ///
+    /// ⚠️ 現時点では未配線（本番の呼び出し元は無く、テストも集計の純関数
+    ///    `HashtagFrequencyRanker` だけを検証している）。後続 PR-7（あなた向けフィード）の
+    ///    ForYouFeedSourceBuilder が「フォロー中タグ0件のときの補完」に使う前倒し実装。
     func fetchInferredTags(userId: String, topN: Int) async throws -> [String] {
         let posts = try await firestoreService.fetchUserPosts(
             userId: userId,

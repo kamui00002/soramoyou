@@ -57,9 +57,6 @@ class TagDetailViewModel: PaginatedPostsViewModel {
     /// ログイン中のユーザーID（未ログインなら nil）
     var currentUserId: String? { authService.currentUser()?.id }
 
-    /// ゲスト（未ログイン）かどうか。フォローボタンの出し分けに使う。
-    var isGuest: Bool { currentUserId == nil }
-
     // MARK: - Initializer
 
     init(
@@ -106,6 +103,10 @@ class TagDetailViewModel: PaginatedPostsViewModel {
     }
 
     // MARK: - Authors
+
+    // ⚠️ この著者取得・ブロック除外ロジックは HomeViewModel / TagDetailViewModel
+    //    （一部は GalleryViewModel）に重複がある。仕様を変えるときは全箇所を同時に
+    //    更新すること。基底 PaginatedPostsViewModel への引き上げは別リファクタ PR で検討。
 
     /// posts に含まれる userId のうち未取得の PublicProfile を並列取得する
     private func fetchAuthorsForCurrentPosts() async {

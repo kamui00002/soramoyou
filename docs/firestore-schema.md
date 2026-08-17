@@ -204,6 +204,17 @@
 }
 ```
 
+## users への追加フィールド（タグフォロー関連）
+```json
+{
+  "followedTags": ["string"]    // フォロー中のハッシュタグ。最大30件（array-contains-any の30上限に由来）
+}
+```
+- `#` を含まない**生の文字列**で持ち、**正規化（小文字化・トリム）はしない**。`arrayContains` は完全一致でしか当たらないため、正規化すると既存投稿（`posts.hashtags` は `extractHashtags` が保存した生の単語）にマッチしなくなる。
+- 書き込みは `followTag` / `unfollowTag`（`arrayUnion` / `arrayRemove`）**専用**。クライアントの `updateUser`（User 全体の setData merge）では書かない — キャッシュ済みの旧配列でサーバーの最新値を巻き戻すため。
+- 上限 30 件のチェックは書き込み前にクライアント側で行う（`arrayUnion` は配列長を見ない）。判定は必ずサーバーから取り直した最新値に対して行うこと。
+- 旧ユーザーはフィールド自体が存在しない（＝欠落）。読み込み側は Optional で扱う。
+
 ---
 
 ## Firebase使用時の重要事項
