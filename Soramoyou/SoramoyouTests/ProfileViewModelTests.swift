@@ -129,6 +129,70 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertNotNil(mockStorageService.uploadedImage)
         XCTAssertEqual(viewModel.user?.displayName, "Updated Name")
     }
+
+    /// 回帰テスト ⭐️: プロフィール更新で publicProfiles のフォローカウンタを書き込まないこと
+    ///
+    /// PublicProfile 全体を書く updatePublicProfile を使うと、クライアントが持つ古い
+    /// followersCount / followingCount で Cloud Functions が保った真値を潰してしまう。
+    /// 「全体書き込みが呼ばれない」ことがこのテストの本体（引数の確認は補助）。
+    func testUpdateProfileDoesNotWriteFollowCounters() async {
+        // Given
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+
+        viewModel.editingDisplayName = "Updated Name"
+        viewModel.editingBio = "Updated Bio"
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then: カウンタを含む全体書き込みは行われない
+        XCTAssertFalse(
+            mockFirestoreService.updatePublicProfileCalled,
+            "updatePublicProfile（PublicProfile 全体書き込み）はカウンタを古い値で潰すため呼んではいけない"
+        )
+
+        // Then: 編集対象フィールドだけがターゲット更新される
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.count, 1)
+        let call = mockFirestoreService.updatePublicProfileFieldsCalls.first
+        XCTAssertEqual(call?.userId, testUser.id)
+        XCTAssertEqual(call?.displayName, "Updated Name")
+        XCTAssertEqual(call?.bio, "Updated Bio")
+        XCTAssertEqual(call?.photoURL, testUser.photoURL)
+
+        // Then: 既存ドキュメントがある場合は新規作成にフォールバックしない
+        XCTAssertFalse(mockFirestoreService.createPublicProfileCalled)
+    }
+
+    /// publicProfiles ドキュメント未作成（マイグレーション未実施）ユーザーは
+    /// notFound を受けて createPublicProfile にフォールバックすること ⭐️
+    func testUpdateProfileFallsBackToCreateWhenPublicProfileMissing() async {
+        // Given
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        mockFirestoreService.updatePublicProfileFieldsError = FirestoreServiceError.notFound
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+
+        viewModel.editingDisplayName = "Updated Name"
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then
+        XCTAssertTrue(mockFirestoreService.createPublicProfileCalled)
+        XCTAssertNil(viewModel.errorMessage)
+    }
     
     func testLoadEditTools() async {
         // Given
@@ -300,6 +364,15 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     var user: User?
     var userPosts: [Post] = []
     var updateEditToolsCalled = false
+    /// publicProfiles への「PublicProfile 全体書き込み」が呼ばれたか ⭐️
+    /// （カウンタを古い値で潰す経路なので、プロフィール更新では呼ばれてはいけない）
+    var updatePublicProfileCalled = false
+    /// ターゲット更新（updatePublicProfileFields）に渡された引数の記録 ⭐️
+    var updatePublicProfileFieldsCalls: [(userId: String, displayName: String?, photoURL: String?, bio: String?)] = []
+    /// updatePublicProfileFields が投げるエラー（notFound フォールバック検証用） ⭐️
+    var updatePublicProfileFieldsError: Error?
+    /// createPublicProfile が呼ばれたか（フォールバック検証用） ⭐️
+    var createPublicProfileCalled = false
     
     func fetchUser(userId: String) async throws -> User {
         guard let user = user else {
@@ -344,8 +417,14 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     ) async throws -> [Post] { return [] }
     func syncPostsCount(userId: String, count: Int) async throws {}
     func fetchPublicProfile(userId: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
-    func updatePublicProfile(_ profile: PublicProfile) async throws {}
-    func createPublicProfile(from user: User) async throws {}
+    func updatePublicProfile(_ profile: PublicProfile) async throws { updatePublicProfileCalled = true }
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
+        updatePublicProfileFieldsCalls.append((userId: userId, displayName: displayName, photoURL: photoURL, bio: bio))
+        if let error = updatePublicProfileFieldsError {
+            throw error
+        }
+    }
+    func createPublicProfile(from user: User) async throws { createPublicProfileCalled = true }
     func deleteUserData(userId: String) async throws {}
     func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {}
     func blockUser(userId: String, blockedUserId: String) async throws {}

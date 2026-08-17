@@ -4,8 +4,12 @@
 //
 //  フォロー関係の Firestore アクセスを集約する Repository ⭐️ Issue #2
 //
-//  follows コレクションへの create/delete と、users.followersCount /
-//  users.followingCount の増減を Firestore トランザクションで原子的に行う。
+//  follows コレクションへの create/delete「だけ」を行う。
+//  followersCount / followingCount は Cloud Functions（onFollowCreated /
+//  onFollowDeleted）が follows を count() して users・publicProfiles の両方へ
+//  「代入」する方式に変更したため、クライアントからはカウンタを一切書かない。
+//  （クライアントが increment すると Functions の代入と二重計上になり、
+//   さらに publicProfiles 側は所有者しか書けないため他人からは 0 のままだった）
 //
 
 import Foundation
@@ -48,10 +52,6 @@ final class FollowRepository: FollowRepositoryProtocol {
         db.collection("follows")
     }
 
-    private var usersCollection: CollectionReference {
-        db.collection("users")
-    }
-
     // MARK: - follow
 
     func follow(_ targetUserId: String, by ownUserId: String) async throws {
@@ -61,10 +61,9 @@ final class FollowRepository: FollowRepositoryProtocol {
 
         let followId = Follow.makeId(followerId: ownUserId, followeeId: targetUserId)
         let followRef = followsCollection.document(followId)
-        let ownUserRef = usersCollection.document(ownUserId)
-        let targetUserRef = usersCollection.document(targetUserId)
 
-        // トランザクションで follows 追加 + カウンタ増加を原子的に行う
+        // トランザクションは follows の「存在確認 → 作成」だけを原子的に行う。
+        // カウンタはここでは触らない（Cloud Functions が count() の結果を代入する）。
         _ = try await db.runTransaction { transaction, errorPointer -> Any? in
             do {
                 // 既にフォロー中なら何もしない（冪等性確保）
@@ -79,16 +78,6 @@ final class FollowRepository: FollowRepositoryProtocol {
                     followeeId: targetUserId
                 )
                 transaction.setData(follow.toFirestoreData(), forDocument: followRef)
-
-                // カウンタ更新（FieldValue.increment で安全にインクリメント）
-                transaction.updateData(
-                    ["followingCount": FieldValue.increment(Int64(1))],
-                    forDocument: ownUserRef
-                )
-                transaction.updateData(
-                    ["followersCount": FieldValue.increment(Int64(1))],
-                    forDocument: targetUserRef
-                )
                 return nil
             } catch let err as NSError {
                 errorPointer?.pointee = err
@@ -104,9 +93,10 @@ final class FollowRepository: FollowRepositoryProtocol {
     func unfollow(_ targetUserId: String, by ownUserId: String) async throws {
         let followId = Follow.makeId(followerId: ownUserId, followeeId: targetUserId)
         let followRef = followsCollection.document(followId)
-        let ownUserRef = usersCollection.document(ownUserId)
-        let targetUserRef = usersCollection.document(targetUserId)
 
+        // トランザクションは follows の「存在確認 → 削除」だけを原子的に行う。
+        // カウンタはここでは触らない（Cloud Functions が count() の結果を代入するので、
+        // 負の値になったりフォロワー削除と食い違ったりしない）。
         _ = try await db.runTransaction { transaction, errorPointer -> Any? in
             do {
                 // 存在しないなら何もしない
@@ -115,17 +105,6 @@ final class FollowRepository: FollowRepositoryProtocol {
                     return nil
                 }
                 transaction.deleteDocument(followRef)
-
-                // カウンタ減少（負にならないよう Cloud Function 等での集計が望ましいが、
-                // ここでは UX 即時反映のためクライアント側でもデクリメント）
-                transaction.updateData(
-                    ["followingCount": FieldValue.increment(Int64(-1))],
-                    forDocument: ownUserRef
-                )
-                transaction.updateData(
-                    ["followersCount": FieldValue.increment(Int64(-1))],
-                    forDocument: targetUserRef
-                )
                 return nil
             } catch let err as NSError {
                 errorPointer?.pointee = err

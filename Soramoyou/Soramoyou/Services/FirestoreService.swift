@@ -46,6 +46,10 @@ protocol FirestoreServiceProtocol {
     // Public Profiles (公開情報のみ - 認証済みユーザー)
     func fetchPublicProfile(userId: String) async throws -> PublicProfile
     func updatePublicProfile(_ profile: PublicProfile) async throws
+    /// プロフィール編集で本人が変更できる公開情報だけをターゲット更新する。
+    /// PublicProfile 全体を書く updatePublicProfile と違い、followersCount /
+    /// followingCount（Cloud Functions が真値を代入する）を古い値で潰さない。
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws
     func createPublicProfile(from user: User) async throws
     
     // Account
@@ -720,6 +724,50 @@ class FirestoreService: FirestoreServiceProtocol {
             let docRef = publicProfilesCollection.document(profile.id)
             try await docRef.setData(profile.toFirestoreData(), merge: true)
         } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// 公開プロフィールのうち「本人が編集できるフィールド」だけを更新する ⭐️
+    ///
+    /// なぜ専用メソッドが必要か:
+    /// `updatePublicProfile` は `PublicProfile.toFirestoreData()` を丸ごと書くため、
+    /// followersCount / followingCount まで**クライアントが持っている古い値**で
+    /// 上書きしてしまう。カウンタは Cloud Functions（onFollowCreated /
+    /// onFollowDeleted）が follows を count() して代入する真値なので、
+    /// プロフィール編集のたびに 0 などへ巻き戻る事故が起きていた。
+    /// updateData で対象フィールドだけを書けばこの経路は断てる
+    /// （`updateNotificationPreferences` と同じ理由・同じ形）。
+    ///
+    /// - Note: nil のフィールドは「書き込まない」＝既存値を維持する。
+    ///   従来の `setData(merge: true)` + `toFirestoreData()`（nil キーを省略）と
+    ///   同じ挙動に揃えてあり、本 PR では意図的に変更していない。
+    /// - Throws: ドキュメントが存在しない場合は `FirestoreServiceError.notFound`。
+    ///   （呼び出し側が `createPublicProfile` にフォールバックできるようにするため、
+    ///    Firestore の NOT_FOUND を updateFailed に埋めずに区別して投げる）
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
+        // updatedAt は常に更新し、値がある項目だけを追加する
+        var data: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+
+        if let displayName = displayName {
+            data["displayName"] = displayName
+        }
+        if let photoURL = photoURL {
+            data["photoURL"] = photoURL
+        }
+        if let bio = bio {
+            data["bio"] = bio
+        }
+
+        do {
+            try await publicProfilesCollection.document(userId).updateData(data)
+        } catch let error as NSError {
+            // updateData は対象ドキュメントが存在しないと NOT_FOUND（code 5）で失敗する。
+            // マイグレーション未実施ユーザー向けに、呼び出し側で新規作成へ切り替えられるよう
+            // notFound として区別して伝える。
+            if error.domain == "FIRFirestoreErrorDomain" && error.code == 5 {
+                throw FirestoreServiceError.notFound
+            }
             throw FirestoreServiceError.updateFailed(error)
         }
     }
