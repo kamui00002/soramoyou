@@ -189,8 +189,12 @@ service cloud.firestore {
                     && request.resource.data.keys().hasAll(['followerId', 'followeeId', 'createdAt']);
 
       // フォロー解除: 自分のフォローのみ削除可能
+      // ＋ フォロワー削除（PR-5）: フォローされている側（followee）も削除可能
+      //   （自分のフォロワー一覧から相手を外す操作。相手がフォローしている側なので
+      //     followerId 条件だけでは followee 本人が消せない）
       allow delete: if isAuthenticated()
-                    && resource.data.followerId == request.auth.uid;
+                    && (resource.data.followerId == request.auth.uid
+                        || resource.data.followeeId == request.auth.uid);
 
       // フォロー関係の更新は不可
       allow update: if false;
