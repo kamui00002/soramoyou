@@ -116,14 +116,21 @@ final class FollowRepository: FollowRepositoryProtocol {
 
     func unfollow(_ targetUserId: String, by ownUserId: String) async throws {
         let followId = Follow.makeId(followerId: ownUserId, followeeId: targetUserId)
+        try await deleteFollowIfExists(followId: followId)
+        logger.info("フォロー解除 \(ownUserId, privacy: .private) -> \(targetUserId, privacy: .private)")
+    }
+
+    /// follows の「存在確認 → 削除」を原子的に行う共通実装（unfollow / removeFollower 用）
+    ///
+    /// - 存在しないドキュメントの delete は rules の resource.data 評価で
+    ///   permission-denied になり得るため、必ず存在確認を先に行う（冪等性確保）。
+    /// - カウンタはここでは触らない（Cloud Functions の onFollowDeleted が count() の
+    ///   結果を代入するので、負の値になったり操作同士で食い違ったりしない）。
+    private func deleteFollowIfExists(followId: String) async throws {
         let followRef = followsCollection.document(followId)
 
-        // トランザクションは follows の「存在確認 → 削除」だけを原子的に行う。
-        // カウンタはここでは触らない（Cloud Functions が count() の結果を代入するので、
-        // 負の値になったりフォロワー削除と食い違ったりしない）。
         _ = try await db.runTransaction { transaction, errorPointer -> Any? in
             do {
-                // 存在しないなら何もしない
                 let existing = try transaction.getDocument(followRef)
                 guard existing.exists else {
                     return nil
@@ -135,8 +142,6 @@ final class FollowRepository: FollowRepositoryProtocol {
                 return nil
             }
         }
-
-        logger.info("フォロー解除 \(ownUserId, privacy: .private) -> \(targetUserId, privacy: .private)")
     }
 
     // MARK: - isFollowing
@@ -218,26 +223,7 @@ final class FollowRepository: FollowRepositoryProtocol {
         // ドキュメント ID は「フォローしている側_されている側」。
         // フォロワー削除では相手（followerUserId）がフォローしている側になる。
         let followId = Follow.makeId(followerId: followerUserId, followeeId: ownUserId)
-        let followRef = followsCollection.document(followId)
-
-        // unfollow と同じ「存在確認 → 削除」の原子操作。
-        // 存在しないドキュメントの delete は rules の resource.data 評価で
-        // permission-denied になり得るため、必ず存在確認を先に行う。
-        // カウンタは触らない（Cloud Functions の onFollowDeleted が count() を代入する）。
-        _ = try await db.runTransaction { transaction, errorPointer -> Any? in
-            do {
-                let existing = try transaction.getDocument(followRef)
-                guard existing.exists else {
-                    return nil
-                }
-                transaction.deleteDocument(followRef)
-                return nil
-            } catch let err as NSError {
-                errorPointer?.pointee = err
-                return nil
-            }
-        }
-
+        try await deleteFollowIfExists(followId: followId)
         logger.info("フォロワー削除 \(followerUserId, privacy: .private) を \(ownUserId, privacy: .private) から")
     }
 }

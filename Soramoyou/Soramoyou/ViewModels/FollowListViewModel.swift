@@ -136,7 +136,13 @@ final class FollowListViewModel: ObservableObject {
                 context: "FollowListViewModel.fetchFirstPage",
                 category: ErrorHandler.categorize(error)
             )
-            lastError = error
+            if follows.isEmpty {
+                lastError = error
+            } else {
+                // pull-to-refresh の失敗: 一覧表示中は ErrorStateView に切り替わらず
+                // 無反応に見えるため、アラートで見せる（loadMore の失敗と同じ流儀）
+                errorMessage = error.userFriendlyMessage
+            }
         }
     }
 
@@ -221,11 +227,10 @@ final class FollowListViewModel: ObservableObject {
         do {
             try await followRepository.removeFollower(followerUserId, from: ownUserId)
             follows.removeAll { $0.followerId == followerUserId }
-            // ⚠️ キー名に "auth" を含むと LoggingService.sanitizeParameters が
-            //    丸ごと [REDACTED] にするため removed_user_id を使う（author_id は不可）
-            LoggingService.shared.logEvent("follower_removed", parameters: [
-                "removed_user_id": followerUserId,
-            ])
+            // ⚠️ 削除相手の uid はパラメータに載せない。他ユーザーの内部 ID を
+            //    外部 SaaS（Firebase/PostHog）へ送らないため（既存イベントに前例なし）。
+            //    削除回数の分析は identify 済みの自分の distinct_id とイベント名で足りる。
+            LoggingService.shared.logEvent("follower_removed")
         } catch {
             logger.error("フォロワー削除失敗: \(error.localizedDescription)")
             LoggingService.shared.logErrorEvent(

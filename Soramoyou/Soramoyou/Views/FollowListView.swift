@@ -63,24 +63,24 @@ struct FollowListView: View {
             }
         }
         // フォロワー削除の確認ダイアログ（不可逆操作なので必ず挟む）
+        // ⚠️ presenting: で候補を action クロージャの引数に束縛する。
+        //    ボタン action 内で @State を読み直す形だと、OS 側の dismiss（binding の
+        //    setter で removalCandidate = nil）が action より先に走った場合に
+        //    サイレント no-op になるため、提示時点の値を引数で受け取る。
         .confirmationDialog(
             removalConfirmationTitle,
             isPresented: Binding(
                 get: { removalCandidate != nil },
                 set: { if !$0 { removalCandidate = nil } }
             ),
-            titleVisibility: .visible
-        ) {
+            titleVisibility: .visible,
+            presenting: removalCandidate
+        ) { candidate in
             Button("フォロワーから削除", role: .destructive) {
-                if let candidate = removalCandidate {
-                    Task { await viewModel.removeFollower(userId: candidate.followerId) }
-                }
-                removalCandidate = nil
+                Task { await viewModel.removeFollower(userId: candidate.followerId) }
             }
-            Button("キャンセル", role: .cancel) {
-                removalCandidate = nil
-            }
-        } message: {
+            Button("キャンセル", role: .cancel) {}
+        } message: { _ in
             Text("相手に通知されません。相手はあなたを再びフォローできます。")
         }
         // ⚠️ 画面計装は .task で行う。.onAppear は復帰のたびに複数回発火するため
@@ -170,7 +170,11 @@ struct FollowListView: View {
                 NavigationLink {
                     UserProfileView(targetUserId: userId, ownUserId: viewModel.ownUserId)
                 } label: {
+                    // 行の余白・カード背景までタップ可能領域を広げる
+                    // （rowContent だけだと名前部分しか反応せず「行タップで遷移」にならない）
                     rowContent(profile: profile)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(profile?.displayName ?? "ユーザー") のプロフィールを開く")

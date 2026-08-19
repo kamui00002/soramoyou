@@ -180,7 +180,10 @@ service cloud.firestore {
     // ============================================
     match /follows/{followId} {
       // フォロー関係は認証済みユーザーが確認可能
-      allow read: if isAuthenticated();
+      allow get: if isAuthenticated();
+      // 一覧取得はページサイズ上限付き（publicProfiles の limit<=20 と同じ流儀。
+      // クライアントの list は FollowRepository.fetchFollows（limit=30）のみ）
+      allow list: if isAuthenticated() && request.query.limit <= 50;
 
       // フォロー作成: 自分がフォロワーの場合のみ
       allow create: if isAuthenticated()
