@@ -27,7 +27,18 @@ protocol FirestoreServiceProtocol {
     func fetchPost(postId: String) async throws -> Post
     func deletePost(postId: String, userId: String) async throws
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
-
+    /// 他ユーザーのプロフィール用: 閲覧可能な公開範囲だけに絞って投稿を取得する ⭐️
+    /// - Important: `fetchUserPosts` は公開範囲で絞らないため、他人のプロフィールで使うと
+    ///   Firestore Security Rules が「private も含みうるクエリ」と判断してクエリ全体が
+    ///   permission-denied になる。他人のプロフィールでは必ず本メソッドを使う。
+    /// - Parameter visibilities: 呼び出し側が「rules で読めると証明できる」公開範囲だけを渡すこと。
+    func fetchVisibleUserPosts(
+        userId: String,
+        visibilities: [Visibility],
+        limit: Int,
+        lastDocument: DocumentSnapshot?
+    ) async throws -> [Post]
+    
     // Drafts
     func saveDraft(_ draft: Draft) async throws -> Draft
     func fetchDrafts(userId: String) async throws -> [Draft]
@@ -318,7 +329,84 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-
+    
+    /// 指定ユーザーの投稿のうち、指定した公開範囲のものだけを取得する ⭐️
+    ///
+    /// Firestore Security Rules は「フィルタ」ではなく「静的な証明」であり、
+    /// クエリが返しうる結果集合の中に 1 件でも読めない可能性があるドキュメントが
+    /// 含まれると **クエリ全体** が permission-denied になる。
+    /// そのため他ユーザーのプロフィールでは `visibility` をクエリ側で必ず絞り込む。
+    ///
+    /// - Parameters:
+    ///   - userId: 対象ユーザーの ID
+    ///   - visibilities: 取得したい公開範囲（呼び出し側が rules を満たせるものだけを渡す）
+    ///   - limit: 取得件数の上限
+    ///   - lastDocument: ページネーション用の直前ページ末尾ドキュメント。
+    ///     ⚠️ 同一の visibilities 集合で取得したカーソルのみ有効（要素 1 件は isEqualTo・
+    ///     複数件は in とクエリ形状が変わるため、フォロー状態が変わったらカーソルは破棄すること）
+    /// - Returns: 新しい順（createdAt 降順）の投稿配列
+    /// - Note: 複合インデックス `visibility ASC + userId ASC + createdAt DESC` が必要。
+    ///   `firestore.indexes.json` に追加済みだが **deploy は別作業**（未 deploy だと
+    ///   permission-denied ではなく failed-precondition のインデックス欠落エラーになる）。
+    ///   等値フィールドの並び順は既存 posts インデックス（visibility を先頭に置く形）に
+    ///   合わせているが、確定値は初回実行時のエラーに含まれるインデックス作成リンクが正。
+    func fetchVisibleUserPosts(
+        userId: String,
+        visibilities: [Visibility],
+        limit: Int,
+        lastDocument: DocumentSnapshot?
+    ) async throws -> [Post] {
+        // 空配列を渡された場合、Firestore の `in` は空配列を受け付けずクラッシュするため
+        // クエリを投げずに空を返す（「読めるものが何も無い」＝正しい結果）。
+        guard !visibilities.isEmpty else { return [] }
+        
+        do {
+            let rawValues = visibilities.map { $0.rawValue }
+            var query: Query = postsCollection
+            
+            // ⚠️ 1 件だけなら `in` ではなく `isEqualTo` を使う。
+            //    `in` は要素数 1 でも「論理和クエリ」として扱われ、rules の評価経路が
+            //    既存の公開一覧（`visibility == 'public'`）と変わってしまう。
+            //    本 PR は「rules が followers 枝で通るか」を確かめる実験を兼ねるため、
+            //    未フォロー時（public のみ）は既知の安全な形と完全に同じ形にして
+            //    失敗したときの原因を一意に切り分けられるようにする。
+            if rawValues.count == 1 {
+                query = query.whereField("visibility", isEqualTo: rawValues[0])
+            } else {
+                query = query.whereField("visibility", in: rawValues)
+            }
+            
+            query = query
+                .whereField("userId", isEqualTo: userId)
+                .order(by: "createdAt", descending: true)
+                .limit(to: limit)
+            
+            // ページネーション
+            if let lastDocument = lastDocument {
+                query = query.start(afterDocument: lastDocument)
+            }
+            
+            let snapshot = try await query.getDocuments()
+            
+            // ⚠️ 壊れたドキュメント 1 件でクエリ全体を落とさない。
+            //    ここで throw すると「rules 拒否 / インデックス欠落 / 不正データ」が
+            //    すべて同じ fetchFailed に潰れ、失敗原因の切り分け（followers 枝が
+            //    rules を通るかを確かめる R1 プローブ）ができなくなる。
+            //    デコードに失敗したドキュメントはパスをログに残し 1 件だけスキップする。
+            return snapshot.documents.compactMap { document in
+                do {
+                    return try Post(from: document.data())
+                } catch {
+                    print("❌ 投稿デコード失敗 path=\(document.reference.path) error=\(error.localizedDescription)")
+                    return nil
+                }
+            }
+        } catch {
+            // クエリ全体の失敗（権限・インデックス欠落・ネットワーク）は呼び出し側に伝播する。
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+    
     // MARK: - Drafts
 
     func saveDraft(_ draft: Draft) async throws -> Draft {
