@@ -10,7 +10,11 @@ import Foundation
 /// 投稿詳細画面のViewModel
 @MainActor
 class PostDetailViewModel: ObservableObject {
-    @Published var author: User?
+    /// 投稿者の公開プロフィール。
+    /// ⚠️ `User`（`users` コレクション）ではなく `PublicProfile`（`publicProfiles`）を保持する。
+    /// `users` は Firestore Security Rules で `isOwner` 制限がかかっており、
+    /// 他人のドキュメントは読めないため（HomeViewModel / UserProfileViewModel と同じ方針）。
+    @Published var author: PublicProfile?
     @Published var isLoadingAuthor = false
     @Published var errorMessage: String?
     /// 通報・ブロック処理のエラー
@@ -49,15 +53,25 @@ class PostDetailViewModel: ObservableObject {
         }
     }
 
-    /// 投稿者情報を読み込む
+    /// 投稿者情報（公開プロフィール）を読み込む。
+    ///
+    /// ⚠️ 参照先は必ず `publicProfiles`（`fetchPublicProfile`）にすること。
+    /// `fetchUser` が読む `users` コレクションは `firestore.rules` の
+    /// `allow read: if isOwner(userId)` により **他人のドキュメントでは権限エラーになる**。
+    /// その結果、他人の投稿詳細では取得が必ず失敗し、描画側の
+    /// `if let user = viewModel.author` が偽になって著者ブロックごと無言で消えていた。
+    ///
+    /// 失敗時は `errorMessage` に載せず `ErrorHandler.logError` のみに留める。
+    /// この画面には `errorMessage` を監視してアラートを出す導線が無く、
+    /// セットしても誰にも見えないため。ただし原因追跡のためログは必ず残す。
+    /// - Parameter userId: 投稿者のユーザーID
     func loadAuthor(userId: String) async {
         isLoadingAuthor = true
-        errorMessage = nil
 
         do {
-            author = try await firestoreService.fetchUser(userId: userId)
+            author = try await firestoreService.fetchPublicProfile(userId: userId)
         } catch {
-            errorMessage = error.userFriendlyMessage
+            ErrorHandler.logError(error, context: "PostDetailViewModel.loadAuthor")
         }
 
         isLoadingAuthor = false

@@ -6,6 +6,11 @@
 //  「再編集後、投稿詳細が古い画像URL/公開範囲を保持し続ける」バグの修正
 //  （refreshPost メソッド）を検証する。CalendarDiaryViewModelTests と同型の最小 Mock を使う。
 //
+//  加えて「他人の投稿詳細で著者が無言で消える」バグ（loadAuthor が権限で読めない
+//  `users` を参照していた）の修正も検証する。Mock はあえて `fetchUser` を実装せず
+//  TestDefaults の fatalError のままにしてあり、`users` 参照に戻す回帰が起きたら
+//  テストが即座にクラッシュして気付ける構成にしている。
+//
 
 import XCTest
 @testable import Soramoyou
@@ -48,15 +53,63 @@ final class PostDetailViewModelTests: XCTestCase {
         // Assert: nil を返し、呼び出し側が直前の post を保持できるようにする（表示を壊さない）
         XCTAssertNil(result, "取得失敗時は nil を返し、呼び出し側で直前の post を保持できるようにするべき")
     }
+
+    // MARK: - loadAuthor（他人の投稿で著者が消えるバグの回帰テスト）
+
+    func testLoadAuthorFetchesFromPublicProfilesCollection() async {
+        // Arrange: publicProfiles 側にだけ投稿者を用意する。
+        // `fetchUser`（users コレクション）は Mock に実装していないため、
+        // 万一そちらを呼ぶ実装に戻ると TestDefaults の fatalError で落ちる。
+        let mock = MockFirestoreServiceForPostDetail()
+        mock.stubbedPublicProfile = PublicProfile(
+            id: "u1",
+            displayName: "そらまめ",
+            photoURL: "https://example.com/icon.jpg"
+        )
+        let viewModel = PostDetailViewModel(firestoreService: mock)
+
+        // Act
+        await viewModel.loadAuthor(userId: "u1")
+
+        // Assert: publicProfiles から取得できており、著者ブロックを描画できる状態になる
+        XCTAssertEqual(mock.requestedPublicProfileUserId, "u1",
+                       "他人の users は Security Rules で読めないため publicProfiles を参照するべき")
+        XCTAssertEqual(viewModel.author?.id, "u1")
+        XCTAssertEqual(viewModel.author?.displayName, "そらまめ")
+        XCTAssertEqual(viewModel.author?.photoURL, "https://example.com/icon.jpg")
+        XCTAssertFalse(viewModel.isLoadingAuthor, "読み込み完了後はローディング表示を畳むべき")
+    }
+
+    func testLoadAuthorKeepsErrorMessageNilOnFailure() async {
+        // Arrange: 公開プロフィールの取得が失敗する（未作成ユーザー・ネットワーク断など）
+        let mock = MockFirestoreServiceForPostDetail()
+        mock.stubbedPublicProfileError = FirestoreServiceError.notFound
+        let viewModel = PostDetailViewModel(firestoreService: mock)
+
+        // Act
+        await viewModel.loadAuthor(userId: "u1")
+
+        // Assert: この画面にはアラート導線が無いため errorMessage は立てず、
+        //         ログ（ErrorHandler.logError）だけに留める
+        XCTAssertNil(viewModel.author)
+        XCTAssertNil(viewModel.errorMessage, "アラート導線が無い画面なので errorMessage には出さない（ログのみ）")
+        XCTAssertFalse(viewModel.isLoadingAuthor, "失敗時もローディング表示は畳むべき")
+    }
 }
 
 // MARK: - Mock
 
-/// `fetchPost` のみ上書きする最小 Mock。残りは TestDefaults（fatalError）で満たす。
+/// `fetchPost` / `fetchPublicProfile` のみ上書きする最小 Mock。残りは TestDefaults（fatalError）で満たす。
+/// ⚠️ `fetchUser` はあえて実装しない（users 参照に戻る回帰を fatalError で検知するため）。
 final class MockFirestoreServiceForPostDetail: FirestoreServiceProtocol {
     var stubbedPost: Post?
     var stubbedError: Error?
     private(set) var requestedPostId: String?
+
+    /// loadAuthor 用スタブ（publicProfiles コレクション側）
+    var stubbedPublicProfile: PublicProfile?
+    var stubbedPublicProfileError: Error?
+    private(set) var requestedPublicProfileUserId: String?
 
     func fetchPost(postId: String) async throws -> Post {
         requestedPostId = postId
@@ -65,5 +118,14 @@ final class MockFirestoreServiceForPostDetail: FirestoreServiceProtocol {
             fatalError("MockFirestoreServiceForPostDetail.stubbedPost が未設定です")
         }
         return stubbedPost
+    }
+
+    func fetchPublicProfile(userId: String) async throws -> PublicProfile {
+        requestedPublicProfileUserId = userId
+        if let stubbedPublicProfileError { throw stubbedPublicProfileError }
+        guard let stubbedPublicProfile else {
+            fatalError("MockFirestoreServiceForPostDetail.stubbedPublicProfile が未設定です")
+        }
+        return stubbedPublicProfile
     }
 }
