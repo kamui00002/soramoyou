@@ -15,55 +15,54 @@
 //    テストが利用するメソッドを MockFirestoreService が実装していれば何も起きない。
 //
 
-import Foundation
 import FirebaseFirestore
+import Foundation
 @testable import Soramoyou
 
 extension FirestoreServiceProtocol {
-
     // MARK: - Posts
 
-    func createPost(_ post: Post) async throws -> Post {
+    func createPost(_: Post) async throws -> Post {
         fatalError("MockFirestoreService.createPost は未実装です")
     }
 
-    func updatePost(_ post: Post) async throws -> Post {
+    func updatePost(_: Post) async throws -> Post {
         fatalError("MockFirestoreService.updatePost は未実装です")
     }
 
-    func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
+    func fetchPosts(limit _: Int, lastDocument _: DocumentSnapshot?) async throws -> [Post] {
         fatalError("MockFirestoreService.fetchPosts は未実装です")
     }
 
     func fetchPostsWithSnapshot(
-        limit: Int,
-        lastDocument: DocumentSnapshot?
+        limit _: Int,
+        lastDocument _: DocumentSnapshot?
     ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
         fatalError("MockFirestoreService.fetchPostsWithSnapshot は未実装です")
     }
 
     func fetchPostsWithSnapshot(
-        timeOfDay: TimeOfDay?,
-        skyType: SkyType?,
-        sortField: String,
-        limit: Int,
-        lastDocument: DocumentSnapshot?
+        timeOfDay _: TimeOfDay?,
+        skyType _: SkyType?,
+        sortField _: String,
+        limit _: Int,
+        lastDocument _: DocumentSnapshot?
     ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
         fatalError("MockFirestoreService.fetchPostsWithSnapshot(絞り込み版) は未実装です")
     }
 
-    func fetchPost(postId: String) async throws -> Post {
+    func fetchPost(postId _: String) async throws -> Post {
         fatalError("MockFirestoreService.fetchPost は未実装です")
     }
 
-    func deletePost(postId: String, userId: String) async throws {
+    func deletePost(postId _: String, userId _: String) async throws {
         fatalError("MockFirestoreService.deletePost は未実装です")
     }
 
     func fetchUserPosts(
-        userId: String,
-        limit: Int,
-        lastDocument: DocumentSnapshot?
+        userId _: String,
+        limit _: Int,
+        lastDocument _: DocumentSnapshot?
     ) async throws -> [Post] {
         fatalError("MockFirestoreService.fetchUserPosts は未実装です")
     }
@@ -79,149 +78,157 @@ extension FirestoreServiceProtocol {
 
     // MARK: - Drafts
 
-    func saveDraft(_ draft: Draft) async throws -> Draft {
+    func saveDraft(_: Draft) async throws -> Draft {
         fatalError("MockFirestoreService.saveDraft は未実装です")
     }
 
-    func fetchDrafts(userId: String) async throws -> [Draft] {
+    func fetchDrafts(userId _: String) async throws -> [Draft] {
         fatalError("MockFirestoreService.fetchDrafts は未実装です")
     }
 
-    func loadDraft(draftId: String) async throws -> Draft {
+    func loadDraft(draftId _: String) async throws -> Draft {
         fatalError("MockFirestoreService.loadDraft は未実装です")
     }
 
-    func deleteDraft(draftId: String) async throws {
+    func deleteDraft(draftId _: String) async throws {
         fatalError("MockFirestoreService.deleteDraft は未実装です")
     }
 
     // MARK: - Users
 
-    func fetchUser(userId: String) async throws -> User {
+    func fetchUser(userId _: String) async throws -> User {
         fatalError("MockFirestoreService.fetchUser は未実装です")
     }
 
-    func updateUser(_ user: User) async throws -> User {
+    func updateUser(_: User) async throws -> User {
         fatalError("MockFirestoreService.updateUser は未実装です")
     }
 
-    func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws {
+    func updateEditTools(userId _: String, tools _: [EditTool], order _: [String]) async throws {
         fatalError("MockFirestoreService.updateEditTools は未実装です")
     }
 
-    func syncPostsCount(userId: String, count: Int) async throws {
+    func syncPostsCount(userId _: String, count _: Int) async throws {
         fatalError("MockFirestoreService.syncPostsCount は未実装です")
     }
 
-    func updateNotificationPreferences(userId: String, notifyReactions: Bool, notifyNewPostsFromFollowing: Bool, notifyNewPostsFromEveryone: Bool) async throws {
+    func followTag(userId _: String, tag _: String) async throws {
+        fatalError("MockFirestoreService.followTag は未実装です")
+    }
+
+    func unfollowTag(userId _: String, tag _: String) async throws {
+        fatalError("MockFirestoreService.unfollowTag は未実装です")
+    }
+
+    func updateNotificationPreferences(userId _: String, notifyReactions _: Bool, notifyNewPostsFromFollowing _: Bool, notifyNewPostsFromEveryone _: Bool) async throws {
         fatalError("MockFirestoreService.updateNotificationPreferences は未実装です")
     }
 
     // MARK: - Public Profiles
 
-    func fetchPublicProfile(userId: String) async throws -> PublicProfile {
+    func fetchPublicProfile(userId _: String) async throws -> PublicProfile {
         fatalError("MockFirestoreService.fetchPublicProfile は未実装です")
     }
 
-    func updatePublicProfile(_ profile: PublicProfile) async throws {
-        fatalError("MockFirestoreService.updatePublicProfile は未実装です")
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
+        fatalError("MockFirestoreService.updatePublicProfileFields は未実装です")
     }
 
-    func createPublicProfile(from user: User) async throws {
+    func createPublicProfile(from _: User) async throws {
         fatalError("MockFirestoreService.createPublicProfile は未実装です")
     }
 
     // MARK: - Account
 
-    func deleteUserData(userId: String) async throws {
+    func deleteUserData(userId _: String) async throws {
         fatalError("MockFirestoreService.deleteUserData は未実装です")
     }
 
     // MARK: - Report / Block
 
     func reportPost(
-        postId: String,
-        reporterId: String,
-        reportedUserId: String,
-        reason: String
+        postId _: String,
+        reporterId _: String,
+        reportedUserId _: String,
+        reason _: String
     ) async throws {
         fatalError("MockFirestoreService.reportPost は未実装です")
     }
 
-    func blockUser(userId: String, blockedUserId: String) async throws {
+    func blockUser(userId _: String, blockedUserId _: String) async throws {
         fatalError("MockFirestoreService.blockUser は未実装です")
     }
 
-    func unblockUser(userId: String, blockedUserId: String) async throws {
+    func unblockUser(userId _: String, blockedUserId _: String) async throws {
         fatalError("MockFirestoreService.unblockUser は未実装です")
     }
 
-    func fetchBlockedUserIds(userId: String) async throws -> [String] {
+    func fetchBlockedUserIds(userId _: String) async throws -> [String] {
         fatalError("MockFirestoreService.fetchBlockedUserIds は未実装です")
     }
 
     // MARK: - Search
 
-    func searchByHashtag(_ hashtag: String) async throws -> [Post] {
+    func searchByHashtag(_: String) async throws -> [Post] {
         fatalError("MockFirestoreService.searchByHashtag は未実装です")
     }
 
-    func searchByColor(_ color: String, threshold: Double?) async throws -> [Post] {
+    func searchByColor(_: String, threshold _: Double?) async throws -> [Post] {
         fatalError("MockFirestoreService.searchByColor は未実装です")
     }
 
-    func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] {
+    func searchByTimeOfDay(_: TimeOfDay) async throws -> [Post] {
         fatalError("MockFirestoreService.searchByTimeOfDay は未実装です")
     }
 
-    func searchBySkyType(_ skyType: SkyType) async throws -> [Post] {
+    func searchBySkyType(_: SkyType) async throws -> [Post] {
         fatalError("MockFirestoreService.searchBySkyType は未実装です")
     }
 
     func searchPosts(
-        hashtag: String?,
-        color: String?,
-        timeOfDay: TimeOfDay?,
-        skyType: SkyType?,
-        colorThreshold: Double?,
-        limit: Int
+        hashtag _: String?,
+        color _: String?,
+        timeOfDay _: TimeOfDay?,
+        skyType _: SkyType?,
+        colorThreshold _: Double?,
+        limit _: Int
     ) async throws -> [Post] {
         fatalError("MockFirestoreService.searchPosts は未実装です")
     }
 
     // MARK: - Likes
 
-    func toggleLike(postId: String, userId: String) async throws -> Bool {
+    func toggleLike(postId _: String, userId _: String) async throws -> Bool {
         fatalError("MockFirestoreService.toggleLike は未実装です")
     }
 
-    func checkLikeStatus(postId: String, userId: String) async throws -> Bool {
+    func checkLikeStatus(postId _: String, userId _: String) async throws -> Bool {
         fatalError("MockFirestoreService.checkLikeStatus は未実装です")
     }
 
-    func batchCheckLikeStatus(postIds: [String], userId: String) async throws -> Set<String> {
+    func batchCheckLikeStatus(postIds _: [String], userId _: String) async throws -> Set<String> {
         fatalError("MockFirestoreService.batchCheckLikeStatus は未実装です")
     }
 
     // MARK: - Comments
 
     func fetchComments(
-        postId: String,
-        limit: Int,
-        lastDocument: DocumentSnapshot?
+        postId _: String,
+        limit _: Int,
+        lastDocument _: DocumentSnapshot?
     ) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?) {
         fatalError("MockFirestoreService.fetchComments は未実装です")
     }
 
-    func addComment(postId: String, userId: String, content: String, authorName: String?, authorPhotoURL: String?) async throws -> Comment {
+    func addComment(postId _: String, userId _: String, content _: String, authorName _: String?, authorPhotoURL _: String?) async throws -> Comment {
         fatalError("MockFirestoreService.addComment は未実装です")
     }
 
-    func deleteComment(commentId: String, postId: String, userId: String) async throws {
+    func deleteComment(commentId _: String, postId _: String, userId _: String) async throws {
         fatalError("MockFirestoreService.deleteComment は未実装です")
     }
 
-    func submitFeedback(_ feedback: Feedback) async throws {
+    func submitFeedback(_: Feedback) async throws {
         fatalError("MockFirestoreService.submitFeedback は未実装です")
     }
 }

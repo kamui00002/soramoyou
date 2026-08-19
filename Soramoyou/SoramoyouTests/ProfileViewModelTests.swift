@@ -129,6 +129,106 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertNotNil(mockStorageService.uploadedImage)
         XCTAssertEqual(viewModel.user?.displayName, "Updated Name")
     }
+
+    /// 回帰テスト ⭐️: プロフィール更新が publicProfiles のフォローカウンタを書き換えないこと
+    ///
+    /// PublicProfile 全体書き込みは、クライアントが持つ古い followersCount /
+    /// followingCount で Cloud Functions が保った真値を潰すため経路ごと廃止した
+    /// （メソッド自体を型から削除済み＝呼び出しはコンパイラが構造的に禁止する）。
+    /// ここでは残った唯一の経路であるターゲット更新が、編集対象フィールドだけを
+    /// 渡していることを確認する。
+    func testUpdateProfileDoesNotWriteFollowCounters() async {
+        // Given
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+
+        viewModel.editingDisplayName = "Updated Name"
+        viewModel.editingBio = "Updated Bio"
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then: 編集対象フィールドだけがターゲット更新される
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.count, 1)
+        let call = mockFirestoreService.updatePublicProfileFieldsCalls.first
+        XCTAssertEqual(call?.userId, testUser.id)
+        XCTAssertEqual(call?.displayName, "Updated Name")
+        XCTAssertEqual(call?.bio, "Updated Bio")
+        XCTAssertEqual(call?.photoURL, testUser.photoURL)
+
+        // Then: 既存ドキュメントがある場合は新規作成にフォールバックしない
+        XCTAssertFalse(mockFirestoreService.createPublicProfileCalled)
+    }
+
+    /// publicProfiles ドキュメント未作成（マイグレーション未実施）ユーザーは
+    /// notFound を受けて createPublicProfile にフォールバックすること ⭐️
+    func testUpdateProfileFallsBackToCreateWhenPublicProfileMissing() async {
+        // Given
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        mockFirestoreService.updatePublicProfileFieldsError = FirestoreServiceError.notFound
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+
+        viewModel.editingDisplayName = "Updated Name"
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then
+        XCTAssertTrue(mockFirestoreService.createPublicProfileCalled)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    /// notFound 以外の失敗では新規作成にフォールバックせず、エラーとして見せること ⭐️
+    ///
+    /// `updatePublicProfileFields` は「更新失敗 → publicProfiles の存在確認 →
+    /// 不在なら notFound ／ 存在するなら updateFailed」という構造になっている。
+    /// updateFailed は「ドキュメントは在るのに書けなかった」＝ createPublicProfile で
+    /// 作り直すと Cloud Functions が保つカウンタを古い値で潰しかねないため、
+    /// フォールバック経路に流してはいけない。
+    func testUpdateProfileDoesNotFallBackToCreateOnUpdateFailure() async {
+        // Given: 更新が updateFailed（存在するが書き込めなかった）で失敗する
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        mockFirestoreService.updatePublicProfileFieldsError = FirestoreServiceError.updateFailed(
+            NSError(
+                domain: "FIRFirestoreErrorDomain",
+                code: 7,
+                userInfo: [NSLocalizedDescriptionKey: "permission denied"]
+            )
+        )
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+
+        viewModel.editingDisplayName = "Updated Name"
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then: 新規作成へのフォールバックは notFound のときだけ
+        XCTAssertFalse(
+            mockFirestoreService.createPublicProfileCalled,
+            "updateFailed で createPublicProfile に流すと、サーバーが保つカウンタを潰しかねない"
+        )
+
+        // Then: 失敗を握りつぶさずユーザーに見せる
+        XCTAssertNotNil(viewModel.errorMessage)
+    }
     
     func testLoadEditTools() async {
         // Given
@@ -300,6 +400,12 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     var user: User?
     var userPosts: [Post] = []
     var updateEditToolsCalled = false
+    /// ターゲット更新（updatePublicProfileFields）に渡された引数の記録 ⭐️
+    var updatePublicProfileFieldsCalls: [(userId: String, displayName: String?, photoURL: String?, bio: String?)] = []
+    /// updatePublicProfileFields が投げるエラー（notFound フォールバック検証用） ⭐️
+    var updatePublicProfileFieldsError: Error?
+    /// createPublicProfile が呼ばれたか（フォールバック検証用） ⭐️
+    var createPublicProfileCalled = false
     
     func fetchUser(userId: String) async throws -> User {
         guard let user = user else {
@@ -344,8 +450,13 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     ) async throws -> [Post] { return [] }
     func syncPostsCount(userId: String, count: Int) async throws {}
     func fetchPublicProfile(userId: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
-    func updatePublicProfile(_ profile: PublicProfile) async throws {}
-    func createPublicProfile(from user: User) async throws {}
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
+        updatePublicProfileFieldsCalls.append((userId: userId, displayName: displayName, photoURL: photoURL, bio: bio))
+        if let error = updatePublicProfileFieldsError {
+            throw error
+        }
+    }
+    func createPublicProfile(from user: User) async throws { createPublicProfileCalled = true }
     func deleteUserData(userId: String) async throws {}
     func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {}
     func blockUser(userId: String, blockedUserId: String) async throws {}

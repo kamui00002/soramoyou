@@ -17,14 +17,14 @@
   "customEditToolsOrder": ["string"], // 表示順
   "fcmToken": "string",               // プッシュ通知の登録トークン（端末ごと・PushNotificationManagerが保存／無効時に自動削除）
   "fcmTokenUpdatedAt": "timestamp",   // fcmToken の更新時刻
-  "notifyReactions": "boolean",       // 通知: 自分の投稿への いいね/コメント（既定 true・欠落=true）
+  "notifyReactions": "boolean",       // 通知: 自分の投稿への いいね/コメント ＋ フォローされた時（既定 true・欠落=true）
   "notifyNewPostsFromFollowing": "boolean", // 通知: フォロー中の人の新規投稿（既定 true・欠落=true）
   "notifyNewPostsFromEveryone": "boolean"   // 通知: 誰かの新規投稿＝全員（既定 false・欠落=false）
 }
 ```
 - 通知プレフ3つの既定値は **iOS `User.swift` と Cloud Functions `functions/index.js` の `PREF_DEFAULTS` で一致必須**（reactions=true / following=true / everyone=false）。旧ユーザーはフィールド欠落＝既定で動く。
 - `fcmToken` は Cloud Functions（送信側）のみが読む。クライアントは書き込み専用（merge）。送信時に無効トークンは自動削除。
-- 送信トリガー: `likes`/`comments`/`posts` のドキュメント作成（`functions/index.js`）。デプロイには Blaze プラン＋APNs認証キーが必要。
+- 送信トリガー: `likes`/`comments`/`posts`/`follows` のドキュメント作成（`follows` は削除もフォローカウンタ整合のトリガー。`functions/index.js`）。デプロイには Blaze プラン＋APNs認証キーが必要。
 
 ## posts コレクション
 ```json
@@ -203,6 +203,23 @@
                                 // StoreKitのappAccountTokenに渡し、サーバーが「本当の購入者」の照合に使う
 }
 ```
+
+## users への追加フィールド（タグフォロー関連）
+```json
+{
+  "followedTags": ["string"]    // フォロー中のハッシュタグ。最大30件（array-contains-any の30上限に由来）
+}
+```
+- `#` を含まない**生の文字列**で持ち、**正規化（小文字化・トリム）はしない**。`arrayContains` は完全一致でしか当たらないため、正規化すると既存投稿（`posts.hashtags` は `extractHashtags` が保存した生の単語）にマッチしなくなる。
+- 書き込みは `followTag` / `unfollowTag`（`arrayUnion` / `arrayRemove`）**専用**。クライアントの `updateUser`（User 全体の setData merge）では書かない — キャッシュ済みの旧配列でサーバーの最新値を巻き戻すため。
+- 上限 30 件のチェックは書き込み前にクライアント側で行う（`arrayUnion` は配列長を見ない）。判定は必ずサーバーから取り直した最新値に対して行うこと。
+- 旧ユーザーはフィールド自体が存在しない（＝欠落）。読み込み側は Optional で扱う。
+
+## publicProfiles コレクション — 書き込み契約 ⭐️
+
+- **`followersCount` / `followingCount` はクライアント書き込み対象外**。正典はCloud Functions（`onFollowCreated` / `onFollowDeleted`）が `follows` を `count()` した結果を代入する値。
+- クライアントからプロフィールを更新するときは `updatePublicProfileFields`（`displayName` / `photoURL` / `bio` のみを `updateData`）を使う。`PublicProfile` 全体を書くとクライアントが持つ古いカウンタでサーバーの真値を潰す。
+- 更新失敗時は `publicProfiles/{userId}` の存在を `get` で確認して分岐する（不在＝新規作成、存在＝更新失敗）。`update` ルールが `resource.data.id` を参照するため、ドキュメント不在でも `NOT_FOUND` ではなく `PERMISSION_DENIED` が返りうるので、**エラーコードで不在判定してはいけない**。
 
 ---
 

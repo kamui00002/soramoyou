@@ -509,9 +509,27 @@ class ProfileViewModel: ObservableObject {
             user = savedUser
 
             // 公開プロフィールも更新（他のユーザーから閲覧可能な情報）
-            let publicProfile = PublicProfile(from: savedUser)
-            try await RetryableOperation.executeIfRetryable { [self] in
-                try await self.firestoreService.updatePublicProfile(publicProfile)
+            // ⚠️ PublicProfile 全体を書くと followersCount / followingCount まで
+            //    クライアントの古い値で上書きしてしまい、Cloud Functions が保っている
+            //    真値をプロフィール編集のたびに潰す。そのため編集対象フィールド
+            //    （表示名・アイコン・自己紹介）だけを updateData するメソッドを使う。
+            do {
+                try await RetryableOperation.executeIfRetryable { [self] in
+                    try await self.firestoreService.updatePublicProfileFields(
+                        userId: savedUser.id,
+                        displayName: savedUser.displayName,
+                        photoURL: savedUser.photoURL,
+                        bio: savedUser.bio
+                    )
+                }
+            } catch FirestoreServiceError.notFound {
+                // publicProfiles ドキュメントが未作成のユーザー（マイグレーション未実施）は
+                // updateData が NOT_FOUND になるため、新規作成にフォールバックする。
+                // ドキュメントが存在しない ＝ サーバーが保つカウンタも存在しないので、
+                // ここで User 由来の値ごと作成しても真値を潰すことはない。
+                try await RetryableOperation.executeIfRetryable { [self] in
+                    try await self.firestoreService.createPublicProfile(from: savedUser)
+                }
             }
 
             // 編集用の値をリセット
