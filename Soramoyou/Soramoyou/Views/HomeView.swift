@@ -804,6 +804,11 @@ struct PostDetailView: View {
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                     .padding()
+                } else {
+                    // 取得失敗時（publicProfiles 未作成の旧アカウント・ゲスト閲覧・一過性の
+                    // ネットワーク失敗）でも著者ブロックごと消さず、PostCard と同じ
+                    // プレースホルダ（灰色アイコン＋「ユーザー」）を表示する。
+                    authorSection(user: nil)
                 }
                 // 複数画像投稿はスワイプで切り替え可能なカルーセルで表示 ⭐️
                 if !post.images.isEmpty {
@@ -1115,10 +1120,14 @@ struct PostDetailView: View {
     
     // MARK: - Author Section
     
-    private func authorSection(user: User) -> some View {
+    /// 投稿者ヘッダー。
+    /// 引数は `User` ではなく `PublicProfile`（他人の `users` は権限で読めないため）。
+    /// 表示に使うのは displayName / photoURL の 2 つだけなので、公開プロフィールで足りる。
+    /// nil の場合（取得失敗・ゲスト閲覧）は灰色アイコン＋「ユーザー」のプレースホルダになる。
+    private func authorSection(user: PublicProfile?) -> some View {
         HStack(spacing: 12) {
             // プロフィール画像
-            if let photoURL = user.photoURL, let url = URL(string: photoURL) {
+            if let photoURL = user?.photoURL, let url = URL(string: photoURL) {
                 KFImage(url)
                     .placeholder {
                         Circle()
@@ -1143,9 +1152,10 @@ struct PostDetailView: View {
             }
             
             // ユーザー情報 ☁️
-            // セキュリティ: メールアドレスは表示しない
+            // PublicProfile には email 等の機密フィールドが型として存在しないため、
+            // 誤って表示するリスクは構造的に発生しない（User を渡していた頃の注記を更新）
             VStack(alignment: .leading, spacing: 4) {
-                Text(user.displayName ?? "ユーザー")
+                Text(user?.displayName ?? "ユーザー")
                     .font(.headline)
                     .foregroundColor(.white)
             }

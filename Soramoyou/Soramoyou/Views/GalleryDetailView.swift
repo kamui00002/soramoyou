@@ -53,6 +53,12 @@ struct GalleryDetailView: View {
                     } else if viewModel.isLoadingAuthor {
                         InlineLoadingView(message: "投稿者情報を読み込み中...")
                             .padding()
+                    } else {
+                        // 取得失敗時（publicProfiles 未作成の旧アカウント等）でも著者ブロックを
+                        // 消さず、プレースホルダ（灰色アイコン＋「ユーザー」）を表示する。
+                        // このビューは自分のアルバムからのみ開かれるため、旧アカウントで
+                        // 「今まで出ていた自分の名前が消える」回帰を防ぐのが主目的。
+                        authorSection(user: nil)
                     }
 
                     // 画像表示（編集前後切り替え対応）
@@ -737,10 +743,14 @@ struct GalleryDetailView: View {
 
     // MARK: - Author Section
 
-    private func authorSection(user: User) -> some View {
+    /// 投稿者ヘッダー。
+    /// 引数は `User` ではなく `PublicProfile`（他人の `users` は権限で読めないため）。
+    /// 表示に使うのは displayName / photoURL の 2 つだけなので、公開プロフィールで足りる。
+    /// nil の場合（取得失敗）は灰色アイコン＋「ユーザー」のプレースホルダになる。
+    private func authorSection(user: PublicProfile?) -> some View {
         HStack(spacing: 12) {
             // プロフィール画像
-            if let photoURL = user.photoURL, let url = URL(string: photoURL) {
+            if let photoURL = user?.photoURL, let url = URL(string: photoURL) {
                 KFImage(url)
                     .placeholder {
                         Circle()
@@ -765,9 +775,10 @@ struct GalleryDetailView: View {
             }
 
             // ユーザー情報 ☁️
-            // セキュリティ: メールアドレスは表示しない（HomeViewのauthorSectionと統一）
+            // PublicProfile には email 等の機密フィールドが型として存在しないため、
+            // 誤って表示するリスクは構造的に発生しない（HomeView の authorSection と統一）
             VStack(alignment: .leading, spacing: 4) {
-                Text(user.displayName ?? "ユーザー")
+                Text(user?.displayName ?? "ユーザー")
                     .font(.headline)
                     .foregroundColor(.white)
             }
