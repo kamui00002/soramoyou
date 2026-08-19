@@ -13,7 +13,13 @@ struct UserProfileView: View {
     @StateObject private var viewModel: UserProfileViewModel
     @Environment(\.dismiss) private var dismiss
 
+    /// フォロー一覧への遷移に使う（ViewModel 内の同名プロパティは private のため保持）⭐️ PR-5
+    private let targetUserId: String
+    private let ownUserId: String?
+
     init(targetUserId: String, ownUserId: String?) {
+        self.targetUserId = targetUserId
+        self.ownUserId = ownUserId
         _viewModel = StateObject(
             wrappedValue: UserProfileViewModel(
                 targetUserId: targetUserId,
@@ -73,7 +79,7 @@ struct UserProfileView: View {
         if let urlString = viewModel.publicProfile?.photoURL, let url = URL(string: urlString) {
             AsyncImage(url: url) { phase in
                 switch phase {
-                case .success(let image):
+                case let .success(image):
                     image.resizable().scaledToFill()
                 default:
                     placeholderAvatar
@@ -122,8 +128,8 @@ struct UserProfileView: View {
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(viewModel.isFollowing
-                          ? Color.white.opacity(0.15)
-                          : DesignTokens.Colors.skyBlue)
+                        ? Color.white.opacity(0.15)
+                        : DesignTokens.Colors.skyBlue)
             )
             .foregroundColor(.white)
         }
@@ -136,8 +142,32 @@ struct UserProfileView: View {
     private var statsRow: some View {
         HStack(spacing: DesignTokens.Spacing.lg) {
             statItem(value: viewModel.publicProfile?.postsCount ?? 0, label: "投稿")
-            statItem(value: viewModel.publicProfile?.followersCount ?? 0, label: "フォロワー")
-            statItem(value: viewModel.publicProfile?.followingCount ?? 0, label: "フォロー中")
+
+            // フォロワー / フォロー中はタップで一覧へ ⭐️ PR-5
+            // （この画面は呼び出し元がいずれも NavigationView 内なので push できる）
+            NavigationLink {
+                FollowListView(
+                    listType: .followers,
+                    targetUserId: targetUserId,
+                    ownUserId: ownUserId
+                )
+            } label: {
+                statItem(value: viewModel.publicProfile?.followersCount ?? 0, label: "フォロワー")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("フォロワー一覧を開く")
+
+            NavigationLink {
+                FollowListView(
+                    listType: .following,
+                    targetUserId: targetUserId,
+                    ownUserId: ownUserId
+                )
+            } label: {
+                statItem(value: viewModel.publicProfile?.followingCount ?? 0, label: "フォロー中")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("フォロー中一覧を開く")
         }
         .padding(.vertical, DesignTokens.Spacing.md)
         .frame(maxWidth: .infinity)
@@ -186,16 +216,17 @@ struct UserProfileView: View {
                     columns: [
                         GridItem(.flexible(), spacing: 4),
                         GridItem(.flexible(), spacing: 4),
-                        GridItem(.flexible(), spacing: 4)
+                        GridItem(.flexible(), spacing: 4),
                     ],
                     spacing: 4
                 ) {
                     ForEach(viewModel.posts) { post in
                         if let firstImage = post.images.first,
-                           let url = URL(string: firstImage.thumbnail ?? firstImage.url) {
+                           let url = URL(string: firstImage.thumbnail ?? firstImage.url)
+                        {
                             AsyncImage(url: url) { phase in
                                 switch phase {
-                                case .success(let image):
+                                case let .success(image):
                                     image.resizable().scaledToFill()
                                 default:
                                     Color.gray.opacity(0.3)

@@ -180,7 +180,10 @@ service cloud.firestore {
     // ============================================
     match /follows/{followId} {
       // フォロー関係は認証済みユーザーが確認可能
-      allow read: if isAuthenticated();
+      allow get: if isAuthenticated();
+      // 一覧取得はページサイズ上限付き（publicProfiles の limit<=20 と同じ流儀。
+      // クライアントの list は FollowRepository.fetchFollows（limit=30）のみ）
+      allow list: if isAuthenticated() && request.query.limit <= 50;
 
       // フォロー作成: 自分がフォロワーの場合のみ
       allow create: if isAuthenticated()
@@ -189,8 +192,12 @@ service cloud.firestore {
                     && request.resource.data.keys().hasAll(['followerId', 'followeeId', 'createdAt']);
 
       // フォロー解除: 自分のフォローのみ削除可能
+      // ＋ フォロワー削除（PR-5）: フォローされている側（followee）も削除可能
+      //   （自分のフォロワー一覧から相手を外す操作。相手がフォローしている側なので
+      //     followerId 条件だけでは followee 本人が消せない）
       allow delete: if isAuthenticated()
-                    && resource.data.followerId == request.auth.uid;
+                    && (resource.data.followerId == request.auth.uid
+                        || resource.data.followeeId == request.auth.uid);
 
       // フォロー関係の更新は不可
       allow update: if false;

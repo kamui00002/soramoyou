@@ -5,8 +5,8 @@
 //  Created on 2025-12-06.
 //
 
-import SwiftUI
 import Kingfisher
+import SwiftUI
 
 struct ProfileView: View {
     let userId: String?
@@ -32,21 +32,21 @@ struct ProfileView: View {
 
     /// デバイス向き・サイズに応じてグリッド列数を決定
     private var gridColumnCount: Int {
-        if horizontalSizeClass == .regular { return 5 }   // iPad
-        if verticalSizeClass == .compact { return 4 }     // ランドスケープiPhone
-        return 3                                           // ポートレートiPhone
+        if horizontalSizeClass == .regular { return 5 } // iPad
+        if verticalSizeClass == .compact { return 4 } // ランドスケープiPhone
+        return 3 // ポートレートiPhone
     }
 
     enum DisplayMode {
         case grid
         case list
     }
-    
+
     init(userId: String? = nil) {
         self.userId = userId
         _viewModel = StateObject(wrappedValue: ProfileViewModel(userId: userId))
     }
-    
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -55,7 +55,7 @@ struct ProfileView: View {
                     colors: [
                         Color(red: 0.68, green: 0.85, blue: 0.90),
                         Color(red: 0.53, green: 0.81, blue: 0.98),
-                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                        Color(red: 0.39, green: 0.58, blue: 0.93),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -64,7 +64,7 @@ struct ProfileView: View {
 
                 VStack(spacing: 0) {
                     ZStack {
-                        if viewModel.isLoading && viewModel.user == nil {
+                        if viewModel.isLoading, viewModel.user == nil {
                             // 初回読み込み中 ☁️
                             LoadingStateView(type: .initial)
                         } else if let user = viewModel.user {
@@ -89,7 +89,7 @@ struct ProfileView: View {
                             }
                         }
                     }
-                    
+
                     // 画面下部に固定表示されるバナー広告
                     BannerAdContainer()
                 }
@@ -110,7 +110,7 @@ struct ProfileView: View {
                             }) {
                                 Label("プロフィール編集", systemImage: "pencil")
                             }
-                            
+
                             Button(action: {
                                 showingEditTools = true
                             }) {
@@ -274,25 +274,25 @@ struct ProfileView: View {
             showingSaveResult = true
         }
     }
-    
+
     // MARK: - Profile Content
-    
+
     private func profileContent(user: User) -> some View {
         ScrollView {
             VStack(spacing: 24) {
                 // プロフィール情報セクション
                 profileInfoSection(user: user)
-                
+
                 Divider()
                     .background(.white.opacity(0.3))
-                
+
                 // 投稿一覧セクション
                 postsSection
             }
             .padding()
         }
     }
-    
+
     // MARK: - Profile Info Section ☁️
 
     private func profileInfoSection(user: User) -> some View {
@@ -372,7 +372,7 @@ struct ProfileView: View {
 
     private func profileImageView(photoURL: String?) -> some View {
         Group {
-            if let photoURL = photoURL, let url = URL(string: photoURL) {
+            if let photoURL, let url = URL(string: photoURL) {
                 KFImage(url)
                     .placeholder {
                         Image(systemName: "person.circle.fill")
@@ -408,16 +408,36 @@ struct ProfileView: View {
                 .fill(DesignTokens.Colors.glassBorderSecondary)
                 .frame(width: 1, height: 40)
 
-            // フォロワー数
-            statItem(value: user.followersCount, label: "フォロワー", icon: "person.2")
+            // フォロワー数（タップでフォロワー一覧へ ⭐️ PR-5）
+            NavigationLink {
+                FollowListView(
+                    listType: .followers,
+                    targetUserId: user.id,
+                    ownUserId: user.id
+                )
+            } label: {
+                statItem(value: user.followersCount, label: "フォロワー", icon: "person.2")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("フォロワー一覧を開く")
 
             // 区切り線
             Rectangle()
                 .fill(DesignTokens.Colors.glassBorderSecondary)
                 .frame(width: 1, height: 40)
 
-            // フォロー数
-            statItem(value: user.followingCount, label: "フォロー中", icon: "heart")
+            // フォロー数（タップでフォロー中一覧へ ⭐️ PR-5）
+            NavigationLink {
+                FollowListView(
+                    listType: .following,
+                    targetUserId: user.id,
+                    ownUserId: user.id
+                )
+            } label: {
+                statItem(value: user.followingCount, label: "フォロー中", icon: "heart")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("フォロー中一覧を開く")
         }
         .padding(.vertical, DesignTokens.Spacing.md)
         .frame(maxWidth: .infinity)
@@ -431,7 +451,7 @@ struct ProfileView: View {
                         LinearGradient(
                             colors: [
                                 DesignTokens.Colors.glassBorderAccentStart,
-                                DesignTokens.Colors.glassBorderAccentEnd
+                                DesignTokens.Colors.glassBorderAccentEnd,
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -502,7 +522,7 @@ struct ProfileView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
     }
-    
+
     private var postsContentView: some View {
         Group {
             if displayMode == .grid {
@@ -635,5 +655,3 @@ struct ProfileView_Previews: PreviewProvider {
         ProfileView()
     }
 }
-
-
