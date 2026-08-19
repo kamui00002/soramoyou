@@ -121,8 +121,8 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.fetchPublicProfile は未実装です")
     }
 
-    func updatePublicProfile(_: PublicProfile) async throws {
-        fatalError("MockFirestoreService.updatePublicProfile は未実装です")
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
+        fatalError("MockFirestoreService.updatePublicProfileFields は未実装です")
     }
 
     func createPublicProfile(from _: User) async throws {

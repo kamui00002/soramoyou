@@ -50,7 +50,11 @@ protocol FirestoreServiceProtocol {
 
     // Public Profiles (公開情報のみ - 認証済みユーザー)
     func fetchPublicProfile(userId: String) async throws -> PublicProfile
-    func updatePublicProfile(_ profile: PublicProfile) async throws
+    /// プロフィール編集で本人が変更できる公開情報だけをターゲット更新する。
+    /// PublicProfile 全体を書くと followersCount / followingCount
+    /// （Cloud Functions が真値を代入する）を古い値で潰すため、
+    /// 公開プロフィールの更新経路はこのメソッドに限定する。
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws
     func createPublicProfile(from user: User) async throws
 
     // Account
@@ -762,12 +766,58 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
 
-    /// 公開プロフィールを更新
-    func updatePublicProfile(_ profile: PublicProfile) async throws {
+    /// 公開プロフィールのうち「本人が編集できるフィールド」だけを更新する ⭐️
+    ///
+    /// なぜ専用メソッドが必要か:
+    /// `PublicProfile.toFirestoreData()` を丸ごと書く旧実装は、
+    /// followersCount / followingCount まで**クライアントが持っている古い値**で
+    /// 上書きしてしまう。カウンタは Cloud Functions（onFollowCreated /
+    /// onFollowDeleted）が follows を count() して代入する真値なので、
+    /// プロフィール編集のたびに 0 などへ巻き戻る事故が起きていた。
+    /// updateData で対象フィールドだけを書けばこの経路は断てる
+    /// （`updateNotificationPreferences` と同じ理由・同じ形）。
+    ///
+    /// - Note: nil のフィールドは「書き込まない」＝既存値を維持する。
+    ///   従来の `setData(merge: true)` + `toFirestoreData()`（nil キーを省略）と
+    ///   同じ挙動に揃えてあり、本 PR では意図的に変更していない。
+    /// - Throws: 更新に失敗したときは `publicProfiles/{userId}` の存在を get で確認し、
+    ///   不在なら `FirestoreServiceError.notFound`（呼び出し側が `createPublicProfile`
+    ///   にフォールバックできるようにするため）、存在するなら
+    ///   `FirestoreServiceError.updateFailed` を投げる。
+    ///   ⚠️ updateData が返すエラーコードでは判定しない。publicProfiles の update ルールは
+    ///   `resource.data.id` を参照するため、ドキュメント不在時に NOT_FOUND ではなく
+    ///   PERMISSION_DENIED が返りうる。存在確認を経由することで rules の評価順序に
+    ///   依存しない判定にしてある。
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
+        // updatedAt は常に更新し、値がある項目だけを追加する
+        var data: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+
+        if let displayName = displayName {
+            data["displayName"] = displayName
+        }
+        if let photoURL = photoURL {
+            data["photoURL"] = photoURL
+        }
+        if let bio = bio {
+            data["bio"] = bio
+        }
+
         do {
-            let docRef = publicProfilesCollection.document(profile.id)
-            try await docRef.setData(profile.toFirestoreData(), merge: true)
+            try await publicProfilesCollection.document(userId).updateData(data)
         } catch {
+            // 失敗の種類はエラーコードで推測せず、「ドキュメントが実在するか」を
+            // get で確かめてから決める。publicProfiles の get は rules が
+            // isAuthenticated() しか要求しないため決定的に判定でき、
+            // update 側の rules（`resource.data.id` を参照する＝不在時に
+            // NOT_FOUND ではなく PERMISSION_DENIED になりうる）の評価順序に左右されない。
+            let snapshot = try? await publicProfilesCollection.document(userId).getDocument()
+            if let snapshot = snapshot, !snapshot.exists {
+                // ドキュメント未作成（マイグレーション未実施）のユーザー。
+                // 呼び出し側が createPublicProfile へ切り替えられるよう notFound で伝える。
+                throw FirestoreServiceError.notFound
+            }
+            // 存在する場合、および存在確認そのものが失敗した場合（snapshot が nil）は
+            // 「不在」と断定できないので、元のエラーを updateFailed として伝える。
             throw FirestoreServiceError.updateFailed(error)
         }
     }
