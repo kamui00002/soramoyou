@@ -129,6 +129,13 @@ package-lock.json
 # 一般ログ（debug.log, build.log など）を全階層で除外
 *.log
 
+# git worktree（並列作業用）
+# Xcode 16+ の同期グループはディスク上の全ファイルをターゲットに入れるため、
+# ソースツリー内に worktree があると同じファイルが二重に取り込まれ
+# "Multiple commands produce" でビルドが失敗する。ここで除外すれば対象外になる。
+.claude/worktrees/
+worktrees/
+
 
 
 
