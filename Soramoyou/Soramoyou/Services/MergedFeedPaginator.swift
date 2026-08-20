@@ -73,6 +73,9 @@ final class MergedFeedPaginator {
     private let streams: [StreamState]
     /// ストリーム1回あたりの取得件数
     private let fetchPageSize: Int
+    /// 1回の nextPage 内で「空・非枯渇ページ」の補充を試みる周回の上限。
+    /// 超えたら該当ストリームを切り離す（無限ループ防止・レビュー D3）。
+    private static let maxRefillRounds = 50
     /// 重複除去用の emit 済み投稿 ID。ページを跨いで保持する。
     private var emittedIds: Set<String> = []
     /// ブロック判定（emit 前に除外する）
@@ -113,24 +116,38 @@ final class MergedFeedPaginator {
     /// - 1件も返せず、かつストリーム失敗が原因の場合はエラーを投げる。
     func nextPage(limit: Int) async throws -> [Post] {
         var emitted: [Post] = []
+        // 「アクティブなのにバッファが空」のストリームを補充し直した回数。
+        // 補充が進まないソース（空・非枯渇ページを返し続ける等）による無限ループの防護柵。
+        var refillRounds = 0
 
         while emitted.count < limit {
             // 1. アクティブなのにバッファが空のストリームへ1ページ補充する
             await fillEmptyBuffers()
 
-            // 2. バッファに投稿を持つストリームを候補にする
-            let candidates = streams.filter { !$0.buffer.isEmpty }
-            if candidates.isEmpty {
-                // アクティブなストリームが残っていなければ全体が枯渇
-                if !streams.contains(where: \.isActive) {
-                    break
+            // 2. 補充後もなお「アクティブなのにバッファが空」のストリームが残っている間は
+            //    emit しない（例: ページ内の全件がデコード失敗）。ここで他ストリームを
+            //    emit すると、次の補充でそのストリームからより新しい投稿が現れたときに
+            //    時系列が逆転する（k-way マージの安全条件はこの不変条件に依存する。レビュー D3）。
+            if streams.contains(where: { $0.isActive && $0.buffer.isEmpty }) {
+                refillRounds += 1
+                if refillRounds > Self.maxRefillRounds {
+                    // 本番の Firestore ソースはドキュメントが有限で必ず枯渇に到達するため
+                    // ここには来ない。契約違反のソースが注入された場合の最終柵として、
+                    // 補充が進まないストリームを切り離してマージを続行する。
+                    for stream in streams where stream.isActive && stream.buffer.isEmpty {
+                        stream.isFailed = true
+                    }
                 }
-                // アクティブなのにバッファが空（例: ページ内の全件がデコード失敗）
-                // → カーソルは進んでいるので、次の周回で続きを取り直す
                 continue
             }
 
-            // 3. 各ストリーム先頭のうち最も新しい投稿を取り出す。
+            // 3. バッファに投稿を持つストリームを候補にする（全体枯渇なら終了）
+            let candidates = streams.filter { !$0.buffer.isEmpty }
+            if candidates.isEmpty {
+                break
+            }
+
+            // 4. 各ストリーム先頭のうち最も新しい投稿を取り出す。
             //    「全アクティブストリームがバッファを持つ」状態で選ぶため、
             //    未取得の投稿がこれより新しいことはない（k-way マージの安全条件:
             //    各ストリームの未取得分は必ずそのストリームのバッファ末尾より古い）。
@@ -139,7 +156,7 @@ final class MergedFeedPaginator {
             }) else { break } // candidates は非空なので到達しない（force unwrap 回避）
             let post = best.buffer.removeFirst()
 
-            // 4. 重複除去 → ブロック除外 → emit
+            // 5. 重複除去 → ブロック除外 → emit
             //    （ブロック投稿も emittedIds に入れて、別ストリーム経由の再登場を防ぐ）
             guard !emittedIds.contains(post.id) else { continue }
             emittedIds.insert(post.id)
@@ -163,7 +180,11 @@ final class MergedFeedPaginator {
 
     // MARK: - Private
 
-    /// フィード内の表示順: createdAt 降順、同時刻は documentID 昇順（決定的な並びにする）
+    /// フィード内の表示順: createdAt 降順。
+    /// 同時刻の documentID 昇順タイブレークは「ストリーム間」（各ストリームの先頭同士の
+    /// 比較）でのみ効く。同一ストリーム内の同時刻投稿は Firestore の取得順
+    /// （暗黙の __name__ 順 = createdAt DESC と同方向 = ID 降順）のまま emit される。
+    /// 重複・欠落は起きず、影響は表示順の見た目のみ（レビュー D13）。
     private func orderedBefore(_ lhs: Post, _ rhs: Post) -> Bool {
         if lhs.createdAt != rhs.createdAt {
             return lhs.createdAt > rhs.createdAt

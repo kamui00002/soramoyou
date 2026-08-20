@@ -260,3 +260,33 @@
 - ✅ エラーハンドリング
 - ✅ オフライン対応（可能な範囲で）
 - ✅ 未ログインユーザーの閲覧制限（写真3枚まで）
+
+---
+
+## あなた向けフィードのクエリ形状（Wave 4 / PR-7・2026-08-20）⭐️
+
+ホーム「あなた向け」セグメントは `posts` への3系統のクエリを k-way マージして1本のフィードにする
+（組み立ては `Services/ForYouFeedSourceBuilder.swift`、マージは `Services/MergedFeedPaginator.swift`）。
+
+| ID | クエリ形状 | チャンク上限 | インデックス |
+|---|---|---|---|
+| A1 | `visibility == 'public'` + `userId in [...]` + `createdAt DESC` | 30（`in` の上限） | `visibility + userId + createdAt DESC`（deploy 済み） |
+| A2 | `visibility == 'followers'` + `userId in [...]` + `createdAt DESC` | **8** ⚠️ | 同上 |
+| B | `visibility == 'public'` + `hashtags array-contains-any [...]` + `createdAt DESC` | 30 | 既存の `visibility + hashtags CONTAINS + createdAt DESC` |
+
+### ⚠️ A1 と A2 を `visibility in ['public','followers']` の1本に統合してはいけない
+
+rules の followers 枝（`isFollowing(resource.data.userId)`）は `userId in [...]` の**要素1件ごとに
+`exists()` を1回消費**する。統合すると論理和が 2N に膨らんで exists() 予算で縛られ、
+安全なはずの公開投稿までクエリ全体が巻き添えで denied になる。
+また **未フォロー相手に `'followers'` を含むクエリを投げてはいけない**（rules は結果のフィルタ
+ではなく静的証明。1枝でも証明できなければクエリ全体が denied）。
+
+### A2 チャンク=8 の根拠（R2 実測・2026-08-20）
+
+- Firebase 公式の文書上、rules の `exists()`/`get()` は「1リクエスト10回まで」
+- **実測では A2 の `userId in [N]` は N=8 も N=12 も本番 rules を通過**（PostHog の
+  error_occurred ゼロ＋for_you_feed_loaded 正常着弾で確認）＝ `in` 分解後の枝ごとに
+  予算が効いている可能性が高い
+- ただし文書化された上限は 10 のままなので、**出荷値は余裕を持って 8**
+  （上限ちょうどで設計しない）。現データはフォロー中12人が上限のため N>12 は未測定

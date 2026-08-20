@@ -74,7 +74,13 @@ final class ForYouFeedViewModel: HomeViewModel {
         // ブロック集合（Paginator の emit 前除外用）。
         // 基底 HomeViewModel の blockedUserIds は private なので自前で取得する。
         // 取得失敗時はフィード継続を優先して空扱い（基底 loadBlockedUsers と同じ方針）。
-        let blockedIds = await Set((try? firestoreService.fetchBlockedUserIds(userId: userId)) ?? [])
+        // ただし失敗は必ずテレメトリに残す（クラッシュしない不具合を本番で拾うため）。
+        var blockedIds: Set<String> = []
+        do {
+            blockedIds = try await Set(firestoreService.fetchBlockedUserIds(userId: userId))
+        } catch {
+            ErrorHandler.logError(error, context: "ForYouFeedViewModel.fetchBlockedUserIds", userId: userId)
+        }
 
         do {
             let sources = try await sourceBuilder.buildSources(for: userId)
@@ -105,8 +111,11 @@ final class ForYouFeedViewModel: HomeViewModel {
         // （GalleryViewModel が isColorMode 時に再代入しているのと同じ前例）。
         hasMorePosts = paginator?.hasMore ?? false
 
-        // 計装: フィード構成の内訳（PII なし。件数と出所種別のみ）
-        if let sources = lastSources {
+        // 計装: フィード構成の内訳（PII なし。件数と出所種別のみ）。
+        // 取得失敗時（lastError あり）は発火しない: 失敗を「loaded・0件」として数えると
+        // 空フィード率とエラー率が混ざり、PostHog 実査の母数が歪む。失敗側は
+        // ErrorHandler 経由の error_occurred が既に拾っている。
+        if lastError == nil, let sources = lastSources {
             LoggingService.shared.logEvent("for_you_feed_loaded", parameters: [
                 "post_count": posts.count,
                 "followee_count": sources.followeeCount,
@@ -118,6 +127,12 @@ final class ForYouFeedViewModel: HomeViewModel {
 
     /// 次のページを取得（基底の取得フロー後に残量を Paginator の真値へ上書き）
     override func loadMorePosts() async {
+        // リフレッシュが Paginator を差し替えてから基底 fetchPosts が世代を進めるまでの
+        // await 窓（ブロックリスト取得など）に、最終投稿の .onAppear 由来の追加読み込みが
+        // 割り込むと、新しい Paginator の1ページ目を先食いして先頭ページが無言欠落する。
+        // 基底の isLoadingMore/hasMorePosts ガードはこの再入を防げないため、
+        // リフレッシュ中は追加読み込みを受け付けない（レビュー D4）。
+        guard !isRefreshing else { return }
         await super.loadMorePosts()
         hasMorePosts = paginator?.hasMore ?? false
     }

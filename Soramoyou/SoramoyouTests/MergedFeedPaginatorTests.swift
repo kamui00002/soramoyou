@@ -234,6 +234,46 @@ final class MergedFeedPaginatorTests: XCTestCase {
         XCTAssertFalse(paginator.hasMore)
     }
 
+    /// 空・非枯渇ページ（全件デコード失敗相当）を返したストリームが残っている間は、
+    /// 他ストリームを先行 emit しない（先行すると次の補充で時系列が逆転する。レビュー D3）
+    func test空ページの後に他ストリームを先行emitしない() async throws {
+        var callCountA = 0
+        let streamA = FeedStreamSource(id: "A") { _ in
+            callCountA += 1
+            if callCountA == 1 {
+                // 1ページ目: 全件デコード失敗（空・非枯渇）
+                return FeedStreamPage(posts: [], isExhausted: false)
+            }
+            // 2ページ目: B の投稿より新しい投稿が現れる
+            return FeedStreamPage(posts: [self.makePost("a1", t: 100)], isExhausted: true)
+        }
+        let streamB = makeArrayStream(id: "B", posts: [makePost("b1", t: 50)])
+        let paginator = MergedFeedPaginator(sources: [streamA, streamB], fetchPageSize: 3)
+
+        let page = try await paginator.nextPage(limit: 3)
+
+        // b1(t=50) を先に emit すると a1(t=100) が後から出て時系列逆転になる
+        XCTAssertEqual(page.map(\.id), ["a1", "b1"], "A の補充を待ってからマージすべき")
+    }
+
+    /// 「空・非枯渇ページ」を返し続ける契約違反ソースが注入されても、
+    /// nextPage は無限ループせず、上限到達でそのストリームを切り離して続行する（レビュー D3）
+    func test補充が進まないストリームは上限で切り離される() async throws {
+        var stuckCallCount = 0
+        let stuckStream = FeedStreamSource(id: "stuck") { _ in
+            stuckCallCount += 1
+            return FeedStreamPage(posts: [], isExhausted: false) // 永遠に空・非枯渇
+        }
+        let streamB = makeArrayStream(id: "B", posts: [makePost("b1", t: 50)])
+        let paginator = MergedFeedPaginator(sources: [stuckStream, streamB], fetchPageSize: 3)
+
+        let page = try await paginator.nextPage(limit: 1)
+
+        XCTAssertEqual(page.map(\.id), ["b1"], "切り離し後は残りのストリームでマージを続行する")
+        XCTAssertFalse(paginator.hasMore, "切り離したストリームは残量に数えない")
+        XCTAssertLessThanOrEqual(stuckCallCount, 60, "補充試行は上限で打ち止めになる（無限ループしない）")
+    }
+
     /// 部分的に表示できていたフィードは、以後のページでストリーム失敗が混ざっても
     /// エラーを投げない（表示継続を優先。失敗はログ済み）
     func test部分成功後の失敗はエラーにしない() async throws {

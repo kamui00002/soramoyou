@@ -107,8 +107,11 @@ struct HomeView: View {
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .refreshable {
-                await activeViewModel.refresh()
-                await likeManager.checkLikeStatus(for: activeViewModel.posts)
+                // await 中にセグメントが切り替わっても、更新対象といいね照合対象を
+                // 同じ VM に固定する（activeViewModel は computed のため再評価されうる。レビュー D6）
+                let targetViewModel = activeViewModel
+                await targetViewModel.refresh()
+                await likeManager.checkLikeStatus(for: targetViewModel.posts)
             }
             .onAppear {
                 Task {
@@ -266,10 +269,13 @@ struct HomeView: View {
                            activeViewModel.hasMorePosts
                         {
                             Task {
-                                let previousCount = activeViewModel.posts.count
-                                await activeViewModel.loadMorePosts()
+                                // await 中のセグメント切替で件数計算と照合対象の VM が
+                                // 食い違わないよう、処理全体を同じ参照で完結させる（レビュー D6）
+                                let targetViewModel = activeViewModel
+                                let previousCount = targetViewModel.posts.count
+                                await targetViewModel.loadMorePosts()
                                 // 新しく読み込んだ投稿のいいね状態をチェック
-                                let newPosts = Array(activeViewModel.posts.dropFirst(previousCount))
+                                let newPosts = Array(targetViewModel.posts.dropFirst(previousCount))
                                 await likeManager.checkLikeStatus(for: newPosts)
                             }
                         }

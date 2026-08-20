@@ -112,6 +112,11 @@ final class ForYouFeedSourceBuilder: ForYouFeedSourceBuilderProtocol {
         // A2: フォロー中のフォロワー限定投稿（R1 プローブ成功により有効化）。
         // ⚠️ 対象はフォロー中ユーザーのみ。未フォロー相手に 'followers' を含む
         //    クエリを投げると rules を満たせずクエリ全体が denied になる。
+        // ⚠️ 既知の許容制限（レビュー D7）: チャンクは構築時点のフォロー集合を固定する。
+        //    フィード表示中にフォロー解除すると、そのチャンクの以後の補充は rules を
+        //    満たせず失敗し（ログ・計装には残る）、同チャンクの他ユーザー分も次の
+        //    リフレッシュ（Paginator 再構築）まで欠落する。リフレッシュで自癒するため
+        //    許容。フォロー変更イベントとの連動再構築は将来課題。
         for (index, chunk) in chunked(followeeIds, size: Self.followersChunkSize).enumerated() {
             streams.append(makePostsStream(id: "A2-\(index)") { [postsCollection] in
                 postsCollection
