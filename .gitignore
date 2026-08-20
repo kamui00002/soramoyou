@@ -128,6 +128,17 @@ package-lock.json
 .claude/settings.local.json
 # 一般ログ（debug.log, build.log など）を全階層で除外
 *.log
+# サブディレクトリ側の Claude 設定（ソースツリー内に置くと Xcode 同期グループが拾うため除外）
+Soramoyou/.claude/
+
+# Firebase CLI のローカルキャッシュ（デプロイ時に自動生成される）
+.firebase/
+
+# Playwright MCP の作業用出力（スクショ試作などの一時ファイル）
+.playwright-mcp/
+
+# Python のバイトコードキャッシュ（screenshots/ のスクリプト実行で生成）
+__pycache__/
 
 # git worktree（並列作業用）
 # Xcode 16+ の同期グループはディスク上の全ファイルをターゲットに入れるため、
