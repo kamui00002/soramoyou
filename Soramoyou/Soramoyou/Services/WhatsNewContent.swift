@@ -18,11 +18,10 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    // 2026-08-03: 「AIで自動編集」が候補選択方式に変更。空タイプを選ぶと、その空タイプで
-    // 編集した記録から作った定番パターン（無ければ「あなたの定番」やおまかせプリセットへ
-    // フォールバック）を1件提案する仕様（2026-08-05: description の文言を現行仕様に合わせて修正。
-    // 複数の空タイプ別定番を並べて見比べる旧設計の説明のままだったため）。
-    static let currentID = "2026-08-personal-default-candidates"
+    // 2026-08-20: フォロー可視化3点セット（あなた向けフィード / タグフォロー /
+    // フォロワー・フォロー中一覧）。Wave 1〜4 で段階マージした機能をこのリリースで
+    // まとめて紹介する（計画どおり What's New は PR-7 で一括更新）。
+    static let currentID = "2026-08-follow-social"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -39,22 +38,38 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（2026-08）の新機能紹介ページ。
-    /// アイコンは実UIで使われている SF Symbol と揃えている
-    /// （AI自動編集の候補選択＝EditView の「AIで自動編集」ボタン）。
+    /// 今回（2026-08 フォロー可視化）の新機能紹介ページ。
+    /// アイコンは既存UIの SF Symbol と揃えている（person.2 = フォロワー一覧の空状態、
+    /// number = ハッシュタグ）。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "wand.and.stars",
-            badge: "AI自動編集",
-            title: "パターンを選べるように",
-            // ⚠️ 2026-08-05: currentID は変えていない（同一リリースサイクル内の文言修正であり、
-            // 既読ユーザーへ再表示する必要は無いため）。現行仕様（空タイプを選ぶと、その空タイプ向けの
-            // 定番1枚が提案される）に合わせて description のみ書き直した
-            // （旧文言は「複数の空タイプ別定番を並べて見比べる」という初期設計の説明のままだった）。
-            description: "「AIで自動編集」が候補から選ぶ方式に。\n空のタイプを選ぶと、あなたがその空で編集した記録から作ったパターンを提案します",
+            icon: "sparkles",
+            badge: "新機能",
+            title: "「あなた向け」フィード",
+            description: "ホームに「あなた向け」を追加。\nフォロー中の人とフォロー中のタグの新着が、時系列でまとめて流れてきます",
+            gradientColors: [
+                Color(red: 0.35, green: 0.55, blue: 0.95),
+                Color(red: 0.55, green: 0.80, blue: 0.98),
+            ]
+        ),
+        WhatsNewPage(
+            icon: "number",
+            badge: "新機能",
+            title: "タグをフォロー",
+            description: "投稿の #タグ をタップするとタグ詳細画面へ。\n気になるタグをフォローすると「あなた向け」に新着が流れます",
             gradientColors: [
                 Color(red: 0.55, green: 0.48, blue: 0.90),
                 Color(red: 0.85, green: 0.58, blue: 0.90),
+            ]
+        ),
+        WhatsNewPage(
+            icon: "person.2",
+            badge: "新機能",
+            title: "フォロワー / フォロー中一覧",
+            description: "プロフィールのフォロワー・フォロー中の数字をタップすると一覧を表示。\n自分のフォロワーはリストから外すこともできます",
+            gradientColors: [
+                Color(red: 0.95, green: 0.60, blue: 0.40),
+                Color(red: 0.98, green: 0.80, blue: 0.55),
             ]
         ),
     ]

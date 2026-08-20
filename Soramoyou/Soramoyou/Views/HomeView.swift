@@ -10,6 +10,8 @@ import SwiftUI
 
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
+    /// 「あなた向け」セグメント用 VM（フォロー中＋フォロータグのマージフィード）⭐️ PR-7
+    @StateObject private var forYouViewModel = ForYouFeedViewModel()
     /// On This Day とストリークチップの共有 VM（1回の投稿取得から両方を導出）⭐️
     @StateObject private var onThisDayViewModel = OnThisDayViewModel()
     @EnvironmentObject private var likeManager: LikeManager
@@ -21,7 +23,16 @@ struct HomeView: View {
     /// ストリークチップから開く空図鑑の表示フラグ
     @State private var showingStreakZukan = false
     @State private var animateCards = false // フィードアニメーション用 ☀️
+    /// ホームフィードの表示セグメント（すべて / あなた向け）⭐️ PR-7
+    @State private var selectedSegment: HomeFeedSegment = .all
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    /// 現在のセグメントに対応する ViewModel ⭐️ PR-7
+    /// ForYouFeedViewModel は HomeViewModel のサブクラスなので、この1本の参照で
+    /// フィード表示・状態表示を共通化できる（両方 @StateObject なので変更は body に届く）。
+    private var activeViewModel: HomeViewModel {
+        selectedSegment == .forYou ? forYouViewModel : viewModel
+    }
 
     var body: some View {
         NavigationView {
@@ -35,24 +46,47 @@ struct HomeView: View {
                 .ignoresSafeArea()
 
                 VStack(spacing: 0) {
+                    // フィード切り替え（すべて / あなた向け）⭐️ PR-7
+                    // ゲスト（未認証）は publicProfiles を読めず「あなた向け」が成立しないため出さない
+                    if viewModel.currentUserId != nil {
+                        Picker("フィード", selection: $selectedSegment) {
+                            ForEach(HomeFeedSegment.allCases) { segment in
+                                Text(segment.title).tag(segment)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, DesignTokens.Spacing.screenMargin)
+                        .padding(.top, DesignTokens.Spacing.sm)
+                    }
+
                     ZStack {
-                        if viewModel.isLoading, viewModel.posts.isEmpty {
+                        if activeViewModel.isLoading, activeViewModel.posts.isEmpty {
                             // 初回読み込み中 ☁️
                             LoadingStateView(type: .initial)
-                        } else if let error = viewModel.lastError, viewModel.posts.isEmpty {
+                        } else if let error = activeViewModel.lastError, activeViewModel.posts.isEmpty {
                             // エラー発生時（投稿が空の場合）☁️
                             ErrorStateView(
                                 error: error,
                                 retryAction: {
-                                    await viewModel.refresh()
+                                    await activeViewModel.refresh()
                                 },
                                 secondaryAction: nil,
                                 secondaryActionTitle: nil
                             )
-                        } else if viewModel.posts.isEmpty {
-                            // 投稿がない場合 ☁️
-                            EmptyStateView(type: .posts) {
-                                // 投稿タブに切り替える（TabViewの切り替えはMainTabViewで管理）
+                        } else if activeViewModel.posts.isEmpty {
+                            if selectedSegment == .forYou {
+                                // あなた向けの投稿がない場合（フォロー0・タグ0など）⭐️ PR-7
+                                EmptyStateView(type: .custom(
+                                    icon: "person.2",
+                                    title: "あなた向けの投稿はまだありません",
+                                    description: "ユーザーやタグをフォローすると、その新着がここに流れます",
+                                    actionTitle: nil
+                                ))
+                            } else {
+                                // 投稿がない場合 ☁️
+                                EmptyStateView(type: .posts) {
+                                    // 投稿タブに切り替える（TabViewの切り替えはMainTabViewで管理）
+                                }
                             }
                         } else {
                             // フィード表示
@@ -73,8 +107,8 @@ struct HomeView: View {
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .refreshable {
-                await viewModel.refresh()
-                await likeManager.checkLikeStatus(for: viewModel.posts)
+                await activeViewModel.refresh()
+                await likeManager.checkLikeStatus(for: activeViewModel.posts)
             }
             .onAppear {
                 Task {
@@ -94,12 +128,31 @@ struct HomeView: View {
                     }
                 }
             }
-            .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
+            .onChange(of: selectedSegment) { newSegment in
+                LoggingService.shared.logEvent("home_feed_segment_changed", parameters: [
+                    "segment": newSegment.analyticsValue,
+                ])
+                // 「あなた向け」は初回選択時に遅延読み込み（未使用時のクエリコストを避ける）⭐️ PR-7
+                if newSegment == .forYou, forYouViewModel.posts.isEmpty, !forYouViewModel.isLoading {
+                    Task {
+                        await forYouViewModel.fetchPosts()
+                        await likeManager.checkLikeStatus(for: forYouViewModel.posts)
+                    }
+                }
+            }
+            .alert("エラー", isPresented: Binding(
+                get: { activeViewModel.errorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        activeViewModel.errorMessage = nil
+                    }
+                }
+            )) {
                 Button("OK") {
-                    viewModel.errorMessage = nil
+                    activeViewModel.errorMessage = nil
                 }
             } message: {
-                if let errorMessage = viewModel.errorMessage {
+                if let errorMessage = activeViewModel.errorMessage {
                     Text(errorMessage)
                 }
             }
@@ -149,22 +202,26 @@ struct HomeView: View {
     private var feedView: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: DesignTokens.Spacing.lg) {
-                // ストリークチップ（🔥◯日連続）— 継続中のみ表示、タップで図鑑へ ⭐️
-                SkyStreakChipView(streak: onThisDayViewModel.streak) {
-                    LoggingService.shared.logEvent("streak_chip_tapped", parameters: [
-                        "current_streak": onThisDayViewModel.streak.currentStreak,
-                    ])
-                    showingStreakZukan = true
+                // ストリークチップ・On This Day は「すべて」セグメントのみ表示 ⭐️ PR-7
+                //（あなた向けは「フォロー由来の投稿だけが流れる場所」として純度を保つ）
+                if selectedSegment == .all {
+                    // ストリークチップ（🔥◯日連続）— 継続中のみ表示、タップで図鑑へ ⭐️
+                    SkyStreakChipView(streak: onThisDayViewModel.streak) {
+                        LoggingService.shared.logEvent("streak_chip_tapped", parameters: [
+                            "current_streak": onThisDayViewModel.streak.currentStreak,
+                        ])
+                        showingStreakZukan = true
+                    }
+
+                    // On This Day（1年前の空）— 同月日の過去投稿がある時だけ表示する ⭐️
+                    // VM はチップと共有（1回の投稿取得から両方を導出、load は HomeView の task）
+                    OnThisDayCardView(viewModel: onThisDayViewModel)
                 }
 
-                // On This Day（1年前の空）— 同月日の過去投稿がある時だけ表示する ⭐️
-                // VM はチップと共有（1回の投稿取得から両方を導出、load は HomeView の task）
-                OnThisDayCardView(viewModel: onThisDayViewModel)
-
-                ForEach(Array(viewModel.posts.enumerated()), id: \.element.id) { index, post in
+                ForEach(Array(activeViewModel.posts.enumerated()), id: \.element.id) { index, post in
                     PostCard(
                         post: post,
-                        author: viewModel.authorsByUserId[post.userId],
+                        author: activeViewModel.authorsByUserId[post.userId],
                         isLiked: likeManager.isLiked(post.id),
                         likeCount: likeManager.likeCount(for: post),
                         onLikeTapped: {
@@ -180,7 +237,7 @@ struct HomeView: View {
                         onAuthorTapped: {
                             // 自分の投稿の場合はプロフィールタブへの遷移を促すか
                             // 既存仕様に任せる。ここでは他ユーザーであれば UserProfileView を開く
-                            if let currentUserId = viewModel.currentUserId,
+                            if let currentUserId = activeViewModel.currentUserId,
                                currentUserId == post.userId
                             {
                                 // 自分の投稿: プロフィールタブで見るほうが自然なので何もしない
@@ -204,15 +261,15 @@ struct HomeView: View {
                     .onAppear {
                         // ページネーション: 最後の投稿が表示されたら次のページを読み込む ☁️
                         // 重複リクエスト防止: 読み込み中の場合はスキップ
-                        if post.id == viewModel.posts.last?.id,
-                           !viewModel.isLoadingMore,
-                           viewModel.hasMorePosts
+                        if post.id == activeViewModel.posts.last?.id,
+                           !activeViewModel.isLoadingMore,
+                           activeViewModel.hasMorePosts
                         {
                             Task {
-                                let previousCount = viewModel.posts.count
-                                await viewModel.loadMorePosts()
+                                let previousCount = activeViewModel.posts.count
+                                await activeViewModel.loadMorePosts()
                                 // 新しく読み込んだ投稿のいいね状態をチェック
-                                let newPosts = Array(viewModel.posts.dropFirst(previousCount))
+                                let newPosts = Array(activeViewModel.posts.dropFirst(previousCount))
                                 await likeManager.checkLikeStatus(for: newPosts)
                             }
                         }
@@ -220,7 +277,7 @@ struct HomeView: View {
                 }
 
                 // 追加読み込み中のインジケーター
-                if viewModel.isLoadingMore {
+                if activeViewModel.isLoadingMore {
                     HStack(spacing: DesignTokens.Spacing.sm) {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -233,7 +290,7 @@ struct HomeView: View {
                 }
 
                 // これ以上投稿がない場合
-                if !viewModel.hasMorePosts, !viewModel.posts.isEmpty {
+                if !activeViewModel.hasMorePosts, !activeViewModel.posts.isEmpty {
                     VStack(spacing: DesignTokens.Spacing.sm) {
                         Image(systemName: "checkmark.circle")
                             .font(.system(size: 24))
@@ -1267,4 +1324,31 @@ struct IdentifiableString: Identifiable {
 struct ShareCardExportPayload: Identifiable {
     let id = UUID()
     let image: UIImage
+}
+// MARK: - Home Feed Segment ⭐️ PR-7
+
+/// ホームのフィード切り替えセグメント
+enum HomeFeedSegment: String, CaseIterable, Identifiable {
+    /// 全公開投稿（従来のホームフィード）
+    case all
+    /// フォロー中のユーザー＋フォロータグの投稿（マージフィード）
+    case forYou
+
+    var id: String { rawValue }
+
+    /// セグメントの表示名
+    var title: String {
+        switch self {
+        case .all: return "すべて"
+        case .forYou: return "あなた向け"
+        }
+    }
+
+    /// 計装（home_feed_segment_changed）用の値
+    var analyticsValue: String {
+        switch self {
+        case .all: return "all"
+        case .forYou: return "for_you"
+        }
+    }
 }
