@@ -675,7 +675,11 @@ struct EditView: View {
 
     private var filterContentView: some View {
         VStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
+            // フィルターは「なし」＋10種類＝計11個あるが、画面に映るのは5個ほど。
+            // スクロールバーを消したうえ右端がぴったり収まって見えるため「ここで終わり」に
+            // 誤読され、右端を繰り返し触る操作が実際に観測された（2026-08-23 の rageclick 実査）。
+            // 標識（スクロールバー）を戻し、はみ出している側に端フェードを重ねて続きを示す。
+            ScrollView(.horizontal, showsIndicators: true) {
                 HStack(spacing: 16) {
                     // フィルターなし
                     FilterButton(
@@ -700,10 +704,15 @@ struct EditView: View {
                             }
                         )
                     }
+
+                    // 内容の右端を計測して「まだ続きがあるか」を判定するための幅0マーカー
+                    HorizontalScrollEndMarker()
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 16)
             }
+            // 右端まで読み切るまで「続きがある」手がかり（矢印＋フェード）を出す
+            .horizontalScrollEdgeFade()
         }
         .frame(height: 120)
     }
@@ -722,8 +731,9 @@ struct EditView: View {
                 }
             }
 
-            // ツール一覧
-            ScrollView(.horizontal, showsIndicators: false) {
+            // ツール一覧（装備ツールは最大27個並ぶため、フィルター行と同じ「続きがある」
+            // 手がかりを出す。構造が同型なので同じ対処を適用する）
+            ScrollView(.horizontal, showsIndicators: true) {
                 HStack(spacing: 12) {
                     ForEach(viewModel.equippedTools, id: \.self) { tool in
                         ToolButton(
@@ -743,10 +753,15 @@ struct EditView: View {
                             }
                         )
                     }
+
+                    // 内容の右端を計測して「まだ続きがあるか」を判定するための幅0マーカー
+                    HorizontalScrollEndMarker()
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 12)
             }
+            // 装備ツールが表示領域に収まりきらないときだけ手がかりが出る
+            .horizontalScrollEdgeFade()
         }
         .frame(minHeight: selectedTool == .curves ? 280 : (selectedTool != nil ? 180 : 100))
     }
