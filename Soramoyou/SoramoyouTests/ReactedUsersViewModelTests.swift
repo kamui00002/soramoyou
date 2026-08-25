@@ -9,8 +9,8 @@
 //  （PR #97 の D1＝View の private に置いた文言判定が誤ったまま17件 green で通った、の再発防止）。
 //
 
-@testable import Soramoyou
 import FirebaseFirestore
+@testable import Soramoyou
 import XCTest
 
 @MainActor
@@ -21,8 +21,10 @@ final class ReactedUsersViewModelTests: XCTestCase {
         Like(userId: user, postId: post, createdAt: Date(timeIntervalSince1970: t))
     }
 
-    private func makePost(_ id: String, user: String = "me") -> Post {
-        Post(id: id, userId: user, images: [])
+    private func makePost(
+        _ id: String, user: String = "me", visibility: Visibility = .public
+    ) -> Post {
+        Post(id: id, userId: user, images: [], visibility: visibility)
     }
 
     // MARK: - 集約（純関数）
@@ -213,6 +215,106 @@ final class ReactedUsersViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.isFollowingUser("userA"))
         XCTAssertEqual(repository.capturedFollows.map(\.target), ["userA"])
     }
+
+    /// フォロー中の相手には「フォロー中」と出す（レビュー D10）
+    func testフォロー中は文言が変わる() async {
+        let firestore = MockFirestoreServiceForReacted()
+        let repository = MockFollowRepositoryForReacted()
+        repository.stubbedFollowing = ["userA"]
+        let viewModel = ReactedUsersViewModel(
+            ownUserId: "me", firestoreService: firestore, followRepository: repository
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.followButtonTitle(for: "userA"), "フォロー中")
+        XCTAssertEqual(viewModel.followButtonTitle(for: "userB"), "フォロー")
+    }
+
+    /// フォロー中の相手をもう一度押すと解除される（レビュー D10）
+    func testフォロー中をもう一度押すと解除される() async {
+        let firestore = MockFirestoreServiceForReacted()
+        let repository = MockFollowRepositoryForReacted()
+        repository.stubbedFollowing = ["userA"]
+        let viewModel = ReactedUsersViewModel(
+            ownUserId: "me", firestoreService: firestore, followRepository: repository
+        )
+        await viewModel.load()
+        XCTAssertTrue(viewModel.isFollowingUser("userA"), "前提: フォロー中から始める")
+
+        await viewModel.toggleFollow(userId: "userA")
+
+        XCTAssertFalse(viewModel.isFollowingUser("userA"))
+        XCTAssertEqual(repository.capturedUnfollows.map(\.target), ["userA"])
+        XCTAssertTrue(repository.capturedFollows.isEmpty, "解除なのに follow を呼ばないこと")
+    }
+
+    /// フォローに失敗したら状態を変えず、アラートで知らせる（レビュー D10）
+    ///
+    /// ⚠️ 楽観的更新をしていないことの回帰テスト。先に集合へ入れてから通信すると、
+    ///    失敗しても「フォロー中」に見えたまま残り、ユーザーが騙される。
+    func testフォロー失敗では状態を変えない() async {
+        struct FollowError: Error {}
+        let firestore = MockFirestoreServiceForReacted()
+        let repository = MockFollowRepositoryForReacted()
+        repository.stubbedToggleError = FollowError()
+        let viewModel = ReactedUsersViewModel(
+            ownUserId: "me", firestoreService: firestore, followRepository: repository
+        )
+
+        await viewModel.toggleFollow(userId: "userA")
+
+        XCTAssertFalse(viewModel.isFollowingUser("userA"), "失敗したのにフォロー中に見せない")
+        XCTAssertNotNil(viewModel.errorMessage, "アラートで知らせる")
+        XCTAssertFalse(viewModel.isTogglingFollow(for: "userA"), "処理中フラグは必ず戻す")
+    }
+
+    // MARK: - 30件の壁（レビュー D9）
+
+    /// 非公開投稿を除いたうえで、`likes` へ渡す postId は必ず30件以下に収まる
+    ///
+    /// ⚠️ Firestore の `in` は最大30要素。ここを超えると実機で即エラーになるが、
+    ///    Mock 相手のテストでは黙って通ってしまうため、境界を明示的に固定する。
+    func test渡すpostIdは30件以下で非公開を除く() async {
+        let firestore = MockFirestoreServiceForReacted()
+        // ⚠️ 公開と非公開を**交互に**並べる。非公開を後ろにまとめると、
+        //    filter を外しても先頭30件が公開のままになり、テストが穴になる。
+        //    交互なら filter が無い瞬間に priv が混ざり、必ず red になる。
+        firestore.stubbedUserPosts = (0 ..< 30).flatMap {
+            [makePost("pub\($0)"), makePost("priv\($0)", visibility: .private)]
+        }
+        let viewModel = ReactedUsersViewModel(
+            ownUserId: "me",
+            firestoreService: firestore,
+            followRepository: MockFollowRepositoryForReacted()
+        )
+
+        await viewModel.load()
+
+        let sent = firestore.capturedLikePostIds
+        XCTAssertEqual(sent.count, 30, "`in` の上限ちょうどまでで頭打ちにすること")
+        XCTAssertTrue(sent.allSatisfy { $0.hasPrefix("pub") }, "非公開投稿を混ぜないこと")
+        XCTAssertEqual(firestore.capturedUserPostsLimit, 60,
+                       "非公開を捨てても30件そろうよう、広めに取ってから絞ること")
+    }
+
+    /// 注入した窓の値がそのまま使われる（本番既定値に依存せず境界を試せる）
+    func test窓の件数は注入できる() async {
+        let firestore = MockFirestoreServiceForReacted()
+        firestore.stubbedUserPosts = (0 ..< 10).map { makePost("p\($0)") }
+        let viewModel = ReactedUsersViewModel(
+            ownUserId: "me",
+            firestoreService: firestore,
+            followRepository: MockFollowRepositoryForReacted(),
+            recentPostsWindow: 3,
+            postsFetchWindow: 7
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(firestore.capturedUserPostsLimit, 7)
+        XCTAssertEqual(firestore.capturedLikePostIds, ["p0", "p1", "p2"])
+    }
 }
 
 // MARK: - Mocks
@@ -227,6 +329,7 @@ final class MockFirestoreServiceForReacted: FirestoreServiceProtocol, @unchecked
     private let lock = NSLock()
     private var _capturedLikePostIds: [String] = []
     private var _fetchUserPostsCallCount = 0
+    private var _capturedUserPostsLimit: Int?
 
     var capturedLikePostIds: [String] {
         lock.lock(); defer { lock.unlock() }
@@ -238,12 +341,19 @@ final class MockFirestoreServiceForReacted: FirestoreServiceProtocol, @unchecked
         return _fetchUserPostsCallCount
     }
 
+    /// 直近の `fetchUserPosts(limit:)` に渡された件数（取得窓の検証用）
+    var capturedUserPostsLimit: Int? {
+        lock.lock(); defer { lock.unlock() }
+        return _capturedUserPostsLimit
+    }
+
     // ⚠️ NSLock の lock()/unlock() は async 関数から直接呼ぶと
     //    Swift 6 でエラーになる（unavailable from asynchronous contexts）。
     //    同期ヘルパー経由で触る（FollowListViewModelTests の既存モックと同じ手法）。
-    private func recordUserPostsCall() {
+    private func recordUserPostsCall(limit: Int) {
         lock.lock(); defer { lock.unlock() }
         _fetchUserPostsCallCount += 1
+        _capturedUserPostsLimit = limit
     }
 
     private func recordLikePostIds(_ postIds: [String]) {
@@ -251,8 +361,8 @@ final class MockFirestoreServiceForReacted: FirestoreServiceProtocol, @unchecked
         _capturedLikePostIds = postIds
     }
 
-    func fetchUserPosts(userId _: String, limit _: Int, lastDocument _: DocumentSnapshot?) async throws -> [Post] {
-        recordUserPostsCall()
+    func fetchUserPosts(userId _: String, limit: Int, lastDocument _: DocumentSnapshot?) async throws -> [Post] {
+        recordUserPostsCall(limit: limit)
         if let stubbedError { throw stubbedError }
         return stubbedUserPosts
     }
@@ -272,7 +382,10 @@ final class MockFirestoreServiceForReacted: FirestoreServiceProtocol, @unchecked
 /// フォロー操作と「自分のフォロー中一覧」だけを扱う最小 Mock
 final class MockFollowRepositoryForReacted: FollowRepositoryProtocol, @unchecked Sendable {
     var stubbedFollowing: [String] = []
+    /// `fetchFollowing`（一覧読み込み）で投げるエラー
     var stubbedError: Error?
+    /// `follow` / `unfollow`（ボタン操作）で投げるエラー
+    var stubbedToggleError: Error?
 
     private let lock = NSLock()
     private var _capturedFollows: [(target: String, owner: String)] = []
@@ -300,10 +413,12 @@ final class MockFollowRepositoryForReacted: FollowRepositoryProtocol, @unchecked
     }
 
     func follow(_ targetUserId: String, by ownUserId: String) async throws {
+        if let stubbedToggleError { throw stubbedToggleError }
         recordFollow(target: targetUserId, owner: ownUserId)
     }
 
     func unfollow(_ targetUserId: String, by ownUserId: String) async throws {
+        if let stubbedToggleError { throw stubbedToggleError }
         recordUnfollow(target: targetUserId, owner: ownUserId)
     }
 

@@ -138,6 +138,9 @@ class FirestoreService: FirestoreServiceProtocol {
         db.collection("likes")
     }
 
+    /// `fetchLikes` の読み取り上限（暴走防止の非常弁。正確な上位 N 件ではない）
+    private static let likesFetchLimit = 500
+
     private var commentsCollection: CollectionReference {
         db.collection("comments")
     }
@@ -828,7 +831,9 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
 
-    /// ブロックしているユーザーIDのリストを取得
+    /// 指定した投稿群に付いた「いいね」を取得する ⭐️
+    /// - Parameter postIds: 対象の投稿 ID（Firestore の `in` 上限により最大 30 件に切る）
+    /// - Returns: いいね（新しい順への並べ替えは呼び出し側の責任）
     func fetchLikes(forPostIds postIds: [String]) async throws -> [Like] {
         // 空配列を `in` に渡すと Firestore がクラッシュするため、投げずに空を返す
         guard !postIds.isEmpty else { return [] }
@@ -839,8 +844,14 @@ class FirestoreService: FirestoreServiceProtocol {
             // ⚠️ `order(by:)` は付けない。等値フィルタ＋別フィールドの並び替えは複合インデックスが
             //    必要になるが、この用途（自分の直近投稿に付いたいいね）は件数が少なく、
             //    並べ替えは呼び出し側で行えば足りる。index 追加＝deploy を避けられる。
+            //    ⚠️ `limit` は「非常弁」であって「正確な上位 N 件」ではない。
+            //       `order(by:)` を付けていないので、上限に達した場合に切り捨てられるのは
+            //       ドキュメント ID 順の後ろ側で、新しい順の上位が残る保証はない。
+            //       `likes` の rules は read が `isAuthenticated()` のみで list 上限を強制しないため、
+            //       人気投稿が窓に入ったときに読み取り量とメモリが青天井になるのを防ぐのが目的。
             let snapshot = try await likesCollection
                 .whereField("postId", in: targetIds)
+                .limit(to: Self.likesFetchLimit)
                 .getDocuments()
 
             // ⚠️ compactMap { try? } は壊れたドキュメントを無言で落とすため使わない。
@@ -858,6 +869,7 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
 
+    /// ブロックしているユーザーIDのリストを取得
     func fetchBlockedUserIds(userId: String) async throws -> [String] {
         do {
             let document = try await usersCollection.document(userId).getDocument()

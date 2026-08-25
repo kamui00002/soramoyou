@@ -62,7 +62,6 @@ enum WhatsNewContent {
                 Color(red: 0.98, green: 0.80, blue: 0.55),
             ]
         ),
-    
     ]
 }
 

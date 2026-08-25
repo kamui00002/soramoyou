@@ -200,60 +200,26 @@ struct FollowListView: View {
         )
     }
 
-    /// フォロー / フォローバックのボタン ⭐️
+    /// フォロー / フォローバックのボタン ⭐️（見た目は共通部品 `FollowActionButton`）
     ///
     /// 文言の出し分け（「フォローバック」は自分のフォロワー一覧でだけ成立する）は
     /// ViewModel の `followButtonTitle(for:)` に置いている。View の private に置くと
     /// テストで固定できず、判定の取り違えが検出できないため。
-    @ViewBuilder
     private func followButton(for userId: String, profile: PublicProfile?) -> some View {
-        let isFollowing = viewModel.isFollowingUser(userId)
-        let isToggling = viewModel.isTogglingFollow(for: userId)
-        let title = viewModel.followButtonTitle(for: userId)
-        let displayName = profile?.displayName ?? "ユーザー"
-
-        Button {
+        FollowActionButton(
+            title: viewModel.followButtonTitle(for: userId),
+            isFollowing: viewModel.isFollowingUser(userId),
+            isToggling: viewModel.isTogglingFollow(for: userId),
+            displayName: profile?.displayName ?? "ユーザー"
+        ) {
             Task { await viewModel.toggleFollow(userId: userId) }
-        } label: {
-            Text(title)
-                .font(.system(.caption, design: .rounded, weight: .semibold))
-                // ⚠️ 未フォロー時は白い背景の上に載るため、文字は必ず暗い色にする。
-                //    DesignTokens.Colors.textPrimary は Color.white なのでここでは使えない
-                //    （白背景×白文字で読めなくなる。実データ検証で発覚）。
-                .foregroundColor(
-                    isFollowing
-                        ? .white.opacity(0.85)
-                        : Color(red: 0.20, green: 0.28, blue: 0.45)
-                )
-                .padding(.horizontal, DesignTokens.Spacing.md)
-                .padding(.vertical, DesignTokens.Spacing.xs)
-                .background(
-                    Capsule().fill(
-                        isFollowing
-                            // フォロー中は控えめ（解除が主目的ではないので目立たせない）
-                            ? AnyShapeStyle(.ultraThinMaterial)
-                            // 未フォローは行動を促す色
-                            : AnyShapeStyle(Color.white.opacity(0.9))
-                    )
-                )
-                .overlay(
-                    Capsule().stroke(.white.opacity(isFollowing ? 0.3 : 0), lineWidth: 1)
-                )
-                // 処理中は押せないことが見た目でも分かるようにする
-                .opacity(isToggling ? 0.5 : 1)
         }
-        .buttonStyle(.plain)
-        .disabled(isToggling)
-        // 同じ行の removeButton が「◯◯ をフォロワーから削除」と名前を入れているので揃える。
-        // 名前が無いと VoiceOver で同じ読み上げのボタンが並び、どの行か分からなくなる。
-        .accessibilityLabel("\(displayName) を\(isFollowing ? "フォロー解除" : "フォロー")")
-        .accessibilityAddTraits(isFollowing ? .isSelected : [])
     }
 
     /// 行の中身（アバター + 表示名 + bio）
     private func rowContent(profile: PublicProfile?) -> some View {
         HStack(spacing: DesignTokens.Spacing.md) {
-            avatarView(profile: profile)
+            UserAvatarView(photoURL: profile?.photoURL)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile?.displayName ?? "ユーザー")
@@ -268,37 +234,6 @@ struct FollowListView: View {
                 }
             }
         }
-    }
-
-    /// アバター（取得失敗・未設定はプレースホルダ）
-    @ViewBuilder
-    private func avatarView(profile: PublicProfile?) -> some View {
-        if let urlString = profile?.photoURL, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case let .success(image):
-                    image.resizable().scaledToFill()
-                default:
-                    placeholderAvatar
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(Circle())
-            .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 1))
-        } else {
-            placeholderAvatar
-        }
-    }
-
-    private var placeholderAvatar: some View {
-        Circle()
-            .fill(.ultraThinMaterial)
-            .frame(width: 44, height: 44)
-            .overlay(
-                Image(systemName: "person.fill")
-                    .font(.system(size: 18))
-                    .foregroundColor(.white.opacity(0.7))
-            )
     }
 
     /// フォロワー削除ボタン（確認ダイアログを開くだけ。削除自体は ViewModel が行う）

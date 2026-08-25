@@ -68,23 +68,38 @@ final class ReactedUsersViewModel: ObservableObject {
     private let firestoreService: FirestoreServiceProtocol
     private let followRepository: FollowRepositoryProtocol
 
+    // MARK: - 件数の設定
+
+    // ⚠️ 既定値は本番用。テストから小さい値を注入して境界（ページ上限・30件の壁）を
+    //    実データ量なしで突けるようにするため、static ではなく注入可能にしている。
+
     /// 反応を辿る対象にする自分の投稿の件数（Firestore の `in` 上限と同じ 30）
-    private static let recentPostsWindow = 30
+    private let recentPostsWindow: Int
+    /// 投稿を取ってくるときの件数。非公開投稿を除外したあとに 30 件を確保するため広めに取る
+    private let postsFetchWindow: Int
     /// 自分のフォロー中集合を読むときの1ページ件数
-    private static let followingPageSize = 30
+    private let followingPageSize: Int
     /// 同上のページ数上限（= 件数 × この値が判定できる上限）
-    private static let maxFollowingPages = 5
+    private let maxFollowingPages: Int
 
     // MARK: - Initializer
 
     init(
         ownUserId: String?,
         firestoreService: FirestoreServiceProtocol = FirestoreService(),
-        followRepository: FollowRepositoryProtocol = FollowRepository()
+        followRepository: FollowRepositoryProtocol = FollowRepository(),
+        recentPostsWindow: Int = 30,
+        postsFetchWindow: Int = 60,
+        followingPageSize: Int = 30,
+        maxFollowingPages: Int = 5
     ) {
         self.ownUserId = ownUserId
         self.firestoreService = firestoreService
         self.followRepository = followRepository
+        self.recentPostsWindow = recentPostsWindow
+        self.postsFetchWindow = postsFetchWindow
+        self.followingPageSize = followingPageSize
+        self.maxFollowingPages = maxFollowingPages
     }
 
     // MARK: - 表示ヘルパー
@@ -129,10 +144,17 @@ final class ReactedUsersViewModel: ObservableObject {
 
         do {
             // 1. 自分の直近投稿 → その postId 群でいいねを1クエリ取得
+            // ⚠️ 非公開（private）の投稿は他人が閲覧できず新しいいいねが付かないため、
+            //    30件の枠をそれで埋めると「実在する反応」が一覧から落ちる。
+            //    そこで少し広めに取ってから除外し、改めて30件に切る
+            //    （createdAt 降順は filter / prefix を通しても保たれる。クエリ数は増えない）。
             let myPosts = try await firestoreService.fetchUserPosts(
-                userId: ownUserId, limit: Self.recentPostsWindow, lastDocument: nil
+                userId: ownUserId, limit: postsFetchWindow, lastDocument: nil
             )
-            let postIds = myPosts.map(\.id)
+            let postIds = myPosts
+                .filter { $0.visibility != .private }
+                .prefix(recentPostsWindow)
+                .map(\.id)
             let likes = try await firestoreService.fetchLikes(forPostIds: postIds)
 
             // 2. 自分のいいねを除外し、userId で集約する
@@ -227,13 +249,13 @@ final class ReactedUsersViewModel: ObservableObject {
         do {
             var ids: Set<String> = []
             var cursor: DocumentSnapshot?
-            for _ in 0 ..< Self.maxFollowingPages {
+            for _ in 0 ..< maxFollowingPages {
                 let page = try await followRepository.fetchFollowing(
-                    of: ownUserId, limit: Self.followingPageSize, lastDocument: cursor
+                    of: ownUserId, limit: followingPageSize, lastDocument: cursor
                 )
                 ids.formUnion(page.follows.map(\.followeeId))
                 cursor = page.lastDocument
-                if page.follows.count < Self.followingPageSize || cursor == nil { break }
+                if page.follows.count < followingPageSize || cursor == nil { break }
             }
             followingUserIds = ids
         } catch {
@@ -269,9 +291,19 @@ final class ReactedUsersViewModel: ObservableObject {
                 try await followRepository.follow(targetId, by: ownUserId)
                 followingUserIds.insert(targetId)
             }
+            // ⚠️ イベント名は一覧ごとに増やさず、**由来をパラメータで区別する**。
+            //    「アプリ内でフォローされた回数」という 1 つの指標が
+            //    イベント名の数だけ分裂すると、後から合算できなくなるため
+            //    （FollowListViewModel と同じ follow_list_followed を共有する）。
+            //    ⚠️ イベント名はリリース後に変えると過去データと繋がらないので、増やすなら今しかない。
             // ⚠️ 相手の uid はパラメータに載せない（PR #89 で確立した方針）
             LoggingService.shared.logEvent(
-                wasFollowing ? "reacted_users_unfollowed" : "reacted_users_followed"
+                wasFollowing ? "follow_list_unfollowed" : "follow_list_followed",
+                parameters: [
+                    "list_type": "reacted_users",
+                    // この一覧は「自分の投稿への反応」なので常に自分の一覧
+                    "is_own_list": true,
+                ]
             )
         } catch {
             logger.error("フォロー切り替え失敗: \(error.localizedDescription)")

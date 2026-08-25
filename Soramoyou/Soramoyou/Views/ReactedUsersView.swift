@@ -126,7 +126,11 @@ struct ReactedUsersView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                // ⚠️ NavigationLink に accessibilityLabel を付けると、中の Text
+                //    （表示名・件数）は VoiceOver から読み上げられなくなる。
+                //    件数はこの一覧の主役なので accessibilityValue で明示的に戻す。
                 .accessibilityLabel("\(profile?.displayName ?? "ユーザー") のプロフィールを開く")
+                .accessibilityValue("\(user.reactionCount)件のいいね")
             }
 
             Spacer(minLength: 0)
@@ -145,7 +149,7 @@ struct ReactedUsersView: View {
     /// 行の中身（アバター + 表示名 + 反応件数）
     private func rowContent(user: ReactedUser, profile: PublicProfile?) -> some View {
         HStack(spacing: DesignTokens.Spacing.md) {
-            avatarView(profile: profile)
+            UserAvatarView(photoURL: profile?.photoURL)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile?.displayName ?? "ユーザー")
@@ -161,77 +165,18 @@ struct ReactedUsersView: View {
         }
     }
 
-    /// フォローボタン
+    /// フォローボタン（見た目は共通部品 `FollowActionButton`）
     ///
     /// ⚠️ 文言は ViewModel の `followButtonTitle(for:)` に置く。View の private に置くと
     ///    テストで固定できず、判定の取り違えが検出できない（PR #97 の D1 の教訓）。
-    @ViewBuilder
     private func followButton(for userId: String, profile: PublicProfile?) -> some View {
-        let isFollowing = viewModel.isFollowingUser(userId)
-        let isToggling = viewModel.isTogglingFollow(for: userId)
-        let title = viewModel.followButtonTitle(for: userId)
-        let displayName = profile?.displayName ?? "ユーザー"
-
-        Button {
+        FollowActionButton(
+            title: viewModel.followButtonTitle(for: userId),
+            isFollowing: viewModel.isFollowingUser(userId),
+            isToggling: viewModel.isTogglingFollow(for: userId),
+            displayName: profile?.displayName ?? "ユーザー"
+        ) {
             Task { await viewModel.toggleFollow(userId: userId) }
-        } label: {
-            Text(title)
-                .font(.system(.caption, design: .rounded, weight: .semibold))
-                // ⚠️ 未フォロー時は白背景の上に載るため、文字は必ず暗い色にする。
-                //    DesignTokens.Colors.textPrimary は Color.white なのでここでは使えない
-                //    （FollowListView と同じ理由。白×白で読めなくなる）。
-                .foregroundColor(
-                    isFollowing
-                        ? .white.opacity(0.85)
-                        : Color(red: 0.20, green: 0.28, blue: 0.45)
-                )
-                .padding(.horizontal, DesignTokens.Spacing.md)
-                .padding(.vertical, DesignTokens.Spacing.xs)
-                .background(
-                    Capsule().fill(
-                        isFollowing
-                            ? AnyShapeStyle(.ultraThinMaterial)
-                            : AnyShapeStyle(Color.white.opacity(0.9))
-                    )
-                )
-                .overlay(
-                    Capsule().stroke(.white.opacity(isFollowing ? 0.3 : 0), lineWidth: 1)
-                )
-                .opacity(isToggling ? 0.5 : 1)
         }
-        .buttonStyle(.plain)
-        .disabled(isToggling)
-        .accessibilityLabel("\(displayName) を\(isFollowing ? "フォロー解除" : "フォロー")")
-        .accessibilityAddTraits(isFollowing ? .isSelected : [])
-    }
-
-    /// アバター（取得失敗・未設定はプレースホルダ）
-    @ViewBuilder
-    private func avatarView(profile: PublicProfile?) -> some View {
-        if let urlString = profile?.photoURL, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case let .success(image):
-                    image.resizable().scaledToFill()
-                default:
-                    placeholderAvatar
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(Circle())
-            .overlay(Circle().stroke(.white.opacity(0.3), lineWidth: 1))
-        } else {
-            placeholderAvatar
-        }
-    }
-
-    private var placeholderAvatar: some View {
-        Circle()
-            .fill(.ultraThinMaterial)
-            .frame(width: 44, height: 44)
-            .overlay(
-                Image(systemName: "person.fill")
-                    .foregroundColor(.white.opacity(0.6))
-            )
     }
 }
