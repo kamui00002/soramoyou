@@ -182,6 +182,12 @@ struct FollowListView: View {
 
             Spacer(minLength: 0)
 
+            // フォロー / フォローバックのボタン ⭐️
+            // 相互フォローへの導線。ゲストと自分自身の行には出さない。
+            if viewModel.canToggleFollow(for: userId) {
+                followButton(for: userId, profile: profile)
+            }
+
             // フォロワー削除は「自分のフォロワー一覧」でのみ
             if viewModel.isOwnFollowersList {
                 removeButton(for: follow, profile: profile)
@@ -192,6 +198,56 @@ struct FollowListView: View {
             RoundedRectangle(cornerRadius: DesignTokens.Radius.lg)
                 .fill(.ultraThinMaterial.opacity(0.4))
         )
+    }
+
+    /// フォロー / フォローバックのボタン ⭐️
+    ///
+    /// 文言の出し分け（「フォローバック」は自分のフォロワー一覧でだけ成立する）は
+    /// ViewModel の `followButtonTitle(for:)` に置いている。View の private に置くと
+    /// テストで固定できず、判定の取り違えが検出できないため。
+    @ViewBuilder
+    private func followButton(for userId: String, profile: PublicProfile?) -> some View {
+        let isFollowing = viewModel.isFollowingUser(userId)
+        let isToggling = viewModel.isTogglingFollow(for: userId)
+        let title = viewModel.followButtonTitle(for: userId)
+        let displayName = profile?.displayName ?? "ユーザー"
+
+        Button {
+            Task { await viewModel.toggleFollow(userId: userId) }
+        } label: {
+            Text(title)
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+                // ⚠️ 未フォロー時は白い背景の上に載るため、文字は必ず暗い色にする。
+                //    DesignTokens.Colors.textPrimary は Color.white なのでここでは使えない
+                //    （白背景×白文字で読めなくなる。実データ検証で発覚）。
+                .foregroundColor(
+                    isFollowing
+                        ? .white.opacity(0.85)
+                        : Color(red: 0.20, green: 0.28, blue: 0.45)
+                )
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.vertical, DesignTokens.Spacing.xs)
+                .background(
+                    Capsule().fill(
+                        isFollowing
+                            // フォロー中は控えめ（解除が主目的ではないので目立たせない）
+                            ? AnyShapeStyle(.ultraThinMaterial)
+                            // 未フォローは行動を促す色
+                            : AnyShapeStyle(Color.white.opacity(0.9))
+                    )
+                )
+                .overlay(
+                    Capsule().stroke(.white.opacity(isFollowing ? 0.3 : 0), lineWidth: 1)
+                )
+                // 処理中は押せないことが見た目でも分かるようにする
+                .opacity(isToggling ? 0.5 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(isToggling)
+        // 同じ行の removeButton が「◯◯ をフォロワーから削除」と名前を入れているので揃える。
+        // 名前が無いと VoiceOver で同じ読み上げのボタンが並び、どの行か分からなくなる。
+        .accessibilityLabel("\(displayName) を\(isFollowing ? "フォロー解除" : "フォロー")")
+        .accessibilityAddTraits(isFollowing ? .isSelected : [])
     }
 
     /// 行の中身（アバター + 表示名 + bio）

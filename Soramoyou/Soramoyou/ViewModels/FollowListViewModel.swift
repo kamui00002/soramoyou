@@ -61,6 +61,13 @@ final class FollowListViewModel: ObservableObject {
     @Published var errorMessage: String?
     /// フォロワー削除の実行中（多重タップ防止）
     @Published var isRemovingFollower = false
+    /// 閲覧者自身がフォロー中のユーザー uid 集合（フォローバック表示の判定に使う）⭐️
+    ///
+    /// 行ごとに `isFollowing` を叩くと N+1 リクエストになるため、
+    /// 自分のフォロー中一覧を 1 度だけ取って集合にしておく。
+    @Published private(set) var followingUserIds: Set<String> = []
+    /// フォロー状態を切り替え中の uid（そのボタンだけ無効化して多重タップを防ぐ）
+    @Published private(set) var togglingUserIds: Set<String> = []
 
     // MARK: - Dependencies
 
@@ -73,6 +80,8 @@ final class FollowListViewModel: ObservableObject {
 
     private let followRepository: FollowRepositoryProtocol
     private let firestoreService: FirestoreServiceProtocol
+    /// 自分のフォロー中集合を読むときのページ数上限（= pageSize × この値が判定できる上限）
+    private static let maxOwnFollowingPages = 5
     /// 1 ページあたりの件数（テストとページング手動検証のため注入可能にする）
     private let pageSize: Int
     private var lastDocument: DocumentSnapshot?
@@ -113,6 +122,41 @@ final class FollowListViewModel: ObservableObject {
         }
     }
 
+    /// この行にフォロー操作ボタンを出すか
+    ///
+    /// 未ログイン（ゲスト）と自分自身の行には出さない。
+    /// ⚠️ ゲストは `enterGuestMode` で Firebase 認証を一切しないため `ownUserId` が nil になる
+    ///    （PR-6 の judge で確定した事実。匿名認証ユーザーとは別物）。
+    func canToggleFollow(for userId: String) -> Bool {
+        guard let ownUserId, !ownUserId.isEmpty else { return false }
+        return userId != ownUserId
+    }
+
+    /// その uid を自分がフォロー中か
+    func isFollowingUser(_ userId: String) -> Bool {
+        followingUserIds.contains(userId)
+    }
+
+    /// そのボタンが処理中か（多重タップ防止）
+    func isTogglingFollow(for userId: String) -> Bool {
+        togglingUserIds.contains(userId)
+    }
+
+    /// 一覧の行に出すフォローボタンの文言 ⭐️
+    ///
+    /// ⚠️ 「フォローバック」は **自分のフォロワー一覧** でだけ成立する言葉。
+    ///    他人のフォロワー一覧（`UserProfileView` から開ける）に並ぶのは
+    ///    「その人をフォローしている人たち」であって自分のフォロワーではないため、
+    ///    そこで「フォローバック」と出すと存在しない関係を提示することになる。
+    ///    判定は `isOwnFollowersList` に一元化する（削除ボタンと同じ基準）。
+    ///
+    /// ⚠️ この文言は View の private メソッドではなくここに置く。
+    ///    View 内に隠れていたせいで上記の取り違えがテストで検出できなかった。
+    func followButtonTitle(for userId: String) -> String {
+        if isFollowingUser(userId) { return "フォロー中" }
+        return isOwnFollowersList ? "フォローバック" : "フォロー"
+    }
+
     // MARK: - Loading
 
     /// 初回ページを取得する（再取得にも使う）
@@ -129,6 +173,8 @@ final class FollowListViewModel: ObservableObject {
             // 1 ページに満たなければ末尾（PaginatedPostsViewModel と同じ判定）
             hasMore = page.follows.count >= pageSize
             await fetchMissingProfiles()
+            // フォローバック表示のため、自分のフォロー中集合も取り直す
+            await loadOwnFollowingIds()
         } catch {
             logger.error("フォロー一覧の初回取得失敗: \(error.localizedDescription)")
             LoggingService.shared.logErrorEvent(
@@ -159,6 +205,12 @@ final class FollowListViewModel: ObservableObject {
             follows.append(contentsOf: page.follows.filter { !existingIds.contains($0.id) })
             lastDocument = page.lastDocument
             hasMore = page.follows.count >= pageSize
+            // 自分のフォロー中一覧は「表示中の行 = 自分のフォロー中集合」なので追加ページも取り込む。
+            // ⚠️ このガードは必須。外して呼ぶと、フォロワー一覧では followeeId（＝一覧の主＝自分）が、
+            //    他人のフォロー中一覧では他人のフォロー先が、自分の集合に混入する。
+            if listType == .following, ownUserId == targetUserId {
+                followingUserIds.formUnion(page.follows.map(\.followeeId))
+            }
             await fetchMissingProfiles()
         } catch {
             logger.error("フォロー一覧の追加取得失敗: \(error.localizedDescription)")
@@ -208,6 +260,93 @@ final class FollowListViewModel: ObservableObject {
                     profilesByUserId[profile.id] = profile
                 }
             }
+        }
+    }
+
+    /// 閲覧者自身がフォローしているユーザーの uid を集合として読み込む ⭐️
+    ///
+    /// 「フォローバック」ボタンの状態判定に使う。取得に失敗しても一覧表示は続ける
+    /// （ボタンが「フォローバック」のまま出るだけで、押せば正しく処理される）。
+    /// ⚠️ ページングの上限は設けている。数百人規模のフォローがある場合は
+    ///    先頭ページ分しか判定できないが、現状の規模では十分。
+    private func loadOwnFollowingIds() async {
+        guard let ownUserId, !ownUserId.isEmpty else { return }
+
+        // 自分のフォロー中一覧なら、いま表示している follows がそのまま自分のフォロー中集合。
+        // 追加のクエリを投げずに済む。
+        if listType == .following, ownUserId == targetUserId {
+            followingUserIds = Set(follows.map(\.followeeId))
+            return
+        }
+
+        do {
+            var ids: Set<String> = []
+            var cursor: DocumentSnapshot?
+            // 最大 5 ページ（= 150 件）まで。無制限ループを避けるための上限。
+            for _ in 0 ..< Self.maxOwnFollowingPages {
+                let page = try await followRepository.fetchFollowing(
+                    of: ownUserId, limit: pageSize, lastDocument: cursor
+                )
+                ids.formUnion(page.follows.map(\.followeeId))
+                cursor = page.lastDocument
+                if page.follows.count < pageSize || cursor == nil { break }
+            }
+            followingUserIds = ids
+        } catch {
+            // 失敗してもフォロー状態が「未フォロー」に見えるだけで一覧は壊れない
+            logger.error("自分のフォロー中一覧の取得失敗: \(error.localizedDescription)")
+            LoggingService.shared.logErrorEvent(
+                error,
+                context: "FollowListViewModel.loadOwnFollowingIds",
+                category: ErrorHandler.categorize(error)
+            )
+        }
+    }
+
+    // MARK: - フォロー / フォロー解除
+
+    /// 一覧の行からフォロー状態を切り替える ⭐️
+    ///
+    /// 一覧に「フォローバック」を置くのが目的（相互フォローの導線）。
+    /// カウンタは触らない（Cloud Functions の onFollowCreated / onFollowDeleted が
+    /// count() の結果を代入する）。
+    func toggleFollow(userId targetId: String) async {
+        guard canToggleFollow(for: targetId), let ownUserId else { return }
+        guard !togglingUserIds.contains(targetId) else { return }
+
+        let wasFollowing = followingUserIds.contains(targetId)
+        togglingUserIds.insert(targetId)
+        defer { togglingUserIds.remove(targetId) }
+
+        do {
+            if wasFollowing {
+                try await followRepository.unfollow(targetId, by: ownUserId)
+                followingUserIds.remove(targetId)
+            } else {
+                try await followRepository.follow(targetId, by: ownUserId)
+                followingUserIds.insert(targetId)
+            }
+            // ⚠️ 相手の uid はパラメータに載せない（removeFollower と同じ方針。
+            //    他ユーザーの内部 ID を外部 SaaS へ送らない）。
+            //    どちらの一覧から押されたかだけを残す。
+            // 兄弟イベント follow_list_opened と同じ粒度にする。
+            // is_own_list がないと「自分のフォロワー一覧からのフォローバック」と
+            // 「他人の一覧からの新規フォロー」が区別できず、測りたい指標が取れない。
+            LoggingService.shared.logEvent(
+                wasFollowing ? "follow_list_unfollowed" : "follow_list_followed",
+                parameters: [
+                    "list_type": listType.rawValue,
+                    "is_own_list": isOwnFollowersList,
+                ]
+            )
+        } catch {
+            logger.error("フォロー切り替え失敗: \(error.localizedDescription)")
+            LoggingService.shared.logErrorEvent(
+                error,
+                context: "FollowListViewModel.toggleFollow",
+                category: ErrorHandler.categorize(error)
+            )
+            errorMessage = error.userFriendlyMessage
         }
     }
 
