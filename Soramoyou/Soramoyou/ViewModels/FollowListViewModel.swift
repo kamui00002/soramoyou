@@ -142,6 +142,21 @@ final class FollowListViewModel: ObservableObject {
         togglingUserIds.contains(userId)
     }
 
+    /// 一覧の行に出すフォローボタンの文言 ⭐️
+    ///
+    /// ⚠️ 「フォローバック」は **自分のフォロワー一覧** でだけ成立する言葉。
+    ///    他人のフォロワー一覧（`UserProfileView` から開ける）に並ぶのは
+    ///    「その人をフォローしている人たち」であって自分のフォロワーではないため、
+    ///    そこで「フォローバック」と出すと存在しない関係を提示することになる。
+    ///    判定は `isOwnFollowersList` に一元化する（削除ボタンと同じ基準）。
+    ///
+    /// ⚠️ この文言は View の private メソッドではなくここに置く。
+    ///    View 内に隠れていたせいで上記の取り違えがテストで検出できなかった。
+    func followButtonTitle(for userId: String) -> String {
+        if isFollowingUser(userId) { return "フォロー中" }
+        return isOwnFollowersList ? "フォローバック" : "フォロー"
+    }
+
     // MARK: - Loading
 
     /// 初回ページを取得する（再取得にも使う）
@@ -190,6 +205,12 @@ final class FollowListViewModel: ObservableObject {
             follows.append(contentsOf: page.follows.filter { !existingIds.contains($0.id) })
             lastDocument = page.lastDocument
             hasMore = page.follows.count >= pageSize
+            // 自分のフォロー中一覧は「表示中の行 = 自分のフォロー中集合」なので追加ページも取り込む。
+            // ⚠️ このガードは必須。外して呼ぶと、フォロワー一覧では followeeId（＝一覧の主＝自分）が、
+            //    他人のフォロー中一覧では他人のフォロー先が、自分の集合に混入する。
+            if listType == .following, ownUserId == targetUserId {
+                followingUserIds.formUnion(page.follows.map(\.followeeId))
+            }
             await fetchMissingProfiles()
         } catch {
             logger.error("フォロー一覧の追加取得失敗: \(error.localizedDescription)")
@@ -308,9 +329,15 @@ final class FollowListViewModel: ObservableObject {
             // ⚠️ 相手の uid はパラメータに載せない（removeFollower と同じ方針。
             //    他ユーザーの内部 ID を外部 SaaS へ送らない）。
             //    どちらの一覧から押されたかだけを残す。
+            // 兄弟イベント follow_list_opened と同じ粒度にする。
+            // is_own_list がないと「自分のフォロワー一覧からのフォローバック」と
+            // 「他人の一覧からの新規フォロー」が区別できず、測りたい指標が取れない。
             LoggingService.shared.logEvent(
                 wasFollowing ? "follow_list_unfollowed" : "follow_list_followed",
-                parameters: ["list_type": listType.rawValue]
+                parameters: [
+                    "list_type": listType.rawValue,
+                    "is_own_list": isOwnFollowersList,
+                ]
             )
         } catch {
             logger.error("フォロー切り替え失敗: \(error.localizedDescription)")

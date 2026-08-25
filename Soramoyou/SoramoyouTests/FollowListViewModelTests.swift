@@ -215,6 +215,105 @@ final class FollowListViewModelTests: XCTestCase {
         )
     }
 
+    /// 【回帰】自分のフォロー中一覧を 2 ページ目まで読んでも、追加された行はフォロー中と判定される
+    ///
+    /// 高速パス（表示中の follows を集合にする）が初回ページ分しか反映せず、
+    /// 31 件目以降に「フォロー」ボタンが誤表示されていた（レビュー D2）。
+    func testフォロー中一覧の2ページ目もフォロー中と判定される() async {
+        // Arrange: pageSize=2。1ページ目は満杯、2ページ目に userC
+        let repository = MockFollowListRepository()
+        repository.stubbedPages = [
+            [
+                makeFollow(follower: "me", followee: "userA"),
+                makeFollow(follower: "me", followee: "userB"),
+            ],
+            [makeFollow(follower: "me", followee: "userC")],
+        ]
+        let viewModel = makeViewModel(listType: .following, repository: repository, pageSize: 2)
+        await viewModel.fetchFirstPage()
+
+        // Act
+        await viewModel.loadMore()
+
+        // Assert: 一覧に出ていること自体がフォロー中の証拠
+        XCTAssertTrue(viewModel.isFollowingUser("userC"), "2ページ目の行もフォロー中と判定されること")
+        XCTAssertEqual(viewModel.followButtonTitle(for: "userC"), "フォロー中")
+    }
+
+    // MARK: - ボタン文言 ⭐️
+
+    /// 「フォローバック」は自分のフォロワー一覧でだけ出す（レビュー D1）
+    func test他人のフォロワー一覧ではフォローバックと出さない() async {
+        // Arrange: 他人（target）のフォロワー一覧を自分（me）が見ている
+        let repository = MockFollowListRepository()
+        repository.stubbedPages = [[makeFollow(follower: "userA", followee: "target")]]
+        repository.stubbedFollowingByUser = ["me": []]
+        repository.listTypeForStub = .followers
+        repository.listTargetUserId = "target"
+        let viewModel = FollowListViewModel(
+            listType: .followers,
+            targetUserId: "target",
+            ownUserId: "me",
+            followRepository: repository,
+            firestoreService: MockFirestoreServiceForFollowList(),
+            pageSize: 30
+        )
+        await viewModel.fetchFirstPage()
+
+        // Assert: userA は「target をフォローしている人」であって自分のフォロワーではない
+        XCTAssertFalse(viewModel.isOwnFollowersList)
+        XCTAssertEqual(
+            viewModel.followButtonTitle(for: "userA"), "フォロー",
+            "他人のフォロワー一覧で『フォローバック』と出すと、存在しない関係を提示することになる"
+        )
+    }
+
+    /// 自分のフォロワー一覧では「フォローバック」、フォロー済みなら「フォロー中」
+    func test自分のフォロワー一覧ではフォローバックと出す() async {
+        let repository = MockFollowListRepository()
+        repository.stubbedPages = [[
+            makeFollow(follower: "userA", followee: "me"),
+            makeFollow(follower: "userB", followee: "me"),
+        ]]
+        repository.stubbedFollowingByUser = ["me": [makeFollow(follower: "me", followee: "userB")]]
+        let viewModel = makeViewModel(listType: .followers, repository: repository)
+
+        await viewModel.fetchFirstPage()
+
+        XCTAssertTrue(viewModel.isOwnFollowersList)
+        XCTAssertEqual(viewModel.followButtonTitle(for: "userA"), "フォローバック")
+        XCTAssertEqual(viewModel.followButtonTitle(for: "userB"), "フォロー中")
+    }
+
+    /// 自分のフォロー中一覧では「フォローバック」ではなく「フォロー中」
+    func testフォロー中一覧の文言はフォロー中() async {
+        let repository = MockFollowListRepository()
+        repository.stubbedPages = [[makeFollow(follower: "me", followee: "userA")]]
+        let viewModel = makeViewModel(listType: .following, repository: repository)
+
+        await viewModel.fetchFirstPage()
+
+        XCTAssertEqual(viewModel.followButtonTitle(for: "userA"), "フォロー中")
+    }
+
+    /// 自分のフォロー中集合の取得に失敗しても、一覧表示は続く（コメントで宣言している約束・レビュー D10）
+    func testフォロー中集合の取得に失敗しても一覧は表示される() async {
+        struct OwnFollowingError: Error {}
+        let repository = MockFollowListRepository()
+        repository.stubbedPages = [[makeFollow(follower: "userA", followee: "me")]]
+        repository.stubbedOwnFollowingError = OwnFollowingError()
+        let viewModel = makeViewModel(listType: .followers, repository: repository)
+
+        // Act
+        await viewModel.fetchFirstPage()
+
+        // Assert: 一覧は生きていて、エラー表示にも切り替わらない
+        XCTAssertEqual(viewModel.follows.count, 1, "集合取得の失敗で一覧を壊さない")
+        XCTAssertNil(viewModel.lastError, "ErrorStateView に切り替えない")
+        // 集合が空なので「未フォロー」に見えるが、押せば正しく処理される
+        XCTAssertFalse(viewModel.isFollowingUser("userA"))
+    }
+
     // MARK: - ページング
 
     /// 1 ページに満たない件数なら hasMore は false（無限に読み続けない）
@@ -437,6 +536,10 @@ final class MockFollowListRepository: FollowRepositoryProtocol, @unchecked Senda
     /// 一覧本体が対象にしている uid（makeViewModel が設定する）
     var listTargetUserId: String?
 
+    /// 「自分のフォロー中集合」の取得だけを失敗させるスタブ。
+    /// stubbedFetchError は一覧本体が先に落ちてしまい、集合取得だけの失敗を作れないため分ける。
+    var stubbedOwnFollowingError: Error?
+
     private(set) var capturedFollows: [(target: String, owner: String)] = []
     private(set) var capturedUnfollows: [(target: String, owner: String)] = []
     var stubbedFollowError: Error?
@@ -478,6 +581,7 @@ final class MockFollowListRepository: FollowRepositoryProtocol, @unchecked Senda
         let isOwnFollowingFetch = listTypeForStub == .followers
             || (listTargetUserId != nil && userId != listTargetUserId)
         if isOwnFollowingFetch {
+            if let stubbedOwnFollowingError { throw stubbedOwnFollowingError }
             if let stubbedFetchError { throw stubbedFetchError }
             return (follows: stubbedFollowingByUser[userId] ?? [], lastDocument: nil)
         }

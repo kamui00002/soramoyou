@@ -185,7 +185,7 @@ struct FollowListView: View {
             // フォロー / フォローバックのボタン ⭐️
             // 相互フォローへの導線。ゲストと自分自身の行には出さない。
             if viewModel.canToggleFollow(for: userId) {
-                followButton(for: userId)
+                followButton(for: userId, profile: profile)
             }
 
             // フォロワー削除は「自分のフォロワー一覧」でのみ
@@ -202,17 +202,20 @@ struct FollowListView: View {
 
     /// フォロー / フォローバックのボタン ⭐️
     ///
-    /// 「自分のフォロワー一覧」で未フォローの相手には **フォローバック** と出す
-    /// （相互フォローへの導線であることを言葉で示す）。それ以外の一覧では「フォロー」。
+    /// 文言の出し分け（「フォローバック」は自分のフォロワー一覧でだけ成立する）は
+    /// ViewModel の `followButtonTitle(for:)` に置いている。View の private に置くと
+    /// テストで固定できず、判定の取り違えが検出できないため。
     @ViewBuilder
-    private func followButton(for userId: String) -> some View {
+    private func followButton(for userId: String, profile: PublicProfile?) -> some View {
         let isFollowing = viewModel.isFollowingUser(userId)
         let isToggling = viewModel.isTogglingFollow(for: userId)
+        let title = viewModel.followButtonTitle(for: userId)
+        let displayName = profile?.displayName ?? "ユーザー"
 
         Button {
             Task { await viewModel.toggleFollow(userId: userId) }
         } label: {
-            Text(followButtonTitle(isFollowing: isFollowing))
+            Text(title)
                 .font(.system(.caption, design: .rounded, weight: .semibold))
                 // ⚠️ 未フォロー時は白い背景の上に載るため、文字は必ず暗い色にする。
                 //    DesignTokens.Colors.textPrimary は Color.white なのでここでは使えない
@@ -241,13 +244,10 @@ struct FollowListView: View {
         }
         .buttonStyle(.plain)
         .disabled(isToggling)
-        .accessibilityLabel(followButtonTitle(isFollowing: isFollowing))
-    }
-
-    /// ボタンの文言（フォロワー一覧の未フォローだけ「フォローバック」にする）
-    private func followButtonTitle(isFollowing: Bool) -> String {
-        if isFollowing { return "フォロー中" }
-        return viewModel.listType == .followers ? "フォローバック" : "フォロー"
+        // 同じ行の removeButton が「◯◯ をフォロワーから削除」と名前を入れているので揃える。
+        // 名前が無いと VoiceOver で同じ読み上げのボタンが並び、どの行か分からなくなる。
+        .accessibilityLabel("\(displayName) を\(isFollowing ? "フォロー解除" : "フォロー")")
+        .accessibilityAddTraits(isFollowing ? .isSelected : [])
     }
 
     /// 行の中身（アバター + 表示名 + bio）
