@@ -166,9 +166,16 @@ final class ReactedUsersViewModel: ObservableObject {
             await fetchMissingProfiles()
             await loadOwnFollowingIds(ownUserId: ownUserId)
 
+            // ⚠️ `like_count` が `fetchLikes` の上限（500）に張り付いていたら、
+            //    表示している「N件のいいね」は**過小**になっている可能性がある。
+            //    `order(by:)` を付けていないため切り捨てられるのは末尾ではなく
+            //    ドキュメントID順の任意の部分集合で、全員の件数が同時に目減りし、
+            //    人によっては一覧から丸ごと消える。エラーにも例外にもならない
+            //    ＝これを送らないと誰も気づけないので、必ず計測に載せる。
             LoggingService.shared.logEvent("reacted_users_loaded", parameters: [
                 "user_count": reactedUsers.count,
                 "post_window": postIds.count,
+                "like_count": likes.count,
             ])
         } catch {
             logger.error("反応した人一覧の取得失敗: \(error.localizedDescription)")

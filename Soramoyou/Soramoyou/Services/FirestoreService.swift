@@ -854,6 +854,12 @@ class FirestoreService: FirestoreServiceProtocol {
                 .limit(to: Self.likesFetchLimit)
                 .getDocuments()
 
+            // 上限に張り付いた時点で「集計結果は過小」が確定する。
+            // 例外にならないので、ここで痕跡を残さないと誰も気づけない。
+            if snapshot.documents.count >= Self.likesFetchLimit {
+                print("⚠️ fetchLikes が上限 \(Self.likesFetchLimit) 件に到達。いいね件数の集計が過小になります postIds=\(targetIds.count)件")
+            }
+
             // ⚠️ compactMap { try? } は壊れたドキュメントを無言で落とすため使わない。
             //    パスをログに残したうえで 1 件だけスキップする（tech-spec.md の方針）。
             return snapshot.documents.compactMap { document -> Like? in
