@@ -18,10 +18,10 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    // 2026-08-20: フォロー可視化3点セット（あなた向けフィード / タグフォロー /
-    // フォロワー・フォロー中一覧）。Wave 1〜4 で段階マージした機能をこのリリースで
-    // まとめて紹介する（計画どおり What's New は PR-7 で一括更新）。
-    static let currentID = "2026-08-follow-social"
+    // 2026-08-25: つながりを増やすための2機能（フォローバック / 反応してくれた人）。
+    // ⚠️ 前回の "2026-08-follow-social" は 1.9.7 で既に消費済み（＝全ユーザーが既読）。
+    //    同じ識別子のまま機能を足しても誰にも表示されないため、必ず新しい値にする。
+    static let currentID = "2026-08-connections"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -38,40 +38,31 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（2026-08 フォロー可視化）の新機能紹介ページ。
-    /// アイコンは既存UIの SF Symbol と揃えている（person.2 = フォロワー一覧の空状態、
-    /// number = ハッシュタグ）。
+    /// 今回（2026-08 つながり）の新機能紹介ページ。
+    /// アイコンは実UIと揃えている（person.2.fill = フォロワー一覧、
+    /// heart.text.square = プロフィールの「反応してくれた人を見る」）。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "sparkles",
+            icon: "person.2.fill",
             badge: "新機能",
-            title: "「あなた向け」フィード",
-            description: "ホームに「あなた向け」を追加。\nフォロー中の人とフォロー中のタグの新着が、時系列でまとめて流れてきます",
+            title: "フォローを返せるように",
+            description: "フォロワー一覧から、その場で「フォローバック」できるようになりました。\nお互いにフォローすると、相手の新しい空が「あなた向け」に流れてきます",
             gradientColors: [
                 Color(red: 0.35, green: 0.55, blue: 0.95),
                 Color(red: 0.55, green: 0.80, blue: 0.98),
             ]
         ),
         WhatsNewPage(
-            icon: "number",
+            icon: "heart.text.square",
             badge: "新機能",
-            title: "タグをフォロー",
-            description: "投稿の #タグ をタップするとタグ詳細画面へ。\n気になるタグをフォローすると「あなた向け」に新着が流れます",
-            gradientColors: [
-                Color(red: 0.55, green: 0.48, blue: 0.90),
-                Color(red: 0.85, green: 0.58, blue: 0.90),
-            ]
-        ),
-        WhatsNewPage(
-            icon: "person.2",
-            badge: "新機能",
-            title: "フォロワー / フォロー中一覧",
-            description: "プロフィールのフォロワー・フォロー中の数字をタップすると一覧を表示。\n自分のフォロワーはリストから外すこともできます",
+            title: "反応してくれた人がわかる",
+            description: "プロフィールに「反応してくれた人を見る」を追加。\n最近の投稿にいいねしてくれた人がわかり、そのままフォローできます",
             gradientColors: [
                 Color(red: 0.95, green: 0.60, blue: 0.40),
                 Color(red: 0.98, green: 0.80, blue: 0.55),
             ]
         ),
+    
     ]
 }
 

@@ -77,6 +77,13 @@ protocol FirestoreServiceProtocol {
     func unblockUser(userId: String, blockedUserId: String) async throws
     func fetchBlockedUserIds(userId: String) async throws -> [String]
 
+    /// 指定した投稿群に付いた「いいね」を取得する ⭐️
+    ///
+    /// 「あなたの投稿に反応した人」一覧のためのメソッド。呼び出し側は **自分の投稿の ID** を渡す。
+    /// - Parameter postIds: 対象の投稿 ID（Firestore の `in` 上限により最大 30 件）
+    /// - Returns: いいね（新しい順への並べ替えは呼び出し側の責任）
+    func fetchLikes(forPostIds postIds: [String]) async throws -> [Like]
+
     // Search
     func searchByHashtag(_ hashtag: String) async throws -> [Post]
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post]
@@ -822,6 +829,35 @@ class FirestoreService: FirestoreServiceProtocol {
     }
 
     /// ブロックしているユーザーIDのリストを取得
+    func fetchLikes(forPostIds postIds: [String]) async throws -> [Like] {
+        // 空配列を `in` に渡すと Firestore がクラッシュするため、投げずに空を返す
+        guard !postIds.isEmpty else { return [] }
+        // `in` の上限は 30。呼び出し側で切っている前提だが、ここでも防御する
+        let targetIds = Array(postIds.prefix(30))
+
+        do {
+            // ⚠️ `order(by:)` は付けない。等値フィルタ＋別フィールドの並び替えは複合インデックスが
+            //    必要になるが、この用途（自分の直近投稿に付いたいいね）は件数が少なく、
+            //    並べ替えは呼び出し側で行えば足りる。index 追加＝deploy を避けられる。
+            let snapshot = try await likesCollection
+                .whereField("postId", in: targetIds)
+                .getDocuments()
+
+            // ⚠️ compactMap { try? } は壊れたドキュメントを無言で落とすため使わない。
+            //    パスをログに残したうえで 1 件だけスキップする（tech-spec.md の方針）。
+            return snapshot.documents.compactMap { document -> Like? in
+                do {
+                    return try Like(from: document.data(), documentId: document.documentID)
+                } catch {
+                    print("❌ いいねのデコード失敗 path=\(document.reference.path) error=\(error.localizedDescription)")
+                    return nil
+                }
+            }
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
     func fetchBlockedUserIds(userId: String) async throws -> [String] {
         do {
             let document = try await usersCollection.document(userId).getDocument()
