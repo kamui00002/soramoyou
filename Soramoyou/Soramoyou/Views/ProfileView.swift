@@ -346,6 +346,29 @@ struct ProfileView: View {
                 )
             }
 
+            // 「反応してくれた人」への導線 ⭐️
+            // 自分の空に届いた反応を見せ、そのままフォローへ進めるための入口。
+            // ⚠️ 一覧は「最近の投稿（最大30件）への反応」なので、文言もそれに合わせている。
+            NavigationLink {
+                ReactedUsersView(ownUserId: user.id)
+            } label: {
+                HStack {
+                    Image(systemName: "heart.text.square")
+                    Text("反応してくれた人を見る")
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption)
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+                .padding(DesignTokens.Spacing.md)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                        .fill(.ultraThinMaterial)
+                )
+            }
+            .buttonStyle(.plain)
+
             // 空カレンダー日記への導線 ⭐️
             Button {
                 showingCalendarDiary = true

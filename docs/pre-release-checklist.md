@@ -50,6 +50,12 @@
 - [ ] `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` が意図どおりか（CLI override でなく pbxproj に値をコミット＝ドリフト防止）
 - [ ] archive は `ENABLE_USER_SCRIPT_SANDBOXING=YES` のまま通るか（dSYM の inputPaths 修正が有効）
 - [ ] 新機能をユーザーに見せるなら **What's New（`WhatsNewContent`）を更新**したか
+- [ ] ⭐️ **What's New で宣伝する機能を、実データで1回ずつ触ったか**
+      （画面が開くだけでは足りない。宣伝している**操作そのもの**を1回通す）
+      - 例: 「フォローバックできる」と書くなら、プロフィール → フォロワー → **フォローバックを1回押す**
+      - 例: 「反応してくれた人がわかる」と書くなら、一覧を開いて**名前と件数が出ている**ことを見る
+      - 理由: 宣伝した機能が壊れていると、What's New が**そのまま低評価への導線**になる
+        （`~/.claude/rules/mvp-prelaunch.md`「不具合がある状態でレビュー誘導を出すと逆効果」と同じ構造）
 - [ ] App Store 審査提出は `scripts/appstore-release.sh`（prepare→GO確認→submit）で行う。手順は `docs/appstore-release-automation.md` 参照
 
 ---

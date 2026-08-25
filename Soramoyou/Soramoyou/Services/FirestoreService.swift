@@ -77,6 +77,13 @@ protocol FirestoreServiceProtocol {
     func unblockUser(userId: String, blockedUserId: String) async throws
     func fetchBlockedUserIds(userId: String) async throws -> [String]
 
+    /// 指定した投稿群に付いた「いいね」を取得する ⭐️
+    ///
+    /// 「あなたの投稿に反応した人」一覧のためのメソッド。呼び出し側は **自分の投稿の ID** を渡す。
+    /// - Parameter postIds: 対象の投稿 ID（Firestore の `in` 上限により最大 30 件）
+    /// - Returns: いいね（新しい順への並べ替えは呼び出し側の責任）
+    func fetchLikes(forPostIds postIds: [String]) async throws -> [Like]
+
     // Search
     func searchByHashtag(_ hashtag: String) async throws -> [Post]
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post]
@@ -130,6 +137,9 @@ class FirestoreService: FirestoreServiceProtocol {
     private var likesCollection: CollectionReference {
         db.collection("likes")
     }
+
+    /// `fetchLikes` の読み取り上限（暴走防止の非常弁。正確な上位 N 件ではない）
+    private static let likesFetchLimit = 500
 
     private var commentsCollection: CollectionReference {
         db.collection("comments")
@@ -818,6 +828,50 @@ class FirestoreService: FirestoreServiceProtocol {
             ])
         } catch {
             throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// 指定した投稿群に付いた「いいね」を取得する ⭐️
+    /// - Parameter postIds: 対象の投稿 ID（Firestore の `in` 上限により最大 30 件に切る）
+    /// - Returns: いいね（新しい順への並べ替えは呼び出し側の責任）
+    func fetchLikes(forPostIds postIds: [String]) async throws -> [Like] {
+        // 空配列を `in` に渡すと Firestore がクラッシュするため、投げずに空を返す
+        guard !postIds.isEmpty else { return [] }
+        // `in` の上限は 30。呼び出し側で切っている前提だが、ここでも防御する
+        let targetIds = Array(postIds.prefix(30))
+
+        do {
+            // ⚠️ `order(by:)` は付けない。等値フィルタ＋別フィールドの並び替えは複合インデックスが
+            //    必要になるが、この用途（自分の直近投稿に付いたいいね）は件数が少なく、
+            //    並べ替えは呼び出し側で行えば足りる。index 追加＝deploy を避けられる。
+            //    ⚠️ `limit` は「非常弁」であって「正確な上位 N 件」ではない。
+            //       `order(by:)` を付けていないので、上限に達した場合に切り捨てられるのは
+            //       ドキュメント ID 順の後ろ側で、新しい順の上位が残る保証はない。
+            //       `likes` の rules は read が `isAuthenticated()` のみで list 上限を強制しないため、
+            //       人気投稿が窓に入ったときに読み取り量とメモリが青天井になるのを防ぐのが目的。
+            let snapshot = try await likesCollection
+                .whereField("postId", in: targetIds)
+                .limit(to: Self.likesFetchLimit)
+                .getDocuments()
+
+            // 上限に張り付いた時点で「集計結果は過小」が確定する。
+            // 例外にならないので、ここで痕跡を残さないと誰も気づけない。
+            if snapshot.documents.count >= Self.likesFetchLimit {
+                print("⚠️ fetchLikes が上限 \(Self.likesFetchLimit) 件に到達。いいね件数の集計が過小になります postIds=\(targetIds.count)件")
+            }
+
+            // ⚠️ compactMap { try? } は壊れたドキュメントを無言で落とすため使わない。
+            //    パスをログに残したうえで 1 件だけスキップする（tech-spec.md の方針）。
+            return snapshot.documents.compactMap { document -> Like? in
+                do {
+                    return try Like(from: document.data(), documentId: document.documentID)
+                } catch {
+                    print("❌ いいねのデコード失敗 path=\(document.reference.path) error=\(error.localizedDescription)")
+                    return nil
+                }
+            }
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
         }
     }
 

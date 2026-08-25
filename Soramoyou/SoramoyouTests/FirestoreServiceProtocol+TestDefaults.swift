@@ -163,6 +163,10 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.unblockUser は未実装です")
     }
 
+    func fetchLikes(forPostIds _: [String]) async throws -> [Like] {
+        fatalError("MockFirestoreService.fetchLikes は未実装です")
+    }
+
     func fetchBlockedUserIds(userId _: String) async throws -> [String] {
         fatalError("MockFirestoreService.fetchBlockedUserIds は未実装です")
     }
