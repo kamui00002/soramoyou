@@ -154,6 +154,23 @@ service cloud.firestore {
                     || isFollowCounterUpdate();
 
       allow delete: if isOwner(userId);
+
+      // ============================================
+      // favorites サブコレクション（私のお気に入りの空）⭐️
+      // ドキュメントID: {postId}。所有者だけが読める＝「自分だけのお気に入り」を構造で保証。
+      // 一覧は order(by: createdAt) 1本なので複合インデックス不要。
+      // ============================================
+      match /favorites/{postId} {
+        allow read: if isOwner(userId);
+        // create/update とも許可: クライアントは set(冪等) で書くため、
+        // ローカル状態が古く「既にある文書に set」しても update として通す必要がある
+        allow create, update: if isOwner(userId)
+                      && request.resource.data.keys().hasOnly(['postId', 'createdAt'])
+                      && request.resource.data.keys().hasAll(['postId', 'createdAt'])
+                      && request.resource.data.postId == postId
+                      && request.resource.data.createdAt is timestamp;
+        allow delete: if isOwner(userId);
+      }
     }
 
     // ============================================

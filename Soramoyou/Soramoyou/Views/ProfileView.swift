@@ -13,6 +13,7 @@ struct ProfileView: View {
 
     @StateObject private var viewModel: ProfileViewModel
     @EnvironmentObject private var likeManager: LikeManager
+    @EnvironmentObject private var favoriteManager: FavoriteManager
     @State private var selectedPost: Post?
     @State private var showingEditProfile = false
     @State private var showingEditTools = false
@@ -166,11 +167,13 @@ struct ProfileView: View {
                     await viewModel.loadUserPosts()
                 }
                 await likeManager.checkLikeStatus(for: viewModel.userPosts)
+                await favoriteManager.checkFavoriteStatus(for: viewModel.userPosts)
             }
             .refreshable {
                 await viewModel.loadProfile()
                 await viewModel.loadUserPosts()
                 await likeManager.checkLikeStatus(for: viewModel.userPosts)
+                await favoriteManager.checkFavoriteStatus(for: viewModel.userPosts)
             }
             .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
                 Button("OK") {
@@ -217,11 +220,13 @@ struct ProfileView: View {
                 if let uid = viewModel.user?.id {
                     SkyCalendarDiaryView(userId: uid)
                         .environmentObject(likeManager)
+                        .environmentObject(favoriteManager)
                 }
             }
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
                     .environmentObject(likeManager)
+                    .environmentObject(favoriteManager)
             }
             // 保存結果アラート
             .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {
@@ -355,6 +360,29 @@ struct ProfileView: View {
                 HStack {
                     Image(systemName: "heart.text.square")
                     Text("反応してくれた人を見る")
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption)
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+                .padding(DesignTokens.Spacing.md)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
+                        .fill(.ultraThinMaterial)
+                )
+            }
+            .buttonStyle(.plain)
+
+            // 「私のお気に入りの空」への導線 ⭐️
+            // 🔖 を付けた空だけが並ぶ、自分だけのアルバム。
+            // push 遷移なので EnvironmentObject は継承される（再注入は不要）。
+            NavigationLink {
+                FavoritesView(ownUserId: user.id)
+            } label: {
+                HStack {
+                    Image(systemName: "bookmark")
+                    Text("私のお気に入りの空")
                     Spacer()
                     Image(systemName: "chevron.right").font(.caption)
                 }
@@ -584,8 +612,12 @@ struct ProfileView: View {
                             post: post,
                             isLiked: likeManager.isLiked(post.id),
                             likeCount: likeManager.likeCount(for: post),
+                            isFavorited: favoriteManager.isFavorited(post.id),
                             onLikeTapped: {
                                 Task { await likeManager.toggleLike(post: post) }
+                            },
+                            onFavoriteTapped: {
+                                Task { await favoriteManager.toggleFavorite(post: post, source: "profile_list") }
                             },
                             onCardTapped: {
                                 selectedPost = post

@@ -15,6 +15,7 @@ struct HomeView: View {
     /// On This Day とストリークチップの共有 VM（1回の投稿取得から両方を導出）⭐️
     @StateObject private var onThisDayViewModel = OnThisDayViewModel()
     @EnvironmentObject private var likeManager: LikeManager
+    @EnvironmentObject private var favoriteManager: FavoriteManager
     @State private var selectedPost: Post?
     /// 他ユーザープロフィール画面表示用 ⭐️ Issue #2
     @State private var selectedAuthorUserId: String?
@@ -112,11 +113,13 @@ struct HomeView: View {
                 let targetViewModel = activeViewModel
                 await targetViewModel.refresh()
                 await likeManager.checkLikeStatus(for: targetViewModel.posts)
+                await favoriteManager.checkFavoriteStatus(for: targetViewModel.posts)
             }
             .onAppear {
                 Task {
                     await viewModel.fetchPosts()
                     await likeManager.checkLikeStatus(for: viewModel.posts)
+                    await favoriteManager.checkFavoriteStatus(for: viewModel.posts)
                     // フィードアニメーションを開始
                     withAnimation {
                         animateCards = true
@@ -140,6 +143,7 @@ struct HomeView: View {
                     Task {
                         await forYouViewModel.fetchPosts()
                         await likeManager.checkLikeStatus(for: forYouViewModel.posts)
+                        await favoriteManager.checkFavoriteStatus(for: forYouViewModel.posts)
                     }
                 }
             }
@@ -162,6 +166,7 @@ struct HomeView: View {
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
                     .environmentObject(likeManager)
+                    .environmentObject(favoriteManager)
             }
             // ハッシュタグ → タグ詳細画面 ⭐️
             // HomeView は NavigationView（NavigationStack ではない）ため
@@ -170,7 +175,7 @@ struct HomeView: View {
                 get: { selectedTag.map(IdentifiableString.init) },
                 set: { selectedTag = $0?.id }
             )) { wrapper in
-                TagDetailView(tag: wrapper.id, source: "home_card", likeManager: likeManager)
+                TagDetailView(tag: wrapper.id, source: "home_card", likeManager: likeManager, favoriteManager: favoriteManager)
             }
             // ストリークチップ → 空図鑑（カレンダー詳細）⭐️
             .sheet(isPresented: $showingStreakZukan) {
@@ -227,9 +232,15 @@ struct HomeView: View {
                         author: activeViewModel.authorsByUserId[post.userId],
                         isLiked: likeManager.isLiked(post.id),
                         likeCount: likeManager.likeCount(for: post),
+                        isFavorited: favoriteManager.isFavorited(post.id),
                         onLikeTapped: {
                             Task {
                                 await likeManager.toggleLike(post: post)
+                            }
+                        },
+                        onFavoriteTapped: {
+                            Task {
+                                await favoriteManager.toggleFavorite(post: post, source: "home_card")
                             }
                         },
                         onCardTapped: {
@@ -277,6 +288,7 @@ struct HomeView: View {
                                 // 新しく読み込んだ投稿のいいね状態をチェック
                                 let newPosts = Array(targetViewModel.posts.dropFirst(previousCount))
                                 await likeManager.checkLikeStatus(for: newPosts)
+                                await favoriteManager.checkFavoriteStatus(for: newPosts)
                             }
                         }
                     }
@@ -328,7 +340,12 @@ struct PostCard: View {
     var author: PublicProfile?
     var isLiked: Bool = false
     var likeCount: Int?
+    /// お気に入り（🔖）済みか ⭐️
+    var isFavorited: Bool = false
     var onLikeTapped: (() -> Void)?
+    /// お気に入りをタップしたときのハンドラ ⭐️
+    /// nil のときは 🔖 ボタン自体を描かない（お気に入りを扱わない画面＝SearchView をそのまま使えるようにする）。
+    var onFavoriteTapped: (() -> Void)?
     var onCardTapped: (() -> Void)?
     /// 投稿者ヘッダーをタップしたときのハンドラ（他ユーザープロフィールへ遷移）
     var onAuthorTapped: (() -> Void)?
@@ -473,6 +490,25 @@ struct PostCard: View {
                         .foregroundColor(DesignTokens.Colors.skyBlue)
                     }
                     .buttonStyle(.plain)
+
+                    // お気に入り（🔖）ボタン ⭐️
+                    // ❤️と違い件数は出さない（自分だけのプライベート保存なので公開する数がない）。
+                    if let onFavoriteTapped {
+                        Button {
+                            let impact = UIImpactFeedbackGenerator(style: .light)
+                            impact.impactOccurred()
+                            onFavoriteTapped()
+                        } label: {
+                            Image(systemName: isFavorited ? "bookmark.fill" : "bookmark")
+                                .font(.system(size: 16, weight: .medium))
+                                .animation(.easeInOut(duration: 0.2), value: isFavorited)
+                                .foregroundColor(isFavorited
+                                    ? DesignTokens.Colors.goldenHour
+                                    : DesignTokens.Colors.textTertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isFavorited ? "お気に入りから外す" : "お気に入りに追加")
+                    }
 
                     Spacer()
 
@@ -670,6 +706,7 @@ struct PostDetailView: View {
     @State private var post: Post
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var likeManager: LikeManager
+    @EnvironmentObject private var favoriteManager: FavoriteManager
     @StateObject private var viewModel = PostDetailViewModel()
     @StateObject private var commentViewModel = CommentViewModel()
     @State private var showingReportSheet = false
@@ -726,6 +763,9 @@ struct PostDetailView: View {
                         await viewModel.loadAuthor(userId: post.userId)
                         await commentViewModel.fetchComments(postId: post.id)
                     }
+                    // ⚠️ この詳細は GalleryView など checkLikeStatus を呼ばない画面からも開かれる。
+                    //    1 read だけ足して、🔖 の表示が常にサーバー値と一致するようにする。⭐️
+                    Task { await favoriteManager.checkFavoriteStatus(for: [post]) }
                 }
                 .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
                     Button("削除", role: .destructive) {
@@ -787,7 +827,7 @@ struct PostDetailView: View {
                     get: { selectedTag.map(IdentifiableString.init) },
                     set: { selectedTag = $0?.id }
                 )) { wrapper in
-                    TagDetailView(tag: wrapper.id, source: "post_detail", likeManager: likeManager)
+                    TagDetailView(tag: wrapper.id, source: "post_detail", likeManager: likeManager, favoriteManager: favoriteManager)
                 }
                 // 再編集: 元画像＋レシピをエディタへ。保存時は既存投稿を上書き更新する。
                 // item: 方式で「画像が確実に揃ってから」EditView を構築する（stale-state 回避）。
@@ -1006,6 +1046,24 @@ struct PostDetailView: View {
                 Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
                     .font(.headline)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                Spacer()
+
+                // お気に入り（🔖）ボタン ⭐️ 件数は出さない（自分だけのプライベート保存）
+                Button {
+                    let impact = UIImpactFeedbackGenerator(style: .light)
+                    impact.impactOccurred()
+                    Task { await favoriteManager.toggleFavorite(post: post, source: "post_detail") }
+                } label: {
+                    Image(systemName: favoriteManager.isFavorited(post.id) ? "bookmark.fill" : "bookmark")
+                        .font(.headline)
+                        .foregroundColor(favoriteManager.isFavorited(post.id)
+                            ? DesignTokens.Colors.goldenHour
+                            : DesignTokens.Colors.textSecondary)
+                        .animation(.easeInOut(duration: 0.2), value: favoriteManager.isFavorited(post.id))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(favoriteManager.isFavorited(post.id) ? "お気に入りから外す" : "お気に入りに追加")
             }
 
             // コメントセクション

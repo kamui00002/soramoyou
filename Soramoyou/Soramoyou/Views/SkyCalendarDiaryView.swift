@@ -249,6 +249,7 @@ private struct DayPostsListView: View {
     let posts: [Post]
 
     @EnvironmentObject private var likeManager: LikeManager
+    @EnvironmentObject private var favoriteManager: FavoriteManager
     @State private var selectedPost: Post?
 
     var body: some View {
@@ -274,6 +275,7 @@ private struct DayPostsListView: View {
         .sheet(item: $selectedPost) { post in
             PostDetailView(post: post)
                 .environmentObject(likeManager)
+                .environmentObject(favoriteManager)
         }
     }
 

@@ -15,6 +15,7 @@ struct GalleryDetailView: View {
     var onPostDeleted: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var likeManager: LikeManager
+    @EnvironmentObject private var favoriteManager: FavoriteManager
     /// 投稿者情報の取得にはPostDetailViewModelを使用（GalleryDetailViewModelとの二重定義を解消）
     @StateObject private var viewModel = PostDetailViewModel()
     @StateObject private var commentViewModel = CommentViewModel()
@@ -178,6 +179,9 @@ struct GalleryDetailView: View {
                     await viewModel.loadAuthor(userId: post.userId)
                     await commentViewModel.fetchComments(postId: post.id)
                 }
+                // ⚠️ ギャラリーは一覧側で checkLikeStatus を呼んでいないため、
+                //    詳細で 1 read だけ足して 🔖 の表示をサーバー値に合わせる。⭐️
+                Task { await favoriteManager.checkFavoriteStatus(for: [post]) }
             }
             // 再編集: 元画像＋レシピをエディタへ。保存時は既存投稿を上書き更新する。
             // item: 方式で「画像が確実に揃ってから」EditView を構築する（stale-state 回避）。
@@ -196,7 +200,7 @@ struct GalleryDetailView: View {
                 get: { selectedTag.map(IdentifiableString.init) },
                 set: { selectedTag = $0?.id }
             )) { wrapper in
-                TagDetailView(tag: wrapper.id, source: "gallery_detail", likeManager: likeManager)
+                TagDetailView(tag: wrapper.id, source: "gallery_detail", likeManager: likeManager, favoriteManager: favoriteManager)
             }
             // 投稿削除確認アラート
             .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
@@ -740,6 +744,24 @@ struct GalleryDetailView: View {
             Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
                 .font(.headline)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
+
+            Spacer()
+
+            // お気に入り（🔖）ボタン ⭐️ 件数は出さない（自分だけのプライベート保存）
+            Button {
+                let impact = UIImpactFeedbackGenerator(style: .light)
+                impact.impactOccurred()
+                Task { await favoriteManager.toggleFavorite(post: post, source: "gallery_detail") }
+            } label: {
+                Image(systemName: favoriteManager.isFavorited(post.id) ? "bookmark.fill" : "bookmark")
+                    .font(.headline)
+                    .foregroundColor(favoriteManager.isFavorited(post.id)
+                        ? DesignTokens.Colors.goldenHour
+                        : DesignTokens.Colors.textSecondary)
+                    .animation(.easeInOut(duration: 0.2), value: favoriteManager.isFavorited(post.id))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(favoriteManager.isFavorited(post.id) ? "お気に入りから外す" : "お気に入りに追加")
         }
     }
 

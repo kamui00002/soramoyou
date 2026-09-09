@@ -26,6 +26,8 @@ struct TagDetailView: View {
     ///    実行時に fatalError で落ちる（ビルドもテストも緑のまま）。
     ///    init 引数にしておけばコンパイル時に強制できる。
     @ObservedObject var likeManager: LikeManager
+    /// ⚠️ likeManager と同じ理由で init 引数にする（fullScreenCover は環境を継承しない）。⭐️
+    @ObservedObject var favoriteManager: FavoriteManager
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel: TagDetailViewModel
@@ -37,10 +39,11 @@ struct TagDetailView: View {
 
     // MARK: - Initializer
 
-    init(tag: String, source: String, likeManager: LikeManager) {
+    init(tag: String, source: String, likeManager: LikeManager, favoriteManager: FavoriteManager) {
         self.tag = tag
         self.source = source
         self.likeManager = likeManager
+        self.favoriteManager = favoriteManager
         _viewModel = StateObject(wrappedValue: TagDetailViewModel(tag: tag))
     }
 
@@ -73,6 +76,7 @@ struct TagDetailView: View {
             .refreshable {
                 await viewModel.refresh()
                 await likeManager.checkLikeStatus(for: viewModel.posts)
+                await favoriteManager.checkFavoriteStatus(for: viewModel.posts)
             }
             // フォロー操作のエラー（上限超過・未ログインを含む）は必ず見せる
             .alert("お知らせ", isPresented: Binding(errorMessage: $viewModel.followErrorMessage)) {
@@ -85,6 +89,7 @@ struct TagDetailView: View {
             .sheet(item: $selectedPost) { post in
                 PostDetailView(post: post)
                     .environmentObject(likeManager)
+                    .environmentObject(favoriteManager)
             }
             .fullScreenCover(item: Binding<IdentifiableString?>(
                 get: { selectedAuthorUserId.map(IdentifiableString.init) },
@@ -117,6 +122,7 @@ struct TagDetailView: View {
             await viewModel.loadFollowState()
             await viewModel.fetchPosts()
             await likeManager.checkLikeStatus(for: viewModel.posts)
+            await favoriteManager.checkFavoriteStatus(for: viewModel.posts)
         }
     }
 
@@ -157,6 +163,7 @@ struct TagDetailView: View {
                 retryAction: {
                     await viewModel.refresh()
                     await likeManager.checkLikeStatus(for: viewModel.posts)
+                    await favoriteManager.checkFavoriteStatus(for: viewModel.posts)
                 },
                 secondaryAction: nil,
                 secondaryActionTitle: nil
@@ -219,8 +226,12 @@ struct TagDetailView: View {
             author: viewModel.authorsByUserId[post.userId],
             isLiked: likeManager.isLiked(post.id),
             likeCount: likeManager.likeCount(for: post),
+            isFavorited: favoriteManager.isFavorited(post.id),
             onLikeTapped: {
                 Task { await likeManager.toggleLike(post: post) }
+            },
+            onFavoriteTapped: {
+                Task { await favoriteManager.toggleFavorite(post: post, source: "tag_detail") }
             },
             onCardTapped: {
                 let impact = UIImpactFeedbackGenerator(style: .light)
@@ -252,6 +263,7 @@ struct TagDetailView: View {
             // 追加読み込み分のいいね状態も取得する
             let newPosts = Array(viewModel.posts.dropFirst(previousCount))
             await likeManager.checkLikeStatus(for: newPosts)
+            await favoriteManager.checkFavoriteStatus(for: newPosts)
         }
     }
 }
