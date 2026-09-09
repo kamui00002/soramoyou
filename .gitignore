@@ -136,7 +136,13 @@ package-lock.json
 .claude/worktrees/
 worktrees/
 
-
-
-
-
+# 作業成果物・ツールのキャッシュ（リポジトリに入れない）
+# ⚠️ marketing/ は CM 動画・音源・スクショの作業場で 43万行・74ファイル規模。
+#    一度でも `git add .` で取り込むと履歴に焼き付いて実質消せないため必ず除外する。
+Soramoyou/marketing/
+# Playwright MCP（ブラウザ自動操作）が吐く作業ログ・スナップショット
+.playwright-mcp/
+# Firebase Hosting のデプロイキャッシュ
+.firebase/
+# Python のコンパイル済みキャッシュ（screenshots/ のスクリプト由来）
+__pycache__/
