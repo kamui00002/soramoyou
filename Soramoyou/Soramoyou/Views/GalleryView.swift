@@ -12,6 +12,7 @@ import Kingfisher
 struct GalleryView: View {
     @StateObject private var viewModel = GalleryViewModel()
     @EnvironmentObject private var likeManager: LikeManager
+    @EnvironmentObject private var favoriteManager: FavoriteManager
     @State private var selectedPost: Post?
     @State private var isSaving = false
     @State private var saveResultMessage: String?
@@ -130,6 +131,7 @@ struct GalleryView: View {
                     viewModel.removePost(postId: post.id)
                 }
                 .environmentObject(likeManager)
+                .environmentObject(favoriteManager)
             }
             // 保存結果アラート
             .alert(saveResultMessage ?? "", isPresented: $showingSaveResult) {

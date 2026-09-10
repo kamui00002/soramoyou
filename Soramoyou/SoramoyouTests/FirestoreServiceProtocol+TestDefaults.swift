@@ -214,6 +214,20 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.batchCheckLikeStatus は未実装です")
     }
 
+    // MARK: - Favorites（私のお気に入りの空）⭐️
+
+    func setFavorite(postId _: String, userId _: String, isFavorited _: Bool) async throws {
+        fatalError("MockFirestoreService.setFavorite は未実装です")
+    }
+
+    func batchCheckFavoriteStatus(postIds _: [String], userId _: String) async throws -> Set<String> {
+        fatalError("MockFirestoreService.batchCheckFavoriteStatus は未実装です")
+    }
+
+    func fetchFavorites(userId _: String, limit _: Int, after _: Date?) async throws -> [Favorite] {
+        fatalError("MockFirestoreService.fetchFavorites は未実装です")
+    }
+
     // MARK: - Comments
 
     func fetchComments(

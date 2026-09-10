@@ -17,6 +17,8 @@ struct SoramoyouApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var authViewModel = AuthViewModel()
     @StateObject private var likeManager = LikeManager()
+    /// お気に入り（🔖）状態の共有 Manager ⭐️ いいねと同じく全画面で共有する
+    @StateObject private var favoriteManager = FavoriteManager()
     /// シーンの状態（フォアグラウンド復帰でゴールデンアワー通知を洗い替えするために監視）
     @Environment(\.scenePhase) private var scenePhase
 
@@ -66,6 +68,7 @@ struct SoramoyouApp: App {
             ContentView()
                 .environmentObject(authViewModel)
                 .environmentObject(likeManager)
+                .environmentObject(favoriteManager)
         }
         .onChange(of: scenePhase) { newPhase in
             // フォアグラウンド復帰のたびに、有効ならゴールデンアワー通知の14日窓を洗い替えする

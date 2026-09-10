@@ -9,6 +9,8 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var authViewModel: AuthViewModel
+    /// お気に入り（🔖）状態の共有 Manager ⭐️ サインアウト時のローカル破棄を配線するために参照する
+    @EnvironmentObject private var favoriteManager: FavoriteManager
     @State private var isLoading = true
     @State private var hasRequestedATT = false
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
@@ -62,6 +64,17 @@ struct ContentView: View {
                 WelcomeView()
             }
         }
+        // ⚠️ サインアウトしたら、この端末に残る「自分だけの🔖」をローカルから消す。
+        //    お気に入りは本人だけが見られるプライベート保存なので、共有端末で次の
+        //    ユーザーに前のユーザーの🔖が塗られて見えてはいけない。
+        //    AuthViewModel.signOut は WidgetCacheManager / SkyMotionCreditService を
+        //    同じ理由で消しているが、FavoriteManager は別の @StateObject で
+        //    AuthViewModel から手が届かないため、環境が揃うここで配線する。
+        .onChange(of: authViewModel.isAuthenticated) { isAuthenticated in
+            if !isAuthenticated {
+                favoriteManager.clearOnSignOut()
+            }
+        }
         .alert("エラー", isPresented: Binding(errorMessage: $authViewModel.errorMessage)) {
             Button("OK") {
                 authViewModel.errorMessage = nil
@@ -78,5 +91,6 @@ struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
             .environmentObject(AuthViewModel())
+            .environmentObject(FavoriteManager())
     }
 }

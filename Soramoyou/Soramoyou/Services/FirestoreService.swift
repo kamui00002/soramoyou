@@ -103,6 +103,14 @@ protocol FirestoreServiceProtocol {
     func checkLikeStatus(postId: String, userId: String) async throws -> Bool
     func batchCheckLikeStatus(postIds: [String], userId: String) async throws -> Set<String>
 
+    // Favorites（私のお気に入りの空）⭐️
+    /// お気に入りの追加/解除を明示指定で書く（冪等。既にその状態なら何もしないのと同じ結果）
+    func setFavorite(postId: String, userId: String, isFavorited: Bool) async throws
+    /// 表示中の投稿群のうちお気に入り済みの postId を返す（1件ずつ get・likes と同じ方式）
+    func batchCheckFavoriteStatus(postIds: [String], userId: String) async throws -> Set<String>
+    /// 自分のお気に入りを新しい順に1ページ返す。`after` は前ページ末尾の createdAt（nil=先頭）
+    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> [Favorite]
+
     // Comments
     func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?)
     func addComment(postId: String, userId: String, content: String, authorName: String?, authorPhotoURL: String?) async throws -> Comment
@@ -136,6 +144,13 @@ class FirestoreService: FirestoreServiceProtocol {
 
     private var likesCollection: CollectionReference {
         db.collection("likes")
+    }
+
+    /// お気に入りサブコレクション参照（users/{userId}/favorites）⭐️
+    /// サブコレクションにすることで、一覧クエリが `order(by: createdAt)` 1本になり
+    /// 複合インデックスが不要になる（index 欠落による「件数だけ増えて中身が出ない」事故の構造的な予防）。
+    private func favoritesCollection(userId: String) -> CollectionReference {
+        usersCollection.document(userId).collection("favorites")
     }
 
     /// `fetchLikes` の読み取り上限（暴走防止の非常弁。正確な上位 N 件ではない）
@@ -733,7 +748,7 @@ class FirestoreService: FirestoreServiceProtocol {
 
     // MARK: - Account Deletion
 
-    /// ユーザーの全データを削除（投稿、下書き、ユーザードキュメント）
+    /// ユーザーの全データを削除（投稿、下書き、お気に入り、ユーザードキュメント）
     func deleteUserData(userId: String) async throws {
         do {
             // 1. ユーザーの投稿を全てバッチ削除
@@ -750,7 +765,12 @@ class FirestoreService: FirestoreServiceProtocol {
 
             try await batchDelete(documents: draftsSnapshot.documents)
 
-            // 3. ユーザードキュメントを削除
+            // 3. お気に入りサブコレクションを全件バッチ削除 ⭐️
+            //    favorites は本機能で新設した自分のコレクションなので、退会時に確実に消す。
+            let favoritesSnapshot = try await favoritesCollection(userId: userId).getDocuments()
+            try await batchDelete(documents: favoritesSnapshot.documents)
+
+            // 4. ユーザードキュメントを削除
             try await usersCollection.document(userId).delete()
         } catch {
             throw FirestoreServiceError.deleteFailed(error)
@@ -1053,6 +1073,92 @@ class FirestoreService: FirestoreServiceProtocol {
             return likedIds
         }
     }
+
+    // MARK: - Favorites（私のお気に入りの空）⭐️
+
+    /// お気に入りの追加/解除を明示指定で書き込む
+    ///
+    /// ⚠️ `toggleLike` のようなサーバー側トグルにしないのは意図的。
+    ///    ローカル状態が古くても「押した結果こうなってほしい」状態へ収束する（冪等）。
+    /// - Parameters:
+    ///   - postId: 対象の投稿ID（そのままドキュメントIDになる）
+    ///   - userId: 操作するユーザーID（＝サブコレクションの所有者）
+    ///   - isFavorited: true で追加、false で解除
+    func setFavorite(postId: String, userId: String, isFavorited: Bool) async throws {
+        let document = favoritesCollection(userId: userId).document(postId)
+
+        do {
+            if isFavorited {
+                try await document.setData(Favorite(postId: postId).toFirestoreData())
+            } else {
+                try await document.delete()
+            }
+        } catch {
+            // 追加は「更新失敗」、解除は「削除失敗」として区別できるように包む。
+            throw isFavorited
+                ? FirestoreServiceError.updateFailed(error)
+                : FirestoreServiceError.deleteFailed(error)
+        }
+    }
+
+    /// 複数投稿のお気に入り状態を一括確認
+    /// - Returns: お気に入り済みの投稿IDセット
+    func batchCheckFavoriteStatus(postIds: [String], userId: String) async throws -> Set<String> {
+        guard !postIds.isEmpty else { return [] }
+
+        return try await withThrowingTaskGroup(of: (String, Bool).self) { group in
+            for postId in postIds {
+                group.addTask { [self] in
+                    // ドキュメントID = postId なので、存在確認だけで済む。
+                    let document = try await favoritesCollection(userId: userId).document(postId).getDocument()
+                    return (postId, document.exists)
+                }
+            }
+
+            var favoritedIds: Set<String> = []
+            for try await (postId, exists) in group {
+                if exists {
+                    favoritedIds.insert(postId)
+                }
+            }
+            return favoritedIds
+        }
+    }
+
+    /// 自分のお気に入りを新しい順に1ページ取得する
+    /// - Parameters:
+    ///   - userId: 所有者のユーザーID
+    ///   - limit: 1ページの件数
+    ///   - after: 前ページ末尾の createdAt（nil で先頭ページ）。
+    ///            `DocumentSnapshot` ではなく Date をカーソルにすることで、
+    ///            protocol に Firestore 型を出さずテストでモックできる。
+    /// - Returns: お気に入りの配列（createdAt 降順）
+    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> [Favorite] {
+        do {
+            var query: Query = favoritesCollection(userId: userId)
+                .order(by: "createdAt", descending: true)
+
+            if let after {
+                query = query.start(after: [Timestamp(date: after)])
+            }
+
+            let snapshot = try await query.limit(to: limit).getDocuments()
+
+            // ⚠️ compactMap { try? ... } は壊れたドキュメントを無言で落とすため禁止（tech-spec）。
+            //    失敗した1件はパスをログに残してスキップし、ページ全体は巻き込まない。
+            return snapshot.documents.compactMap { document in
+                do {
+                    return try Favorite(from: document.data(), documentId: document.documentID)
+                } catch {
+                    print("❌ お気に入りデコード失敗 path=\(document.reference.path) error=\(error.localizedDescription)")
+                    return nil
+                }
+            }
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
 
     // MARK: - Comments
 

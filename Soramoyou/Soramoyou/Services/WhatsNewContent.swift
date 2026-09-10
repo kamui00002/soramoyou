@@ -18,10 +18,10 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    // 2026-08-25: つながりを増やすための2機能（フォローバック / 反応してくれた人）。
-    // ⚠️ 前回の "2026-08-follow-social" は 1.9.7 で既に消費済み（＝全ユーザーが既読）。
+    // 2026-09-09: 私のお気に入りの空（🔖 で自分だけのアルバムに保存）。
+    // ⚠️ 前回の "2026-08-connections" は 1.9.9 で既に消費済み（＝全ユーザーが既読）。
     //    同じ識別子のまま機能を足しても誰にも表示されないため、必ず新しい値にする。
-    static let currentID = "2026-08-connections"
+    static let currentID = "2026-09-favorites"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -38,28 +38,18 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（2026-08 つながり）の新機能紹介ページ。
-    /// アイコンは実UIと揃えている（person.2.fill = フォロワー一覧、
-    /// heart.text.square = プロフィールの「反応してくれた人を見る」）。
+    /// 今回（2026-09 お気に入り）の新機能紹介ページ。
+    /// アイコンは実UIと揃えている（bookmark.fill = 各画面の 🔖 ボタンと
+    /// プロフィールの「私のお気に入りの空」）。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "person.2.fill",
+            icon: "bookmark.fill",
             badge: "新機能",
-            title: "フォローを返せるように",
-            description: "フォロワー一覧から、その場で「フォローバック」できるようになりました。\nお互いにフォローすると、相手の新しい空が「あなた向け」に流れてきます",
+            title: "私のお気に入りの空",
+            description: "気になった空に 🔖 を付けると、あなただけのアルバムに集まります。\nプロフィールの「私のお気に入りの空」からいつでも見返せます",
             gradientColors: [
-                Color(red: 0.35, green: 0.55, blue: 0.95),
-                Color(red: 0.55, green: 0.80, blue: 0.98),
-            ]
-        ),
-        WhatsNewPage(
-            icon: "heart.text.square",
-            badge: "新機能",
-            title: "反応してくれた人がわかる",
-            description: "プロフィールに「反応してくれた人を見る」を追加。\n最近の投稿にいいねしてくれた人がわかり、そのままフォローできます",
-            gradientColors: [
-                Color(red: 0.95, green: 0.60, blue: 0.40),
-                Color(red: 0.98, green: 0.80, blue: 0.55),
+                Color(red: 1.0, green: 0.85, blue: 0.60),
+                Color(red: 0.98, green: 0.65, blue: 0.45),
             ]
         ),
     ]

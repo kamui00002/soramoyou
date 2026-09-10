@@ -102,6 +102,27 @@
 }
 ```
 
+## users/{userId}/favorites サブコレクション（私のお気に入りの空）⭐️
+```json
+{
+  "postId": "string (= ドキュメントID)",
+  "createdAt": "timestamp"
+}
+```
+
+- **所有者のみ read/write**（`isOwner(userId)`）。「自分だけが見られる」を rules ではなく**構造**で保証する。
+- **複合インデックス不要**: 一覧は `order(by: createdAt, descending: true)` の 1 本だけ。
+  サブコレクションにしたのはこのためで、2026-06-15 のコメント不具合（index 欠落で
+  「件数だけ増えて中身が出ない」）と同型の事故を構造的に防ぐ。
+- **通知トリガーなし**: ❤️いいね（`onLikeCreated`）と違い、Functions を一切足さない。
+  お気に入りはプライベート保存であり、相手に知らせない・件数も公開しない。
+- **投稿は 1 件ずつ `fetchPost` で解決する**（TaskGroup で並列）。
+  `posts` の read rule は visibility 依存のため、`documentID in [...]` の一括クエリだと
+  1 件でも読めないものが混ざった時点で**クエリ全体が permission denied** になる。
+  1 件ずつの get なら rules がドキュメント単位で評価され、非公開化・削除された投稿を
+  1 件だけ落として残りを表示できる（落とした件数は画面の脚注で正直に伝える）。
+
+
 ## feedback コレクション（アプリ内フィードバック）
 ```json
 {
