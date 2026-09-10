@@ -41,7 +41,7 @@ final class FavoritesViewModelTests: XCTestCase {
     /// 1. favorites の順序が posts に保たれる（fetchPost は並列なので順序保持は VM の責務）
     func testLoadPreservesFavoriteOrder() async {
         let mock = MockFirestoreServiceForFavoritesList()
-        mock.stubbedFavoritePages = [makeFavorites(["p1", "p2", "p3"])]
+        mock.allFavorites = makeFavorites(["p1", "p2", "p3"])
         mock.postsById = ["p1": makePost("p1"), "p2": makePost("p2"), "p3": makePost("p3")]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 30)
 
@@ -55,7 +55,7 @@ final class FavoritesViewModelTests: XCTestCase {
     /// 2. 削除済み（notFound）の投稿は落ちて unavailableCount に数えられ、他は表示される
     func testDeletedPostIsCountedAsUnavailable() async {
         let mock = MockFirestoreServiceForFavoritesList()
-        mock.stubbedFavoritePages = [makeFavorites(["p1", "gone", "p3"])]
+        mock.allFavorites = makeFavorites(["p1", "gone", "p3"])
         mock.postsById = ["p1": makePost("p1"), "p3": makePost("p3")]
         mock.failingPostIds = ["gone": FirestoreServiceError.notFound]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 30)
@@ -70,7 +70,7 @@ final class FavoritesViewModelTests: XCTestCase {
     /// 3. 非公開化（permissionDenied）も unavailable 扱い
     func testPermissionDeniedIsCountedAsUnavailable() async {
         let mock = MockFirestoreServiceForFavoritesList()
-        mock.stubbedFavoritePages = [makeFavorites(["p1", "hidden"])]
+        mock.allFavorites = makeFavorites(["p1", "hidden"])
         mock.postsById = ["p1": makePost("p1")]
         mock.failingPostIds = ["hidden": permissionDeniedError()]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 30)
@@ -85,7 +85,7 @@ final class FavoritesViewModelTests: XCTestCase {
     /// 4. 全件が一時的な失敗（ネットワーク等）なら「0件」と嘘をつかずエラーにする
     func testAllTransientFailuresSurfaceError() async {
         let mock = MockFirestoreServiceForFavoritesList()
-        mock.stubbedFavoritePages = [makeFavorites(["p1", "p2"])]
+        mock.allFavorites = makeFavorites(["p1", "p2"])
         let networkError = FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
         mock.failingPostIds = ["p1": networkError, "p2": networkError]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 30)
@@ -100,10 +100,8 @@ final class FavoritesViewModelTests: XCTestCase {
     ///    2ページ目が pageSize 未満になったら hasMore が倒れる
     func testPaginationAppendsAndStops() async {
         let mock = MockFirestoreServiceForFavoritesList()
-        mock.stubbedFavoritePages = [
-            makeFavorites(["p1", "p2"]),   // 1ページ目 = pageSize(2) ちょうど
-            makeFavorites(["p3"])          // 2ページ目 = pageSize 未満
-        ]
+        // pageSize(2) で切ると 1ページ目 = [p1, p2]（ちょうど）、2ページ目 = [p3]（未満）
+        mock.allFavorites = makeFavorites(["p1", "p2", "p3"])
         mock.postsById = ["p1": makePost("p1"), "p2": makePost("p2"), "p3": makePost("p3")]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
 
@@ -121,15 +119,15 @@ final class FavoritesViewModelTests: XCTestCase {
         XCTAssertNil(mock.receivedAfterValues.first ?? nil, "1ページ目は先頭から取る（カーソルなし）")
         XCTAssertEqual(
             mock.receivedAfterValues.last ?? nil,
-            mock.stubbedFavoritePages[0].last?.createdAt,
-            "2ページ目は1ページ目末尾の createdAt から続ける"
+            mock.allFavorites[1].createdAt,
+            "2ページ目は1ページ目末尾（p2）の createdAt から続ける"
         )
     }
 
     /// 6. syncFavorited(ids:) で、お気に入りから外れた投稿だけが消える
     func testSyncFavoritedDropsUnfavoritedOnly() async {
         let mock = MockFirestoreServiceForFavoritesList()
-        mock.stubbedFavoritePages = [makeFavorites(["p1", "p2", "p3"])]
+        mock.allFavorites = makeFavorites(["p1", "p2", "p3"])
         mock.postsById = ["p1": makePost("p1"), "p2": makePost("p2"), "p3": makePost("p3")]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 30)
         await viewModel.load()
@@ -149,7 +147,7 @@ final class FavoritesViewModelTests: XCTestCase {
     /// pull-to-refresh するまで直らない。
     func testSyncFavoritedRestoresPostAtOriginalPosition() async {
         let mock = MockFirestoreServiceForFavoritesList()
-        mock.stubbedFavoritePages = [makeFavorites(["p1", "p2", "p3"])]
+        mock.allFavorites = makeFavorites(["p1", "p2", "p3"])
         mock.postsById = ["p1": makePost("p1"), "p2": makePost("p2"), "p3": makePost("p3")]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 30)
         await viewModel.load()
@@ -171,11 +169,13 @@ final class FavoritesViewModelTests: XCTestCase {
     ///
     /// レジで30個スキャンして袋に入ったのが25個なら、レシートは25個分で切る。
     /// ＝カーソルは「解決できた最後の1件」までしか進めない。
-    func testTransientFailureTruncatesPageAtFailurePoint() async {
+    func testTransientFailureTruncatesPageAndResumesAfterRecovery() async {
         let mock = MockFirestoreServiceForFavoritesList()
-        let firstPage = makeFavorites(["p1", "p2", "p3"])
-        mock.stubbedFavoritePages = [firstPage, makeFavorites(["p4"])]
-        mock.postsById = ["p1": makePost("p1"), "p3": makePost("p3"), "p4": makePost("p4")]
+        mock.allFavorites = makeFavorites(["p1", "p2", "p3", "p4"])
+        mock.postsById = [
+            "p1": makePost("p1"), "p2": makePost("p2"),
+            "p3": makePost("p3"), "p4": makePost("p4")
+        ]
         mock.failingPostIds = [
             "p2": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
         ]
@@ -190,13 +190,17 @@ final class FavoritesViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.hasMore, "切り詰めた＝サーバーにはまだ続きが残っている")
         XCTAssertNotNil(viewModel.loadMoreError, "つまずいたことをフッターに出す（黙って諦めない）")
 
+        // 通信が回復した状態で続きを読む
+        mock.failingPostIds = [:]
         await viewModel.loadMore()
 
+        // ⚠️ ここが本命。「カーソルを進めすぎない」ことの結果を**表示される並び**で見る。
+        //    進めすぎれば p2 が欠落し、戻しすぎれば p1 が二重に出る。どちらもこの1本で落ちる。
         XCTAssertEqual(
-            mock.receivedAfterValues.last ?? nil,
-            firstPage[0].createdAt,
-            "カーソルは成功した p1 までしか進めない（p3 まで消費したことにしない）"
+            viewModel.posts.map(\.id), ["p1", "p2", "p3", "p4"],
+            "切り詰めた p2 から再開する。欠落も重複もしない"
         )
+        XCTAssertNil(viewModel.loadMoreError, "回復したらエラー表示は消える")
     }
 
     /// 9. 1ページ丸ごと出せなかったら、次のページまで繰る ⭐️
@@ -205,10 +209,8 @@ final class FavoritesViewModelTests: XCTestCase {
     /// ViewModel 側で繰らないと、その先に生きている投稿があっても永久に辿り着けない。
     func testAllUnavailablePageAdvancesToNextPage() async {
         let mock = MockFirestoreServiceForFavoritesList()
-        mock.stubbedFavoritePages = [
-            makeFavorites(["gone1", "gone2"]),  // pageSize ちょうど＝続きがある
-            makeFavorites(["p3"])
-        ]
+        // pageSize(2) で切ると 1ページ目 = [gone1, gone2]（全滅）、2ページ目 = [p3]
+        mock.allFavorites = makeFavorites(["gone1", "gone2", "p3"])
         mock.postsById = ["p3": makePost("p3")]
         mock.failingPostIds = [
             "gone1": FirestoreServiceError.notFound,
@@ -231,11 +233,10 @@ final class FavoritesViewModelTests: XCTestCase {
     func testAllUnavailablePagesStopAtPageBudget() async {
         let mock = MockFirestoreServiceForFavoritesList()
         // 予算より多いページを用意し、全ページとも全件が削除済み
-        mock.stubbedFavoritePages = (1...8).map { makeFavorites(["g\($0)a", "g\($0)b"]) }
-        for page in mock.stubbedFavoritePages {
-            for favorite in page {
-                mock.failingPostIds[favorite.postId] = FirestoreServiceError.notFound
-            }
+        // pageSize(2) × 予算(5) を超える16件。全件が削除済み
+        mock.allFavorites = makeFavorites((1...16).map { "g\($0)" })
+        for favorite in mock.allFavorites {
+            mock.failingPostIds[favorite.postId] = FirestoreServiceError.notFound
         }
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
 
@@ -244,6 +245,10 @@ final class FavoritesViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.posts.isEmpty)
         XCTAssertEqual(mock.receivedAfterValues.count, 5, "無限には繰らない（1リクエストあたり5ページまで）")
         XCTAssertTrue(viewModel.hasMore, "予算切れ。続きが残っているのに『全部消えた』と断定しない")
+        XCTAssertTrue(
+            viewModel.stalledWithMore,
+            "自動のページ送りは末尾セルが変わらないと再発火しない。手動の導線を画面に出す必要がある状態"
+        )
     }
 
     /// 11. 続きの読み込みが一時的に失敗したら、黙って捨てず表に出す ⭐️
@@ -253,7 +258,7 @@ final class FavoritesViewModelTests: XCTestCase {
     /// 一覧全体をエラーにはせず（既に出ているものは残す）、フッターで再試行を促す。
     func testLoadMoreSurfacesTransientErrorInsteadOfDroppingIt() async {
         let mock = MockFirestoreServiceForFavoritesList()
-        mock.stubbedFavoritePages = [makeFavorites(["p1", "p2"]), makeFavorites(["p3", "p4"])]
+        mock.allFavorites = makeFavorites(["p1", "p2", "p3", "p4"])
         mock.postsById = [
             "p1": makePost("p1"), "p2": makePost("p2"),
             "p3": makePost("p3"), "p4": makePost("p4")
@@ -277,8 +282,13 @@ final class FavoritesViewModelTests: XCTestCase {
 // MARK: - Mock
 
 final class MockFirestoreServiceForFavoritesList: FirestoreServiceProtocol {
-    /// fetchFavorites が順に返すページ（どのページを返すかはカーソルではなく呼び出し順で決める）
-    var stubbedFavoritePages: [[Favorite]] = []
+    /// お気に入り全件（createdAt の降順）。`fetchFavorites` はここから `after` / `limit` で切り出す ⭐️
+    ///
+    /// ⚠️ 「呼び出し順に用意したページを返す」形だと、**カーソルを渡していない実装でもテストが緑になる**。
+    ///    この画面の肝はまさに「カーソルをどこまで進めるか」なので、Mock 側で `after` を実際に尊重する。
+    ///    本番の `fetchFavorites` は `order(by: createdAt, descending: true)` + `start(after:)` ＝
+    ///    **同値は含まない**ので、その意味論に合わせている。
+    var allFavorites: [Favorite] = []
     /// fetchFavorites に渡された `after`（カーソル）の記録 ⭐️
     ///
     /// ⚠️ カーソルを `DocumentSnapshot` ではなく `createdAt` の `Date` にしたのは
@@ -290,13 +300,14 @@ final class MockFirestoreServiceForFavoritesList: FirestoreServiceProtocol {
     /// postId -> 投げるエラー（失敗する投稿）
     var failingPostIds: [String: Error] = [:]
 
-    private var pageIndex = 0
 
-    func fetchFavorites(userId _: String, limit _: Int, after: Date?) async throws -> [Favorite] {
+    func fetchFavorites(userId _: String, limit: Int, after: Date?) async throws -> [Favorite] {
         receivedAfterValues.append(after)
-        guard pageIndex < stubbedFavoritePages.count else { return [] }
-        defer { pageIndex += 1 }
-        return stubbedFavoritePages[pageIndex]
+        // start(after:) 相当。降順なので「カーソルより古いもの」を返し、同値は含まない。
+        let remaining = after.map { cursor in
+            allFavorites.filter { $0.createdAt < cursor }
+        } ?? allFavorites
+        return Array(remaining.prefix(limit))
     }
 
     func fetchPost(postId: String) async throws -> Post {

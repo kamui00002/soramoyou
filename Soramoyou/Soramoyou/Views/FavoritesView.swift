@@ -100,10 +100,8 @@ struct FavoritesView: View {
             EmptyStateView(type: .custom(
                 icon: "bookmark.slash",
                 title: "表示できる空がありません",
-                description: viewModel.unavailableCount > 0
-                    ? "ここまでの \(viewModel.unavailableCount)件は非公開になったか削除されています。まだ続きがあります"
-                    : "まだ続きがあります",
-                actionTitle: "続きを読み込む"
+                description: emptyWithMoreDescription,
+                actionTitle: viewModel.loadMoreError != nil ? "再試行" : "続きを読み込む"
             ), action: {
                 Task {
                     await viewModel.loadMore()
@@ -129,6 +127,43 @@ struct FavoritesView: View {
             ))
         } else {
             gridSection
+        }
+    }
+
+    /// 「1件も出せていないが、続きはある」ときの説明文
+    ///
+    /// ⚠️ この状態では `gridSection` が描画されない＝**フッターも出ない**。
+    ///    続きの読み込みに失敗したことをここで伝えないと、ボタンを押しても
+    ///    同じ文言に戻るだけになり、ユーザーには「効いていない」ようにしか見えない。
+    private var emptyWithMoreDescription: String {
+        if viewModel.loadMoreError != nil {
+            return "続きを読み込めませんでした。通信状況を確かめて、もう一度お試しください"
+        }
+        if viewModel.unavailableCount > 0 {
+            return "ここまでの \(viewModel.unavailableCount)件は非公開になったか削除されています。まだ続きがあります"
+        }
+        return "まだ続きがあります"
+    }
+
+    /// 続きを手動で読み込むボタン
+    ///
+    /// 自動のページ送り（`.onAppear`）が効かない状況の出口なので、
+    /// 失敗からの再試行と「行き詰まり」からの前進で見た目を揃えている。
+    private func loadMoreButton(title: String) -> some View {
+        Button {
+            Task {
+                await viewModel.loadMore()
+                syncRegisteredFavorites()
+            }
+        } label: {
+            Text(title)
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, DesignTokens.Spacing.lg)
+                .padding(.vertical, DesignTokens.Spacing.sm)
+                .background(
+                    Capsule().fill(Color.white.opacity(0.2))
+                )
         }
     }
 
@@ -185,24 +220,18 @@ struct FavoritesView: View {
                         .font(.system(.caption, design: .rounded))
                         .foregroundColor(.white.opacity(0.75))
 
-                    Button {
-                        Task {
-                            await viewModel.loadMore()
-                            syncRegisteredFavorites()
-                        }
-                    } label: {
-                        Text("再試行")
-                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, DesignTokens.Spacing.lg)
-                            .padding(.vertical, DesignTokens.Spacing.sm)
-                            .background(
-                                Capsule().fill(Color.white.opacity(0.2))
-                            )
-                    }
+                    loadMoreButton(title: "再試行")
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, DesignTokens.Spacing.md)
+            } else if viewModel.stalledWithMore {
+                // ⚠️ 続きはあるのに、今回の読み込みでは表示できる投稿が1件も増えなかった
+                //    （非公開・削除がページ予算いっぱいに続いている）。
+                //    末尾セルの id が変わらないので `.onAppear` は再発火せず、
+                //    手動の導線が無いとここから先へ進めなくなる。
+                loadMoreButton(title: "続きを読み込む")
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, DesignTokens.Spacing.md)
             }
 
             // 非公開化・削除で出せなかった投稿があることを正直に伝える

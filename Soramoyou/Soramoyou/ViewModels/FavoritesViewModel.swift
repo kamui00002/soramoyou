@@ -53,6 +53,13 @@ final class FavoritesViewModel: ObservableObject {
     ///    スクロール位置のゆらぎで同じ失敗を叩き続けることになるため。
     @Published private(set) var loadMoreError: Error?
 
+    /// 「続きはあるのに、今回の読み込みでは表示できる投稿が1件も増えなかった」状態
+    ///
+    /// ⚠️ ページ繰りの予算を使い切ったときに立つ。一覧が0件のときも、非空のときも起きうる。
+    ///    `.onAppear` 起点の自動ページ送りは**末尾セルの id が変わらないと再発火しない**ので、
+    ///    この状態で手動の導線を出さないと、ユーザーはそこから先へ進めなくなる。
+    @Published private(set) var stalledWithMore = false
+
     // MARK: - Dependencies
 
     /// 閲覧者自身の userId（未ログインなら nil）
@@ -110,6 +117,7 @@ final class FavoritesViewModel: ObservableObject {
             hasMore = false
             unavailableCount = 0
             loadMoreError = nil
+            stalledWithMore = false
             return
         }
 
@@ -120,6 +128,7 @@ final class FavoritesViewModel: ObservableObject {
         isLoading = true
         lastError = nil
         loadMoreError = nil
+        stalledWithMore = false
         // 世代が変わっていたら、ローディング解除は新しい load() 側の責務。
         // （世代を進めるのは load() だけで、進めた直後に必ず isLoading = true を立てるので、
         //   ここで解除を見送ってもスピナーが出たままになることはない）
@@ -139,6 +148,7 @@ final class FavoritesViewModel: ObservableObject {
                 hasMore = false
                 unavailableCount = batch.unavailable
                 lastError = transientError
+                ErrorHandler.logError(transientError, context: "FavoritesViewModel.load", userId: userId)
                 return
             }
 
@@ -150,10 +160,15 @@ final class FavoritesViewModel: ObservableObject {
             hasMore = batch.hasMore
             // 一覧は出せたが、続きの解決でつまずいた場合はフッターから再試行させる。
             loadMoreError = batch.transientError
+            stalledWithMore = batch.hasMore && batch.posts.isEmpty
+            logTruncationIfNeeded(batch, context: "FavoritesViewModel.load", userId: userId)
 
             LoggingService.shared.logEvent("favorites_viewed", parameters: [
                 "count": posts.count,
-                "unavailable_count": unavailableCount
+                "unavailable_count": unavailableCount,
+                // 予算を使い切っても1件も出せなかったか
+                //（＝削除済みのお気に入りが溜まっている兆候。自己修復を入れるかの判断材料）
+                "stalled_with_more": stalledWithMore
             ])
         } catch {
             guard generation == fetchGeneration else { return }
@@ -161,6 +176,7 @@ final class FavoritesViewModel: ObservableObject {
             unfavoritedIds = []
             posts = []
             hasMore = false
+            stalledWithMore = false
             lastError = error
             ErrorHandler.logError(error, context: "FavoritesViewModel.load", userId: userId)
         }
@@ -176,9 +192,9 @@ final class FavoritesViewModel: ObservableObject {
         let generation = fetchGeneration
 
         isLoadingMore = true
+        loadMoreError = nil
         // 世代不一致で早期 return しても追加読み込みが恒久ブロックされないよう、必ず解除する。
         defer { isLoadingMore = false }
-        loadMoreError = nil
 
         do {
             let batch = try await fetchVisiblePages(userId: userId, after: cursor)
@@ -191,6 +207,8 @@ final class FavoritesViewModel: ObservableObject {
             self.cursor = batch.cursor ?? cursor
             hasMore = batch.hasMore
             loadMoreError = batch.transientError
+            stalledWithMore = batch.hasMore && batch.posts.isEmpty
+            logTruncationIfNeeded(batch, context: "FavoritesViewModel.loadMore", userId: userId)
         } catch {
             guard generation == fetchGeneration else { return }
             // 追加読み込みの失敗は画面全体をエラーにしない（既に出ているものは残す）。
@@ -270,6 +288,16 @@ final class FavoritesViewModel: ObservableObject {
         // 予算切れ。`hasMore` は true のまま返す。
         // ここで倒すと「お気に入りは全部消えました」という**嘘の断定**を表示することになる。
         return batch
+    }
+
+    /// 切り詰めが起きたことをログに残す
+    ///
+    /// ⚠️ 画面（フッターの再試行）に出すだけでは**運用側から見えない**。
+    ///    切り詰めが実ユーザーで発火しているのか、予算を使い切っているのかを後から
+    ///    判断できるようにログにも残す（`docs/pre-release-checklist.md` §1）。
+    private func logTruncationIfNeeded(_ batch: PageBatch, context: String, userId: String) {
+        guard let transientError = batch.transientError else { return }
+        ErrorHandler.logError(transientError, context: "\(context)(truncated)", userId: userId)
     }
 
     /// 全量から「隠している投稿」を除いて表示用の `posts` を作り直す
