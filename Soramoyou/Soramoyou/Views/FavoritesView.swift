@@ -76,7 +76,7 @@ struct FavoritesView: View {
 
     @ViewBuilder
     private var contentSection: some View {
-        if viewModel.isLoading, viewModel.posts.isEmpty {
+        if viewModel.isLoading || viewModel.isLoadingMore, viewModel.posts.isEmpty {
             LoadingStateView(type: .initial)
         } else if let error = viewModel.lastError, viewModel.posts.isEmpty {
             // ⚠️ 一時的な失敗のときに「0件」と嘘をつかないための分岐
@@ -91,8 +91,25 @@ struct FavoritesView: View {
                 secondaryAction: nil,
                 secondaryActionTitle: nil
             )
+        } else if viewModel.posts.isEmpty, viewModel.hasMore {
+            // ⚠️ 1件も出せていないが、サーバーにはまだ続きが残っている。
+            //    （ページ繰りの予算を使い切った／続きの解決が一時的に失敗した）
+            //    ここで「全部消えました」と出すと**嘘の断定**になる。
+            //    しかも一覧が0件だと末尾セルが無く `.onAppear` 起点の自動ページ送りが
+            //    効かないので、この手動ボタンが唯一の出口になる。
+            EmptyStateView(type: .custom(
+                icon: "bookmark.slash",
+                title: "表示できる空がありません",
+                description: emptyWithMoreDescription,
+                actionTitle: viewModel.loadMoreError != nil ? "再試行" : "続きを読み込む"
+            ), action: {
+                Task {
+                    await viewModel.loadMore()
+                    syncRegisteredFavorites()
+                }
+            })
         } else if viewModel.posts.isEmpty, viewModel.unavailableCount > 0 {
-            // ⚠️ お気に入りはあるが、全部が非公開化・削除で出せなかったケース。
+            // ⚠️ 続きは無い。お気に入りはあるが、全部が非公開化・削除で出せなかったケース。
             //    脚注（unavailableCount の Text）はグリッド側にあり、ここでは出ない。
             //    「まだありません」と出すと嘘になるので、専用の文言にする。
             EmptyStateView(type: .custom(
@@ -110,6 +127,43 @@ struct FavoritesView: View {
             ))
         } else {
             gridSection
+        }
+    }
+
+    /// 「1件も出せていないが、続きはある」ときの説明文
+    ///
+    /// ⚠️ この状態では `gridSection` が描画されない＝**フッターも出ない**。
+    ///    続きの読み込みに失敗したことをここで伝えないと、ボタンを押しても
+    ///    同じ文言に戻るだけになり、ユーザーには「効いていない」ようにしか見えない。
+    private var emptyWithMoreDescription: String {
+        if viewModel.loadMoreError != nil {
+            return "続きを読み込めませんでした。通信状況を確かめて、もう一度お試しください"
+        }
+        if viewModel.unavailableCount > 0 {
+            return "ここまでの \(viewModel.unavailableCount)件は非公開になったか削除されています。まだ続きがあります"
+        }
+        return "まだ続きがあります"
+    }
+
+    /// 続きを手動で読み込むボタン
+    ///
+    /// 自動のページ送り（`.onAppear`）が効かない状況の出口なので、
+    /// 失敗からの再試行と「行き詰まり」からの前進で見た目を揃えている。
+    private func loadMoreButton(title: String) -> some View {
+        Button {
+            Task {
+                await viewModel.loadMore()
+                syncRegisteredFavorites()
+            }
+        } label: {
+            Text(title)
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, DesignTokens.Spacing.lg)
+                .padding(.vertical, DesignTokens.Spacing.sm)
+                .background(
+                    Capsule().fill(Color.white.opacity(0.2))
+                )
         }
     }
 
@@ -138,8 +192,11 @@ struct FavoritesView: View {
                     }
                     .buttonStyle(CardButtonStyle())
                     .onAppear {
-                        // 末尾に到達したら次ページを読む
-                        if post.id == viewModel.posts.last?.id {
+                        // 末尾に到達したら次ページを読む。
+                        // ⚠️ 直前の追加読み込みが失敗しているときは自動で叩かない。
+                        //    `.onAppear` はスクロール位置のゆらぎで何度も発火するので、
+                        //    放っておくと同じ失敗を叩き続けることになる。再試行はフッターのボタンから。
+                        if post.id == viewModel.posts.last?.id, viewModel.loadMoreError == nil {
                             Task {
                                 await viewModel.loadMore()
                                 syncRegisteredFavorites()
@@ -154,6 +211,26 @@ struct FavoritesView: View {
             if viewModel.isLoadingMore {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .padding(.top, DesignTokens.Spacing.md)
+            } else if viewModel.loadMoreError != nil {
+                // 続きの読み込みに失敗した。⚠️ 黙って諦めない
+                //    （黙ると「お気に入りしたのに一覧に無い」に見え、原因も伝わらない）。
+                VStack(spacing: DesignTokens.Spacing.sm) {
+                    Text("続きを読み込めませんでした")
+                        .font(.system(.caption, design: .rounded))
+                        .foregroundColor(.white.opacity(0.75))
+
+                    loadMoreButton(title: "再試行")
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, DesignTokens.Spacing.md)
+            } else if viewModel.stalledWithMore {
+                // ⚠️ 続きはあるのに、今回の読み込みでは表示できる投稿が1件も増えなかった
+                //    （非公開・削除がページ予算いっぱいに続いている）。
+                //    末尾セルの id が変わらないので `.onAppear` は再発火せず、
+                //    手動の導線が無いとここから先へ進めなくなる。
+                loadMoreButton(title: "続きを読み込む")
+                    .frame(maxWidth: .infinity)
                     .padding(.top, DesignTokens.Spacing.md)
             }
 
