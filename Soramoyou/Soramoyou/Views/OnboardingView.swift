@@ -55,6 +55,26 @@ struct OnboardingView: View {
                 Color(red: 0.96, green: 0.58, blue: 0.45)
             ]
         ),
+        // ⚠️ 新規ユーザーには What's New が出ない（completeOnboarding で既読化される）ため、
+        //    フォローと🔖お気に入りはここで案内する（issue #94）。最終ページの直前に置く。
+        OnboardingPage(
+            icon: "person.2.fill",
+            title: "好きな空とつながる",
+            description: "気になる人やタグをフォローすると\n「あなた向け」に新着が届きます",
+            gradientColors: [
+                Color(red: 0.35, green: 0.55, blue: 0.95),
+                Color(red: 0.55, green: 0.80, blue: 0.98)
+            ]
+        ),
+        OnboardingPage(
+            icon: "bookmark.fill",
+            title: "私のお気に入りの空",
+            description: "🔖 で気になった空を\nあなただけのアルバムに集めよう",
+            gradientColors: [
+                Color(red: 0.98, green: 0.70, blue: 0.75),
+                Color(red: 0.93, green: 0.49, blue: 0.62)
+            ]
+        ),
         OnboardingPage(
             icon: "sparkles",
             title: "さあ、始めよう",
