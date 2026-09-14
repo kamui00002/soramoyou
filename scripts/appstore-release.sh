@@ -251,7 +251,11 @@ case "$SUBCOMMAND" in
         load_asc_credentials
         cd "$REPO_ROOT"
         fastlane release_prepare "version:$VERSION" "build:$BUILD"
-        # fastlane が成功した後にのみマニフェストを書き出す（失敗時は set -e で到達しない）
+        # deliver は submit_for_review: false だとビルドを紐付けない（1.9.9 / 1.10.0 / 1.10.1 で3回連続実測）。
+        # fastlane の「成功」表示ではなく、ASC から読み返した「紐づくビルド」で prepare の成否を判定し、
+        # 空なら PATCH relationships/build → 再読み返しで保証する。
+        python3 "$REPO_ROOT/scripts/asc_ensure_build.py" --version "$VERSION" --build "$BUILD"
+        # fastlane とビルド紐付けの両方が成功した後にのみマニフェストを書き出す（失敗時は set -e で到達しない）
         write_manifest
         ;;
     submit)
