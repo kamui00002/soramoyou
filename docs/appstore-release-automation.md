@@ -34,6 +34,10 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
   - `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`（`<KEY_ID>` は `ASC_KEY_ID` の値）
 - **fastlane がインストール済みであること**
   - `fastlane --version` が通ること（未導入なら `bundle install` または `brew install fastlane`）
+- **ASC API ヘルパー `~/.claude/scripts/asc_version_check.py` が存在すること**（リポジトリ外）
+  - `scripts/asc_ensure_build.py` が JWT 生成と ASC 照会（`make_jwt` / `_get` / `get_app_id`）を再利用する。無いと prepare は fastlane が ASC の版とメタデータを書き換えた**後**に止まる（マニフェストは書かれないので submit には進めない）
+- **python3 に `cryptography` が入っていること**
+  - `python3 -c 'import cryptography'` が通ること（上記ヘルパーが JWT の ES256 署名に使う）
 - `scripts/appstore-release.sh` は上記2つの secret を読み取り、`ASC_KEY_ID` / `ASC_ISSUER_ID` を環境変数にセットしてから `fastlane` を呼び出す。**手動 export は不要**（むしろ引数直書きは `secrets.md` 違反になるため行わないこと）。
 
 ---
