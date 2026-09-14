@@ -246,6 +246,9 @@ case "$SUBCOMMAND" in
         ;;
     prepare)
         # チェック順: release_notes → resolve → secret → fastlane（オフラインでもプレースホルダ検知だけは検証できる）
+        # 前回 prepare のマニフェストを最初に消す。同じ version/build/notes でやり直して途中で失敗したとき、
+        # 古いマニフェストが残ると submit の照合を素通りしてしまうため（成功した時だけ最後に書き直す）。
+        rm -f "$MANIFEST"
         check_release_notes
         resolve_version_and_build
         load_asc_credentials

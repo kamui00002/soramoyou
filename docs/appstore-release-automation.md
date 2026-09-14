@@ -54,7 +54,7 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
    - fastlane の直後に `scripts/asc_ensure_build.py` が ASC から「紐づくビルド」を読み返す。空または別ビルドなら `PATCH /v1/appStoreVersions/{id}/relationships/build` で紐付け、もう一度読み返して一致しなければ prepare を失敗させる
      - 理由: deliver は `submit_for_review: false` のときビルドを紐付けない。fastlane が「成功」と表示しても紐づくビルドは空のまま（1.9.9 / 1.10.0 / 1.10.1 で3回連続実測・毎回手動 PATCH で直していた）
      - 版が審査待ち・審査中・公開済みなど編集できない状態のときは、ビルドが一致していても書き込まずに止まる（そうした版で prepare が成功扱いになり、マニフェストが書かれて submit へ進めてしまうのを防ぐ）
-   - 成功時（fastlane とビルド紐付けの両方が成功した後だけ）、`fastlane/.release-manifest`（version/build/リリースノートのSHA-256）をローカルに書き出す。次の `submit` はこの内容と現在の状態を照合する
+   - 開始時に前回のマニフェストを消し、成功時（fastlane とビルド紐付けの両方が成功した後だけ）、`fastlane/.release-manifest`（version/build/リリースノートのSHA-256）をローカルに書き出す。次の `submit` はこの内容と現在の状態を照合する
 5. **GO確認（人間の判断・自動化しない）**
    - App Store Connect 上で `prepare` 後の内容（版番号・新機能欄・選択されたビルド）を目視確認する
    - 「審査提出GOの最終判断は自動化しない」方針のため、この確認は必ず人間（ユーザー）が行う
@@ -113,7 +113,7 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
 | `prepare` / `submit` が「リリースノートが PLACEHOLDER のまま」で止まる | `fastlane/metadata/ja/release_notes.txt` が未編集（`PLACEHOLDER` 文字列が残ったまま） | ユーザー承認済みのリリースノート草案でファイルを置き換えてから再実行する（§3 手順3） |
 | `submit` がマニフェスト不一致で止まる | `prepare` 後に `release_notes.txt` や version/build が変更された | 再度 `prepare` からやり直す |
 | `prepare` が「VALID なビルドが見つからない」で止まる | 指定ビルドが processing 中、または版番号とビルド番号の組み合わせが TestFlight 上に無い | processing 完了を待って `prepare` を再実行する。組み合わせ違いなら `--version` / `--build` を見直す |
-| `prepare` が「版の状態が … のため書き込まない」で止まる | 同じ版番号がすでに審査待ち・審査中・公開済み | 版番号を上げる（編集できない版のビルドは差し替えない設計） |
+| `prepare` が「版の状態が … のため書き込まない」で止まる | 同じ版番号がすでに審査待ち・審査中・公開済み（編集できない版のビルドは差し替えない設計） | 審査待ち・審査中なら、上の in-reviewロックの行と同じく結果が出るまで待つ。公開済みなら版番号を上げる |
 | 紐づくビルドだけを確認したい | — | `python3 scripts/asc_ensure_build.py --version <X.Y.Z> --build <N> --check-only`（読み取りのみ・不一致なら exit 1） |
 
 ---

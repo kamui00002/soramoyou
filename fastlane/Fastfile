@@ -86,9 +86,10 @@ platform :ios do
   end
 
   # --- lane :release_prepare ----------------------------------------------
-  # App Store 版の作成（または編集中の版のビルド選択）＋新機能欄の記入のみ行う。
+  # App Store 版の作成（または編集中の版の更新）＋新機能欄の記入のみ行う。
   # submit_for_review: false のため、審査提出は一切行わない。
-  desc "App Store版の作成・新機能欄記入・ビルド選択（審査提出はしない）"
+  # このレーンではビルドは紐付かない（実測）。紐付けは appstore-release.sh が直後に asc_ensure_build.py で保証する。
+  desc "App Store版の作成・新機能欄記入（ビルド紐付けと審査提出はしない）"
   lane :release_prepare do |options|
     version = options[:version]
     build = options[:build]
@@ -99,7 +100,7 @@ platform :ios do
     ensure_release_notes!
     deliver_release(version: version, build: build, submit: false)
 
-    UI.success("prepare 完了。ASCで内容確認→GO判断へ")
+    UI.success("deliver 完了（ビルドの紐付けはこの後 asc_ensure_build.py が保証する）")
   end
 
   # --- lane :release_submit ------------------------------------------------
