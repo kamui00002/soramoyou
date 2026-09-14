@@ -56,6 +56,7 @@
       - 例: 「反応してくれた人がわかる」と書くなら、一覧を開いて**名前と件数が出ている**ことを見る
       - 理由: 宣伝した機能が壊れていると、What's New が**そのまま低評価への導線**になる
         （`~/.claude/rules/mvp-prelaunch.md`「不具合がある状態でレビュー誘導を出すと逆効果」と同じ構造）
+- [ ] 新規ユーザー（オンボ）にも案内が要るか判断したか（What's New は新規ユーザーには出ない）
 - [ ] App Store 審査提出は `scripts/appstore-release.sh`（prepare→GO確認→submit）で行う。手順は `docs/appstore-release-automation.md` 参照
 
 ---
