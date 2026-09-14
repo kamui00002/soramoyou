@@ -34,6 +34,10 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
   - `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`（`<KEY_ID>` は `ASC_KEY_ID` の値）
 - **fastlane がインストール済みであること**
   - `fastlane --version` が通ること（未導入なら `bundle install` または `brew install fastlane`）
+- **ASC API ヘルパー `~/.claude/scripts/asc_version_check.py` が存在すること**（リポジトリ外）
+  - `scripts/asc_ensure_build.py` が JWT 生成と ASC 照会（`make_jwt` / `_get` / `get_app_id`）を再利用する。無いと prepare は fastlane が ASC の版とメタデータを書き換えた**後**に止まる（マニフェストは書かれないので submit には進めない）
+- **python3 に `cryptography` が入っていること**
+  - `python3 -c 'import cryptography'` が通ること（上記ヘルパーが JWT の ES256 署名に使う）
 - `scripts/appstore-release.sh` は上記2つの secret を読み取り、`ASC_KEY_ID` / `ASC_ISSUER_ID` を環境変数にセットしてから `fastlane` を呼び出す。**手動 export は不要**（むしろ引数直書きは `secrets.md` 違反になるため行わないこと）。
 
 ---
@@ -51,7 +55,10 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
    ```bash
    scripts/appstore-release.sh prepare --version 1.9.3 --build 73
    ```
-   - 成功時、`fastlane/.release-manifest`（version/build/リリースノートのSHA-256）をローカルに書き出す。次の `submit` はこの内容と現在の状態を照合する
+   - fastlane の直後に `scripts/asc_ensure_build.py` が ASC から「紐づくビルド」を読み返す。空または別ビルドなら `PATCH /v1/appStoreVersions/{id}/relationships/build` で紐付け、もう一度読み返して一致しなければ prepare を失敗させる
+     - 理由: deliver は `submit_for_review: false` のときビルドを紐付けない。fastlane が「成功」と表示しても紐づくビルドは空のまま（1.9.9 / 1.10.0 / 1.10.1 で3回連続実測・毎回手動 PATCH で直していた）
+     - 版が審査待ち・審査中・公開済みなど編集できない状態のときは、ビルドが一致していても書き込まずに止まる（そうした版で prepare が成功扱いになり、マニフェストが書かれて submit へ進めてしまうのを防ぐ）
+   - 開始時に前回のマニフェストを消し、成功時（fastlane とビルド紐付けの両方が成功した後だけ）、`fastlane/.release-manifest`（version/build/リリースノートのSHA-256）をローカルに書き出す。次の `submit` はこの内容と現在の状態を照合する
 5. **GO確認（人間の判断・自動化しない）**
    - App Store Connect 上で `prepare` 後の内容（版番号・新機能欄・選択されたビルド）を目視確認する
    - 「審査提出GOの最終判断は自動化しない」方針のため、この確認は必ず人間（ユーザー）が行う
@@ -74,7 +81,7 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
 | サブコマンド | 対応 Fastlane レーン | 説明 |
 |---|---|---|
 | `status` | `asc_status` | App Store Connect API 認証の疎通確認（読み取り専用・最新TestFlightビルド番号を取得） |
-| `prepare` | `release_prepare` | 版作成／ビルド選択＋新機能欄記入のみ行う。`submit_for_review: false` のため審査提出はしない |
+| `prepare` | `release_prepare` ＋ `scripts/asc_ensure_build.py` | 版作成＋新機能欄記入のあと、ビルドの紐付けを ASC から読み返して保証する（§3 手順4）。`submit_for_review: false` のため審査提出はしない |
 | `submit` | `release_submit` | `prepare` と同一内容で審査提出まで行う。**不可逆** |
 
 **オプション:**
@@ -109,6 +116,9 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
 | 初回 `submit` 実行時に `submission_information`（IDFA等）の入力を要求してエラーになる | deliver が輸出コンプライアンス等の申告情報を要求している | `fastlane/Fastfile` の `release_submit` レーンに `submission_information` オプションを追加する |
 | `prepare` / `submit` が「リリースノートが PLACEHOLDER のまま」で止まる | `fastlane/metadata/ja/release_notes.txt` が未編集（`PLACEHOLDER` 文字列が残ったまま） | ユーザー承認済みのリリースノート草案でファイルを置き換えてから再実行する（§3 手順3） |
 | `submit` がマニフェスト不一致で止まる | `prepare` 後に `release_notes.txt` や version/build が変更された | 再度 `prepare` からやり直す |
+| `prepare` が「VALID なビルドが見つからない」で止まる | 指定ビルドが processing 中、または版番号とビルド番号の組み合わせが TestFlight 上に無い | processing 完了を待って `prepare` を再実行する。組み合わせ違いなら `--version` / `--build` を見直す |
+| `prepare` が「版の状態が … のため書き込まない」で止まる | 同じ版番号がすでに審査待ち・審査中・公開済み（編集できない版のビルドは差し替えない設計） | 審査待ち・審査中なら、上の in-reviewロックの行と同じく結果が出るまで待つ。公開済みなら版番号を上げる |
+| 紐づくビルドだけを確認したい | — | `python3 scripts/asc_ensure_build.py --version <X.Y.Z> --build <N> --check-only`（読み取りのみ・不一致なら exit 1） |
 
 ---
 
@@ -117,3 +127,9 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
 - 本自動化（`scripts/appstore-release.sh` の `prepare` / `submit`）は、**2026-07-11時点で実弾での End-to-End 検証を行っていない**。
 - 理由: この時点で 1.4.2 / build72 が審査中（in-reviewロック中）のため、新しい版を作成できる状態になかった。
 - **初回の実弾実行は次リリース（build 73 以降）で行う予定。** 実行時は §6 の既知制約（特に in-reviewロックと403権限エラー）に注意しながら進めること。
+
+### ビルド紐付けの保証（`scripts/asc_ensure_build.py`・2026-09-14 追加）の検証状況
+
+- **検証済み（読み取り経路）**: 1.10.1 / build 99（審査待ち）に対して `--check-only` を実行し、build 99 で exit 0（陽性）・build 98 で exit 1（陰性）・存在しない版 9.9.9 で exit 1 を確認。ビルド検索（`/v1/builds` の版番号＋ビルド番号フィルタ）は、1.10.1/99 と 1.10.0/98 の2組で「返った id を引き直すと版番号・ビルド番号とも一致」し、1.10.1/100 と 1.10.0/99 では見つからないことを確認（陽性2本＝フィルタが除外だけでなく選択していることの確認）
+- **検証済み（安全弁）**: 1.10.1 / build 99 を書き込みモード（`--check-only` なし）で実行し、紐付いていても `WAITING_FOR_REVIEW` を理由に exit 1 で止まることを実データで確認（PATCH の分岐には入らない）。判定関数は審査待ち・審査中・公開済み・提出準備中・却下の各状態で単体確認。ASC への書き込みは一切していない
+- **未検証（書き込み経路）**: `PATCH relationships/build` → 再読み返しの流れは、紐付いていない編集中の版が存在しないため実弾で試せていない。**次の build 100 以降の prepare が初回実弾**。そのときは prepare の出力に `PATCH relationships/build → HTTP 204` と `✅ … を紐付けた（読み返しで確認）` が出ることを確認し、GO 確認の前に ASC 画面でも紐づくビルドを目視すること
