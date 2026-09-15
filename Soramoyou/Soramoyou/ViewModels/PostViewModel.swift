@@ -93,10 +93,18 @@ class PostViewModel: ObservableObject {
 
     // MARK: - Image Management
 
-    /// 選択された画像を設定
-    func setSelectedImages(_ images: [UIImage]) {
+    /// 選択された画像と、各画像の外部編集情報（PHAsset / 元ファイル EXIF 由来）をまとめて設定する。
+    ///
+    /// 抽出（`extractImageInfo()`）は撮影日時を `externalEditInfos` から決めるため、
+    /// **両方が揃ってから**起動しなければならない。旧 `setExternalEditInfos` は抽出 Task の
+    /// 起動後に別途呼ばれており、順序依存で偶然成立していた。入口を 1 つに統合して
+    /// 「揃ってから始まる」ことを呼び出しの形で強制する。
+    /// - Parameter externalEditInfos: index は `images` と対応。既定 [] は下書き・テスト等の互換用。
+    func setSelectedImages(_ images: [UIImage], externalEditInfos: [ExternalEditInfo?] = []) {
         selectedImages = images
         editedImages = []
+        // ⭐️ Issue #4: 写真Appバッジ表示用。extractImageInfo() より前に代入する（撮影日時の出所）。
+        self.externalEditInfos = externalEditInfos
         extractImageInfo()
         // 解像度・ファイルサイズを非同期でバリデーション（必要に応じてリサイズ・圧縮）
         Task { @MainActor in
@@ -147,11 +155,6 @@ class PostViewModel: ObservableObject {
         self.editSettings = editSettings
         self.editRecipe = editRecipe
         self.editRecipes = editRecipes
-    }
-
-    /// 各画像の外部編集情報を設定（PHAsset 由来のメタ情報）⭐️ Issue #4
-    func setExternalEditInfos(_ infos: [ExternalEditInfo?]) {
-        externalEditInfos = infos
     }
 
     // MARK: - Post Info Management
@@ -210,7 +213,7 @@ class PostViewModel: ObservableObject {
 
     /// 画像情報の自動抽出の段階（エラー計装用）☁️
     ///
-    /// 4 つの抽出処理を 1 つの do/catch で囲んでいるため、`error_occurred` の
+    /// 3 つの抽出処理を 1 つの do/catch で囲んでいるため、`error_occurred` の
     /// `error_context` が `PostViewModel.extractImageInfo` の 1 種類しか出ず、
     /// 「どの段階で落ちたか」を運用で切り分けられなかった。
     /// 特にエラー文言「画像処理に失敗しました」は `ImageServiceError.processingFailed` と
@@ -220,9 +223,9 @@ class PostViewModel: ObservableObject {
     /// `rawValue` はそのまま `error_context` の接尾辞になる（例: `PostViewModel.extractImageInfo.colors`）。
     /// 既存の `型名.メソッド名` 規約を接頭辞として保つことで、分析側では前方一致で
     /// 「抽出全体の失敗数」も、完全一致で「段階ごとの失敗数」も取れる。
+    /// 撮影日時（旧 `.exif` 段階）はピッカー時点で元ファイルから読み終えており、ここでは
+    /// 画像に触らず同期で決まるため、失敗しうる段階ではなくなった（列挙から除去）。
     private enum ImageInfoExtractionStage: String {
-        /// EXIF 情報の抽出（`ImageService.extractEXIFData`）
-        case exif
         /// 主要色の抽出（`ImageService.extractColors`）
         case colors
         /// 色温度の計算（`ImageService.calculateColorTemperature`）
@@ -231,33 +234,47 @@ class PostViewModel: ObservableObject {
         case skyType = "sky_type"
     }
 
+    /// 画像情報の自動抽出 Task。テストが完了を待てるように保持する
+    /// （`await vm.imageInfoExtractionTask?.value`）。本体側は参照しない。
+    private(set) var imageInfoExtractionTask: Task<Void, Never>?
+
     /// 画像情報を抽出
     private func extractImageInfo() {
         guard let firstImage = selectedImages.first else { return }
 
-        Task { [weak self] in
+        // 撮影日時は元ファイルの EXIF（無ければ写真ライブラリの作成日時）から、ピッカー時点で
+        // 読んで `externalEditInfos` に載せてある。UIImage からは EXIF を読めない（再エンコードで
+        // 消える＝旧実装が全投稿で撮影日時を落としていた原因）ため、ここでは画像に触らず同期で決める。
+        // 先頭 1 枚を代表とする意味論は従来どおり。
+        //
+        // 合成投稿（collage / panorama）は素材複数枚を1枚に畳むため、特定の1枚の撮影日時・時間帯を
+        // 代表させる意味を持たない（`createPost` の `postKind.isComposite ? nil : ...` と同じ規則）。
+        // 抽出のこの時点で落としておくことで、投稿情報画面の「撮影時刻」表示・学習コーパスに渡す
+        // `capturedAt`・`post_completed` の `captured_at_source` が、実際に保存される値（nil）と
+        // 食い違わない。
+        // ⚠️ `postKind` は `setSelectedImages(_:externalEditInfos:)` より前に設定されている前提
+        //    （`PostInfoView.init` がその順序で呼ぶ）。
+        let resolved = postKind.isComposite ? nil : (externalEditInfos.first ?? nil)?.resolvedCapturedAt
+        let capturedAt = resolved?.date
+        let capturedAtSource = resolved?.source ?? .none
+        // 時間帯の判定。`TimeOfDay.from` は投稿端末のタイムゾーンで「時」を取る（アプリ全体の規約）。
+        // EXIF の `OffsetTimeOriginal` を使えば撮影の瞬間そのものは正しく求まるが、海外で撮影して
+        // 帰国後に投稿すると、判定に使う「時」は端末（投稿地）のタイムゾーンになり撮影地の時計とは
+        // ずれる。既知の制約として残す（撮影地のタイムゾーンを運ぶかどうかは別途判断）。
+        let timeOfDay = capturedAt.map { TimeOfDay.from(date: $0) }
+
+        imageInfoExtractionTask = Task { [weak self] in
             guard let self else { return }
             // 失敗した段階を `error_context` に載せるため、各処理の直前で更新する。
-            // ⚠️ EXIF・色・色温度の3段階は「最初の失敗で以降を中断」のまま。これらは
+            // ⚠️ 色・色温度の2段階は「最初の失敗で以降を中断」のまま。これらは
             //    `ExtractedImageInfo` の非Optionalな土台であり、段階ごとに catch して
             //    部分成功を許すと `extractedInfo` の中身の意味が変わってしまうため。
             //    例外は最後の空タイプ判定のみで、そこだけは内側で catch して先へ進む
             //    （理由は該当箇所のコメント参照）。したがって外側の catch に届く `stage` は
-            //    .exif / .colors / .colorTemperature のいずれかになる。
-            var stage: ImageInfoExtractionStage = .exif
+            //    .colors / .colorTemperature のいずれかになる。
+            var stage: ImageInfoExtractionStage = .colors
             do {
-                // EXIF情報の抽出
-                let exifData = try await imageService.extractEXIFData(firstImage)
-
-                // 時間帯の判定
-                let timeOfDay: TimeOfDay? = if let capturedAt = exifData.capturedAt {
-                    TimeOfDay.from(date: capturedAt)
-                } else {
-                    nil
-                }
-
                 // 色の抽出
-                stage = .colors
                 let colors = try await imageService.extractColors(firstImage, maxCount: 5)
 
                 // 色温度の計算
@@ -286,11 +303,12 @@ class PostViewModel: ObservableObject {
                 isClassifyingSkyType = false
 
                 extractedInfo = ExtractedImageInfo(
-                    capturedAt: exifData.capturedAt,
+                    capturedAt: capturedAt,
                     timeOfDay: timeOfDay,
                     skyColors: colors,
                     colorTemperature: colorTemperature,
-                    skyType: classifiedSkyType
+                    skyType: classifiedSkyType,
+                    capturedAtSource: capturedAtSource
                 )
             } catch {
                 isClassifyingSkyType = false
@@ -299,6 +317,37 @@ class PostViewModel: ObservableObject {
                 ErrorHandler.logError(error, context: "PostViewModel.extractImageInfo.\(stage.rawValue)")
             }
         }
+    }
+
+    /// `post_completed` の `captured_at_source` に載せる値を、保存値（`Post.capturedAt`）を起点に決める。
+    ///
+    /// `has_captured_at`（`post.capturedAt != nil`）は保存された値そのものを見るのに対し、
+    /// 従来の `captured_at_source` は抽出結果（`extractedInfo?.capturedAtSource`）を見ていたため、
+    /// 次の2パターンで指標が食い違っていた。
+    /// - 配置写真（collage/panorama）: 保存値は必ず nil だが、抽出結果は EXIF/asset を持ちうる
+    ///   （抽出は合成前の素材に対して行われるため）→ `false` / `exif` のような矛盾が出る。
+    /// - 再編集（`editingContext != nil`）: 保存値は元投稿の撮影日時を引き継ぐが、抽出はやり直さない
+    ///   ため `extractedInfo` は nil → `true` / `none` のような矛盾が出る。
+    ///
+    /// この関数は保存値を起点にすることで、`has_captured_at == true` ⇔ `source != .none` が
+    /// 常に成り立つようにする。
+    /// - Parameters:
+    ///   - savedCapturedAt: 実際に保存される `Post.capturedAt`（合成投稿は nil・再編集は元投稿の値）。
+    ///   - isReedit: `editingContext != nil`（再編集かどうか）。
+    ///   - extractedSource: 今回の抽出結果の出所（新規投稿のときのみ意味を持つ）。
+    /// - Returns: 計装用の出所。再編集で「抽出はしていないが保存値はある」場合は `.preserved`。
+    static func capturedAtSourceForEvent(
+        savedCapturedAt: Date?,
+        isReedit: Bool,
+        extractedSource: CapturedAtSource?
+    ) -> CapturedAtSource {
+        guard savedCapturedAt != nil else {
+            return .none
+        }
+        if isReedit {
+            return .preserved
+        }
+        return extractedSource ?? .none
     }
 
     // MARK: - Sky Type Management ☁️
@@ -324,7 +373,8 @@ class PostViewModel: ObservableObject {
             timeOfDay: info.timeOfDay,
             skyColors: info.skyColors,
             colorTemperature: info.colorTemperature,
-            skyType: skyType
+            skyType: skyType,
+            capturedAtSource: info.capturedAtSource // 再構築で出所を落とさない（計装用）
         )
     }
 
@@ -497,6 +547,16 @@ class PostViewModel: ObservableObject {
                 "has_caption": !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                 "has_location": location != nil,
                 "saved_original_images": saveOriginalImages,
+                // 撮影日時が付いたか・その出所（exif / asset / preserved / none）。旧実装は EXIF が
+                // 構造的に読めず全投稿で欠落していたため、再発を運用（PostHog）で検知できるようにする。
+                // 出所は保存値（has_captured_at と同じ post.capturedAt）を起点に決める
+                // （capturedAtSourceForEvent 参照。抽出結果をそのまま見ると合成投稿・再編集で食い違う）。
+                "has_captured_at": post.capturedAt != nil,
+                "captured_at_source": Self.capturedAtSourceForEvent(
+                    savedCapturedAt: post.capturedAt,
+                    isReedit: editingContext != nil,
+                    extractedSource: extractedInfo?.capturedAtSource
+                ).rawValue,
             ])
 
             // 機能1: mood 付き投稿を計装（LoggingService ファサード経由・PII なし）
@@ -752,8 +812,10 @@ class PostViewModel: ObservableObject {
             location: location,
             // 再編集時はメタを再導出せず元投稿の値を保持。新規時は抽出値を使用。配置写真は付けない。
             skyColors: isCollage ? nil : (editing?.skyColors ?? extractedInfo?.skyColors),
-            capturedAt: isCollage ? nil : (editing?.capturedAt ?? extractedInfo?.capturedAt),
-            timeOfDay: isCollage ? nil : (editing?.timeOfDay ?? extractedInfo?.timeOfDay),
+            // 撮影日時・時間帯は合成投稿(collage/panorama)全体で付けない。合成画像は端末内生成で
+            // 特定の素材 1 枚に紐づかず、素材 1 枚目の撮影日時を合成画像のものとして保存すると誤りになる。
+            capturedAt: postKind.isComposite ? nil : (editing?.capturedAt ?? extractedInfo?.capturedAt),
+            timeOfDay: postKind.isComposite ? nil : (editing?.timeOfDay ?? extractedInfo?.timeOfDay),
             skyType: isCollage ? nil : (editing?.skyType ?? effectiveSkyType), // 再編集=保持 / 新規=選択 or AI判定
             colorTemperature: isCollage ? nil : (editing?.colorTemperature ?? extractedInfo?.colorTemperature),
             visibility: visibility,
@@ -930,6 +992,9 @@ struct ExtractedImageInfo {
     let skyColors: [String]
     let colorTemperature: Int?
     let skyType: SkyType?
+    /// `capturedAt` の出所（計装 `post_completed.captured_at_source` 用）。
+    /// 既定 `.none` なので、出所を持たない既存の生成箇所（テスト等）は無改修で通る。
+    var capturedAtSource: CapturedAtSource = .none
 }
 
 // MARK: - アップロード結果 Value Object

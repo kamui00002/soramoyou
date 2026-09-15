@@ -85,10 +85,10 @@ final class PostViewModelCollageTests: XCTestCase {
         // 引き継がない（ギャラリーの「写真Appで編集済み」等のバッジ誤表示を防ぐ）。F5 回帰防止。
         for kind in [PostKind.collage, PostKind.panorama] {
             let vm = PostViewModel(userId: "u1")
-            vm.setSelectedImages([dummyImage()])
             vm.postKind = kind
             // 素材に外部編集情報がある状態を模す（4枚分。合成後は1枚でも元4枚分が残りうる）。
-            vm.setExternalEditInfos([
+            // 画像と外部編集情報は setSelectedImages(_:externalEditInfos:) で同時に渡す（入口統合後の形）。
+            vm.setSelectedImages([dummyImage()], externalEditInfos: [
                 ExternalEditInfo(hasAdjustments: true, formatIdentifier: "com.apple.photo"),
                 ExternalEditInfo(hasAdjustments: true, formatIdentifier: "com.apple.photo"),
                 ExternalEditInfo(hasAdjustments: true, formatIdentifier: "com.apple.photo"),
@@ -109,9 +109,11 @@ final class PostViewModelCollageTests: XCTestCase {
         // 通常投稿(.single)は素材＝投稿画像が1対1なので、外部編集情報を従来どおり保持する
         // （合成分岐が単写真に波及しないことの確認）。
         let vm = PostViewModel(userId: "u1")
-        vm.setSelectedImages([dummyImage()])
         vm.postKind = .single
-        vm.setExternalEditInfos([ExternalEditInfo(hasAdjustments: true, formatIdentifier: "com.apple.photo")])
+        vm.setSelectedImages(
+            [dummyImage()],
+            externalEditInfos: [ExternalEditInfo(hasAdjustments: true, formatIdentifier: "com.apple.photo")]
+        )
         let imageURLs = [UploadedImage(
             url: "https://e.com/s.jpg", thumbnail: "https://e.com/s_t.jpg",
             width: 800, height: 600, storagePath: "posts/u1/s.jpg", thumbnailStoragePath: "posts/u1/s_t.jpg"

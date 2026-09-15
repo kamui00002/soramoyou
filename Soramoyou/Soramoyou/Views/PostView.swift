@@ -98,6 +98,9 @@ struct PostView: View {
                 if let stitched = pendingStitched {
                     pendingStitched = nil
                     viewModel.selectedImages = [stitched]   // 合成済み1枚を投稿パイプラインへ
+                    // 合成画像は端末内で生成した新規画像で、特定の素材 1 枚に紐づかない。
+                    // 素材 1 枚目の外部編集情報（EXIF 撮影日時を含む）を合成画像に付けないよう空にする。
+                    viewModel.pickedMetadata = []
                     showEditView = true
                 }
             }) {

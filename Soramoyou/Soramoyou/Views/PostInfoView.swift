@@ -53,11 +53,12 @@ struct PostInfoView: View {
         //    （`wrappedValue:` 側が autoclosure なので、推論の失敗はここでは分かりにくい）。
         _viewModel = StateObject(wrappedValue: { () -> PostViewModel in
             let postViewModel = PostViewModel(userId: userId)
-            postViewModel.setSelectedImages(images)
             // 投稿種別（通常/配置写真/広角合成）を入口モードから引き継ぐ。savePost の畳み込み・保存メタを駆動。
             postViewModel.postKind = postKind
-            // 各画像の外部編集情報を保持（ギャラリーで写真Appバッジ表示用）⭐️ Issue #4
-            postViewModel.setExternalEditInfos(externalEditInfos)
+            // 画像と各画像の外部編集情報（写真Appバッジ表示用 ⭐️ Issue #4・元ファイル EXIF の撮影日時）を
+            // 同時に渡す。抽出（extractImageInfo）は撮影日時を外部編集情報から決めるため、
+            // 画像だけ先に渡して後から情報を足す形にはしない（順序依存の再発防止）。
+            postViewModel.setSelectedImages(images, externalEditInfos: externalEditInfos)
             if !editedImages.isEmpty {
                 // 通常経路: EditView から生成済みの編集後画像を受け取る（全編集を保持）。
                 // editRecipes は複数枚投稿時の学習コーパス記録用（既定 [] は下書き経路等の互換維持）。

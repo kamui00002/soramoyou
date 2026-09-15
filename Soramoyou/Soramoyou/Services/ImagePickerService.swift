@@ -8,6 +8,7 @@
 import SwiftUI
 import PhotosUI
 import Photos
+import UniformTypeIdentifiers
 import os
 
 private let logger = Logger(
@@ -26,19 +27,25 @@ struct ImagePicker: UIViewControllerRepresentable {
     @Binding var pickedMetadata: [ExternalEditInfo?]
     let maxSelectionCount: Int
     let onSelectionComplete: (() -> Void)?
+    /// 元ファイルの EXIF（撮影日時）読み取りに使うサービス。テストで差し替えられるよう注入する。
+    let imageService: ImageServiceProtocol
 
     /// メタデータのバインディングを必要としない呼び出し（プロフィール画像選択など）も
     /// 互換に保つためデフォルトの `.constant([])` を提供する。
+    /// `imageService` も既定値付きなので、既存の 3 呼び出し元（PostView / UseRecipeButton /
+    /// ProfileEditView）は無改修で通る。
     init(
         selectedImages: Binding<[UIImage]>,
         pickedMetadata: Binding<[ExternalEditInfo?]> = .constant([]),
         maxSelectionCount: Int,
-        onSelectionComplete: (() -> Void)? = nil
+        onSelectionComplete: (() -> Void)? = nil,
+        imageService: ImageServiceProtocol = ImageService()
     ) {
         self._selectedImages = selectedImages
         self._pickedMetadata = pickedMetadata
         self.maxSelectionCount = maxSelectionCount
         self.onSelectionComplete = onSelectionComplete
+        self.imageService = imageService
     }
 
     func makeUIViewController(context: Context) -> PHPickerViewController {
@@ -89,8 +96,16 @@ struct ImagePicker: UIViewControllerRepresentable {
                         let image = try await self.loadImage(from: result.itemProvider)
                         loadedImages.append(image)
 
-                        // PHAsset から外部編集情報を抽出（権限なし or 解決失敗で nil）
-                        let meta = self.resolveExternalEditInfo(from: result.assetIdentifier)
+                        // 元ファイルの EXIF から撮影日時を読む。UIImage は EXIF を保持しないため、
+                        // 元バイト列にまだ触れる「ここ」で読み切って ExternalEditInfo に載せる。
+                        // 読めなければ nil（下で PHAsset.creationDate に補完される）。
+                        let exifCapturedAt = await self.loadEXIFCapturedAt(from: result.itemProvider)
+
+                        // PHAsset から外部編集情報を抽出（権限なし or 解決失敗でも EXIF 日時だけは運ぶ）
+                        let meta = self.resolveExternalEditInfo(
+                            from: result.assetIdentifier,
+                            exifCapturedAt: exifCapturedAt
+                        )
                         loadedMetadata.append(meta)
                     } catch {
                         logger.error("画像の読み込みに失敗しました: \(error.localizedDescription)")
@@ -121,11 +136,61 @@ struct ImagePicker: UIViewControllerRepresentable {
             }
         }
 
-        /// PHPickerResult.assetIdentifier から PHAsset を解決し、外部編集情報を抽出する。
-        /// 権限なし・解決失敗時は nil を返す（バッジを出さないだけで、画像自体は使える）。
-        private func resolveExternalEditInfo(from identifier: String?) -> ExternalEditInfo? {
-            guard let identifier = identifier, !identifier.isEmpty else {
+        /// 元ファイルの EXIF `DateTimeOriginal` から撮影日時を読む。読めなければ nil（投稿は続行）。
+        ///
+        /// - `loadFileRepresentation` が渡す一時 URL は completion を抜けた時点で無効になる
+        ///   （システムがファイルを消す）。そのため URL を外へ持ち出さず、completion の**中で同期に**
+        ///   `extractEXIFData(fileURL:)` を呼び、結果の `Date` だけを持ち帰る。async 化しないのは意図的。
+        /// - 直前の `loadImage` と同じ provider から元ファイルを取り出す。`loadFileRepresentation` は
+        ///   一時領域への書き出しを伴うため、iCloud にしか無い写真や大きなファイルでは追加の待ちが
+        ///   出る可能性がある（未計測）。
+        /// - 写真ライブラリ権限に依存しない（「選択した写真のみ」許可でも item provider から読める）。
+        /// - EXIF を持たない（スクリーンショット等）・読み取り失敗は nil。呼び出し側が
+        ///   `PHAsset.creationDate` に補完するので、ここでは throw しない。
+        private func loadEXIFCapturedAt(from provider: NSItemProvider) async -> Date? {
+            let typeIdentifier = UTType.image.identifier
+            guard provider.hasItemConformingToTypeIdentifier(typeIdentifier) else {
                 return nil
+            }
+            // `loadFileRepresentation` の completion は `@Sendable` で、`any ImageServiceProtocol` は
+            // Sendable でないためそのままキャプチャすると警告になる。ImageService は `let` の
+            // CIContext しか持たず、EXIF 読みはヘッダ I/O のみで共有状態に触れないので、
+            // ここに限って unsafe を明示して渡す（プロトコル全体を Sendable にする変更は本 PR の範囲外）。
+            nonisolated(unsafe) let imageService = self.parent.imageService
+            return await withCheckedContinuation { continuation in
+                provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
+                    if let error {
+                        logger.debug("EXIF 読み取り用の元ファイル取得に失敗しました: \(error.localizedDescription)")
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    guard let url else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    // ⚠️ この closure を抜けると url は無効になる。ここで同期に読み切る。
+                    do {
+                        let exif = try imageService.extractEXIFData(fileURL: url)
+                        continuation.resume(returning: exif.capturedAt)
+                    } catch {
+                        logger.debug("EXIF の読み取りに失敗しました: \(error.localizedDescription)")
+                        continuation.resume(returning: nil)
+                    }
+                }
+            }
+        }
+
+        /// PHPickerResult.assetIdentifier から PHAsset を解決し、外部編集情報を抽出する。
+        /// 権限なし・解決失敗時は、EXIF 由来の撮影日時があればそれだけを載せた
+        /// `ExternalEditInfo` を返す（撮影日時は写真ライブラリ権限に依存しないため、
+        /// ここで捨てると「選択した写真のみ」許可のユーザーで撮影日時が消える）。
+        /// EXIF も無ければ従来どおり nil（バッジを出さないだけで、画像自体は使える）。
+        private func resolveExternalEditInfo(from identifier: String?, exifCapturedAt: Date?) -> ExternalEditInfo? {
+            // PHAsset を解決できない 3 経路（識別子なし / 権限なし / fetch 空）の共通フォールバック
+            let exifOnly = exifCapturedAt.map { ExternalEditInfo(hasAdjustments: false, exifCapturedAt: $0) }
+
+            guard let identifier = identifier, !identifier.isEmpty else {
+                return exifOnly
             }
 
             // 権限ステータス確認（読み取り権限がなければ PHAsset.fetchAssets はからの結果になる）
@@ -140,12 +205,12 @@ struct ImagePicker: UIViewControllerRepresentable {
                 break
             default:
                 logger.debug("写真ライブラリ権限なし。外部編集情報の取得をスキップします")
-                return nil
+                return exifOnly
             }
 
             let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
             guard let asset = fetched.firstObject else {
-                return nil
+                return exifOnly
             }
 
             // 公開された PHAssetMediaSubtype のフラグのみで HDR/パノラマ/Live Photo を判定する。
@@ -177,7 +242,8 @@ struct ImagePicker: UIViewControllerRepresentable {
                 isLivePhoto: isLivePhoto,
                 isPanorama: isPanorama,
                 creationDate: asset.creationDate,
-                modificationDate: asset.modificationDate
+                modificationDate: asset.modificationDate,
+                exifCapturedAt: exifCapturedAt
             )
         }
     }
