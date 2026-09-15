@@ -22,7 +22,7 @@ struct OnboardingView: View {
         OnboardingPage(
             icon: "camera.fill",
             title: "空を撮る",
-            description: "お気に入りの空の写真を選んで\n美しく編集しましょう",
+            description: "アプリのカメラで撮るか\n写真を選んで空を記録しよう",
             gradientColors: [
                 Color(red: 0.53, green: 0.81, blue: 0.98),
                 Color(red: 0.39, green: 0.58, blue: 0.93)
