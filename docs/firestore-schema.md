@@ -58,8 +58,8 @@
     "landmark": "string"
   },
   "skyColors": ["string"],           // 16進数カラーコード（最大5色）
-  "capturedAt": "timestamp",
-  "timeOfDay": "string",             // morning, afternoon, evening, night
+  "capturedAt": "timestamp",         // 過去分は scripts/backfill-post-captured-at.js で補完予定。対象外: 合成投稿(collage/panorama)、復元元データ(externalEditInfo)が無い投稿
+  "timeOfDay": "string",             // morning, afternoon, evening, night（capturedAtと同時に補完。対象外条件は同上）
   "skyType": "string",               // clear, cloudy, sunset, sunrise, storm
   "colorTemperature": "number",      // K表示
   "visibility": "string",            // public, followers, private

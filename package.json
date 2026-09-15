@@ -4,7 +4,8 @@
   "description": "Data migration scripts for Soramoyou app",
   "private": true,
   "scripts": {
-    "migrate": "node migrate-public-profiles.js"
+    "migrate": "node migrate-public-profiles.js",
+    "backfill:captured-at": "node scripts/backfill-post-captured-at.js"
   },
   "dependencies": {
     "firebase-admin": "^12.0.0"
