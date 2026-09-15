@@ -204,7 +204,7 @@ final class SkyMotionJobService: SkyMotionJobServiceProtocol {
             }
 
             // ストリーム終了時（上の finish() 呼び出し・呼び出し側の Task キャンセルいずれも）に
-            // 必ず listener を remove する（StorageService.uploadProgress と同じ onTermination 流儀）。
+            // 必ず listener を remove する（AsyncStream の onTermination で必ず解除する流儀）。
             continuation.onTermination = { _ in
                 listener.remove()
             }

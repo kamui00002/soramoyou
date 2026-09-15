@@ -30,13 +30,10 @@ protocol StorageServiceProtocol {
     func uploadImage(_ image: UIImage, path: String) async throws -> URL
     func uploadThumbnail(_ image: UIImage, path: String) async throws -> URL
     func deleteImage(path: String) async throws
-    func uploadProgress(path: String) -> AsyncStream<Double>
 }
 
 class StorageService: StorageServiceProtocol {
     private let storage: Storage
-    private var progressStreams: [String: AsyncStream<Double>.Continuation] = [:]
-    private let progressStreamsQueue = DispatchQueue(label: "com.soramoyou.storage.progress")
 
     init(storage: Storage = Storage.storage()) {
         self.storage = storage
@@ -163,71 +160,6 @@ class StorageService: StorageServiceProtocol {
             try await storageRef.delete()
         } catch {
             throw StorageServiceError.deleteFailed(error)
-        }
-    }
-
-    // MARK: - Upload Progress
-
-    func uploadProgress(path: String) -> AsyncStream<Double> {
-        return AsyncStream { continuation in
-            continuation.onTermination = { [weak self] _ in
-                guard let self = self else { return }
-                self.progressStreamsQueue.async {
-                    self.progressStreams.removeValue(forKey: path)
-                }
-            }
-            progressStreamsQueue.async {
-                self.progressStreams[path] = continuation
-            }
-        }
-    }
-
-    private func setupProgressObserver(for uploadTask: StorageUploadTask, path: String) {
-        uploadTask.observe(.progress) { [weak self] snapshot in
-            guard let self = self,
-                  let progress = snapshot.progress else {
-                return
-            }
-
-            let fractionCompleted = Double(progress.completedUnitCount) / Double(progress.totalUnitCount)
-
-            self.progressStreamsQueue.async {
-                if let continuation = self.progressStreams[path] {
-                    continuation.yield(fractionCompleted)
-                }
-            }
-        }
-
-        uploadTask.observe(.success) { [weak self] _ in
-            guard let self = self else { return }
-
-            self.progressStreamsQueue.async {
-                if let continuation = self.progressStreams[path] {
-                    continuation.yield(1.0)
-                    continuation.finish()
-                    self.progressStreams.removeValue(forKey: path)
-                }
-            }
-        }
-
-        uploadTask.observe(.failure) { [weak self] _ in
-            guard let self = self else { return }
-
-            self.progressStreamsQueue.async {
-                if let continuation = self.progressStreams[path] {
-                    continuation.finish()
-                    self.progressStreams.removeValue(forKey: path)
-                }
-            }
-        }
-    }
-
-    private func cleanupProgressObserver(for path: String) {
-        progressStreamsQueue.async {
-            if let continuation = self.progressStreams[path] {
-                continuation.finish()
-                self.progressStreams.removeValue(forKey: path)
-            }
         }
     }
 
