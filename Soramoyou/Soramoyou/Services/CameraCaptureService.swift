@@ -82,12 +82,16 @@ enum CameraCaptureService {
 
     /// 撮影結果から `ExternalEditInfo` を作る。
     ///
-    /// ⚠️ EXIF の撮影日時（`{Exif}.DateTimeOriginal`）の取り込みは**別 PR（EXIF 経路の是正）**に任せる。
-    ///    ここでは `creationDate` にシャッター時刻だけを入れる（`ExternalEditInfo` に項目は足さない）。
+    /// `creationDate` にはシャッター時刻を入れる。`exifCapturedAt` は `capture.metadata`
+    /// （`AVCapturePhoto.metadata`。`CGImageSourceCopyPropertiesAtIndex` と同じ辞書構造で
+    /// `{Exif}` サブ辞書を含む）から、写真ピッカー経路と同じ `ImageService.parseEXIFData`
+    /// で解釈する。EXIF が無ければ nil のままで、`ExternalEditInfo.resolvedCapturedAt` が
+    /// `creationDate`（シャッター時刻）に補完する。
     static func makeExternalEditInfo(from capture: SkyCameraCapture) -> ExternalEditInfo {
         ExternalEditInfo(
             hasAdjustments: false,
-            creationDate: capture.shutterDate
+            creationDate: capture.shutterDate,
+            exifCapturedAt: ImageService.parseEXIFData(from: capture.metadata).capturedAt
         )
     }
 

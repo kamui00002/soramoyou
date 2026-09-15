@@ -7,6 +7,7 @@
 //
 
 import XCTest
+import ImageIO
 import SkyCamera
 @testable import Soramoyou
 
@@ -35,6 +36,7 @@ final class CameraCaptureServiceTests: XCTestCase {
     /// 撮影結果のダミー（純関数の検証用。photoData は使われない経路のみを対象にする）。
     private func makeCapture(
         shutterDate: Date = Date(timeIntervalSince1970: 1_700_000_000),
+        metadata: [String: Any] = [:],
         gridEnabled: Bool = true,
         horizonEnabled: Bool = true,
         aeAfLocked: Bool = false,
@@ -44,7 +46,7 @@ final class CameraCaptureServiceTests: XCTestCase {
     ) -> SkyCameraCapture {
         SkyCameraCapture(
             photoData: Data(),
-            metadata: [:],
+            metadata: metadata,
             gridEnabled: gridEnabled,
             horizonEnabled: horizonEnabled,
             aeAfLocked: aeAfLocked,
@@ -85,8 +87,7 @@ final class CameraCaptureServiceTests: XCTestCase {
 
     // MARK: - ExternalEditInfo
 
-    /// 撮影直後は「未編集」で、撮影日時はシャッター時刻。
-    /// ⚠️ EXIF 由来の撮影日時は別 PR（EXIF 経路の是正）の担当。ここでは足さない。
+    /// 撮影直後は「未編集」で、撮影日時はシャッター時刻。EXIF が無ければ `exifCapturedAt` は nil。
     func testExternalEditInfoFromCapture() {
         let shutterDate = Date(timeIntervalSince1970: 1_700_000_000)
         let info = CameraCaptureService.makeExternalEditInfo(from: makeCapture(shutterDate: shutterDate))
@@ -95,6 +96,42 @@ final class CameraCaptureServiceTests: XCTestCase {
         XCTAssertFalse(info.hasAdjustments, "撮ったばかりの写真は未編集")
         XCTAssertNil(info.formatIdentifier)
         XCTAssertFalse(info.isPanorama)
+        XCTAssertNil(info.exifCapturedAt, "metadata が空なら EXIF 撮影日時も nil")
+    }
+
+    /// ⭐️ `capture.metadata` に EXIF の `DateTimeOriginal` があれば、ピッカー経路と同じ
+    /// `ImageService.parseEXIFData` で解釈して `exifCapturedAt` に載せる。
+    /// `AVCapturePhoto.metadata` は `CGImageSourceCopyPropertiesAtIndex` と同じ辞書構造
+    /// （`{Exif}` サブ辞書）を持つため、同じ純関数がそのまま使える。
+    func testExternalEditInfoFromCaptureWithEXIFCapturedAt() {
+        let shutterDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let exifDict: [String: Any] = [
+            kCGImagePropertyExifDateTimeOriginal as String: "2026:09:16 07:30:00",
+            kCGImagePropertyExifOffsetTimeOriginal as String: "+09:00",
+        ]
+        let metadata: [String: Any] = [kCGImagePropertyExifDictionary as String: exifDict]
+
+        let info = CameraCaptureService.makeExternalEditInfo(
+            from: makeCapture(shutterDate: shutterDate, metadata: metadata)
+        )
+
+        let expected = ISO8601DateFormatter().date(from: "2026-09-15T22:30:00Z")
+        XCTAssertEqual(info.exifCapturedAt, expected, "OffsetTimeOriginal(+09:00) 込みで解釈された EXIF 撮影日時")
+        XCTAssertEqual(info.creationDate, shutterDate, "creationDate はシャッター時刻のまま")
+        XCTAssertFalse(info.hasAdjustments, "撮ったばかりの写真は未編集")
+    }
+
+    /// metadata が空（EXIF なし）なら `exifCapturedAt` は nil のまま。
+    func testExternalEditInfoFromCaptureWithoutEXIFReturnsNilCapturedAt() {
+        let shutterDate = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let info = CameraCaptureService.makeExternalEditInfo(
+            from: makeCapture(shutterDate: shutterDate, metadata: [:])
+        )
+
+        XCTAssertNil(info.exifCapturedAt)
+        XCTAssertEqual(info.creationDate, shutterDate, "creationDate はシャッター時刻のまま")
+        XCTAssertFalse(info.hasAdjustments, "撮ったばかりの写真は未編集")
     }
 
     // MARK: - 計装の写像
