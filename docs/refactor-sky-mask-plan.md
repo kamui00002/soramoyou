@@ -1,7 +1,7 @@
 # 画像処理基盤 棚卸し & SkyMaskProvider / Sky Replacement 導入計画 ⭐️
 
 作成: 2026-07-10（調査: Explore 3系統並列 / 統合: Fable 5）
-ステータス: **S1〜S3.1 実装完了（マスク生成v1.1＋合成エンジン・レビュー済み）・S4 UI接続以降は未着手**
+ステータス: **S1〜S3.1 実装完了（マスク生成v1.1＋合成エンジン・レビュー済み）・S4 UI接続以降は未着手**／skyColors・colorTemperature の空領域限定化は **2026-09 PR-B で実施済み**（§3 表・S6 注記参照）
 
 > 進め方の合意事項: 実装は implementer サブエージェントに委譲し、各段階で止まって diff レビューを行う。
 > 作業ブランチ: main から新規に切る（例: `機能-空マスク基盤`）。現行の `claude/enhance-gallery-tab-730rwo` では作業しない。
@@ -117,8 +117,8 @@ SkyMaskProvider =「1枚の写真 → 空領域のグレースケールマスク
 |---|---|---|---|
 | **Sky Replacement（新機能）** | なし | マスクで空だけ差し替え（主目的） | S3 |
 | `SkyTypeClassifier.extractSkyRegion` | 上部60%矩形クロップ | マスク加重の色統計（精度向上） | S6（オプトイン） |
-| `ImageService.extractColors`（skyColors 保存値） | 画像全体から抽出 | 空領域限定抽出 | **保留**（保存データの意味が変わる＝既存投稿と非互換。切替はプロダクト判断） |
-| `ImageService.calculateColorTemperature` | 画像全体平均 | 空領域加重平均 | 同上・保留 |
+| `ImageService.extractColors`（skyColors 保存値） | 画像全体から抽出 | 空領域限定抽出 | **実施済み（PR-B・2026-09）**。被覆率 ≥0.05 かつ確信度 ≥0.3 のとき空マスク加重（セル平均 Σ(m·c)/Σm・マスク平均 <0.2 のセルは捨てる）、満たさない／空セル 0 なら従来どおり画像全体。既存投稿は再計算しない（プロダクト判断で決着） |
+| `ImageService.calculateColorTemperature` | 画像全体平均 | 空領域加重平均 | **実施済み（PR-B・2026-09）**。同じ閾値で空マスク加重平均、マスク平均 <0.01 なら画像全体 |
 | 空選択的編集（空だけ彩度UP等） | なし | 将来の拡張候補 | 対象外（Phase 3以降の構想） |
 
 **マスクを使わないもの**: 27ツール本体は全画面均一処理なので乗り換え対象外。`doubleExposure` も同一画像内合成であり無関係。
@@ -179,7 +179,7 @@ SkyMaskProvider =「1枚の写真 → 空領域のグレースケールマスク
 
 **S6.（S5 の後・任意）SkyTypeClassifier のマスク移行** — リスク: 中
 - 内容: `extractSkyRegion`（上部60%矩形）をマスク加重統計に**オプトイン注入**で置換（デフォルト旧動作、DI で切替）。実写サンプルで新旧の SkyType 一致率を確認してから切替。
-- skyColors / colorTemperature の空領域限定化は**保存データ互換の問題があるため本計画では実施しない**（プロダクト判断待ち）。
+- skyColors / colorTemperature の空領域限定化は、保存データの意味が変わるため保留していたが、プロダクト判断で決着し **PR-B（2026-09）で実施済み**（マスクは `PostViewModel` が `HeuristicSkyMaskProvider` で生成・閾値は `EditViewModel` の空補正と同値の被覆率 ≥0.05 / 確信度 ≥0.3）。`SkyTypeClassifier` のマスク移行は引き続き本項（S6）の対象。
 
 ### 推奨実行順
 

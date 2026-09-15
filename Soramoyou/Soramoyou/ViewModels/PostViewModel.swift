@@ -63,6 +63,8 @@ class PostViewModel: ObservableObject {
 
     private let imageService: ImageServiceProtocol
     private let skyTypeClassifier: SkyTypeClassifierProtocol
+    /// 主要色・色温度を空の部分から取るための空マスク生成（テストではモックを注入する）
+    private let skyMaskProvider: SkyMaskProviderProtocol
     private let storageService: StorageServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
     private let userId: String?
@@ -82,13 +84,15 @@ class PostViewModel: ObservableObject {
         imageService: ImageServiceProtocol = ImageService(),
         storageService: StorageServiceProtocol = StorageService(),
         firestoreService: FirestoreServiceProtocol = FirestoreService(),
-        skyTypeClassifier: SkyTypeClassifierProtocol = SkyTypeClassifier()
+        skyTypeClassifier: SkyTypeClassifierProtocol = SkyTypeClassifier(),
+        skyMaskProvider: SkyMaskProviderProtocol = HeuristicSkyMaskProvider()
     ) {
         self.userId = userId
         self.imageService = imageService
         self.storageService = storageService
         self.firestoreService = firestoreService
         self.skyTypeClassifier = skyTypeClassifier
+        self.skyMaskProvider = skyMaskProvider
     }
 
     // MARK: - Image Management
@@ -232,6 +236,35 @@ class PostViewModel: ObservableObject {
         case colorTemperature = "color_temperature"
         /// AI 空タイプ判定（`SkyTypeClassifier.classify`）
         case skyType = "sky_type"
+        /// 解析用画像の作成と空マスク生成（`SkyMaskProviderProtocol.makeSkyMask`）。
+        /// 失敗しても抽出は止めず、画像全体からの計算で続行する（内側で catch して記録するだけ）。
+        case skyMask = "sky_mask"
+    }
+
+    /// 主要色・色温度を空の部分から取る最低カバレッジ（`EditViewModel.skyCorrectionMinCoverage` と同値）
+    private static let skyColorMinCoverage: Double = 0.05
+    /// 主要色・色温度を空の部分から取る最低信頼度（`EditViewModel.skyCorrectionMinConfidence` と同値）
+    private static let skyColorMinConfidence: Double = 0.3
+    /// 解析用画像の長辺（px）。従来の `extractColors` / `calculateColorTemperature` の縮小サイズと同じ。
+    private static let analysisImageLongSide: CGFloat = 512
+
+    /// マスク生成と色のサンプリングに共用する解析用 CIImage を作る。
+    ///
+    /// - 長辺 512 以下に縮小する（`ImageService.resizeImage`。向きは焼き込まれない）
+    /// - 向きを `.oriented` で焼き込む（空マスク provider は `.up` 前提。縦撮り `.right` で縦横を取り違えない）
+    /// - `.oriented` は `.right` 系で origin が非ゼロの extent を返しうるので (0,0) に揃える
+    ///
+    /// マスクとサンプリングで同じインスタンスを使うことで、両者の座標がずれないことを構造で保証する。
+    private func makeAnalysisCIImage(from image: UIImage) async throws -> CIImage {
+        let side = Self.analysisImageLongSide
+        let resized = try await imageService.resizeImage(image, maxSize: CGSize(width: side, height: side))
+        guard let cgImage = resized.cgImage else {
+            throw ImageServiceError.invalidImage
+        }
+        let oriented = CIImage(cgImage: cgImage).oriented(CGImagePropertyOrientation(resized.imageOrientation))
+        let extent = oriented.extent
+        guard extent.origin != .zero else { return oriented }
+        return oriented.transformed(by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y))
     }
 
     /// 画像情報の自動抽出 Task。テストが完了を待てるように保持する
@@ -274,12 +307,41 @@ class PostViewModel: ObservableObject {
             //    .colors / .colorTemperature のいずれかになる。
             var stage: ImageInfoExtractionStage = .colors
             do {
-                // 色の抽出
-                let colors = try await imageService.extractColors(firstImage, maxCount: 5)
+                // 空マスク（ベストエフォート）。解析用画像を 1 つ作り、マスク生成と色のサンプリングの
+                // 両方に同じものを使う。失敗しても抽出は止めず、画像全体からの計算で続行する。
+                var analysisImage: CIImage?
+                var skyMask: SkyMask?
+                do {
+                    let image = try await makeAnalysisCIImage(from: firstImage)
+                    analysisImage = image
+                    skyMask = try await skyMaskProvider.makeSkyMask(for: image, quality: .preview)
+                } catch {
+                    ErrorHandler.logError(error, context: "PostViewModel.extractImageInfo.\(ImageInfoExtractionStage.skyMask.rawValue)")
+                }
+                // 空がある程度写っていて、判定に確信があるときだけ空の部分から色を取る。
+                // それ以外は nil を渡し、画像全体から計算する（従来と同じ値）。
+                let colorMask: CIImage? = skyMask.flatMap { mask in
+                    mask.skyCoverage >= Self.skyColorMinCoverage && mask.confidence >= Self.skyColorMinConfidence
+                        ? mask.mask
+                        : nil
+                }
 
-                // 色温度の計算
-                stage = .colorTemperature
-                let colorTemperature = try await imageService.calculateColorTemperature(firstImage)
+                let colors: [String]
+                let colorTemperature: Int
+                if let analysisImage {
+                    // 色の抽出
+                    colors = try await imageService.extractColors(from: analysisImage, maxCount: 5, skyMask: colorMask)
+
+                    // 色温度の計算
+                    stage = .colorTemperature
+                    colorTemperature = try await imageService.calculateColorTemperature(from: analysisImage, skyMask: colorMask)
+                } else {
+                    // 解析用画像を作れなかった（CGImage を持たない UIImage 等）ときは従来の経路で計算する
+                    colors = try await imageService.extractColors(firstImage, maxCount: 5)
+
+                    stage = .colorTemperature
+                    colorTemperature = try await imageService.calculateColorTemperature(firstImage)
+                }
 
                 // AI空タイプ判定（新しい分類器を使用）☁️
                 // ⚠️ ここだけはベストエフォートにして、失敗を do ブロックの外へ伝播させない。
@@ -308,7 +370,9 @@ class PostViewModel: ObservableObject {
                     skyColors: colors,
                     colorTemperature: colorTemperature,
                     skyType: classifiedSkyType,
-                    capturedAtSource: capturedAtSource
+                    capturedAtSource: capturedAtSource,
+                    skyCoverage: skyMask?.skyCoverage,
+                    colorsFromSky: colorMask != nil
                 )
             } catch {
                 isClassifyingSkyType = false
@@ -374,7 +438,9 @@ class PostViewModel: ObservableObject {
             skyColors: info.skyColors,
             colorTemperature: info.colorTemperature,
             skyType: skyType,
-            capturedAtSource: info.capturedAtSource // 再構築で出所を落とさない（計装用）
+            capturedAtSource: info.capturedAtSource, // 再構築で出所を落とさない（計装用）
+            skyCoverage: info.skyCoverage, // 同上（計装用）
+            colorsFromSky: info.colorsFromSky // 同上（計装用）
         )
     }
 
@@ -534,7 +600,7 @@ class PostViewModel: ObservableObject {
             // ⚠️ savePost は再編集（updatePost）でもここに到達する。新規投稿の母数を膨らませないよう、
             //    is_reedit で必ず区別する（PostHog 側でどちらにも絞れるよう、除外ではなく属性で持つ）。
             // PII は入れない（原則4）: 位置は Bool のみ・キャプション本文やハッシュタグは送らない。
-            LoggingService.shared.logEvent("post_completed", parameters: [
+            var postCompletedParameters: [String: Any] = [
                 "post_kind": postKind.rawValue,
                 "is_reedit": editingContext != nil,
                 // 実際に投稿された画像の枚数。合成系は畳み込み後なので常に 1 になる
@@ -557,7 +623,17 @@ class PostViewModel: ObservableObject {
                     isReedit: editingContext != nil,
                     extractedSource: extractedInfo?.capturedAtSource
                 ).rawValue,
-            ])
+                // 主要色・色温度を空の部分から取れたか。⚠️ これは「抽出」の結果であり保存値ではない
+                // （配置写真は色を保存しない・再編集は元投稿の色を保持する）。保存値との突き合わせは
+                // post_kind / is_reedit で分析側が絞る。撮影日時（isComposite）と色（isCollage）の
+                // 分岐の非対称は意図的なもので、ここでは揃えない。
+                "colors_from_sky": extractedInfo?.colorsFromSky ?? false,
+            ]
+            // 空の被覆率はマスクを生成できたときだけ載せる（小数 2 桁。取れないときはキー自体を出さない）
+            if let skyCoverage = extractedInfo?.skyCoverage {
+                postCompletedParameters["sky_coverage"] = (skyCoverage * 100).rounded() / 100
+            }
+            LoggingService.shared.logEvent("post_completed", parameters: postCompletedParameters)
 
             // 機能1: mood 付き投稿を計装（LoggingService ファサード経由・PII なし）
             if let mood = selectedMood {
@@ -995,6 +1071,11 @@ struct ExtractedImageInfo {
     /// `capturedAt` の出所（計装 `post_completed.captured_at_source` 用）。
     /// 既定 `.none` なので、出所を持たない既存の生成箇所（テスト等）は無改修で通る。
     var capturedAtSource: CapturedAtSource = .none
+    /// 空マスクの被覆率 0...1（計装 `post_completed.sky_coverage` 用）。マスクを生成できなかったときは nil。
+    var skyCoverage: Double? = nil
+    /// `skyColors` / `colorTemperature` を空の部分から求めたか（計装 `post_completed.colors_from_sky` 用）。
+    /// false は画像全体から求めた（空が少ない・確信が低い・マスク生成に失敗した）ことを表す。
+    var colorsFromSky: Bool = false
 }
 
 // MARK: - アップロード結果 Value Object

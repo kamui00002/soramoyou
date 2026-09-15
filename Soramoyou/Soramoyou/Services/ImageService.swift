@@ -48,6 +48,13 @@ protocol ImageServiceProtocol {
     // Analysis
     func extractColors(_ image: UIImage, maxCount: Int) async throws -> [String]
     func calculateColorTemperature(_ image: UIImage) async throws -> Int
+    /// 主要色を解析用 CIImage から抽出する。`skyMask` があれば空の部分から、nil なら画像全体から（従来と同じ値）。
+    /// - Parameters:
+    ///   - ciImage: 向きを焼き込み済み・origin (0,0)・長辺 512 以下に縮小済みの解析用画像（この関数は縮小しない）
+    ///   - skyMask: 空マスク（1=空）。extent は `ciImage` と一致させる
+    func extractColors(from ciImage: CIImage, maxCount: Int, skyMask: CIImage?) async throws -> [String]
+    /// 色温度を解析用 CIImage から計算する。`skyMask` があれば空の部分の加重平均から、nil なら画像全体から（従来と同じ値）。
+    func calculateColorTemperature(from ciImage: CIImage, skyMask: CIImage?) async throws -> Int
     func detectSkyType(_ image: UIImage) async throws -> SkyType
     /// 元ファイルの URL から EXIF を読む（同期）。UIImage 版は再エンコードで EXIF が消えるため廃止。
     /// 同期なのは `NSItemProvider.loadFileRepresentation` の一時 URL が completion 内でしか有効でないため。
@@ -451,7 +458,8 @@ final class ImageService: ImageServiceProtocol {
                         throw ImageServiceError.invalidImage
                     }
 
-                    let colors = try await self.extractDominantColors(from: resizedCIImage, maxCount: maxCount)
+                    // 空マスク無し（画像全体）で CIImage 版へ委譲する。出力は従来と同一。
+                    let colors = try await self.extractColors(from: resizedCIImage, maxCount: maxCount, skyMask: nil)
                     continuation.resume(returning: colors)
                 } catch {
                     continuation.resume(throwing: error)
@@ -460,22 +468,22 @@ final class ImageService: ImageServiceProtocol {
         }
     }
 
+    func extractColors(from ciImage: CIImage, maxCount: Int, skyMask: CIImage?) async throws -> [String] {
+        // 空のセルが 1 つも残らない（マスクがほぼ空を含まない等）ときは画像全体へフォールバックする。
+        if let skyMask, let skyColors = maskedDominantColors(image: ciImage, mask: skyMask, maxCount: maxCount) {
+            return skyColors
+        }
+        return try await extractDominantColors(from: ciImage, maxCount: maxCount)
+    }
+
     private func extractDominantColors(from ciImage: CIImage, maxCount: Int) async throws -> [String] {
         let extent = ciImage.extent
         let gridSize = min(maxCount, 5)
         let cellWidth = extent.width / CGFloat(gridSize)
         let cellHeight = extent.height / CGFloat(gridSize)
 
-        // 量子化キー -> (出現数, 代表色)。
-        // ⚠️ セルの平均色そのものをキーにしてはならない。25セルの平均が完全一致することは
-        //    まず無いため、全エントリが count=1 になり、下の prefix(maxCount) が
-        //    「上位5色」ではなく「順序の定まらない任意の5セル」を返してしまう
-        //    （Dictionary.sorted は値が同じときの順序を保証しない＝同じ写真から毎回違う
-        //     skyColors が出る）。各チャンネルを32段階に丸めたキーでまとめることで、
-        //    初めて「よく出ている色」という集計の意味が成立する。
-        //    返す値は量子化後の色ではなく、そのグループで最初に観測した実際の色にする
-        //    （丸めた色をそのまま保存すると、実際の空の色から目に見えてズレるため）。
-        var buckets: [String: (count: Int, representative: String)] = [:]
+        // セルの平均色を観測順（i=列 → j=行）に集める。順位付けは rankDominantColors に任せる。
+        var samples: [(r: Int, g: Int, b: Int)] = []
 
         for i in 0 ..< gridSize {
             for j in 0 ..< gridSize {
@@ -524,18 +532,41 @@ final class ImageService: ImageServiceProtocol {
 
                 pixelContext.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
 
-                let r = Int(pixelData[0])
-                let g = Int(pixelData[1])
-                let b = Int(pixelData[2])
-                let hexColor = String(format: "#%02X%02X%02X", r, g, b)
+                samples.append((r: Int(pixelData[0]), g: Int(pixelData[1]), b: Int(pixelData[2])))
+            }
+        }
 
-                // 各チャンネルを 8 刻み（0-31 の32段階）に丸めたキー。近い色を1グループにまとめる。
-                let bucketKey = String(format: "%02X%02X%02X", r / 8, g / 8, b / 8)
-                if let existing = buckets[bucketKey] {
-                    buckets[bucketKey] = (existing.count + 1, existing.representative)
-                } else {
-                    buckets[bucketKey] = (1, hexColor)
-                }
+        return Self.rankDominantColors(samples, maxCount: maxCount)
+    }
+
+    /// セルの平均色（観測順）から「よく出ている色」を上位 `maxCount` 件選ぶ。
+    ///
+    /// 画像全体の経路（`extractDominantColors`）と空マスクの経路（`maskedDominantColors`）で共用する。
+    /// - Parameters:
+    ///   - samples: セルの平均色（0...255）。観測順に並べる（同じグループの代表色は最初に観測した色になる）
+    ///   - maxCount: 返す色の最大数
+    /// - Returns: `#RRGGBB` の配列（出現数の降順 → キーの昇順）
+    private static func rankDominantColors(_ samples: [(r: Int, g: Int, b: Int)], maxCount: Int) -> [String] {
+        // 量子化キー -> (出現数, 代表色)。
+        // ⚠️ セルの平均色そのものをキーにしてはならない。25セルの平均が完全一致することは
+        //    まず無いため、全エントリが count=1 になり、下の prefix(maxCount) が
+        //    「上位5色」ではなく「順序の定まらない任意の5セル」を返してしまう
+        //    （Dictionary.sorted は値が同じときの順序を保証しない＝同じ写真から毎回違う
+        //     skyColors が出る）。各チャンネルを32段階に丸めたキーでまとめることで、
+        //    初めて「よく出ている色」という集計の意味が成立する。
+        //    返す値は量子化後の色ではなく、そのグループで最初に観測した実際の色にする
+        //    （丸めた色をそのまま保存すると、実際の空の色から目に見えてズレるため）。
+        var buckets: [String: (count: Int, representative: String)] = [:]
+
+        for sample in samples {
+            let hexColor = String(format: "#%02X%02X%02X", sample.r, sample.g, sample.b)
+
+            // 各チャンネルを 8 刻み（0-31 の32段階）に丸めたキー。近い色を1グループにまとめる。
+            let bucketKey = String(format: "%02X%02X%02X", sample.r / 8, sample.g / 8, sample.b / 8)
+            if let existing = buckets[bucketKey] {
+                buckets[bucketKey] = (existing.count + 1, existing.representative)
+            } else {
+                buckets[bucketKey] = (1, hexColor)
             }
         }
 
@@ -550,11 +581,152 @@ final class ImageService: ImageServiceProtocol {
         return Array(sortedBuckets.prefix(maxCount).map(\.value.representative))
     }
 
+    // MARK: - 空マスク加重の色（PR-B）
+
+    /// 空マスク加重で色を読むグリッドの長辺（px）。512 の解析画像を 1/4 に縮めて CPU で回す。
+    private static let skySamplingGridLongSide: CGFloat = 128
+    /// 空のセルとして採用するマスク平均の下限。上端の薄い空（ソフトエッジ）でも 1 行目が残る値。
+    private static let skyCellMinMaskMean: Double = 0.2
+    /// 画像全体のマスク平均がこれ未満なら「空が無い」とみなして加重平均を返さない。
+    private static let skyMinMaskMean: Double = 0.01
+
+    /// 解析画像とマスクを同じグリッドで読み出した結果
+    private struct MaskedSamplingGrid {
+        /// 解析画像の RGBA8（premultiplied・行 0 が画像の上端）
+        let pixels: [UInt8]
+        /// マスクの RGBA8（同上）
+        let mask: [UInt8]
+        let width: Int
+        let height: Int
+
+        /// (x, y) の画素を「非乗算の色 0...255」「マスク値 0...1」「画素の不透明度 0...1」で返す。
+        ///
+        /// ⚠️ 読み出しは premultiplied なので、縮小で縁の画素が半透明になると色もマスクも暗く見える。
+        ///    アルファで割り戻してから、アルファ（=その画素がどれだけ画像の中にあるか）を重みに掛ける。
+        ///    割り戻さないと、単色画像でも縁のセルだけ色が暗くなり「画像全体の値」とずれる。
+        func sample(x: Int, y: Int) -> (r: Double, g: Double, b: Double, m: Double, a: Double) {
+            let i = (y * width + x) * 4
+            let alpha = Double(pixels[i + 3])
+            guard alpha > 0 else { return (0, 0, 0, 0, 0) }
+            let r = Double(pixels[i]) * 255.0 / alpha
+            let g = Double(pixels[i + 1]) * 255.0 / alpha
+            let b = Double(pixels[i + 2]) * 255.0 / alpha
+            let maskAlpha = Double(mask[i + 3])
+            // マスクはグレースケール（R=G=B=値・アルファ素通し）。R をアルファで割り戻して値にする。
+            // ⚠️ マスクは色管理なし（`HeuristicSkyMaskProvider` が `.colorSpace: NSNull()` で作る）＝線形の値だが、
+            //    `readRGBA8` は sRGB で書き出すため、読んだ値には sRGB のガンマがかかっている（0.15 → 約 0.42）。
+            //    0/1 は変わらないが、境界のにじみ（中間値）の重みとセルの採用判定が膨らむので線形に戻す。
+            //    画像側は本物の sRGB 色空間を持つので、書き出しで元の値に戻っており変換しない。
+            let encoded = maskAlpha > 0 ? min(1.0, Double(mask[i]) / maskAlpha) : 0
+            let m = Self.srgbToLinear(encoded)
+            return (min(255, r), min(255, g), min(255, b), m, alpha / 255.0)
+        }
+
+        /// sRGB のガンマを外す（`ImageService.correlatedColorTemperature` の linearize と同じ式）
+        private static func srgbToLinear(_ value: Double) -> Double {
+            value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+    }
+
+    /// 解析画像とマスクを同じ長辺 128px のグリッドへ縮小して読み出す（`SkyColorGate.readRGBA8` を共用）。
+    private func readMaskedSamplingGrid(image: CIImage, mask: CIImage) -> MaskedSamplingGrid? {
+        let extent = image.extent
+        guard !extent.isEmpty, !extent.isInfinite, extent.width >= 1, extent.height >= 1 else { return nil }
+
+        // origin を (0,0) に揃える。readRGBA8 は CI 座標系の原点を基準に縮小して (0,0) 起点で読むため、
+        // origin が非ゼロのままだと画像本体からはみ出した範囲を読んでしまう。マスクも同じ量だけずらす。
+        let shift = CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y)
+        let bounds = CGRect(origin: .zero, size: extent.size)
+        let normalizedImage = image.transformed(by: shift)
+        let normalizedMask = mask.transformed(by: shift).cropped(to: bounds)
+
+        let scale = min(1, Self.skySamplingGridLongSide / max(extent.width, extent.height))
+        let width = max(1, Int((extent.width * scale).rounded()))
+        let height = max(1, Int((extent.height * scale).rounded()))
+
+        guard let pixels = SkyColorGate.readRGBA8(normalizedImage, gridW: width, gridH: height, ciContext: context),
+              let maskPixels = SkyColorGate.readRGBA8(normalizedMask, gridW: width, gridH: height, ciContext: context)
+        else {
+            return nil
+        }
+        return MaskedSamplingGrid(pixels: pixels, mask: maskPixels, width: width, height: height)
+    }
+
+    /// 空マスク加重で主要色を選ぶ。セル平均は Σ(m·c)/Σm、マスク平均が `skyCellMinMaskMean` 未満のセルは捨てる。
+    ///
+    /// CI の `areaAverage(image×mask) / areaAverage(mask)` を使わないのは、線形空間での平均になることと、
+    /// 8bit 量子化で被覆率 5% のとき 1/255 が約 8% の相対誤差になるため。CPU で加重和を取る。
+    /// - Returns: 空のセルが 1 つも無い・読み出しに失敗したときは nil（呼び出し側が画像全体へフォールバック）
+    /// グリッドの矩形範囲（[x0, x1) × [y0, y1)）で Σ(m·a·c) と Σm・Σ(m・a) を積算する。
+    /// `maskedDominantColors`（セル単位）・`maskedMeanColor`（全域）の共通ロジック（review-full simplifier keep）。
+    private func accumulateWeightedSum(
+        grid: MaskedSamplingGrid,
+        x0: Int, x1: Int, y0: Int, y1: Int
+    ) -> (weightSum: Double, alphaSum: Double, rSum: Double, gSum: Double, bSum: Double) {
+        var weightSum = 0.0
+        var alphaSum = 0.0
+        var rSum = 0.0, gSum = 0.0, bSum = 0.0
+        for y in y0 ..< y1 {
+            for x in x0 ..< x1 {
+                let p = grid.sample(x: x, y: y)
+                let weight = p.m * p.a
+                weightSum += weight
+                alphaSum += p.a
+                rSum += weight * p.r
+                gSum += weight * p.g
+                bSum += weight * p.b
+            }
+        }
+        return (weightSum, alphaSum, rSum, gSum, bSum)
+    }
+
+    private func maskedDominantColors(image: CIImage, mask: CIImage, maxCount: Int) -> [String]? {
+        guard let grid = readMaskedSamplingGrid(image: image, mask: mask) else { return nil }
+
+        // セルの分け方・観測順は画像全体の経路（extractDominantColors）と揃える。
+        // i=列（左→右）、j=行（CI 座標と同じく下→上）。ビットマップは行 0 が上端なので行番号を反転する。
+        let gridSize = min(maxCount, 5)
+        guard gridSize > 0 else { return nil }
+        var samples: [(r: Int, g: Int, b: Int)] = []
+
+        for i in 0 ..< gridSize {
+            let x0 = i * grid.width / gridSize
+            let x1 = (i + 1) * grid.width / gridSize
+            for j in 0 ..< gridSize {
+                let rowFromTop = gridSize - 1 - j
+                let y0 = rowFromTop * grid.height / gridSize
+                let y1 = (rowFromTop + 1) * grid.height / gridSize
+
+                let sums = accumulateWeightedSum(grid: grid, x0: x0, x1: x1, y0: y0, y1: y1)
+                // マスク平均が低いセル（地上・境界のにじみ）は色の集計に入れない
+                guard sums.alphaSum > 0, sums.weightSum / sums.alphaSum >= Self.skyCellMinMaskMean else { continue }
+
+                func toByte(_ value: Double) -> Int {
+                    max(0, min(255, Int((value / sums.weightSum).rounded())))
+                }
+                samples.append((r: toByte(sums.rSum), g: toByte(sums.gSum), b: toByte(sums.bSum)))
+            }
+        }
+
+        guard !samples.isEmpty else { return nil }
+        return Self.rankDominantColors(samples, maxCount: maxCount)
+    }
+
+    /// 空マスク加重の平均色（0...1）。Σ(m·c)/Σm。
+    /// - Returns: マスク平均が `skyMinMaskMean` 未満（空がほぼ無い）・読み出し失敗なら nil
+    private func maskedMeanColor(image: CIImage, mask: CIImage) -> (r: Double, g: Double, b: Double)? {
+        guard let grid = readMaskedSamplingGrid(image: image, mask: mask) else { return nil }
+
+        let sums = accumulateWeightedSum(grid: grid, x0: 0, x1: grid.width, y0: 0, y1: grid.height)
+        guard sums.alphaSum > 0, sums.weightSum > 0, sums.weightSum / sums.alphaSum >= Self.skyMinMaskMean else { return nil }
+        return (r: sums.rSum / sums.weightSum / 255.0, g: sums.gSum / sums.weightSum / 255.0, b: sums.bSum / sums.weightSum / 255.0)
+    }
+
     func calculateColorTemperature(_ image: UIImage) async throws -> Int {
         try await withCheckedThrowingContinuation { continuation in
             Task.detached(priority: .userInitiated) {
                 do {
-                    guard let ciImage = CIImage(image: image) else {
+                    guard CIImage(image: image) != nil else {
                         throw ImageServiceError.invalidImage
                     }
 
@@ -563,99 +735,117 @@ final class ImageService: ImageServiceProtocol {
                         throw ImageServiceError.invalidImage
                     }
 
-                    let filter = CIFilter.areaAverage()
-                    filter.inputImage = resizedCIImage
-                    filter.extent = resizedCIImage.extent
-
-                    // ⚠️ 切り出し矩形に resizedCIImage.extent（512×512）を使ってはならない。
-                    //    `areaAverage` の出力は常に原点 (0,0) の 1×1 画像なので、512×512 を要求すると
-                    //    平均色は左下1ピクセルだけ、残りは範囲外＝透明黒で埋まった画像が返る。
-                    //    それを 1×1 に縮小描画するとほぼ真っ黒になり、下の式が必ず約2020Kを返していた
-                    //    （実データでも全投稿が colorTemperature: 2021 で固定。2026-08-14 確認）。
-                    //    extractDominantColors / SkyTypeClassifier.getAverageColor と同じく 1×1 が正しい。
-                    guard let outputImage = filter.outputImage,
-                          let cgImage = self.context.createCGImage(outputImage, from: CGRect(x: 0, y: 0, width: 1, height: 1))
-                    else {
-                        throw ImageServiceError.processingFailed
-                    }
-
-                    let colorSpace = CGColorSpaceCreateDeviceRGB()
-                    let bytesPerPixel = 4
-                    let bytesPerRow = bytesPerPixel
-                    var pixelData = [UInt8](repeating: 0, count: bytesPerPixel)
-
-                    guard let pixelContext = CGContext(
-                        data: &pixelData,
-                        width: 1,
-                        height: 1,
-                        bitsPerComponent: 8,
-                        bytesPerRow: bytesPerRow,
-                        space: colorSpace,
-                        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-                    ) else {
-                        throw ImageServiceError.processingFailed
-                    }
-
-                    pixelContext.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-
-                    let r = Double(pixelData[0]) / 255.0
-                    let g = Double(pixelData[1]) / 255.0
-                    let b = Double(pixelData[2]) / 255.0
-
-                    // McCamy の近似式は「CIE xy 色度座標」を入力に取る式であり、RGB をそのまま
-                    // x, y として渡してはならない（旧実装は x に r、y に b を入れていた＝単位の取り違え）。
-                    // 誤用したままだと暖色で除数が負に振れて式が破綻し、夕焼けが常に下限 2000K に
-                    // 張り付いていた。sRGB → 線形RGB → CIE XYZ(D65) → xy と正しく変換してから渡す。
-                    // 検証: D65 の無彩色 #808080 を通すと 6504K（D65 の定義値）が返ることを確認済み。
-
-                    // sRGB のガンマを外して線形 RGB にする
-                    func linearize(_ channel: Double) -> Double {
-                        channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
-                    }
-                    let rLinear = linearize(r)
-                    let gLinear = linearize(g)
-                    let bLinear = linearize(b)
-
-                    // 線形 sRGB → CIE XYZ（D65 基準の標準変換行列）
-                    let xyzX = 0.4124 * rLinear + 0.3576 * gLinear + 0.1805 * bLinear
-                    let xyzY = 0.2126 * rLinear + 0.7152 * gLinear + 0.0722 * bLinear
-                    let xyzZ = 0.0193 * rLinear + 0.1192 * gLinear + 0.9505 * bLinear
-
-                    let epsilon = 1e-10
-                    // 真っ黒（XYZ 合計が 0）では色度が定義できないため、既定値（昼光 5500K）を返す
-                    let xyzSum = xyzX + xyzY + xyzZ
-                    guard xyzSum > epsilon else {
-                        continuation.resume(returning: 5500)
-                        return
-                    }
-                    let chromaticityX = xyzX / xyzSum
-                    let chromaticityY = xyzY / xyzSum
-
-                    // ゼロ除算防止: 除数 (0.1858 - y) が0近傍の場合はデフォルト値（昼光 5500K）を返す
-                    let divisor = 0.1858 - chromaticityY
-                    guard abs(divisor) > epsilon else {
-                        continuation.resume(returning: 5500)
-                        return
-                    }
-
-                    let n = (chromaticityX - 0.3320) / divisor
-                    let nSquared = n * n
-                    let nCubed = nSquared * n
-                    let colorTemperature = (449.0 * nCubed) + (3525.0 * nSquared) + (6823.3 * n) + 5520.33
-
-                    // NaN/Infinity チェック: 異常値の場合はデフォルト値（昼光 5500K）を返す
-                    guard colorTemperature.isFinite else {
-                        continuation.resume(returning: 5500)
-                        return
-                    }
-
-                    let clampedTemperature = max(2000, min(10000, Int(colorTemperature)))
-                    continuation.resume(returning: clampedTemperature)
+                    // 空マスク無し（画像全体）で CIImage 版へ委譲する。出力は従来と同一。
+                    let colorTemperature = try await self.calculateColorTemperature(from: resizedCIImage, skyMask: nil)
+                    continuation.resume(returning: colorTemperature)
                 } catch {
                     continuation.resume(throwing: error)
                 }
             }
         }
+    }
+
+    func calculateColorTemperature(from ciImage: CIImage, skyMask: CIImage?) async throws -> Int {
+        // 空がほぼ写っていない（マスク平均が小さい）ときは画像全体へフォールバックする。
+        if let skyMask, let skyMean = maskedMeanColor(image: ciImage, mask: skyMask) {
+            return Self.correlatedColorTemperature(r: skyMean.r, g: skyMean.g, b: skyMean.b)
+        }
+        let mean = try wholeImageMeanColor(of: ciImage)
+        return Self.correlatedColorTemperature(r: mean.r, g: mean.g, b: mean.b)
+    }
+
+    /// 画像全体の平均色（0...1・8bit 量子化後）を `areaAverage` で読む。
+    private func wholeImageMeanColor(of ciImage: CIImage) throws -> (r: Double, g: Double, b: Double) {
+        let filter = CIFilter.areaAverage()
+        filter.inputImage = ciImage
+        filter.extent = ciImage.extent
+
+        // ⚠️ 切り出し矩形に resizedCIImage.extent（512×512）を使ってはならない。
+        //    `areaAverage` の出力は常に原点 (0,0) の 1×1 画像なので、512×512 を要求すると
+        //    平均色は左下1ピクセルだけ、残りは範囲外＝透明黒で埋まった画像が返る。
+        //    それを 1×1 に縮小描画するとほぼ真っ黒になり、下の式が必ず約2020Kを返していた
+        //    （実データでも全投稿が colorTemperature: 2021 で固定。2026-08-14 確認）。
+        //    extractDominantColors / SkyTypeClassifier.getAverageColor と同じく 1×1 が正しい。
+        guard let outputImage = filter.outputImage,
+              let cgImage = context.createCGImage(outputImage, from: CGRect(x: 0, y: 0, width: 1, height: 1))
+        else {
+            throw ImageServiceError.processingFailed
+        }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bytesPerPixel = 4
+        let bytesPerRow = bytesPerPixel
+        var pixelData = [UInt8](repeating: 0, count: bytesPerPixel)
+
+        guard let pixelContext = CGContext(
+            data: &pixelData,
+            width: 1,
+            height: 1,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else {
+            throw ImageServiceError.processingFailed
+        }
+
+        pixelContext.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+
+        return (
+            r: Double(pixelData[0]) / 255.0,
+            g: Double(pixelData[1]) / 255.0,
+            b: Double(pixelData[2]) / 255.0
+        )
+    }
+
+    /// sRGB の平均色（0...1）から相関色温度（K・2000...10000 にクランプ）を求める。
+    /// 画像全体の経路と空マスクの経路で共用する。
+    private static func correlatedColorTemperature(r: Double, g: Double, b: Double) -> Int {
+        // McCamy の近似式は「CIE xy 色度座標」を入力に取る式であり、RGB をそのまま
+        // x, y として渡してはならない（旧実装は x に r、y に b を入れていた＝単位の取り違え）。
+        // 誤用したままだと暖色で除数が負に振れて式が破綻し、夕焼けが常に下限 2000K に
+        // 張り付いていた。sRGB → 線形RGB → CIE XYZ(D65) → xy と正しく変換してから渡す。
+        // 検証: D65 の無彩色 #808080 を通すと 6504K（D65 の定義値）が返ることを確認済み。
+
+        // sRGB のガンマを外して線形 RGB にする
+        func linearize(_ channel: Double) -> Double {
+            channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        let rLinear = linearize(r)
+        let gLinear = linearize(g)
+        let bLinear = linearize(b)
+
+        // 線形 sRGB → CIE XYZ（D65 基準の標準変換行列）
+        let xyzX = 0.4124 * rLinear + 0.3576 * gLinear + 0.1805 * bLinear
+        let xyzY = 0.2126 * rLinear + 0.7152 * gLinear + 0.0722 * bLinear
+        let xyzZ = 0.0193 * rLinear + 0.1192 * gLinear + 0.9505 * bLinear
+
+        let epsilon = 1e-10
+        // 真っ黒（XYZ 合計が 0）では色度が定義できないため、既定値（昼光 5500K）を返す
+        let xyzSum = xyzX + xyzY + xyzZ
+        guard xyzSum > epsilon else {
+            return 5500
+        }
+        let chromaticityX = xyzX / xyzSum
+        let chromaticityY = xyzY / xyzSum
+
+        // ゼロ除算防止: 除数 (0.1858 - y) が0近傍の場合はデフォルト値（昼光 5500K）を返す
+        let divisor = 0.1858 - chromaticityY
+        guard abs(divisor) > epsilon else {
+            return 5500
+        }
+
+        let n = (chromaticityX - 0.3320) / divisor
+        let nSquared = n * n
+        let nCubed = nSquared * n
+        let colorTemperature = (449.0 * nCubed) + (3525.0 * nSquared) + (6823.3 * n) + 5520.33
+
+        // NaN/Infinity チェック: 異常値の場合はデフォルト値（昼光 5500K）を返す
+        guard colorTemperature.isFinite else {
+            return 5500
+        }
+
+        return max(2000, min(10000, Int(colorTemperature)))
     }
 
     func detectSkyType(_ image: UIImage) async throws -> SkyType {
