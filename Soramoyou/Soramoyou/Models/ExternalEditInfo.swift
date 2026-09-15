@@ -40,6 +40,15 @@ struct ExternalEditInfo: Codable, Equatable {
     /// 最後に編集された日時（PHAsset.modificationDate）
     let modificationDate: Date?
 
+    /// 元ファイルの EXIF `DateTimeOriginal` から読んだ撮影日時。
+    ///
+    /// `creationDate`（PHAsset.creationDate）とは別に持つのは、写真ライブラリの作成日時が
+    /// 「保存した時刻」（他アプリからの保存・AirDrop 受信など）を指すことがあり、撮影の瞬間を
+    /// 表す EXIF の値のほうが投稿の `capturedAt` として正しいため。ピッカー時点で元ファイルから
+    /// 読む（UIImage に変換した後では EXIF が失われる）。EXIF を持たない画像
+    /// （スクリーンショット等）や読み取り失敗時は nil で、`creationDate` に補完される。
+    let exifCapturedAt: Date?
+
     init(
         hasAdjustments: Bool,
         formatIdentifier: String? = nil,
@@ -47,7 +56,8 @@ struct ExternalEditInfo: Codable, Equatable {
         isLivePhoto: Bool = false,
         isPanorama: Bool = false,
         creationDate: Date? = nil,
-        modificationDate: Date? = nil
+        modificationDate: Date? = nil,
+        exifCapturedAt: Date? = nil
     ) {
         self.hasAdjustments = hasAdjustments
         self.formatIdentifier = formatIdentifier
@@ -56,6 +66,23 @@ struct ExternalEditInfo: Codable, Equatable {
         self.isPanorama = isPanorama
         self.creationDate = creationDate
         self.modificationDate = modificationDate
+        self.exifCapturedAt = exifCapturedAt
+    }
+
+    // MARK: - 撮影日時の解決
+
+    /// 投稿の撮影日時（`Post.capturedAt`）として採用する値と、その出所。
+    /// 優先順位は EXIF → 写真ライブラリの作成日時 → nil（ユーザー決定事項）。
+    /// 出所を返すのは、`post_completed` の `captured_at_source` で「EXIF が読めている割合」を
+    /// 運用で追えるようにするため（不具合の再発を計装で検知する）。
+    var resolvedCapturedAt: (date: Date, source: CapturedAtSource)? {
+        if let exifCapturedAt {
+            return (exifCapturedAt, .exif)
+        }
+        if let creationDate {
+            return (creationDate, .asset)
+        }
+        return nil
     }
 
     // MARK: - 表示用ヘルパー
@@ -105,6 +132,10 @@ struct ExternalEditInfo: Codable, Equatable {
         if let modificationDate = modificationDate {
             data["modificationDate"] = Timestamp(date: modificationDate)
         }
+        // nil は省略（旧ドキュメントと同形状を保つ＝後方互換）
+        if let exifCapturedAt = exifCapturedAt {
+            data["exifCapturedAt"] = Timestamp(date: exifCapturedAt)
+        }
         return data
     }
 
@@ -128,5 +159,28 @@ struct ExternalEditInfo: Codable, Equatable {
         } else {
             self.modificationDate = documentData["modificationDate"] as? Date
         }
+        // creationDate と同じく Timestamp / Date の両対応（キー無し＝旧ドキュメントは nil）
+        if let exifTs = documentData["exifCapturedAt"] as? Timestamp {
+            self.exifCapturedAt = exifTs.dateValue()
+        } else {
+            self.exifCapturedAt = documentData["exifCapturedAt"] as? Date
+        }
     }
+}
+
+// MARK: - CapturedAtSource
+
+/// `Post.capturedAt` の出所。計装（`post_completed.captured_at_source`）と
+/// `ExtractedImageInfo` で共有する。`rawValue` がそのままイベントの属性値になる。
+/// `preserved` のみ計装専用（`ExtractedImageInfo.capturedAtSource` には現れない。
+/// 再編集は抽出を通らず元投稿の値をそのまま保持するため）。
+enum CapturedAtSource: String {
+    /// 元ファイルの EXIF `DateTimeOriginal`
+    case exif
+    /// 写真ライブラリの作成日時（PHAsset.creationDate）
+    case asset
+    /// どちらも無い（合成投稿・権限なしのスクリーンショット等）
+    case none
+    /// 再編集で元投稿の値をそのまま保持した（抽出はしていない）。計装専用。
+    case preserved
 }

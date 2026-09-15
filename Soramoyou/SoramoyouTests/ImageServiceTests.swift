@@ -15,6 +15,8 @@ import XCTest
 @testable import Soramoyou
 import UIKit
 import CoreImage
+import ImageIO
+import UniformTypeIdentifiers
 
 final class ImageServiceTests: XCTestCase {
     var imageService: ImageService!
@@ -201,12 +203,89 @@ final class ImageServiceTests: XCTestCase {
         XCTAssertTrue([SkyType.clear, .cloudy, .sunset, .sunrise, .storm].contains(skyType))
     }
 
-    func testExtractEXIFData() async throws {
-        let testImage = createTestImage(size: CGSize(width: 512, height: 512))
+    // MARK: - EXIF（元ファイルから読む）
 
-        let exifData = try await imageService.extractEXIFData(testImage)
+    /// EXIF 辞書付きの JPEG を一時ファイルとして書き出す（`Phase0RegressionTests` の
+    /// CGImageDestination 書き出しと同型）。`exif` が nil なら EXIF 無しで書く。
+    /// バンドルに画像フィクスチャが無いため、テストごとに生成し teardown で削除する。
+    private func makeJPEGFixture(exif: [CFString: Any]?) throws -> URL {
+        let image = createTestImage(size: CGSize(width: 16, height: 16))
+        let cgImage = try XCTUnwrap(image.cgImage, "cgImage 取得失敗")
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("exif_fixture_\(UUID().uuidString)")
+            .appendingPathExtension("jpg")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
 
-        XCTAssertNotNil(exifData)
+        let type = UTType.jpeg.identifier as CFString
+        let dest = try XCTUnwrap(
+            CGImageDestinationCreateWithURL(url as CFURL, type, 1, nil),
+            "JPEG CGImageDestination の生成に失敗"
+        )
+        var properties: [CFString: Any] = [:]
+        if let exif {
+            properties[kCGImagePropertyExifDictionary] = exif
+        }
+        CGImageDestinationAddImage(dest, cgImage, properties as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(dest), "JPEG 書き出し失敗")
+        return url
+    }
+
+    /// 端末ロケールに依らず Gregorian + 現在のタイムゾーンで期待日時を組み立てる
+    private func localGregorianDate(year: Int, month: Int, day: Int, hour: Int, minute: Int) -> Date? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute, second: 0))
+    }
+
+    /// DateTimeOriginal を持つ JPEG から撮影日時が読める。
+    /// 旧 UIImage 版は再エンコードで EXIF が消えるため構造的に不可能だった（本番 12/12 件欠落）。
+    func testExtractEXIFDataReadsDateTimeOriginalFromFile() throws {
+        let url = try makeJPEGFixture(exif: [kCGImagePropertyExifDateTimeOriginal: "2026:03:15 07:30:00"])
+
+        let exif = try imageService.extractEXIFData(fileURL: url)
+
+        XCTAssertEqual(exif.capturedAt, localGregorianDate(year: 2026, month: 3, day: 15, hour: 7, minute: 30))
+    }
+
+    /// EXIF 無し（スクリーンショット相当）は throw せず capturedAt == nil
+    func testExtractEXIFDataWithoutEXIFReturnsNilCapturedAt() throws {
+        let url = try makeJPEGFixture(exif: nil)
+
+        let exif = try imageService.extractEXIFData(fileURL: url)
+
+        XCTAssertNil(exif.capturedAt)
+    }
+
+    /// 画像でないファイルは invalidImage を throw する
+    func testExtractEXIFDataThrowsForNonImageFile() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("not_image_\(UUID().uuidString)")
+            .appendingPathExtension("txt")
+        try "this is not an image".write(to: url, atomically: true, encoding: .utf8)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertThrowsError(try imageService.extractEXIFData(fileURL: url))
+    }
+
+    /// OffsetTimeOriginal（"+09:00"）があればそのオフセットで解釈する
+    func testParseEXIFDateTimeWithOffset() {
+        let date = ImageService.parseEXIFDateTime("2026:03:15 07:30:00", offset: "+09:00")
+
+        XCTAssertEqual(date, ISO8601DateFormatter().date(from: "2026-03-14T22:30:00Z"))
+    }
+
+    /// 書式外は nil
+    func testParseEXIFDateTimeInvalidFormatReturnsNil() {
+        XCTAssertNil(ImageService.parseEXIFDateTime("2026-03-15 07:30:00", offset: nil))
+        XCTAssertNil(ImageService.parseEXIFDateTime("", offset: nil))
+    }
+
+    /// "JST" のような ISO 形式でないオフセットは無視して TimeZone.current で解釈する
+    func testParseEXIFDateTimeIgnoresNonISOOffset() {
+        let withJST = ImageService.parseEXIFDateTime("2026:03:15 07:30:00", offset: "JST")
+
+        XCTAssertEqual(withJST, ImageService.parseEXIFDateTime("2026:03:15 07:30:00", offset: nil))
+        XCTAssertEqual(withJST, localGregorianDate(year: 2026, month: 3, day: 15, hour: 7, minute: 30))
     }
 
     // MARK: - EditSettings 値管理テスト（struct 単体テスト）

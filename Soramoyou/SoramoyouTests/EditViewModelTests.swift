@@ -930,7 +930,8 @@ class MockImageService: ImageServiceProtocol {
         .clear
     }
 
-    func extractEXIFData(_: UIImage) async throws -> EXIFData {
+    /// EXIF は元ファイル URL から同期で読む API に変わった（UIImage 版は再エンコードで EXIF が消えるため廃止）
+    func extractEXIFData(fileURL _: URL) throws -> EXIFData {
         EXIFData()
     }
 }

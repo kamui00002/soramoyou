@@ -37,7 +37,17 @@
       "thumbnail": "string",
       "width": "number",
       "height": "number",
-      "order": "number"
+      "order": "number",
+      "externalEditInfo": {            // 任意。写真ライブラリ(PHAsset)/元ファイル由来のメタ。未設定なら無し
+        "hasAdjustments": "boolean",
+        "formatIdentifier": "string",
+        "isHDR": "boolean",
+        "isLivePhoto": "boolean",
+        "isPanorama": "boolean",
+        "creationDate": "timestamp",   // PHAsset.creationDate（写真ライブラリの作成日時）
+        "modificationDate": "timestamp",
+        "exifCapturedAt": "timestamp"  // 元ファイルの EXIF DateTimeOriginal（2026-09 追加）。posts.capturedAt の第一候補で、無ければ creationDate に補完
+      }
     }
   ],
   "caption": "string",
@@ -58,8 +68,8 @@
     "landmark": "string"
   },
   "skyColors": ["string"],           // 16進数カラーコード（最大5色）
-  "capturedAt": "timestamp",
-  "timeOfDay": "string",             // morning, afternoon, evening, night
+  "capturedAt": "timestamp",         // 先頭画像の EXIF DateTimeOriginal → 無ければ写真ライブラリの作成日時。collage/panorama は無し
+  "timeOfDay": "string",             // morning, afternoon, evening, night（capturedAt から導出）
   "skyType": "string",               // clear, cloudy, sunset, sunrise, storm
   "colorTemperature": "number",      // K表示
   "visibility": "string",            // public, followers, private

@@ -49,7 +49,9 @@ protocol ImageServiceProtocol {
     func extractColors(_ image: UIImage, maxCount: Int) async throws -> [String]
     func calculateColorTemperature(_ image: UIImage) async throws -> Int
     func detectSkyType(_ image: UIImage) async throws -> SkyType
-    func extractEXIFData(_ image: UIImage) async throws -> EXIFData
+    /// 元ファイルの URL から EXIF を読む（同期）。UIImage 版は再エンコードで EXIF が消えるため廃止。
+    /// 同期なのは `NSItemProvider.loadFileRepresentation` の一時 URL が completion 内でしか有効でないため。
+    func extractEXIFData(fileURL: URL) throws -> EXIFData
 }
 
 // MARK: - skyMask 省略用の互換オーバーロード
@@ -775,65 +777,108 @@ final class ImageService: ImageServiceProtocol {
         return .clear
     }
 
-    func extractEXIFData(_ image: UIImage) async throws -> EXIFData {
-        try await withCheckedThrowingContinuation { continuation in
-            Task.detached(priority: .userInitiated) {
-                do {
-                    guard let imageData = image.jpegData(compressionQuality: 1.0),
-                          let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil)
-                    else {
-                        throw ImageServiceError.invalidImage
-                    }
+    // MARK: - EXIF
 
-                    guard let metadata = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [String: Any] else {
-                        continuation.resume(returning: EXIFData())
-                        return
-                    }
-
-                    let exifDict = metadata[kCGImagePropertyExifDictionary as String] as? [String: Any]
-                    let tiffDict = metadata[kCGImagePropertyTIFFDictionary as String] as? [String: Any]
-
-                    var capturedAt: Date?
-                    if let dateTimeOriginal = exifDict?[kCGImagePropertyExifDateTimeOriginal as String] as? String {
-                        let formatter = DateFormatter()
-                        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
-                        capturedAt = formatter.date(from: dateTimeOriginal)
-                    }
-
-                    let cameraModel = tiffDict?[kCGImagePropertyTIFFModel as String] as? String
-                    let iso = exifDict?[kCGImagePropertyExifISOSpeedRatings as String] as? [Int]
-                    let isoValue = iso?.first
-
-                    var shutterSpeed: String?
-                    if let exposureTime = exifDict?[kCGImagePropertyExifExposureTime as String] as? Double {
-                        shutterSpeed = String(format: "1/%.0f", 1.0 / exposureTime)
-                    }
-
-                    var aperture: String?
-                    if let fNumber = exifDict?[kCGImagePropertyExifFNumber as String] as? Double {
-                        aperture = String(format: "f/%.1f", fNumber)
-                    }
-
-                    var focalLength: String?
-                    if let focalLengthValue = exifDict?[kCGImagePropertyExifFocalLength as String] as? Double {
-                        focalLength = String(format: "%.0fmm", focalLengthValue)
-                    }
-
-                    let exifData = EXIFData(
-                        capturedAt: capturedAt,
-                        cameraModel: cameraModel,
-                        iso: isoValue,
-                        shutterSpeed: shutterSpeed,
-                        aperture: aperture,
-                        focalLength: focalLength
-                    )
-
-                    continuation.resume(returning: exifData)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
+    /// 元ファイル（写真ライブラリから `loadFileRepresentation` で得た一時ファイル等）の EXIF を読む。
+    ///
+    /// ⚠️ 旧実装は `UIImage.jpegData` で**再エンコードしてから** EXIF を読んでいたため、
+    ///    メタデータが構造的に常に空だった（本番の公開投稿 12/12 件で撮影日時が欠落）。
+    ///    UIImage は EXIF を保持しないので、元ファイルの URL から直接読むしかない。
+    /// - 同期 API にしているのは、`NSItemProvider.loadFileRepresentation` の一時 URL が
+    ///   completion を抜けた時点で無効になるため。呼び出し側は completion の中で読み切る。
+    /// - `kCGImageSourceShouldCache: false` でピクセルのデコードを避け、ヘッダだけ読む
+    ///   （10 枚選択で 10 回呼ばれても軽い）。HEIC も `.current` 表現のまま読める。
+    /// - Throws: 画像として開けないファイルは `ImageServiceError.invalidImage`。
+    ///   EXIF が無いだけなら throw せず、各フィールド nil の `EXIFData` を返す。
+    func extractEXIFData(fileURL: URL) throws -> EXIFData {
+        let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, options as CFDictionary),
+              CGImageSourceGetCount(source) > 0
+        else {
+            throw ImageServiceError.invalidImage
         }
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, options as CFDictionary) as? [String: Any] else {
+            return EXIFData()
+        }
+        return Self.parseEXIFData(from: properties)
+    }
+
+    /// ImageIO のプロパティ辞書から `EXIFData` を組み立てる（純関数・I/O なし）。
+    /// 旧 UIImage 版から組み立て部分をそのまま移した。`static` なのは辞書だけで
+    /// テストできるようにするため。
+    static func parseEXIFData(from properties: [String: Any]) -> EXIFData {
+        let exifDict = properties[kCGImagePropertyExifDictionary as String] as? [String: Any]
+        let tiffDict = properties[kCGImagePropertyTIFFDictionary as String] as? [String: Any]
+
+        var capturedAt: Date?
+        if let dateTimeOriginal = exifDict?[kCGImagePropertyExifDateTimeOriginal as String] as? String {
+            // OffsetTimeOriginal（EXIF 2.31・"+09:00" 形式）があれば撮影地のオフセットで解釈する
+            let offset = exifDict?[kCGImagePropertyExifOffsetTimeOriginal as String] as? String
+            capturedAt = parseEXIFDateTime(dateTimeOriginal, offset: offset)
+        }
+
+        let cameraModel = tiffDict?[kCGImagePropertyTIFFModel as String] as? String
+        let iso = exifDict?[kCGImagePropertyExifISOSpeedRatings as String] as? [Int]
+        let isoValue = iso?.first
+
+        var shutterSpeed: String?
+        if let exposureTime = exifDict?[kCGImagePropertyExifExposureTime as String] as? Double {
+            shutterSpeed = String(format: "1/%.0f", 1.0 / exposureTime)
+        }
+
+        var aperture: String?
+        if let fNumber = exifDict?[kCGImagePropertyExifFNumber as String] as? Double {
+            aperture = String(format: "f/%.1f", fNumber)
+        }
+
+        var focalLength: String?
+        if let focalLengthValue = exifDict?[kCGImagePropertyExifFocalLength as String] as? Double {
+            focalLength = String(format: "%.0fmm", focalLengthValue)
+        }
+
+        return EXIFData(
+            capturedAt: capturedAt,
+            cameraModel: cameraModel,
+            iso: isoValue,
+            shutterSpeed: shutterSpeed,
+            aperture: aperture,
+            focalLength: focalLength
+        )
+    }
+
+    /// EXIF の日時文字列（`"yyyy:MM:dd HH:mm:ss"`）を `Date` に変換する。書式外は nil。
+    ///
+    /// - `Locale(identifier: "en_US_POSIX")` と `Calendar(identifier: .gregorian)` を固定するのは、
+    ///   端末の設定が和暦・タイ仏暦・12 時間制などでも解釈がぶれないようにするため
+    ///   （`DateFormatter` は既定で端末ロケールに従い、和暦端末では "2026" を和暦年として読む）。
+    /// - EXIF の日時はタイムゾーンを持たない「壁時計」の値。`offset`（`OffsetTimeOriginal`・
+    ///   `"+09:00"` 形式）があればそのオフセットで、無ければ `TimeZone.current` で解釈する
+    ///   （撮影地＝端末の所在地という前提）。`"JST"` のような ISO 形式でない値は無視して current に倒す。
+    static func parseEXIFDateTime(_ value: String, offset: String?) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        formatter.timeZone = offset.flatMap(timeZone(fromEXIFOffset:)) ?? .current
+        return formatter.date(from: value)
+    }
+
+    /// `"+09:00"` / `"-05:30"` 形式の EXIF オフセット文字列を `TimeZone` に変換する。
+    /// 6 文字（符号 + HH + ":" + MM）以外・範囲外は nil（呼び出し側が `.current` に倒す）。
+    private static func timeZone(fromEXIFOffset offset: String) -> TimeZone? {
+        let chars = Array(offset)
+        guard chars.count == 6,
+              chars[0] == "+" || chars[0] == "-",
+              chars[3] == ":",
+              let hours = Int(String(chars[1...2])),
+              let minutes = Int(String(chars[4...5])),
+              (0...23).contains(hours),
+              (0...59).contains(minutes)
+        else {
+            return nil
+        }
+        let sign = chars[0] == "-" ? -1 : 1
+        return TimeZone(secondsFromGMT: sign * (hours * 3600 + minutes * 60))
     }
 }
 

@@ -569,7 +569,9 @@ struct GalleryDetailView: View {
                         }
                     }
                 }
-                if let date = info.creationDate {
+                // 撮影日時の優先順位（EXIF → 写真ライブラリの作成日時）は
+                // `ExternalEditInfo.resolvedCapturedAt` に一本化されている（表示側で再実装しない）。
+                if let date = info.resolvedCapturedAt?.date {
                     Text("撮影: \(date.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.6))
