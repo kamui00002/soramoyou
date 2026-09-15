@@ -477,11 +477,6 @@ class MockStorageServiceForProfile: StorageServiceProtocol {
     }
     
     func deleteImage(path: String) async throws {}
-    func uploadProgress(path: String) -> AsyncStream<Double> {
-        return AsyncStream { continuation in
-            continuation.finish()
-        }
-    }
 }
 
 
