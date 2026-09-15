@@ -95,10 +95,13 @@ public enum SkyCameraEvent {
 /// 空カメラが使える端末かどうかの判定。
 public enum SkyCameraAvailability {
 
-    /// 背面カメラが存在するか。シミュレータでは false になるので導線ごと隠せる。
-    public static var isAvailable: Bool {
+    /// 背面カメラの有無。端末構成は実行中に変わらないので一度だけ調べる
+    ///（SwiftUI の body から毎回デバイス探索を走らせないため。static let は遅延かつスレッドセーフ）。
+    private static let hasBackCamera: Bool =
         AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil
-    }
+
+    /// 背面カメラが存在するか。シミュレータでは false になるので導線ごと隠せる。
+    public static var isAvailable: Bool { hasBackCamera }
 
     /// 現在のカメラ権限の状態（プロンプトは出さない）。
     public static var authorization: SkyCameraAuthorization {

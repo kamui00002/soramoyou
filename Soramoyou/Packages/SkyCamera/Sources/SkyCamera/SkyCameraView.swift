@@ -116,6 +116,9 @@ public struct SkyCameraView: View {
                     .foregroundColor(.white)
                     .frame(width: 44, height: 44)
             }
+            // 撮影処理中に閉じられると、撮れた1枚が渡らないまま画面が消えてしまう。
+            .disabled(model.isCapturing)
+            .opacity(model.isCapturing ? 0.4 : 1)
             .accessibilityLabel("カメラを閉じる")
 
             Spacer()

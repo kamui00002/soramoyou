@@ -172,6 +172,9 @@ struct PostView: View {
                 event: .opened(authorization: SkyCameraAvailability.authorization)
             )
         case .authorized, .notDetermined:
+            // ⚠️ 前回の撮影が「閉じる」と競合して預かり箱に残っていた場合、
+            //    次に開いて閉じた瞬間に古い写真で編集画面が開いてしまう。開く前に必ず空にする。
+            pendingCaptured = nil
             // 未決定の場合のシステムプロンプトは SkyCameraView 側で出す
             //（プレビューを見せながら要求した方が許可率が高い）。
             showCamera = true
