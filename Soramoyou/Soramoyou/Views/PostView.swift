@@ -5,6 +5,7 @@
 //  Created on 2025-12-06.
 //
 
+import SkyCamera
 import SwiftUI
 
 struct PostView: View {
@@ -19,6 +20,14 @@ struct PostView: View {
     @State private var pendingStitched: UIImage?
     /// 投稿モード（通常/配置写真/広角合成）。配置写真・広角合成は4枚固定・ログイン必須。
     @State private var postKind: PostKind = .single
+    /// 空カメラ（アプリ内カメラ）の表示フラグ。
+    @State private var showCamera = false
+    /// 空カメラの権限が無いときに出す案内アラートの表示フラグ。
+    @State private var showCameraDeniedAlert = false
+    /// 撮影した1枚（カメラが閉じ切ってから編集画面へ渡すため、いったんここで預かる）。
+    @State private var pendingCaptured: (image: UIImage, info: ExternalEditInfo)?
+    /// 編集画面へ引き継ぐ写真の出どころ（計装のみ）。ライブラリから選び直したら .library に戻る。
+    @State private var photoSource: PhotoSource = .library
 
     init() {
         // 認証状態に応じて最大選択数を設定
@@ -70,6 +79,8 @@ struct PostView: View {
                     maxSelectionCount: maxSelectionCount,
                     onSelectionComplete: {
                         viewModel.isShowingImagePicker = false
+                        // ライブラリから選び直したら出どころは .library に戻す（計装の取り違え防止）。
+                        photoSource = .library
                     }
                 )
             }
@@ -90,7 +101,8 @@ struct PostView: View {
                     images: viewModel.selectedImages,
                     userId: authViewModel.currentUser?.id,
                     externalEditInfos: viewModel.pickedMetadata,
-                    postKind: postKind
+                    postKind: postKind,
+                    photoSource: photoSource
                 )
             }
             // 広角合成(v2): 合成プレビュー。閉じた後、合成済み1枚で EditView を開く。
@@ -147,6 +159,23 @@ struct PostView: View {
         postKind = kind
         updateMaxSelectionCount()
         LoggingService.shared.logEvent("post_mode_selected", parameters: ["mode": kind.rawValue])
+    }
+
+    /// 空カメラを開く。権限が拒否・制限されているときは既存の作法どおり
+    /// 「設定を開く」付きのアラートへ倒す（アプリからは権限を戻せないため）。
+    private func startCamera() {
+        switch SkyCameraAvailability.authorization {
+        case .denied, .restricted:
+            showCameraDeniedAlert = true
+            // 開けなかったことも分母として残す（権限で離脱した人数が見えるように）。
+            CameraCaptureService.log(
+                event: .opened(authorization: SkyCameraAvailability.authorization)
+            )
+        case .authorized, .notDetermined:
+            // 未決定の場合のシステムプロンプトは SkyCameraView 側で出す
+            //（プレビューを見せながら要求した方が許可率が高い）。
+            showCamera = true
+        }
     }
 
     /// 選べる投稿モード（配置写真・広角合成はログイン必須＝未ログインでは通常のみ）。
@@ -279,6 +308,8 @@ struct PostView: View {
             }
 
             Button(action: {
+                // ライブラリから選び直したら出どころは .library に戻す（計装の取り違え防止）。
+                photoSource = .library
                 viewModel.startPhotoSelection()
             }) {
                 HStack {
@@ -300,7 +331,72 @@ struct PostView: View {
                 .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
             }
             .padding(.horizontal)
-            
+
+            // 空カメラ（アプリ内カメラ）への導線。
+            // 単写モードのときだけ出す（配置写真・広角合成は複数枚が前提のため）。
+            // 背面カメラが無い環境（シミュレータ）では導線ごと隠す。
+            if postKind == .single && SkyCameraAvailability.isAvailable {
+                Button(action: { startCamera() }) {
+                    HStack {
+                        Image(systemName: "camera.fill")
+                        Text("撮る")
+                    }
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(.white.opacity(0.18))
+                            .background(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(.white.opacity(0.45), lineWidth: 1)
+                            )
+                    )
+                }
+                .padding(.horizontal)
+                .accessibilityHint("グリッドと水平線ガイド付きのカメラで空を撮ります")
+                // ⚠️ cover と alert は body 直下ではなく**このボタンに局所付与**する。
+                //    body 直下には既に .sheet×1 + .fullScreenCover×2 があり、同じ階層に重ねると
+                //    表示状態の取り違え（stale-state）で誤った画面が出ることがあるため。
+                .fullScreenCover(isPresented: $showCamera, onDismiss: {
+                    // カメラが閉じ切ってから編集画面を開く（cover の二重表示を避ける）。
+                    // 広角合成の合成プレビュー経路（body 直下の showStitch）と同じ作法。
+                    if let captured = pendingCaptured {
+                        pendingCaptured = nil
+                        viewModel.selectedImages = [captured.image]
+                        // selectedImages と pickedMetadata は index 対応の並列配列。1枚ずつ積む。
+                        viewModel.pickedMetadata = [captured.info]
+                        photoSource = .camera
+                        showEditView = true
+                    }
+                }) {
+                    SkyCameraView(
+                        onCapture: { capture in
+                            Task {
+                                // 写真ライブラリ保存・計装・向きの焼き込みはサービスに任せる。
+                                if let processed = await CameraCaptureService.process(capture: capture) {
+                                    pendingCaptured = processed
+                                }
+                                showCamera = false
+                            }
+                        },
+                        onCancel: { showCamera = false },
+                        onEvent: { event in CameraCaptureService.log(event: event) }
+                    )
+                }
+                .alert("カメラを使えません", isPresented: $showCameraDeniedAlert) {
+                    Button("設定を開く") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    Button("キャンセル", role: .cancel) {}
+                } message: {
+                    Text("設定アプリの「そらもよう」からカメラへのアクセスを許可してください。")
+                }
+            }
+
             VStack(spacing: 8) {
                 Text("選択可能な枚数")
                     .font(.caption)

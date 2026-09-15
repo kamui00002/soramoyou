@@ -39,6 +39,7 @@ struct PostInfoView: View {
         externalEditInfos: [ExternalEditInfo?] = [],
         editingContext: PostEditingContext? = nil,
         postKind: PostKind = .single,
+        photoSource: PhotoSource = .library,
         locationService: LocationServiceProtocol = LocationService()
     ) {
         // ⚠️ PostViewModel の生成と初期設定は、必ずこの `wrappedValue:` の中で完結させること。
@@ -55,6 +56,8 @@ struct PostInfoView: View {
             let postViewModel = PostViewModel(userId: userId)
             // 投稿種別（通常/配置写真/広角合成）を入口モードから引き継ぐ。savePost の畳み込み・保存メタを駆動。
             postViewModel.postKind = postKind
+            // 写真の出どころ（計装のみ・Firestore には保存しない）。
+            postViewModel.photoSource = photoSource
             // 画像と各画像の外部編集情報（写真Appバッジ表示用 ⭐️ Issue #4・元ファイル EXIF の撮影日時）を
             // 同時に渡す。抽出（extractImageInfo）は撮影日時を外部編集情報から決めるため、
             // 画像だけ先に渡して後から情報を足す形にはしない（順序依存の再発防止）。
