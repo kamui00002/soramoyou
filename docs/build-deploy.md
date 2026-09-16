@@ -94,18 +94,21 @@
 
 ## Info.plist 必要な権限
 
+⚠️ 実体は `project.pbxproj` の `INFOPLIST_KEY_*`（Debug / Release の両方）に置いている。
+文言を変えるときは**両方**を直すこと。以下は現行の実文言。
+
 ```xml
 <key>NSPhotoLibraryUsageDescription</key>
-<string>写真を選択して投稿するために使用します</string>
+<string>空の写真を選択して投稿するために、カメラロールへのアクセスが必要です。</string>
 
 <key>NSPhotoLibraryAddUsageDescription</key>
-<string>編集した写真を保存するために使用します</string>
+<string>撮影・編集した写真を保存するために、カメラロールへの書き込みアクセスが必要です。</string>
 
 <key>NSCameraUsageDescription</key>
-<string>写真を撮影するために使用します（Phase 3）</string>
+<string>空を撮影して投稿するためにカメラを使用します。</string>
 
 <key>NSLocationWhenInUseUsageDescription</key>
-<string>投稿に位置情報を追加するために使用します</string>
+<string>投稿への位置情報の追加と、ゴールデンアワー通知の時刻計算のために位置情報を使用します。</string>
 ```
 
 ---
