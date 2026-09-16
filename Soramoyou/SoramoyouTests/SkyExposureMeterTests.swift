@@ -16,11 +16,11 @@ final class SkyExposureMeterTests: XCTestCase {
     /// 輝度プレーンを指定した値で埋めた YCbCr バッファを作る。
     /// - Parameter fill: (x, y) → 輝度値
     private func makeBuffer(width: Int, height: Int,
+                            format: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
                             fill: (Int, Int) -> UInt8) -> CVPixelBuffer? {
         var buffer: CVPixelBuffer?
         let status = CVPixelBufferCreate(
-            kCFAllocatorDefault, width, height,
-            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, nil, &buffer)
+            kCFAllocatorDefault, width, height, format, nil, &buffer)
         guard status == kCVReturnSuccess, let buffer else { return nil }
 
         CVPixelBufferLockBaseAddress(buffer, [])
@@ -69,6 +69,39 @@ final class SkyExposureMeterTests: XCTestCase {
         let samples = try XCTUnwrap(makeMeter().sampleLumaPlane(buffer))
         XCTAssertLessThan(samples.count, 20_000, "間引きが効いていない（毎フレーム重くなる）")
         XCTAssertGreaterThan(samples.count, 5_000, "間引きすぎ。白飛び率の精度が落ちる")
+    }
+
+    // MARK: - 輝度レンジの判定（機能が「黙って死ぬ」経路）
+
+    func testFullRangeBufferIsDetectedAsFullRange() throws {
+        let buffer = try XCTUnwrap(makeBuffer(width: 64, height: 64) { _, _ in 0 })
+        XCTAssertTrue(SkyExposureMeter.isFullRange(buffer))
+    }
+
+    func testVideoRangeBufferIsDetectedAsVideoRange() throws {
+        // ⭐️ ここを取り違えると、Y が 235 までしか来ないのに閾値 250 を当て続け、
+        //    白飛び率が常に 0 になって露出を一度も下げない＝機能が黙って死ぬ。
+        let buffer = try XCTUnwrap(makeBuffer(
+            width: 64, height: 64,
+            format: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) { _, _ in 0 })
+        XCTAssertFalse(SkyExposureMeter.isFullRange(buffer))
+    }
+
+    func testVideoRangeWhiteSkyIsStillDetectedAsClipped() throws {
+        // Video Range の「真っ白」= 235。要求した形式ではなくバッファ自身から判定していれば、
+        // この画面はちゃんと白飛び 100% と測れて露出が下がる。
+        let buffer = try XCTUnwrap(makeBuffer(
+            width: 200, height: 200,
+            format: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) { _, _ in 235 })
+        let samples = try XCTUnwrap(makeMeter().sampleLumaPlane(buffer))
+        let threshold = SkyPriorityExposure.effectiveThreshold(
+            fullRangeThreshold: 250, isFullRange: SkyExposureMeter.isFullRange(buffer))
+        let fraction = SkyPriorityExposure.clippedFraction(luma: samples, threshold: threshold)
+        XCTAssertEqual(fraction, 1.0, accuracy: 0.0001, "Video Range の真っ白を検出できていない")
+
+        let next = SkyPriorityExposure.decideBias(
+            clippedFraction: fraction, currentBias: 0, deviceLimits: -8.0...8.0)
+        XCTAssertLessThan(next, 0, "Video Range 端末で露出が一度も下がらない（機能が黙って死ぬ）")
     }
 
     // MARK: - 白飛び率まで通した検証

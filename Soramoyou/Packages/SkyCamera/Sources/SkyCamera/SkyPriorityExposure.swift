@@ -1,4 +1,6 @@
+// ⭐️ 空優先AE（白飛び防止）の判定ロジック（副作用を持たない純関数だけを置く）
 import Foundation
+import ImageIO
 
 /// 空優先 AE（白飛び防止）の判定ロジック。
 ///
@@ -101,6 +103,25 @@ public enum SkyPriorityExposure {
         // Video Range の有効幅は 16...235 の 219 段階。比率を保って写す。
         let scaled = 16.0 + (Double(fullRangeThreshold) / 255.0) * 219.0
         return UInt8(min(235.0, max(16.0, scaled.rounded())))
+    }
+
+    // MARK: - 実測値の取り出し
+
+    /// 撮影メタデータ（EXIF）から、その 1 枚が**実際に受けた**露出補正値を取り出す。
+    ///
+    /// ⭐️ 計装にはこちらを使う。アプリが「最後に要求した値」ではなく
+    ///    「撮れた写真そのものに記録された値」なので、次の 2 つのズレを同時に消せる。
+    ///    - 撮影処理中も測光は動き続けるので、撮影後に現在値を読むと別の瞬間の値になる
+    ///    - AE ロック中は要求値を書いても実露出が追従しないことがある
+    ///
+    /// - Parameter metadata: `AVCapturePhoto.metadata`（`{Exif}` サブ辞書を含む）
+    /// - Returns: 露出補正値（EV）。EXIF に無ければ nil
+    public static func exposureBias(fromMetadata metadata: [String: Any]) -> Float? {
+        guard let exif = metadata[kCGImagePropertyExifDictionary as String] as? [String: Any],
+              let value = exif[kCGImagePropertyExifExposureBiasValue as String] as? NSNumber else {
+            return nil
+        }
+        return value.floatValue
     }
 
     // MARK: - 判定

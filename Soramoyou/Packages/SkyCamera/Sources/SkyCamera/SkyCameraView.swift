@@ -147,7 +147,8 @@ public struct SkyCameraView: View {
             toggleButton(
                 systemName: "grid",
                 isOn: model.gridEnabled,
-                label: "グリッド"
+                label: "グリッド",
+                hint: "グリッドの表示を切り替えます"
             ) {
                 model.gridEnabled.toggle()
                 defaults.set(model.gridEnabled, forKey: gridDefaultsKey)
@@ -156,7 +157,8 @@ public struct SkyCameraView: View {
             toggleButton(
                 systemName: "level",
                 isOn: model.horizonEnabled,
-                label: "水平線ガイド"
+                label: "水平線ガイド",
+                hint: "水平線ガイドの表示を切り替えます"
             ) {
                 model.horizonEnabled.toggle()
                 defaults.set(model.horizonEnabled, forKey: horizonDefaultsKey)
@@ -165,7 +167,8 @@ public struct SkyCameraView: View {
             toggleButton(
                 systemName: "cloud.sun",
                 isOn: model.skyPriorityEnabled,
-                label: "空優先（白飛び防止）"
+                label: "空優先（白飛び防止）",
+                hint: "空が白く飛ばないよう、撮影時の明るさを自動で下げます"
             ) {
                 model.setSkyPriorityEnabled(!model.skyPriorityEnabled)
                 defaults.set(model.skyPriorityEnabled, forKey: skyPriorityDefaultsKey)
@@ -176,10 +179,13 @@ public struct SkyCameraView: View {
     }
 
     /// ON/OFF を色で示すトグルボタン。
+    /// - Parameter hint: VoiceOver で読み上げる説明。グリッド等は「表示の切り替え」だが
+    ///   空優先 AE は表示ではなく撮影時の露出制御なので、機能ごとに言い分ける必要がある。
     private func toggleButton(
         systemName: String,
         isOn: Bool,
         label: String,
+        hint: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -191,7 +197,7 @@ public struct SkyCameraView: View {
         }
         .accessibilityLabel(label)
         .accessibilityValue(isOn ? "オン" : "オフ")
-        .accessibilityHint("\(label)の表示を切り替えます")
+        .accessibilityHint(hint)
     }
 
     /// AE/AF ロック中であることを示すバッジ（標準カメラと同じ表現）。
@@ -351,11 +357,15 @@ final class SkyCameraViewModel: ObservableObject {
         isCapturing = true
         defer { isCapturing = false }
 
+        // ⚠️ 撮影処理中もトグルは操作できるので、ここで固定する。
+        //    撮影後に読むと「撮った写真とは違う瞬間の設定」を記録してしまう。
+        let skyPriorityAtShutter = skyPriorityEnabled
         let shutterDate = Date()
         do {
             let result = try await controller.capturePhoto(
                 fallbackOrientation: Self.fallbackOrientation(for: reading)
             )
+            let status = await controller.skyPriorityStatus()
             await handOff(SkyCameraCapture(
                 photoData: result.data,
                 metadata: result.metadata,
@@ -365,8 +375,13 @@ final class SkyCameraViewModel: ObservableObject {
                 isLevel: reading.isLevel,
                 rollDegrees: reading.isReliable ? reading.rollDegrees : nil,
                 usedDeferredStart: usedDeferredStart,
-                skyPriorityEnabled: skyPriorityEnabled,
-                exposureBiasEV: await controller.currentExposureBias(),
+                skyPriorityEnabled: skyPriorityAtShutter,
+                // ⭐️ 実測値（撮れた 1 枚の EXIF）を正とする。要求値ではないので、
+                //    撮影処理中の測光や AE ロックによるズレの影響を受けない。
+                //    EXIF に無い端末のための保険としてのみ現在値へ落とす。
+                exposureBiasEV: SkyPriorityExposure.exposureBias(fromMetadata: result.metadata)
+                    ?? status.bias,
+                skyPriorityMeasured: status.hasMeasured,
                 shutterDate: shutterDate
             ))
             return nil

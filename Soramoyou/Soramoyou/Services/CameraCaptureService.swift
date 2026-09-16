@@ -124,6 +124,10 @@ enum CameraCaptureService {
             // ⭐️ 実際に露出を下げたか。ON でもこれが false なら「出番が無かった」だけで、
             //    機能が壊れているのとは意味が違う。両方を残さないと切り分けられない。
             "sky_priority_engaged": capture.exposureBiasEV < 0,
+            // ⭐️ 測光が一度でも成立したか。ON かつ false なら「出番が無かった」ではなく
+            //    **動いていない**。この属性が無いと、恒久的な故障が
+            //    「たまたま下げる必要が無かった撮影」に紛れて永遠に気づけない。
+            "sky_priority_measured": capture.skyPriorityMeasured,
             // 補正量は 0.1 EV 刻みに丸める（小数をそのまま送ると値の種類だけ増えて集計できない）。
             "exposure_bias_ev": Double((capture.exposureBiasEV * 10).rounded()) / 10,
         ]

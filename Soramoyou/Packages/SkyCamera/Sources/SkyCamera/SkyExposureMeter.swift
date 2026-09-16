@@ -1,3 +1,4 @@
+// ⭐️ プレビュー映像から白飛び率を実測する測光器（空優先AE の目にあたる部分）
 import AVFoundation
 import CoreVideo
 import Foundation
@@ -24,16 +25,17 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     /// 測定結果（白飛び率 0〜1）の通知先。`queue` 上で呼ばれる。
     private let onMeasure: (Double) -> Void
 
-    /// 届くバッファが Full Range かどうか。`prepare()` で確定し、以後は読むだけ。
-    /// ⚠️ 他の可変状態と同じく `queue` の上でのみ触る。`prepare()` は別のキューから
-    ///    呼ばれるため、値の反映も `queue.async` を通す（下の理由を参照）。
-    private var isFullRange = true
-
     /// 有効化フラグ。`queue` 上でのみ読み書きしてデータ競合を避ける。
     private var isEnabled = false
 
     /// 最後に処理した時刻（`CACurrentMediaTime` 相当の単調時計）。
     private var lastProcessedAt: CFTimeInterval = 0
+
+    /// この時刻までは測らない（露出補正が実際に効くまでの待ち）。
+    /// ⚠️ これが無いと「補正をかけた → まだ効いていない古い明るさを読む → もっと下げる」を
+    ///    繰り返して下限まで振り切れる（積分ワインドアップ）。
+    ///    シャワーの温度調節でお湯が届く前にさらに捻ってしまうのと同じ構造。
+    private var suppressedUntil: CFTimeInterval = 0
 
     /// 処理の最短間隔（秒）。4 回／秒。
     private let minInterval: CFTimeInterval = 0.25
@@ -54,28 +56,24 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
 
     // MARK: - Setup
 
-    /// 出力のピクセル形式を決めてデリゲートを張る。
-    /// `session.addOutput(_:)` の**前**に呼ぶこと（形式の選択に利用可能一覧を使うため）。
+    /// 出力のピクセル形式を要求してデリゲートを張る。
+    ///
+    /// ⚠️ ここで要求した形式が**通る保証は無い**（構成の状態によって
+    ///    `availableVideoPixelFormatTypes` が空を返すこともある）。
+    ///    そのため実際の輝度レンジは要求値ではなく、**届いたバッファ自身**から
+    ///    フレームごとに判定する（`captureOutput` を参照）。ここは希望を伝えるだけ。
     func prepare() {
         // 輝度をそのまま読みたいので YCbCr の 2 面形式を選ぶ。RGB だと変換コストが乗る。
         let full = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
         let video = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         let available = output.availableVideoPixelFormatTypes
-        var resolvedFullRange = true
         if available.contains(full) {
             output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: full]
-            resolvedFullRange = true
         } else if available.contains(video) {
             output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: video]
-            resolvedFullRange = false
         }
         // 処理が間に合わないフレームは捨てる。溜めるとメモリを食うだけで露出判定には無意味。
         output.alwaysDiscardsLateVideoFrames = true
-
-        // ⚠️ `queue` はシリアルなので、ここで積んだ代入は必ず後続のデリゲート呼び出しより
-        //    先に実行される（FIFO）。デリゲートを張る**前**に積むことで、
-        //    「別キューから書いた値を測光キューで読む」競合を消している。
-        queue.async { self.isFullRange = resolvedFullRange }
         output.setSampleBufferDelegate(self, queue: queue)
     }
 
@@ -85,6 +83,18 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
             self.isEnabled = enabled
             // 次に ON になったとき間隔待ちで取りこぼさないよう、時計を巻き戻しておく。
             self.lastProcessedAt = 0
+            self.suppressedUntil = 0
+        }
+    }
+
+    /// 露出補正を書き込んだあと、それが実際に効くまで測定を見送る。
+    /// - Parameter interval: いまから何秒間測らないか
+    ///
+    /// 既に積まれている待ちより短い指定では**縮めない**（`max` を取る）。
+    /// 縮めてしまうと、反映途中の古い明るさを読んで二重に下げる元の問題に戻る。
+    func suppressMeasurements(for interval: CFTimeInterval) {
+        queue.async {
+            self.suppressedUntil = max(self.suppressedUntil, CACurrentMediaTime() + interval)
         }
     }
 
@@ -95,8 +105,10 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                        from connection: AVCaptureConnection) {
         guard isEnabled else { return }
 
-        // 時間で間引く。露出制御に 30fps は要らない。
         let now = CACurrentMediaTime()
+        // 直前にかけた補正が効くまで待つ。待たずに測ると古い明るさで二重に下げてしまう。
+        guard now >= suppressedUntil else { return }
+        // 時間で間引く。露出制御に 30fps は要らない。
         guard now - lastProcessedAt >= minInterval else { return }
         lastProcessedAt = now
 
@@ -104,12 +116,27 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         guard let luma = sampleLumaPlane(pixelBuffer) else { return }
 
         let threshold = SkyPriorityExposure.effectiveThreshold(
-            fullRangeThreshold: clipThreshold, isFullRange: isFullRange)
+            fullRangeThreshold: clipThreshold,
+            isFullRange: Self.isFullRange(pixelBuffer))
         let fraction = SkyPriorityExposure.clippedFraction(luma: luma, threshold: threshold)
         onMeasure(fraction)
     }
 
     // MARK: - Private
+
+    /// 届いたバッファが Full Range（Y が 0〜255）かどうかを、バッファ自身から判定する。
+    ///
+    /// ⚠️ 「要求した形式」を覚えておいて使ってはいけない。要求が通らなかった場合に取り違えると、
+    ///    Y が 235 までしか来ないのに閾値 250 を当て続け、白飛び率が常に 0 ＝
+    ///    機能が**黙って死ぬ**。バッファ自身は常に権威ある値を持っているので、毎フレーム聞く。
+    ///
+    /// 判別できない形式は安全側（Video Range 扱い＝閾値を下げる）へ倒す。
+    /// 「効きすぎる」より「一度も効かない」方が発覚が遅く、害が大きいため。
+    /// 合成バッファでの検証ができるよう internal にしてある。
+    static func isFullRange(_ pixelBuffer: CVPixelBuffer) -> Bool {
+        CVPixelBufferGetPixelFormatType(pixelBuffer)
+            == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+    }
 
     /// 輝度プレーン（plane 0）を間引いて読む。
     /// 合成バッファでの検証ができるよう internal にしてある（`@testable import` から呼ぶ）。

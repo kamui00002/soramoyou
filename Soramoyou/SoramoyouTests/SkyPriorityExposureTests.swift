@@ -150,6 +150,21 @@ final class SkyPriorityExposureTests: XCTestCase {
         XCTAssertEqual(fraction, 0.4, accuracy: 0.0001)
     }
 
+    // MARK: - EXIF からの実測値
+
+    func testExposureBiasIsReadFromExifDictionary() {
+        // 計装は「アプリが要求した値」ではなく「撮れた 1 枚に記録された値」を正とする。
+        let metadata: [String: Any] = ["{Exif}": ["ExposureBiasValue": NSNumber(value: -0.75)]]
+        let bias = SkyPriorityExposure.exposureBias(fromMetadata: metadata)
+        XCTAssertEqual(try XCTUnwrap(bias), -0.75, accuracy: 0.0001)
+    }
+
+    func testExposureBiasIsNilWhenExifIsMissing() {
+        // EXIF が無い端末では nil を返し、呼び出し側が現在値へフォールバックできること。
+        XCTAssertNil(SkyPriorityExposure.exposureBias(fromMetadata: [:]))
+        XCTAssertNil(SkyPriorityExposure.exposureBias(fromMetadata: ["{Exif}": [String: Any]()]))
+    }
+
     // MARK: - 収束
 
     func testConvergesAndStopsUnderSustainedClipping() {

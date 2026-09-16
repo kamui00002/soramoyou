@@ -61,8 +61,22 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// いま端末へかけている露出補正値（EV）。sessionQueue 上でのみ読み書きする。
     private var appliedExposureBias: Float = 0
 
+    /// 測光が一度でも成立したか（計装用）。
+    /// ⚠️ これが無いと「ON だが一度も測れていない（壊れている）」と
+    ///    「ON だが下げる必要が無かった（正常）」が本番データで区別できない。
+    ///    測光出力を挿せなかった端末・想定外のバッファ形式など、
+    ///    恒久的に機能しない経路はすべてここが false のままになる。
+    private var hasMeasuredClipping = false
+
     /// 空優先 AE の判定パラメータ。
     private let exposureTuning = SkyPriorityExposure.Tuning.default
+
+    /// 露出補正を書き込んでから、反映完了の通知が来るまでに見込む最大待ち時間（秒）。
+    /// 通知が来なかった場合の保険でもあるので、実測の収束時間より長めに取る。
+    private static let exposureSettleTimeout: CFTimeInterval = 0.6
+
+    /// 反映完了の通知が来てから、AE が物理的に落ち着くまで追加で待つ時間（秒）。
+    private static let exposureSettleMargin: CFTimeInterval = 0.3
 
     /// プレビュー View（回転の追従に使う）。sessionQueue 上でのみ読み書きする。
     /// ⚠️ **weak で持つ**。View は `onTap` クロージャ経由で ViewModel → 本コントローラを
@@ -149,7 +163,11 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         //    「開いた直後の 1 枚」が白飛びから守られないため。
         let meter = SkyExposureMeter(clipThreshold: exposureTuning.clipThreshold) { [weak self] fraction in
             guard let self else { return }
-            self.sessionQueue.async { self.applyMeasuredClippingOnSessionQueue(fraction) }
+            self.sessionQueue.async {
+                // 適用の可否に関わらず「測れた」ことは記録する（壊れていない証拠になる）。
+                self.hasMeasuredClipping = true
+                self.applyMeasuredClippingOnSessionQueue(fraction)
+            }
         }
         if session.canAddOutput(meter.output) {
             session.addOutput(meter.output)
@@ -231,6 +249,7 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     public func start() {
         sessionQueue.async {
             self.isRunningDesired = true
+            self.exposureMeter?.setEnabled(self.isSkyPriorityDesired)
             self.startIfPossibleOnSessionQueue()
         }
     }
@@ -239,11 +258,13 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     public func stop() {
         sessionQueue.async {
             self.isRunningDesired = false
+            // ⚠️ 復帰処理より**先に**測光を止める。止めないと、停止直前に測られた結果が
+            //    この後ろのキューに残っていて、0 EV へ戻した直後に負の補正を再適用しうる。
+            //    シリアルキューは順序を守るだけで、古い依頼を捨ててはくれない。
+            self.exposureMeter?.setEnabled(false)
             // 露出補正は端末（AVCaptureDevice）側に残る設定なので、画面を閉じるときは素へ戻す。
             // 戻さないと「OFF にしたのに暗いまま」「次に開いたら暗い」が起きる。
-            if self.appliedExposureBias != 0, let device = self.videoDevice {
-                self.setExposureBiasOnSessionQueue(0, device: device)
-            }
+            self.resetExposureBiasOnSessionQueue()
             guard self.session.isRunning else { return }
             self.session.stopRunning()
         }
@@ -391,23 +412,39 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     public func setSkyPriorityExposureEnabled(_ enabled: Bool) {
         sessionQueue.async {
             self.isSkyPriorityDesired = enabled
-            self.exposureMeter?.setEnabled(enabled)
-            guard !enabled, self.appliedExposureBias != 0, let device = self.videoDevice else { return }
-            self.setExposureBiasOnSessionQueue(0, device: device)
+            // 停止中に ON にされても測り始めない（start() で復帰させる）。
+            self.exposureMeter?.setEnabled(enabled && self.isRunningDesired)
+            guard !enabled else { return }
+            self.resetExposureBiasOnSessionQueue()
         }
     }
 
-    /// いまかかっている露出補正値（EV）。計装用。
-    public func currentExposureBias() async -> Float {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Float, Never>) in
-            sessionQueue.async { continuation.resume(returning: self.appliedExposureBias) }
+    /// 空優先 AE の現況（計装用）。
+    /// - Returns: `bias` = いまかかっている露出補正値（EV。EXIF が取れないときの保険）、
+    ///   `hasMeasured` = 測光が一度でも成立したか
+    public func skyPriorityStatus() async -> (bias: Float, hasMeasured: Bool) {
+        await withCheckedContinuation { (continuation: CheckedContinuation<(bias: Float, hasMeasured: Bool), Never>) in
+            sessionQueue.async {
+                continuation.resume(returning: (self.appliedExposureBias, self.hasMeasuredClipping))
+            }
         }
+    }
+
+    /// 露出補正を 0 EV（素の状態）へ戻す（sessionQueue 上で呼ぶこと）。
+    /// OFF と停止の 2 経路から呼ばれるので、条件判定ごと 1 箇所にまとめてある。
+    private func resetExposureBiasOnSessionQueue() {
+        guard appliedExposureBias != 0, let device = videoDevice else { return }
+        setExposureBiasOnSessionQueue(0, device: device)
     }
 
     /// 測光結果（白飛び率）を受けて露出補正を更新する（sessionQueue 上で呼ぶこと）。
     private func applyMeasuredClippingOnSessionQueue(_ clippedFraction: Double) {
+        // ⚠️ `isRunningDesired` を必ず見る。測光結果は測られてから適用されるまでに
+        //    キューを 1 回またぐので、その間に停止・OFF が挟まりうる。
+        //    「測った時点で有効だった」ではなく「いま適用してよいか」で判断する。
         // ユーザーが長押しで AE をロックしているあいだは意図を尊重して触らない。
-        guard isSkyPriorityDesired, !isFocusLocked, let device = videoDevice else { return }
+        guard isRunningDesired, isSkyPriorityDesired, !isFocusLocked,
+              let device = videoDevice else { return }
         // ⚠️ `lower...upper` は lower > upper だと実行時トラップする。端末の値を信用せず確かめる。
         let lower = device.minExposureTargetBias
         let upper = device.maxExposureTargetBias
@@ -424,15 +461,26 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     }
 
     /// 露出補正値を端末へ書き込む（sessionQueue 上で呼ぶこと）。
+    ///
+    /// ⚠️ 書き込んだ値がセンサーに効くまでには時間がかかる（実機で数百ミリ秒）。
+    ///    その間のフレームは**まだ前の明るさ**なので、測り続けると「効いていない」と誤解して
+    ///    さらに下げ、下限まで振り切れる。だから書き込みとセットで測光を止める。
     private func setExposureBiasOnSessionQueue(_ bias: Float, device: AVCaptureDevice) {
         do {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
-            device.setExposureTargetBias(bias, completionHandler: nil)
+            device.setExposureTargetBias(bias) { [weak self] _ in
+                // 反映が完了した時点から、AE が物理的に落ち着くまでさらに少し待つ。
+                self?.exposureMeter?.suppressMeasurements(for: Self.exposureSettleMargin)
+            }
+            // 反映完了の通知が来るまでの間も測らない。通知が来ない端末への保険も兼ねる。
+            exposureMeter?.suppressMeasurements(for: Self.exposureSettleTimeout)
             // 端末への書き込みが成功したときだけ記録する（失敗時に嘘の現在値を持たないため）。
             appliedExposureBias = bias
         } catch {
-            // 別アプリがカメラ設定を掴んでいる等。次の測光でやり直せるので握りつぶす。
+            // ⚠️ 到達しない想定（このアプリの lockForConfiguration は sessionQueue 上で
+            //    直列化されており、他アプリとの競合は中断通知として現れるため）。
+            //    握りつぶすのは、露出補正が書けなくても撮影自体は続けられるから。
         }
     }
 

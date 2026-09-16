@@ -60,6 +60,11 @@ public struct SkyCameraCapture {
     /// 0 なら「ON だが下げる必要が無かった」＝機能が効いていないのではなく出番が無かった、と読む。
     public let exposureBiasEV: Float
 
+    /// 測光が一度でも成立したか（計装用）。
+    /// `skyPriorityEnabled` が true なのにこれが false なら、出番が無かったのではなく
+    /// **機能が動いていない**（測光出力を挿せなかった等）。この 2 つを混ぜてはいけない。
+    public let skyPriorityMeasured: Bool
+
     /// シャッターを切った時刻。EXIF に撮影日時が無い場合の代替として本体が使う。
     public let shutterDate: Date
 
@@ -74,6 +79,7 @@ public struct SkyCameraCapture {
         usedDeferredStart: Bool,
         skyPriorityEnabled: Bool,
         exposureBiasEV: Float,
+        skyPriorityMeasured: Bool,
         shutterDate: Date
     ) {
         self.photoData = photoData
@@ -86,6 +92,7 @@ public struct SkyCameraCapture {
         self.usedDeferredStart = usedDeferredStart
         self.skyPriorityEnabled = skyPriorityEnabled
         self.exposureBiasEV = exposureBiasEV
+        self.skyPriorityMeasured = skyPriorityMeasured
         self.shutterDate = shutterDate
     }
 }
