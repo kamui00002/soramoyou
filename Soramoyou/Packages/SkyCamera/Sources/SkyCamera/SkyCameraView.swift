@@ -64,7 +64,7 @@ public struct SkyCameraView: View {
                 onTap: { devicePoint in model.focus(at: devicePoint) },
                 onLongPress: { devicePoint in model.toggleLock(at: devicePoint) },
                 // 横持ちでプレビュー映像が回らないのを防ぐため、層をコントローラへ結びつける。
-                onPreviewLayerReady: { layer in model.controller.attachPreviewLayer(layer) }
+                onPreviewReady: { view in model.controller.attachPreview(view) }
             )
             .ignoresSafeArea()
 
@@ -361,10 +361,16 @@ final class SkyCameraViewModel: ObservableObject {
 
     /// エラーを画面と計装の両方へ流す。
     private func present(error: Error) {
+        let skyError = error as? SkyCameraError
         errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        failureReason = (error as? SkyCameraError)?.reasonCode ?? "unknown"
-        isPermissionError = (error as? SkyCameraError)?.isPermissionDenied ?? false
+        failureReason = skyError?.reasonCode ?? "unknown"
+        isPermissionError = skyError?.isPermissionDenied ?? false
         isShowingError = true
-        isReady = false
+        // ⚠️ 一時的な失敗では撮影可否を落とさない。
+        //    中断中にシャッターを押した 1 回で `isReady` を false にすると、
+        //    中断が明けてセッションが戻っても撮れないまま（開き直すしかなくなる）。
+        if skyError?.isTransient != true {
+            isReady = false
+        }
     }
 }

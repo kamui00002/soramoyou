@@ -24,6 +24,26 @@ public final class CameraPreviewUIView: UIView {
     /// 長押し（AE/AF ロック）のコールバック。引数はデバイス座標（0...1）。
     var onLongPress: ((CGPoint) -> Void)?
 
+    /// iOS 17+ で適用したいプレビューの回転角（`RotationCoordinator` 由来）。
+    ///
+    /// ⚠️ **覚えておいて後からも適用する**のが肝。層のコネクションはセッションに入力が
+    ///    追加されるまで出来上がらず、`makeUIView` の時点（＝構成前）ではまだ nil。
+    ///    その瞬間に届いた角度を捨てるだけだと、**横持ちのままカメラを開いたとき**に
+    ///    角度変化が一度も起きず、既定の縦向きで固まる。
+    var desiredRotationAngle: CGFloat? {
+        didSet { applyDesiredRotationAngle() }
+    }
+
+    /// 覚えている回転角をコネクションへ適用する（まだ適用できないときは何もしない）。
+    func applyDesiredRotationAngle() {
+        guard #available(iOS 17.0, *),
+              let angle = desiredRotationAngle,
+              let connection = previewLayer.connection,
+              connection.isVideoRotationAngleSupported(angle),
+              connection.videoRotationAngle != angle else { return }
+        connection.videoRotationAngle = angle
+    }
+
     /// ジェスチャを 1 度だけ登録する。
     func installGesturesIfNeeded() {
         guard gestureRecognizers?.isEmpty ?? true else { return }
@@ -35,11 +55,15 @@ public final class CameraPreviewUIView: UIView {
 
     public override func layoutSubviews() {
         super.layoutSubviews()
-        // iOS 16 は `RotationCoordinator` が無いので、画面の向きが変わるたびに
-        // プレビューのコネクションへ向きを反映する（回転時は必ず layoutSubviews が走る）。
-        // iOS 17+ は `CameraSessionController` の KVO が担当するのでここでは何もしない。
-        if #available(iOS 17.0, *) { return }
-        applyLegacyPreviewOrientation()
+        // 回転時は必ず layoutSubviews が走るので、ここを「取りこぼしの受け皿」にする。
+        if #available(iOS 17.0, *) {
+            // 角度は KVO（CameraSessionController）が push してくるが、
+            // 届いた時点でコネクションが未生成だと適用できない。ここで必ず再試行する。
+            applyDesiredRotationAngle()
+        } else {
+            // iOS 16 は `RotationCoordinator` が無いので画面の向きから直接決める。
+            applyLegacyPreviewOrientation()
+        }
     }
 
     /// iOS 16 用: 画面の向き → プレビューの向き。
@@ -81,23 +105,23 @@ public struct CameraPreviewView: UIViewRepresentable {
     private let session: AVCaptureSession
     private let onTap: (CGPoint) -> Void
     private let onLongPress: (CGPoint) -> Void
-    private let onPreviewLayerReady: (AVCaptureVideoPreviewLayer) -> Void
+    private let onPreviewReady: (CameraPreviewUIView) -> Void
 
     /// - Parameters:
     ///   - session: 表示するセッション
     ///   - onTap: タップ位置（デバイス座標）を受け取る
     ///   - onLongPress: 長押し位置（デバイス座標）を受け取る
-    ///   - onPreviewLayerReady: 生成したプレビュー層を受け取る（回転の追従に使う）
+    ///   - onPreviewReady: 生成したプレビュー View を受け取る（回転の追従に使う）
     public init(
         session: AVCaptureSession,
         onTap: @escaping (CGPoint) -> Void,
         onLongPress: @escaping (CGPoint) -> Void,
-        onPreviewLayerReady: @escaping (AVCaptureVideoPreviewLayer) -> Void
+        onPreviewReady: @escaping (CameraPreviewUIView) -> Void
     ) {
         self.session = session
         self.onTap = onTap
         self.onLongPress = onLongPress
-        self.onPreviewLayerReady = onPreviewLayerReady
+        self.onPreviewReady = onPreviewReady
     }
 
     public func makeUIView(context: Context) -> CameraPreviewUIView {
@@ -109,8 +133,8 @@ public struct CameraPreviewView: UIViewRepresentable {
         view.installGesturesIfNeeded()
         view.onTap = onTap
         view.onLongPress = onLongPress
-        // 回転追従のため、生成直後に層を外へ渡す（`RotationCoordinator` の作り直しに使う）。
-        onPreviewLayerReady(view.previewLayer)
+        // 回転追従のため、生成直後に View を外へ渡す（`RotationCoordinator` の作り直しに使う）。
+        onPreviewReady(view)
         return view
     }
 

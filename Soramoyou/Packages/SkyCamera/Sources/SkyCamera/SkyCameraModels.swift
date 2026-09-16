@@ -139,7 +139,7 @@ public enum SkyCameraError: LocalizedError {
         case .configurationFailed:
             return "カメラの準備に失敗しました。"
         case .sessionNotRunning:
-            return "カメラが停止しています。開き直してください。"
+            return "カメラを準備しています。少し待ってからもう一度お試しください。"
         case .captureFailed(let reason):
             return "撮影に失敗しました（\(reason)）。"
         }
@@ -159,6 +159,14 @@ public enum SkyCameraError: LocalizedError {
     /// 権限が原因か（画面側で「設定を開く」導線を出すかの判断に使う）。
     public var isPermissionDenied: Bool {
         if case .permissionDenied = self { return true }
+        return false
+    }
+
+    /// 一時的な失敗か（＝画面を開き直さなくても、次の操作でやり直せる）。
+    /// 中断（着信・他アプリのカメラ利用）が明ければセッションは自動で戻るため、
+    /// ここで撮影不可にしてしまうと復帰してもシャッターが返ってこない。
+    public var isTransient: Bool {
+        if case .sessionNotRunning = self { return true }
         return false
     }
 }

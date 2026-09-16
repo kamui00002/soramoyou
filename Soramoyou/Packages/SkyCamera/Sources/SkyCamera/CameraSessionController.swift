@@ -52,8 +52,10 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// AE/AF を明示的にロック中か（長押し）。被写体変化で自動へ戻してよいかの判断に使う。
     private var isFocusLocked = false
 
-    /// プレビュー層（回転の追従に使う）。sessionQueue 上でのみ読み書きする。
-    private var previewLayer: AVCaptureVideoPreviewLayer?
+    /// プレビュー View（回転の追従に使う）。sessionQueue 上でのみ読み書きする。
+    /// ⚠️ **weak で持つ**。View は `onTap` クロージャ経由で ViewModel → 本コントローラを
+    ///    強参照しているので、こちらが強参照すると循環参照になる。
+    private weak var previewView: CameraPreviewUIView?
 
     /// プレビュー回転角の監視（iOS 17+）。sessionQueue 上で読み書きする（deinit を除く）。
     private var rotationObservation: NSKeyValueObservation?
@@ -148,16 +150,16 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
 
     // MARK: - プレビュー層の結びつけ
 
-    /// プレビュー層を受け取り、端末の回転にプレビュー映像を追従させる。
+    /// プレビュー View を受け取り、端末の回転にプレビュー映像を追従させる。
     ///
     /// ⚠️ **これを呼ばないと横持ちでプレビューだけ回らない**。
     ///    `AVCaptureVideoPreviewLayer` は端末回転に自動追従しないため、
     ///    コネクションの回転角を明示的に更新してやる必要がある
     ///    （静止画側は撮影直前に `applyRotation` で立てているので影響を受けない）。
-    /// - Parameter layer: `CameraPreviewUIView` が持つプレビュー層
-    public func attachPreviewLayer(_ layer: AVCaptureVideoPreviewLayer) {
+    /// - Parameter view: プレビューを表示している View（メインスレッドから渡すこと）
+    public func attachPreview(_ view: CameraPreviewUIView) {
         sessionQueue.async {
-            self.previewLayer = layer
+            self.previewView = view
             self.rebuildRotationCoordinatorOnSessionQueue()
         }
     }
@@ -169,27 +171,27 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     private func rebuildRotationCoordinatorOnSessionQueue() {
         guard #available(iOS 17.0, *), let device = videoDevice else { return }
 
-        let layer = previewLayer
-        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: layer)
+        let view = previewView
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: view?.previewLayer)
         rotationCoordinatorStorage = coordinator
 
         // ⚠️ 回転角は端末を回すたびに変わる。一度読むだけでは追従しないので必ず KVO で監視する。
         rotationObservation?.invalidate()
-        guard let layer else {
+        guard let view else {
             rotationObservation = nil
             return
         }
         rotationObservation = coordinator.observe(
             \.videoRotationAngleForHorizonLevelPreview,
             options: [.initial, .new]
-        ) { _, change in
+        ) { [weak view] _, change in
             guard let angle = change.newValue else { return }
-            // プレビュー層とそのコネクションは UI 層なのでメインスレッドで触る。
-            // 層はクロージャが直接掴む（sessionQueue 専用プロパティを他スレッドから読まないため）。
+            // プレビューは UI 層なのでメインスレッドで触る。
+            // View はクロージャが直接掴む（sessionQueue 専用プロパティを他スレッドから読まないため）。
+            // 角度は View に預けるだけにして、実際の適用（コネクションの有無）は View に任せる
+            //（構成前でコネクションが未生成でも、次の layoutSubviews で必ず適用される）。
             DispatchQueue.main.async {
-                guard let connection = layer.connection,
-                      connection.isVideoRotationAngleSupported(angle) else { return }
-                connection.videoRotationAngle = angle
+                view?.desiredRotationAngle = angle
             }
         }
     }
