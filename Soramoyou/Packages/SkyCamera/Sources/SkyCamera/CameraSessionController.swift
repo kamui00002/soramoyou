@@ -105,6 +105,12 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     ///    その場合はレンズ切替と 48MP のどちらを取るかという設計判断になる。
     private var deviceMaxMegapixels = 0
 
+    /// **単眼の広角デバイス**が持つ最大解像度（MP。診断用）。
+    /// ⚠️ 掴み替えずに formats を読むだけなので副作用は無い。
+    ///    仮想デバイス（3眼）では 48MP が見えないので、「単眼へ移れば 48MP が取れるのか」を
+    ///    大工事の**前に**確かめるための値。ここが 48 でなければ移る意味が無い。
+    private var wideCameraMaxMegapixels = 0
+
     /// 記録形式（sessionQueue 上でのみ読み書きする）。
     private var photoFormat: SkyCameraPhotoFormat = .heic
 
@@ -273,14 +279,10 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         availableResolutions = supported
         // 診断用：デバイスが持つ全フォーマットの中での最大。
         // ⚠️ メソッドチェーンで書くと型チェックが通らない（式が複雑すぎる）。素直に回す。
-        var maxMegapixels = 0
-        for format in device.formats {
-            for dimensions in format.supportedMaxPhotoDimensions {
-                let pixels = Double(dimensions.width) * Double(dimensions.height)
-                maxMegapixels = max(maxMegapixels, Int((pixels / 1_000_000).rounded()))
-            }
-        }
+        let maxMegapixels = Self.maximumMegapixels(for: device)
         deviceMaxMegapixels = maxMegapixels
+        wideCameraMaxMegapixels = Self.maximumMegapixels(
+            for: AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back))
 
         // ⚠️ 出力側の上限は**ここで一度だけ**いちばん大きい値へ上げておく。
         //    撮影のたびに動かすと「重いパイプライン再構成」が走る（SDK ヘッダーの警告）。
@@ -576,10 +578,28 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         }
     }
 
-    /// このデバイスが全フォーマットを通じて出せる最大解像度（MP。診断用）。
-    public func deviceMaximumMegapixels() async -> Int {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Int, Never>) in
-            sessionQueue.async { continuation.resume(returning: self.deviceMaxMegapixels) }
+    /// 指定デバイスが全フォーマットを通じて出せる最大解像度（MP）。
+    /// ⚠️ メソッドチェーンで書くと型チェックが通らない（式が複雑すぎる）。素直に回す。
+    private static func maximumMegapixels(for device: AVCaptureDevice?) -> Int {
+        guard let device else { return 0 }
+        var maxMegapixels = 0
+        for format in device.formats {
+            for dimensions in format.supportedMaxPhotoDimensions {
+                let pixels = Double(dimensions.width) * Double(dimensions.height)
+                maxMegapixels = max(maxMegapixels, Int((pixels / 1_000_000).rounded()))
+            }
+        }
+        return maxMegapixels
+    }
+
+    /// 診断用の解像度まわりの実測値。
+    /// - Returns: `current` = いま掴んでいるデバイスの最大、
+    ///   `wide` = 単眼の広角デバイスの最大（掴み替えずに読んだもの）
+    public func maximumMegapixelsDiagnostics() async -> (current: Int, wide: Int) {
+        await withCheckedContinuation { (continuation: CheckedContinuation<(current: Int, wide: Int), Never>) in
+            sessionQueue.async {
+                continuation.resume(returning: (self.deviceMaxMegapixels, self.wideCameraMaxMegapixels))
+            }
         }
     }
 

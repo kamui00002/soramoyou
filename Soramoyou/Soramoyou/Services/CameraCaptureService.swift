@@ -138,6 +138,8 @@ enum CameraCaptureService {
             // ⭐️ 診断用。available_mp が小さいとき、デバイスの限界なのか
             //    いま使っているフォーマット（仮想デバイスの都合）の限界なのかを切り分ける。
             "device_max_mp": capture.deviceMaxMegapixels,
+            // ⭐️ 単眼へ移れば解像度が上がるのかを、大工事の前に数字で確かめる。
+            "wide_max_mp": capture.wideCameraMaxMegapixels,
             "sky_priority_measured": capture.skyPriorityMeasured,
             // ⭐️ 閾値較正のための実測値。効かなかったときに
             //    「閾値が高すぎる」のか「本当に飛んでいない」のかを区別する。

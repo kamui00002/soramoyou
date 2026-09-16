@@ -86,6 +86,11 @@ public struct SkyCameraCapture {
     ///    いま使っているフォーマット（＝仮想デバイスの都合）の限界なのかを切り分ける。
     public let deviceMaxMegapixels: Int
 
+    /// 単眼の広角デバイスが出せる最大解像度（MP。診断用）。
+    /// ⭐️ 「レンズ切替を捨てて単眼へ移れば 48MP が取れるのか」を、
+    ///    大工事の前に数字で確かめるための値。
+    public let wideCameraMaxMegapixels: Int
+
     /// 撮影時の記録形式（計装用）。
     public let photoFormat: SkyCameraPhotoFormat
 
@@ -128,6 +133,7 @@ public struct SkyCameraCapture {
         availableMegapixels: String,
         photoFormat: SkyCameraPhotoFormat,
         deviceMaxMegapixels: Int,
+        wideCameraMaxMegapixels: Int,
         skyPriorityMeasured: Bool,
         skyClippedFraction: Double,
         skyPeakLuma: Int,
@@ -151,6 +157,7 @@ public struct SkyCameraCapture {
         self.availableMegapixels = availableMegapixels
         self.photoFormat = photoFormat
         self.deviceMaxMegapixels = deviceMaxMegapixels
+        self.wideCameraMaxMegapixels = wideCameraMaxMegapixels
         self.skyPriorityMeasured = skyPriorityMeasured
         self.skyClippedFraction = skyClippedFraction
         self.skyPeakLuma = skyPeakLuma
