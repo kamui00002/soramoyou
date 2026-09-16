@@ -76,6 +76,11 @@ public struct SkyCameraCapture {
     ///    これが無いと「効いたから静かなのか、最初から静かなのか」を後から区別できない。
     public let skyMaxPeakLuma: Int
 
+    /// 撮影時のズーム倍率（表示倍率。計装用）。
+    /// ⭐️ 「空を撮るとき人はどのレンズを選ぶか」を測る。超広角がよく使われるなら、
+    ///    OpenCV の広角合成（IPA +1.7MB）を将来外せるかの判断材料になる。
+    public let zoomDisplayed: Double
+
     /// 測光が一度でも成立したか（計装用）。
     /// `skyPriorityEnabled` が true なのにこれが false なら、出番が無かったのではなく
     /// **機能が動いていない**（測光出力を挿せなかった等）。この 2 つを混ぜてはいけない。
@@ -95,6 +100,7 @@ public struct SkyCameraCapture {
         usedDeferredStart: Bool,
         skyPriorityEnabled: Bool,
         exposureBiasEV: Float,
+        zoomDisplayed: Double,
         skyPriorityMeasured: Bool,
         skyClippedFraction: Double,
         skyPeakLuma: Int,
@@ -112,6 +118,7 @@ public struct SkyCameraCapture {
         self.usedDeferredStart = usedDeferredStart
         self.skyPriorityEnabled = skyPriorityEnabled
         self.exposureBiasEV = exposureBiasEV
+        self.zoomDisplayed = zoomDisplayed
         self.skyPriorityMeasured = skyPriorityMeasured
         self.skyClippedFraction = skyClippedFraction
         self.skyPeakLuma = skyPeakLuma

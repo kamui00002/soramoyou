@@ -30,6 +30,9 @@ public struct SkyCameraView: View {
 
     // MARK: - State
 
+    /// ピンチを始めたときの倍率（連続ズームの基準点）。
+    @State private var pinchStartZoom: CGFloat?
+
     @StateObject private var horizonMonitor = HorizonMonitor()
     @StateObject private var model: SkyCameraViewModel
 
@@ -74,6 +77,20 @@ public struct SkyCameraView: View {
                 onPreviewReady: { view in model.controller.attachPreview(view) }
             )
             .ignoresSafeArea()
+            // 標準カメラと同じピンチズーム。タップ（フォーカス）・長押し（AE/AFロック）とは
+            // 種類の違うジェスチャなので、simultaneousGesture で並立させて奪い合わない。
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .onChanged { scale in
+                        guard let configuration = model.lensConfiguration else { return }
+                        let start = pinchStartZoom ?? model.displayedZoom
+                        if pinchStartZoom == nil { pinchStartZoom = start }
+                        let lower = configuration.displayedZoom(forVideoZoomFactor: configuration.minFactor)
+                        let upper = configuration.displayedZoom(forVideoZoomFactor: configuration.maxFactor)
+                        model.setZoom(min(upper, max(lower, start * scale)), animated: false)
+                    }
+                    .onEnded { _ in pinchStartZoom = nil }
+            )
 
             if model.gridEnabled {
                 GridOverlay()
@@ -90,6 +107,15 @@ public struct SkyCameraView: View {
                 Spacer()
                 if model.isLocked {
                     lockBadge
+                }
+                if let configuration = model.lensConfiguration {
+                    ZoomControl(
+                        configuration: configuration,
+                        displayedZoom: $model.displayedZoom
+                    ) { zoom, animated in
+                        model.setZoom(zoom, animated: animated)
+                    }
+                    .padding(.bottom, 10)
                 }
                 shutterBar
             }
@@ -264,6 +290,12 @@ final class SkyCameraViewModel: ObservableObject {
     @Published var horizonEnabled: Bool
     /// 空優先 AE（白飛び防止）が ON か。切り替えは `setSkyPriorityEnabled(_:)` を通す。
     @Published private(set) var skyPriorityEnabled: Bool
+
+    /// 端末のレンズ構成。構成前と単眼端末では nil（＝ズーム UI を出さない）。
+    @Published private(set) var lensConfiguration: LensConfiguration?
+
+    /// いま表示している倍率。既定は標準カメラと同じ 1x。
+    @Published var displayedZoom: CGFloat = 1
     /// AE/AF ロック中か。
     @Published private(set) var isLocked = false
     /// 撮影処理中か（シャッターの二度押し防止）。
@@ -311,6 +343,7 @@ final class SkyCameraViewModel: ObservableObject {
             try await controller.configure()
             // ⚠️ 構成の**後**に伝える。configure 前に呼んでも測光器がまだ存在しない。
             controller.setSkyPriorityExposureEnabled(skyPriorityEnabled)
+            lensConfiguration = await controller.lensConfiguration()
             controller.start()
             usedDeferredStart = await controller.usedDeferredStart()
             isReady = true
@@ -318,6 +351,12 @@ final class SkyCameraViewModel: ObservableObject {
             present(error: error)
         }
         return authorization
+    }
+
+    /// ズーム倍率を変える。表示とセッション側を必ず同時に動かす。
+    func setZoom(_ zoom: CGFloat, animated: Bool) {
+        displayedZoom = zoom
+        controller.setZoom(displayedZoom: zoom, animated: animated)
     }
 
     /// タップ = その点に AF/AE を合わせる（ロック中なら解除する）。
@@ -360,6 +399,7 @@ final class SkyCameraViewModel: ObservableObject {
         // ⚠️ 撮影処理中もトグルは操作できるので、ここで固定する。
         //    撮影後に読むと「撮った写真とは違う瞬間の設定」を記録してしまう。
         let skyPriorityAtShutter = skyPriorityEnabled
+        let zoomAtShutter = displayedZoom
         let shutterDate = Date()
         do {
             let result = try await controller.capturePhoto(
@@ -381,6 +421,7 @@ final class SkyCameraViewModel: ObservableObject {
                 //    EXIF に無い端末のための保険としてのみ現在値へ落とす。
                 exposureBiasEV: SkyPriorityExposure.exposureBias(fromMetadata: result.metadata)
                     ?? status.bias,
+                zoomDisplayed: Double(zoomAtShutter),
                 skyPriorityMeasured: status.hasMeasured,
                 skyClippedFraction: status.clippedFraction,
                 skyPeakLuma: Int(status.peakLuma),

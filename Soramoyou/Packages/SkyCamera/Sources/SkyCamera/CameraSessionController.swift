@@ -22,8 +22,16 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// 静止画出力。
     private let photoOutput = AVCapturePhotoOutput()
 
-    /// 背面広角カメラ。構成後に確定する（sessionQueue 上でのみ触る）。
+    /// 背面カメラ。構成後に確定する（sessionQueue 上でのみ触る）。
+    /// ⭐️ 可能なら**仮想デバイス**（3眼などをまとめた 1 つのデバイス）を掴む。
+    ///    レンズごとに別デバイスへ差し替えると、そのたびにセッションの再構成が要り、
+    ///    露出・回転・水平線ガイドの結びつけも作り直しになる。
+    ///    仮想デバイスならズーム倍率を変えるだけで OS がレンズを切り替えてくれるので、
+    ///    こちらは**デバイスを一度も持ち替えない**（＝既存の配線に一切触らない）。
     private var videoDevice: AVCaptureDevice?
+
+    /// 掴んだデバイスのレンズ構成（倍率の換算に使う）。sessionQueue 上でのみ触る。
+    private var lensConfigurationStorage: LensConfiguration?
 
     /// iOS 17+ の回転コーディネータ。iOS 16 では nil のまま（型を隠すため Any で保持）。
     private var rotationCoordinatorStorage: Any?
@@ -133,9 +141,10 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     private func configureOnSessionQueue() throws {
         guard !isConfigured else { return }
 
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+        guard let selected = Self.selectBackCamera() else {
             throw SkyCameraError.deviceUnavailable
         }
+        let device = selected.device
 
         session.beginConfiguration()
         // beginConfiguration と commitConfiguration は必ず対で呼ぶ（途中 throw でも取りこぼさない）。
@@ -194,6 +203,22 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         }
 
         videoDevice = device
+        let lensConfiguration = Self.makeLensConfiguration(
+            device: device, hasUltraWide: selected.hasUltraWide)
+        lensConfigurationStorage = lensConfiguration
+
+        // ⚠️ 仮想デバイスは videoZoomFactor = 1.0 で始まるが、それは**いちばん広いレンズ**。
+        //    3 眼端末だと超広角なので、何もしないとカメラが 0.5x で開いてしまう。
+        //    標準カメラと同じ 1x に揃える。
+        if lensConfiguration.baseFactor != 1 {
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                device.videoZoomFactor = lensConfiguration.clamped(lensConfiguration.baseFactor)
+            } catch {
+                // 揃えられなくても撮影はできる（開いたときの画角が広いだけ）。
+            }
+        }
 
         // タップ AF/AE は「1 回合わせたら止まる」一発モード（.autoFocus / .autoExpose）なので、
         // 被写体が変わったタイミングで自動追従へ戻してやる必要がある。
@@ -210,6 +235,79 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         // 撮影向きだけなら層は不要だが、プレビューの回転には層が要る。
         rebuildRotationCoordinatorOnSessionQueue()
         isConfigured = true
+    }
+
+    // MARK: - レンズ選択
+
+    /// 背面カメラを、広い画角を優先して選ぶ。
+    ///
+    /// 仮想デバイス（複数レンズを 1 つにまとめたもの）を上から順に試し、
+    /// どれも無ければ従来どおり単眼の広角カメラへ落ちる。
+    /// - Returns: 掴んだデバイスと、いちばん広いレンズが超広角かどうか
+    private static func selectBackCamera() -> (device: AVCaptureDevice, hasUltraWide: Bool)? {
+        // 「超広角を含むか」は倍率表示の基準（1x をどこに置くか）を決めるので、
+        // 端末の型から確定させる。ここを推測にすると 0.5x の表示がずれる。
+        let candidates: [(AVCaptureDevice.DeviceType, Bool)] = [
+            (.builtInTripleCamera, true),    // 超広角＋標準＋望遠
+            (.builtInDualWideCamera, true),  // 超広角＋標準
+            (.builtInDualCamera, false),     // 標準＋望遠
+            (.builtInWideAngleCamera, false) // 単眼
+        ]
+        for (type, hasUltraWide) in candidates {
+            if let device = AVCaptureDevice.default(type, for: .video, position: .back) {
+                return (device, hasUltraWide)
+            }
+        }
+        return nil
+    }
+
+    /// 端末が報告する値からレンズ構成を組み立てる。
+    private static func makeLensConfiguration(device: AVCaptureDevice,
+                                              hasUltraWide: Bool) -> LensConfiguration {
+        LensConfiguration(
+            hasUltraWide: hasUltraWide,
+            switchOverFactors: device.virtualDeviceSwitchOverVideoZoomFactors.map { CGFloat($0.doubleValue) },
+            minFactor: device.minAvailableVideoZoomFactor,
+            deviceMaxFactor: device.maxAvailableVideoZoomFactor
+        )
+    }
+
+    // MARK: - ズーム
+
+    /// 掴んだ端末のレンズ構成（UI がボタンとスライダーを組み立てるのに使う）。
+    /// 構成前・デバイスが無い場合は nil。
+    public func lensConfiguration() async -> LensConfiguration? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<LensConfiguration?, Never>) in
+            sessionQueue.async { continuation.resume(returning: self.lensConfigurationStorage) }
+        }
+    }
+
+    /// 表示倍率（0.5x / 1x / 3x …）を指定してズームする。
+    /// - Parameters:
+    ///   - displayedZoom: 画面に出している倍率
+    ///   - animated: true ならなめらかに寄る（ボタンで飛ばすとき用）。
+    ///     スライダーのように連続して呼ぶ場合は false にする
+    ///     （毎回アニメーションを開始し直すとかえってカクつくため）。
+    public func setZoom(displayedZoom: CGFloat, animated: Bool) {
+        sessionQueue.async {
+            guard let device = self.videoDevice,
+                  let configuration = self.lensConfigurationStorage else { return }
+            let factor = configuration.videoZoomFactor(forDisplayedZoom: displayedZoom)
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                if animated {
+                    // rate は「1 秒あたり何段変わるか」。4 は標準カメラに近い体感。
+                    device.ramp(toVideoZoomFactor: factor, withRate: 4)
+                } else {
+                    // ドラッグ中に ramp を重ねると前の動きと喧嘩するので、必ず止めてから直接入れる。
+                    if device.isRampingVideoZoom { device.cancelVideoZoomRamp() }
+                    device.videoZoomFactor = factor
+                }
+            } catch {
+                // ズームできなくても撮影自体は続けられるので握りつぶす。
+            }
+        }
     }
 
     // MARK: - プレビュー層の結びつけ

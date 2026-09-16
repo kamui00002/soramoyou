@@ -127,6 +127,8 @@ enum CameraCaptureService {
             // ⭐️ 測光が一度でも成立したか。ON かつ false なら「出番が無かった」ではなく
             //    **動いていない**。この属性が無いと、恒久的な故障が
             //    「たまたま下げる必要が無かった撮影」に紛れて永遠に気づけない。
+            // ⭐️ どのレンズで空を撮ったか。0.1 刻みへ丸める。
+            "zoom": Double((capture.zoomDisplayed * 10).rounded()) / 10,
             "sky_priority_measured": capture.skyPriorityMeasured,
             // ⭐️ 閾値較正のための実測値。効かなかったときに
             //    「閾値が高すぎる」のか「本当に飛んでいない」のかを区別する。
