@@ -80,6 +80,11 @@ public struct SkyCameraCapture {
     /// ⭐️ 「指定を忘れて最小で撮っていた」が本番で直ったかを確かめるための値。
     public let photoMegapixels: Int
 
+    /// その端末で選べた解像度の一覧（MP をカンマ区切り。例: "12,49"。計装用）。
+    /// ⭐️ 「選択肢が出ない」ときに、端末が本当に 1 つしか返していないのか
+    ///    読み取り位置を間違えているのかを、本番データで切り分けるため。
+    public let availableMegapixels: String
+
     /// 撮影時のズーム倍率（表示倍率。計装用）。
     /// ⭐️ 「空を撮るとき人はどのレンズを選ぶか」を測る。超広角がよく使われるなら、
     ///    OpenCV の広角合成（IPA +1.7MB）を将来外せるかの判断材料になる。
@@ -106,6 +111,7 @@ public struct SkyCameraCapture {
         exposureBiasEV: Float,
         zoomDisplayed: Double,
         photoMegapixels: Int,
+        availableMegapixels: String,
         skyPriorityMeasured: Bool,
         skyClippedFraction: Double,
         skyPeakLuma: Int,
@@ -125,6 +131,7 @@ public struct SkyCameraCapture {
         self.exposureBiasEV = exposureBiasEV
         self.zoomDisplayed = zoomDisplayed
         self.photoMegapixels = photoMegapixels
+        self.availableMegapixels = availableMegapixels
         self.skyPriorityMeasured = skyPriorityMeasured
         self.skyClippedFraction = skyClippedFraction
         self.skyPeakLuma = skyPeakLuma

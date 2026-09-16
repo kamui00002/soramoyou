@@ -247,8 +247,9 @@ public struct SkyCameraView: View {
                 formatMenuItem(title: "HEIC（容量が小さい）", isJPEG: false)
                 formatMenuItem(title: "JPEG（他アプリで開きやすい）", isJPEG: true)
             }
-            // 1 つしか選べない端末ではメニューに出しても選びようがない。
-            if model.photoResolutions.count > 1 {
+            // 1 つしか無いときも節ごと出す。空欄だと「選べないのか壊れているのか」が
+            // ユーザーにも開発者にも分からなくなる（実際それで原因の切り分けに手間取った）。
+            if !model.photoResolutions.isEmpty {
                 Section("解像度") {
                     ForEach(model.photoResolutions, id: \.self) { resolution in
                         Button {
@@ -565,6 +566,8 @@ final class SkyCameraViewModel: ObservableObject {
                     ?? status.bias,
                 zoomDisplayed: Double(zoomAtShutter),
                 photoMegapixels: selectedResolution?.megapixels ?? 0,
+                availableMegapixels: photoResolutions.map { String($0.megapixels) }
+                    .joined(separator: ","),
                 skyPriorityMeasured: status.hasMeasured,
                 skyClippedFraction: status.clippedFraction,
                 skyPeakLuma: Int(status.peakLuma),

@@ -131,6 +131,8 @@ enum CameraCaptureService {
             "zoom": Double((capture.zoomDisplayed * 10).rounded()) / 10,
             // ⭐️ 撮影解像度。指定を忘れると端末の最小で撮られるので、本番で効いているか見る。
             "photo_mp": capture.photoMegapixels,
+            // ⭐️ 端末が返した選択肢そのもの。「選べない」の原因切り分けに使う。
+            "available_mp": capture.availableMegapixels,
             "sky_priority_measured": capture.skyPriorityMeasured,
             // ⭐️ 閾値較正のための実測値。効かなかったときに
             //    「閾値が高すぎる」のか「本当に飛んでいない」のかを区別する。

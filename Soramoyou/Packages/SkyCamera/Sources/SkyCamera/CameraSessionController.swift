@@ -143,6 +143,12 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             sessionQueue.async {
                 do {
                     try self.configureOnSessionQueue()
+                    // ⚠️ 解像度は**構成が確定してから**読む。
+                    //    `sessionPreset = .photo` は commitConfiguration で初めて効くので、
+                    //    構成の内側で activeFormat を見ると**前の形式**の値を拾ってしまう
+                    //    （選べる解像度が 1 つしか無いように見える）。
+                    //    `availableVideoPixelFormatTypes` で踏んだのと同じ型の罠。
+                    self.finalizePhotoDimensionsOnSessionQueue()
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
@@ -221,20 +227,6 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             device: device, hasUltraWide: selected.hasUltraWide)
         lensConfigurationStorage = lensConfiguration
 
-        // 選べる解像度を拾う。24MP は遅延配信が要るので一覧から外す（理由は型のコメント参照）。
-        let supported = device.activeFormat.supportedMaxPhotoDimensions
-            .map { SkyCameraPhotoResolution(width: $0.width, height: $0.height) }
-            .filter { !$0.requiresDeferredDelivery }
-            .sorted { $0.megapixels < $1.megapixels }
-        availableResolutions = supported
-        // ⚠️ 出力側の上限は**構成時に一度だけ**いちばん大きい値へ上げておく。
-        //    ここを撮影のたびに動かすと「重いパイプライン再構成」が走る（SDK ヘッダーの警告）。
-        //    以後は撮影設定側（settings.maxPhotoDimensions）で軽く選ぶ。
-        if let largest = supported.last {
-            photoOutput.maxPhotoDimensions = CMVideoDimensions(
-                width: largest.width, height: largest.height)
-        }
-
         // ⚠️ 仮想デバイスは videoZoomFactor = 1.0 で始まるが、それは**いちばん広いレンズ**。
         //    3 眼端末だと超広角なので、何もしないとカメラが 0.5x で開いてしまう。
         //    標準カメラと同じ 1x に揃える。
@@ -263,6 +255,26 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         // 撮影向きだけなら層は不要だが、プレビューの回転には層が要る。
         rebuildRotationCoordinatorOnSessionQueue()
         isConfigured = true
+    }
+
+    /// 選べる撮影解像度を確定し、出力側の上限を上げる（sessionQueue 上・構成の**後**で呼ぶこと）。
+    private func finalizePhotoDimensionsOnSessionQueue() {
+        guard let device = videoDevice else { return }
+        // 24MP は遅延配信が要るので一覧から外す（理由は SkyCameraPhotoResolution のコメント）。
+        let supported = device.activeFormat.supportedMaxPhotoDimensions
+            .map { SkyCameraPhotoResolution(width: $0.width, height: $0.height) }
+            .filter { !$0.requiresDeferredDelivery }
+            .sorted { $0.megapixels < $1.megapixels }
+        availableResolutions = supported
+
+        // ⚠️ 出力側の上限は**ここで一度だけ**いちばん大きい値へ上げておく。
+        //    撮影のたびに動かすと「重いパイプライン再構成」が走る（SDK ヘッダーの警告）。
+        //    以後は撮影設定側（settings.maxPhotoDimensions）で軽く選ぶ。
+        //    startRunning の前に済ませる必要があるが、configure() は start() より先なので満たしている。
+        if let largest = supported.last {
+            photoOutput.maxPhotoDimensions = CMVideoDimensions(
+                width: largest.width, height: largest.height)
+        }
     }
 
     // MARK: - レンズ選択
