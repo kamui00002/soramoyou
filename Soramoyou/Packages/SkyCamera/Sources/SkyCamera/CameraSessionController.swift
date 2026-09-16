@@ -92,6 +92,12 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// フラッシュの動作（sessionQueue 上でのみ読み書きする）。
     private var flashMode: AVCaptureDevice.FlashMode = .off
 
+    /// 選べる撮影解像度（sessionQueue 上でのみ読み書きする）。
+    private var availableResolutions: [SkyCameraPhotoResolution] = []
+
+    /// いま選んでいる撮影解像度。nil なら端末既定（＝最小）。
+    private var selectedResolution: SkyCameraPhotoResolution?
+
     /// 記録形式を JPEG に固定するか。
     /// 既定は false ＝ HEIC（容量が小さく EXIF もそのまま載る）。
     /// JPEG は古い環境へ渡すときのための逃げ道として残す。
@@ -214,6 +220,20 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         let lensConfiguration = Self.makeLensConfiguration(
             device: device, hasUltraWide: selected.hasUltraWide)
         lensConfigurationStorage = lensConfiguration
+
+        // 選べる解像度を拾う。24MP は遅延配信が要るので一覧から外す（理由は型のコメント参照）。
+        let supported = device.activeFormat.supportedMaxPhotoDimensions
+            .map { SkyCameraPhotoResolution(width: $0.width, height: $0.height) }
+            .filter { !$0.requiresDeferredDelivery }
+            .sorted { $0.megapixels < $1.megapixels }
+        availableResolutions = supported
+        // ⚠️ 出力側の上限は**構成時に一度だけ**いちばん大きい値へ上げておく。
+        //    ここを撮影のたびに動かすと「重いパイプライン再構成」が走る（SDK ヘッダーの警告）。
+        //    以後は撮影設定側（settings.maxPhotoDimensions）で軽く選ぶ。
+        if let largest = supported.last {
+            photoOutput.maxPhotoDimensions = CMVideoDimensions(
+                width: largest.width, height: largest.height)
+        }
 
         // ⚠️ 仮想デバイスは videoZoomFactor = 1.0 で始まるが、それは**いちばん広いレンズ**。
         //    3 眼端末だと超広角なので、何もしないとカメラが 0.5x で開いてしまう。
@@ -469,6 +489,11 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         //    そのぶんシャッターが待たされる。空の連続撮影を優先して `.balanced` のままにしてある
         //    （段階 A での意図的な選択。変えるならシャッター体感の再確認とセットで）。
         settings.photoQualityPrioritization = .balanced
+        // 指定しないと端末が出せる**最小**で撮られる（SDK ヘッダー明記）。
+        if let resolution = selectedResolution {
+            settings.maxPhotoDimensions = CMVideoDimensions(
+                width: resolution.width, height: resolution.height)
+        }
         // 端末・状態によって使えるフラッシュは変わるので、必ず現時点の可否を見てから入れる。
         if photoOutput.supportedFlashModes.contains(flashMode) {
             settings.flashMode = flashMode
@@ -487,6 +512,18 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// - Parameter prefersJPEG: true なら JPEG、false なら HEIC（既定）
     public func setPrefersJPEG(_ prefersJPEG: Bool) {
         sessionQueue.async { self.prefersJPEG = prefersJPEG }
+    }
+
+    /// 選べる撮影解像度の一覧（小さい順）。
+    public func photoResolutions() async -> [SkyCameraPhotoResolution] {
+        await withCheckedContinuation { (continuation: CheckedContinuation<[SkyCameraPhotoResolution], Never>) in
+            sessionQueue.async { continuation.resume(returning: self.availableResolutions) }
+        }
+    }
+
+    /// 撮影解像度を選ぶ。
+    public func setPhotoResolution(_ resolution: SkyCameraPhotoResolution?) {
+        sessionQueue.async { self.selectedResolution = resolution }
     }
 
     /// この端末でフラッシュを使えるか（UI の出し分けに使う）。

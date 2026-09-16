@@ -29,6 +29,8 @@ public struct SkyCameraView: View {
     private let flashDefaultsKey: String
     /// 記録形式（JPEG を選んだか）の保存先キー。
     private let jpegDefaultsKey: String
+    /// 撮影解像度（幅で覚える）の保存先キー。
+    private let resolutionDefaultsKey: String
     /// 設定の保存先（テスト時に差し替えられるよう注入可能にしてある）。
     private let defaults: UserDefaults
 
@@ -46,6 +48,7 @@ public struct SkyCameraView: View {
         skyPriorityDefaultsKey: String = "skyCamera.skyPriorityEnabled",
         flashDefaultsKey: String = "skyCamera.flashMode",
         jpegDefaultsKey: String = "skyCamera.prefersJPEG",
+        resolutionDefaultsKey: String = "skyCamera.photoResolutionWidth",
         defaults: UserDefaults = .standard,
         onCapture: @escaping (SkyCameraCapture) async -> Void,
         onCancel: @escaping () -> Void,
@@ -56,6 +59,7 @@ public struct SkyCameraView: View {
         self.skyPriorityDefaultsKey = skyPriorityDefaultsKey
         self.flashDefaultsKey = flashDefaultsKey
         self.jpegDefaultsKey = jpegDefaultsKey
+        self.resolutionDefaultsKey = resolutionDefaultsKey
         self.defaults = defaults
         self.onCapture = onCapture
         self.onCancel = onCancel
@@ -136,6 +140,8 @@ public struct SkyCameraView: View {
         .task {
             // 権限は呼び出し側（本体の「撮る」ボタン）で確認済みだが、
             // 未決定のまま開かれた場合にもここで確実に要求してから構成する。
+            let savedWidth = defaults.object(forKey: resolutionDefaultsKey) as? Int
+            model.preferredResolutionWidth = savedWidth.map(Int32.init)
             let authorization = await model.prepare()
             onEvent(.opened(authorization: authorization))
             if let failure = model.failureReason {
@@ -233,21 +239,54 @@ public struct SkyCameraView: View {
         .padding(.top, 8)
     }
 
-    /// 記録形式（HEIC / JPEG）の切り替え。アイコンでは伝わらないので文字で出す。
+    /// 記録形式と解像度のバッジ（iPhone 標準カメラの「HEIF 24」に相当）。
+    /// アイコンでは伝わらない情報なので文字で出し、タップでメニューを開く。
     private var formatButton: some View {
-        Button {
-            model.setPrefersJPEG(!model.prefersJPEG)
-            defaults.set(model.prefersJPEG, forKey: jpegDefaultsKey)
+        Menu {
+            Section("記録形式") {
+                formatMenuItem(title: "HEIC（容量が小さい）", isJPEG: false)
+                formatMenuItem(title: "JPEG（他アプリで開きやすい）", isJPEG: true)
+            }
+            // 1 つしか選べない端末ではメニューに出しても選びようがない。
+            if model.photoResolutions.count > 1 {
+                Section("解像度") {
+                    ForEach(model.photoResolutions, id: \.self) { resolution in
+                        Button {
+                            model.setPhotoResolution(resolution)
+                            defaults.set(Int(resolution.width), forKey: resolutionDefaultsKey)
+                        } label: {
+                            Label(resolution.label,
+                                  systemImage: model.selectedResolution == resolution ? "checkmark" : "")
+                        }
+                    }
+                }
+            }
         } label: {
-            Text(model.prefersJPEG ? "JPEG" : "HEIC")
+            Text(formatBadgeText)
                 .font(.system(size: 11, weight: .bold))
-                .foregroundColor(model.prefersJPEG ? .black : .white)
-                .frame(width: 44, height: 44)
-                .background(Circle().fill(model.prefersJPEG ? Color.yellow : .black.opacity(0.35)))
+                .foregroundColor(.white)
+                .frame(width: 64, height: 44)
+                .background(Capsule().fill(.black.opacity(0.35)))
         }
-        .accessibilityLabel("記録形式")
-        .accessibilityValue(model.prefersJPEG ? "JPEG" : "HEIC")
-        .accessibilityHint("写真の保存形式を切り替えます。HEIC は容量が小さく、JPEG は他のアプリで開きやすいです")
+        .accessibilityLabel("記録形式と解像度")
+        .accessibilityValue(formatBadgeText)
+        .accessibilityHint("写真の保存形式と解像度を選びます")
+    }
+
+    /// バッジの文字（例: "HEIC 12"）。解像度が 1 つしか無い端末では形式だけ出す。
+    private var formatBadgeText: String {
+        let format = model.prefersJPEG ? "JPEG" : "HEIC"
+        guard let megapixels = model.selectedResolution?.megapixels else { return format }
+        return "\(format) \(megapixels)"
+    }
+
+    private func formatMenuItem(title: String, isJPEG: Bool) -> some View {
+        Button {
+            model.setPrefersJPEG(isJPEG)
+            defaults.set(isJPEG, forKey: jpegDefaultsKey)
+        } label: {
+            Label(title, systemImage: model.prefersJPEG == isJPEG ? "checkmark" : "")
+        }
     }
 
     /// ON/OFF を色で示すトグルボタン。
@@ -351,6 +390,12 @@ final class SkyCameraViewModel: ObservableObject {
 
     /// この端末でフラッシュを使えるか（使えないならボタンを出さない）。
     @Published private(set) var isFlashAvailable = false
+
+    /// 選べる撮影解像度（小さい順）。
+    @Published private(set) var photoResolutions: [SkyCameraPhotoResolution] = []
+
+    /// いま選んでいる撮影解像度。
+    @Published private(set) var selectedResolution: SkyCameraPhotoResolution?
     /// AE/AF ロック中か。
     @Published private(set) var isLocked = false
     /// 撮影処理中か（シャッターの二度押し防止）。
@@ -390,11 +435,33 @@ final class SkyCameraViewModel: ObservableObject {
         controller.setPrefersJPEG(prefersJPEG)
     }
 
+    /// 撮影解像度を選ぶ。
+    func setPhotoResolution(_ resolution: SkyCameraPhotoResolution) {
+        selectedResolution = resolution
+        controller.setPhotoResolution(resolution)
+    }
+
+    /// 端末が返した一覧から、保存してある選択（無ければ最小）を復元する。
+    func loadPhotoResolutions(preferredWidth: Int32?) async {
+        let resolutions = await controller.photoResolutions()
+        photoResolutions = resolutions
+        // ⚠️ 既定を最小のままにしてある。ここを勝手に最大へ上げると、
+        //    1 枚あたりのファイルが数倍になって写真ライブラリを静かに圧迫する。
+        //    「今まで最小で撮っていた」という事実はユーザーへ伝えたうえで選ばせる。
+        let restored = preferredWidth.flatMap { width in resolutions.first { $0.width == width } }
+        guard let resolution = restored ?? resolutions.first else { return }
+        selectedResolution = resolution
+        controller.setPhotoResolution(resolution)
+    }
+
     /// 空優先 AE を切り替える。表示状態とセッション側の設定を必ず同時に動かす。
     func setSkyPriorityEnabled(_ enabled: Bool) {
         skyPriorityEnabled = enabled
         controller.setSkyPriorityExposureEnabled(enabled)
     }
+
+    /// 復元したい解像度の幅（View から渡す。UserDefaults はパッケージ側で持たない）。
+    var preferredResolutionWidth: Int32?
 
     /// 権限確認 → セッション構成 → 開始。
     /// - Returns: そのときのカメラ権限の状態（計装用）
@@ -418,6 +485,7 @@ final class SkyCameraViewModel: ObservableObject {
             controller.setFlashMode(flashMode)
             controller.setPrefersJPEG(prefersJPEG)
             isFlashAvailable = await controller.isFlashAvailable()
+            await loadPhotoResolutions(preferredWidth: preferredResolutionWidth)
             controller.start()
             usedDeferredStart = await controller.usedDeferredStart()
             isReady = true
@@ -496,6 +564,7 @@ final class SkyCameraViewModel: ObservableObject {
                 exposureBiasEV: SkyPriorityExposure.exposureBias(fromMetadata: result.metadata)
                     ?? status.bias,
                 zoomDisplayed: Double(zoomAtShutter),
+                photoMegapixels: selectedResolution?.megapixels ?? 0,
                 skyPriorityMeasured: status.hasMeasured,
                 skyClippedFraction: status.clippedFraction,
                 skyPeakLuma: Int(status.peakLuma),

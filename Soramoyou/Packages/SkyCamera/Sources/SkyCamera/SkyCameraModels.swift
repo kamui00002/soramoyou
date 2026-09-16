@@ -76,6 +76,10 @@ public struct SkyCameraCapture {
     ///    これが無いと「効いたから静かなのか、最初から静かなのか」を後から区別できない。
     public let skyMaxPeakLuma: Int
 
+    /// 撮影時の解像度（百万画素。計装用）。
+    /// ⭐️ 「指定を忘れて最小で撮っていた」が本番で直ったかを確かめるための値。
+    public let photoMegapixels: Int
+
     /// 撮影時のズーム倍率（表示倍率。計装用）。
     /// ⭐️ 「空を撮るとき人はどのレンズを選ぶか」を測る。超広角がよく使われるなら、
     ///    OpenCV の広角合成（IPA +1.7MB）を将来外せるかの判断材料になる。
@@ -101,6 +105,7 @@ public struct SkyCameraCapture {
         skyPriorityEnabled: Bool,
         exposureBiasEV: Float,
         zoomDisplayed: Double,
+        photoMegapixels: Int,
         skyPriorityMeasured: Bool,
         skyClippedFraction: Double,
         skyPeakLuma: Int,
@@ -119,6 +124,7 @@ public struct SkyCameraCapture {
         self.skyPriorityEnabled = skyPriorityEnabled
         self.exposureBiasEV = exposureBiasEV
         self.zoomDisplayed = zoomDisplayed
+        self.photoMegapixels = photoMegapixels
         self.skyPriorityMeasured = skyPriorityMeasured
         self.skyClippedFraction = skyClippedFraction
         self.skyPeakLuma = skyPeakLuma
@@ -142,6 +148,40 @@ public struct SkyPriorityStatus: Sendable {
     public let maxClippedFraction: Double
     /// 画面を開いてからの最大輝度（0〜255）。
     public let maxPeakLuma: UInt8
+}
+
+/// 撮影解像度。
+///
+/// ⚠️ **既定のままだと端末が出せる最小値で撮ってしまう**。
+///    `AVCapturePhotoSettings.maxPhotoDimensions` の既定は
+///    「supportedMaxPhotoDimensions の最小」と SDK ヘッダーに明記されている。
+///    4800 万画素センサーを積んだ端末でも、指定しなければ最小のまま。
+public struct SkyCameraPhotoResolution: Equatable, Hashable, Sendable {
+
+    public let width: Int32
+    public let height: Int32
+
+    public init(width: Int32, height: Int32) {
+        self.width = width
+        self.height = height
+    }
+
+    /// 百万画素（MP）に丸めた値。
+    public var megapixels: Int {
+        Int((Double(width) * Double(height) / 1_000_000).rounded())
+    }
+
+    /// ボタンに出す文字（例: "12MP"）。
+    public var label: String { "\(megapixels)MP" }
+
+    /// ⚠️ 24MP (5712×4284) は**遅延写真配信（deferred photo delivery）を有効にしたときだけ**
+    ///    24MP として提供される、と SDK ヘッダーに明記されている。
+    ///    遅延配信では撮影直後に届くのが本体ではなく代理（proxy）になり、
+    ///    「撮る → データを受け取る → その場で編集へ」という今の流れと噛み合わない。
+    ///    指定しても 24MP にならないので、選べる一覧から外す。
+    public var requiresDeferredDelivery: Bool {
+        width == 5712 && height == 4284
+    }
 }
 
 /// フラッシュの動作。

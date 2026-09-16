@@ -129,6 +129,8 @@ enum CameraCaptureService {
             //    「たまたま下げる必要が無かった撮影」に紛れて永遠に気づけない。
             // ⭐️ どのレンズで空を撮ったか。0.1 刻みへ丸める。
             "zoom": Double((capture.zoomDisplayed * 10).rounded()) / 10,
+            // ⭐️ 撮影解像度。指定を忘れると端末の最小で撮られるので、本番で効いているか見る。
+            "photo_mp": capture.photoMegapixels,
             "sky_priority_measured": capture.skyPriorityMeasured,
             // ⭐️ 閾値較正のための実測値。効かなかったときに
             //    「閾値が高すぎる」のか「本当に飛んでいない」のかを区別する。
