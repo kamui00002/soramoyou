@@ -12,6 +12,10 @@ public struct HorizonGuideView: View {
     /// 直前に「水平だった」か。ハプティクスを入った瞬間だけに絞るための記憶。
     @State private var wasLevel = false
 
+    /// UI フレームの回転角（画面の向き由来）。
+    /// 画面回転ロック中は端末を横にしても 0 のままで、そのぶんガイドを余分に回す必要がある。
+    @State private var interfaceDegrees: Double = 0
+
     public init(reading: HorizonMath.Reading) {
         self.reading = reading
     }
@@ -21,22 +25,34 @@ public struct HorizonGuideView: View {
             let width = geometry.size.width
             let lineWidth = width * 0.6
 
+            // ⚠️ 線の角度は `rollDegrees` ではなく `guideAngles` から取る。
+            //    プレビューと撮影画像は端末の物理的な向きに追従するのに、ガイドだけ UI フレーム
+            //    基準で描くと、画面回転ロック中の横持ちでガイドだけ縦のまま取り残される。
+            let angles = HorizonMath.guideAngles(reading: reading, interfaceDegrees: interfaceDegrees)
+
             ZStack {
-                // 基準線（常に画面の水平）。ここに撮影中の線が重なると「水平」。
+                // 基準線（撮影したときに水平になる向き）。ここに追従線が重なると「水平」。
                 Rectangle()
                     .fill(Color.white.opacity(0.35))
                     .frame(width: lineWidth, height: 1)
+                    .rotationEffect(.degrees(angles.reference))
 
                 // 端末の傾きに追従する線。
                 Rectangle()
                     .fill(reading.isLevel ? Color.green : Color.white.opacity(0.9))
                     .frame(width: lineWidth, height: reading.isLevel ? 2 : 1)
-                    .rotationEffect(.degrees(reading.rollDegrees))
-                    .animation(.linear(duration: 0.05), value: reading.rollDegrees)
+                    .rotationEffect(.degrees(angles.moving))
+                    .animation(.linear(duration: 0.05), value: angles.moving)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             // 真上（空）を向いていて傾きが求まらないときは、嘘の線を出さずに隠す。
             .opacity(reading.isReliable ? 1 : 0)
+            .onAppear { interfaceDegrees = Self.currentInterfaceDegrees() }
+            // UI が回ると必ずサイズが変わるので、これを「向きが変わった」合図に使う
+            //（回転ロック中はサイズが変わらず 0 のまま＝それが正しい）。
+            .onChange(of: geometry.size) { _ in
+                interfaceDegrees = Self.currentInterfaceDegrees()
+            }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -49,6 +65,21 @@ public struct HorizonGuideView: View {
             wasLevel = isLevel
             guard reading.isReliable, isLevel, !wasLevelBefore else { return }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+    }
+
+    /// 現在の UI フレームの回転角を画面の向きから求める。
+    /// `UIInterfaceOrientation` は端末の向き（`UIDeviceOrientation`）と**左右が逆**なので、
+    /// 「正立から反時計回りに何度か」へ直すときは名前ではなく対応関係で変換する。
+    private static func currentInterfaceDegrees() -> Double {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        switch scene?.interfaceOrientation {
+        case .portrait:           return 0
+        case .landscapeRight:     return 90    // 端末は landscapeLeft（正立から反時計回りに 90°）
+        case .portraitUpsideDown: return 180
+        case .landscapeLeft:      return 270   // 端末は landscapeRight
+        default:                  return 0
         }
     }
 }

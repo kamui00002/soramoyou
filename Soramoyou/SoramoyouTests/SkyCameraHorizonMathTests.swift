@@ -41,6 +41,53 @@ final class SkyCameraHorizonMathTests: XCTestCase {
         XCTAssertEqual(reading.orientation, .portrait, "5°程度なら最寄りの基準はポートレートのまま")
     }
 
+    // MARK: - ガイドの回転角（UI フレームとのズレ補正）
+
+    /// UI が端末と一緒に回っているときは、従来どおり基準線 0°・追従線 = 残差。
+    func testGuideAnglesWhenInterfaceFollowsDevice() {
+        // 端末を横（landscapeLeft = 反時計回り 90°）に構え、さらに 5° 傾けた状態。
+        let radians = 95.0 * .pi / 180.0
+        let reading = HorizonMath.reading(gravityX: -sin(radians), gravityY: -cos(radians))
+        XCTAssertEqual(reading.orientation, .landscapeLeft)
+
+        // UI も一緒に回っている（interfaceDegrees = 90）。
+        let angles = HorizonMath.guideAngles(reading: reading, interfaceDegrees: 90)
+
+        XCTAssertEqual(angles.reference, 0, accuracy: 0.01, "UI が追従していれば基準線は画面の水平のまま")
+        XCTAssertEqual(angles.moving, 5, accuracy: 0.01, "追従線は残差ぶんだけ傾く")
+    }
+
+    /// ⭐️ 回転ロックで UI が縦のまま固定されている横持ち。
+    /// ここで基準線を 0° のままにすると、ガイドだけ世界の垂直方向を指してしまう（実機で発生）。
+    func testGuideAnglesWhenInterfaceIsLockedToPortrait() {
+        let radians = 95.0 * .pi / 180.0
+        let reading = HorizonMath.reading(gravityX: -sin(radians), gravityY: -cos(radians))
+
+        // UI は縦のまま（interfaceDegrees = 0）。
+        let angles = HorizonMath.guideAngles(reading: reading, interfaceDegrees: 0)
+
+        XCTAssertEqual(angles.reference, 90, accuracy: 0.01, "端末の姿勢ぶん（90°）だけガイドを回す必要がある")
+        XCTAssertEqual(angles.moving, 95, accuracy: 0.01, "追従線は基準線からさらに残差ぶん")
+    }
+
+    /// 反対向きの横持ち（landscapeRight）は -90° 側へ畳まれる（遠回りの回転アニメを防ぐ）。
+    func testGuideAnglesLockedPortraitOtherLandscapeFoldsToNegative() {
+        let radians = 270.0 * .pi / 180.0
+        let reading = HorizonMath.reading(gravityX: -sin(radians), gravityY: -cos(radians))
+        XCTAssertEqual(reading.orientation, .landscapeRight)
+
+        let angles = HorizonMath.guideAngles(reading: reading, interfaceDegrees: 0)
+
+        XCTAssertEqual(angles.reference, -90, accuracy: 0.01, "270° ではなく -90° として扱う")
+    }
+
+    func testNormalizedAngleFolding() {
+        XCTAssertEqual(HorizonMath.normalizedAngle(270), -90, accuracy: 0.001)
+        XCTAssertEqual(HorizonMath.normalizedAngle(180), 180, accuracy: 0.001)
+        XCTAssertEqual(HorizonMath.normalizedAngle(-270), 90, accuracy: 0.001)
+        XCTAssertEqual(HorizonMath.normalizedAngle(0), 0, accuracy: 0.001)
+    }
+
     /// 反対向きに傾けたら符号も反対になる（上のテストと対で符号反転を検出する）。
     func testFiveDegreeTiltCounterClockwiseGivesPositiveRoll() {
         let radians = 5.0 * .pi / 180.0

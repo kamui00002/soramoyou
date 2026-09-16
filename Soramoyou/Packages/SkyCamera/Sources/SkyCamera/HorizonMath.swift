@@ -21,6 +21,17 @@ public enum HorizonMath {
         case portraitUpsideDown
         case landscapeLeft
         case landscapeRight
+
+        /// 正立（ポートレート）から反時計回りに何度回った姿勢か。
+        /// 重力から求めた「最寄りの基準角」と一対一に対応する。
+        public var degrees: Double {
+            switch self {
+            case .portrait:           return 0
+            case .landscapeLeft:      return 90
+            case .portraitUpsideDown: return 180
+            case .landscapeRight:     return 270
+            }
+        }
     }
 
     /// 水平線ガイド 1 回分の読み取り結果。
@@ -47,6 +58,41 @@ public enum HorizonMath {
             self.isReliable = isReliable
             self.orientation = orientation
         }
+    }
+
+    /// 水平線ガイドの 2 本の線に与える回転角。
+    ///
+    /// ⚠️ **`rollDegrees` をそのまま線に渡してはいけない**。`rollDegrees` は「最寄りの基準角
+    ///    からの残差」なので、**UI フレームが端末と一緒に回る前提**でしか正しくならない。
+    ///    画面回転ロック中など UI が縦のまま固定されていると、端末を横に構えても残差は 0 に
+    ///    近く、ガイドは縦枠の水平方向＝**世界では垂直**に描かれてしまう。
+    ///    一方でプレビュー映像と撮影画像は `RotationCoordinator` 経由で**端末の物理的な向き**に
+    ///    追従するため、ガイドだけが取り残される（2026-09-16 実機で発生）。
+    ///    そこで「端末の姿勢」と「UI フレームの向き」の差分ぶんを足して辻褄を合わせる。
+    ///
+    /// - Parameters:
+    ///   - reading: 現在の傾き読み取り結果
+    ///   - interfaceDegrees: UI フレームの回転角（画面の向き由来・0 / 90 / 180 / 270）。
+    ///     UI が端末と一緒に回っているときは `reading.orientation.degrees` と一致し、
+    ///     そのとき `reference` は 0 になって従来どおりの見た目になる。
+    /// - Returns: 基準線（撮影時に水平となる向き）と、実際の傾きに追従する線の回転角。
+    ///   どちらも SwiftUI の `rotationEffect(.degrees(_:))` へそのまま渡せる符号。
+    public static func guideAngles(
+        reading: Reading,
+        interfaceDegrees: Double
+    ) -> (reference: Double, moving: Double) {
+        let reference = normalizedAngle(reading.orientation.degrees - interfaceDegrees)
+        // 追従線は「基準線からさらに残差ぶん傾いたもの」。
+        let moving = normalizedAngle(reference + reading.rollDegrees)
+        return (reference, moving)
+    }
+
+    /// 角度を -180 < x <= 180 に畳む（270° を -90° として扱い、遠回りの回転アニメを防ぐ）。
+    public static func normalizedAngle(_ degrees: Double) -> Double {
+        var value = degrees.truncatingRemainder(dividingBy: 360)
+        if value > 180 { value -= 360 }
+        if value <= -180 { value += 360 }
+        return value
     }
 
     /// 重力ベクトルの x / y 成分から傾きを求める。
