@@ -81,6 +81,11 @@ public struct SkyCameraCapture {
     ///    これが無いと「効いたから静かなのか、最初から静かなのか」を後から区別できない。
     public let skyMaxPeakLuma: Int
 
+    /// デバイスが全フォーマットを通じて出せる最大解像度（MP。診断用）。
+    /// ⭐️ `availableMegapixels` が小さいとき、デバイスの限界なのか
+    ///    いま使っているフォーマット（＝仮想デバイスの都合）の限界なのかを切り分ける。
+    public let deviceMaxMegapixels: Int
+
     /// 撮影時の記録形式（計装用）。
     public let photoFormat: SkyCameraPhotoFormat
 
@@ -122,6 +127,7 @@ public struct SkyCameraCapture {
         photoMegapixels: Int,
         availableMegapixels: String,
         photoFormat: SkyCameraPhotoFormat,
+        deviceMaxMegapixels: Int,
         skyPriorityMeasured: Bool,
         skyClippedFraction: Double,
         skyPeakLuma: Int,
@@ -144,6 +150,7 @@ public struct SkyCameraCapture {
         self.photoMegapixels = photoMegapixels
         self.availableMegapixels = availableMegapixels
         self.photoFormat = photoFormat
+        self.deviceMaxMegapixels = deviceMaxMegapixels
         self.skyPriorityMeasured = skyPriorityMeasured
         self.skyClippedFraction = skyClippedFraction
         self.skyPeakLuma = skyPeakLuma

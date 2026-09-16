@@ -39,8 +39,13 @@ public struct SkyCameraView: View {
     /// ピンチを始めたときの倍率（連続ズームの基準点）。
     @State private var pinchStartZoom: CGFloat?
 
-    @StateObject private var horizonMonitor = HorizonMonitor()
     @StateObject private var model: SkyCameraViewModel
+
+    /// 傾きの監視。
+    /// ⚠️ **`@StateObject` / `@ObservedObject` で持たないこと。**
+    ///    SwiftUI は値を読まなくても「持っているだけ」で購読するので、
+    ///    30Hz の更新がそのまま画面全体の再描画になる。
+    ///    ViewModel が素の `let` で抱え、観測は `HorizonGuideContainer` の中だけで行う。
 
     public init(
         gridDefaultsKey: String = "skyCamera.gridEnabled",
@@ -115,7 +120,11 @@ public struct SkyCameraView: View {
             }
 
             if model.horizonEnabled {
-                HorizonGuideView(reading: horizonMonitor.reading)
+                // ⚠️ 傾きの監視は 30Hz で値を流す。ここで直接 `reading` を読むと
+                //    **画面全体が毎秒 30 回作り直され**、ボタンのタップが取りこぼされる
+                //    （実機で「3〜4回押さないと反応しない」として現れた）。
+                //    観測をこの子ビューの中だけに閉じ込めて、再描画をガイドに限定する。
+                HorizonGuideContainer(monitor: model.horizonMonitor)
                     .ignoresSafeArea()
             }
 
@@ -148,10 +157,10 @@ public struct SkyCameraView: View {
             if let failure = model.failureReason {
                 onEvent(.failed(reason: failure))
             }
-            horizonMonitor.start()
+            model.horizonMonitor.start()
         }
         .onDisappear {
-            horizonMonitor.stop()
+            model.horizonMonitor.stop()
             model.controller.stop()
         }
         .alert(model.isPermissionError ? "カメラを使えません" : "カメラエラー", isPresented: $model.isShowingError) {
@@ -354,7 +363,7 @@ public struct SkyCameraView: View {
     /// 受け渡し（`onCapture`）まで含めて ViewModel に任せることで、
     /// 後処理の途中で閉じられて撮れた 1 枚が消える経路を無くしている。
     private func capture() {
-        let reading = horizonMonitor.reading
+        let reading = model.horizonMonitor.reading
         Task {
             if let failure = await model.capture(reading: reading, handOff: onCapture) {
                 onEvent(.failed(reason: failure))
@@ -374,6 +383,10 @@ final class SkyCameraViewModel: ObservableObject {
 
     @Published var gridEnabled: Bool
     @Published var horizonEnabled: Bool
+    /// 傾きの監視。素の `let` で持つ（`@Published` にすると 30Hz の更新が
+    /// この ViewModel を観測している画面全体へ伝播し、ボタンのタップを潰す）。
+    let horizonMonitor = HorizonMonitor()
+
     /// 空優先 AE（白飛び防止）が ON か。切り替えは `setSkyPriorityEnabled(_:)` を通す。
     @Published private(set) var skyPriorityEnabled: Bool
 
@@ -397,6 +410,9 @@ final class SkyCameraViewModel: ObservableObject {
 
     /// 選べる撮影解像度（小さい順）。
     @Published private(set) var photoResolutions: [SkyCameraPhotoResolution] = []
+
+    /// デバイスが全フォーマットを通じて出せる最大解像度（MP。診断用）。
+    private(set) var deviceMaxMegapixels = 0
 
     /// いま選んでいる撮影解像度。
     @Published private(set) var selectedResolution: SkyCameraPhotoResolution?
@@ -449,6 +465,7 @@ final class SkyCameraViewModel: ObservableObject {
     func loadPhotoResolutions(preferredWidth: Int32?) async {
         let resolutions = await controller.photoResolutions()
         photoResolutions = resolutions
+        deviceMaxMegapixels = await controller.deviceMaximumMegapixels()
         // ⚠️ 既定を最小のままにしてある。ここを勝手に最大へ上げると、
         //    1 枚あたりのファイルが数倍になって写真ライブラリを静かに圧迫する。
         //    「今まで最小で撮っていた」という事実はユーザーへ伝えたうえで選ばせる。
@@ -580,6 +597,7 @@ final class SkyCameraViewModel: ObservableObject {
                 availableMegapixels: photoResolutions.map { String($0.megapixels) }
                     .joined(separator: ","),
                 photoFormat: photoFormat,
+                deviceMaxMegapixels: deviceMaxMegapixels,
                 skyPriorityMeasured: status.hasMeasured,
                 skyClippedFraction: status.clippedFraction,
                 skyPeakLuma: Int(status.peakLuma),

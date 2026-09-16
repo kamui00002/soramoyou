@@ -98,6 +98,13 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// いま選んでいる撮影解像度。nil なら端末既定（＝最小）。
     private var selectedResolution: SkyCameraPhotoResolution?
 
+    /// このデバイスの**全フォーマットを通じた**最大解像度（MP。診断用）。
+    /// ⚠️ いま使っているフォーマットが出せる最大とは別物。
+    ///    「48MP がこのデバイスに存在しないのか、いまのフォーマットが対応していないだけか」を
+    ///    区別するために要る。仮想デバイス（3眼）では 48MP が出ないことがあり、
+    ///    その場合はレンズ切替と 48MP のどちらを取るかという設計判断になる。
+    private var deviceMaxMegapixels = 0
+
     /// 記録形式（sessionQueue 上でのみ読み書きする）。
     private var photoFormat: SkyCameraPhotoFormat = .heic
 
@@ -264,6 +271,16 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             .filter { !$0.requiresDeferredDelivery }
             .sorted { $0.megapixels < $1.megapixels }
         availableResolutions = supported
+        // 診断用：デバイスが持つ全フォーマットの中での最大。
+        // ⚠️ メソッドチェーンで書くと型チェックが通らない（式が複雑すぎる）。素直に回す。
+        var maxMegapixels = 0
+        for format in device.formats {
+            for dimensions in format.supportedMaxPhotoDimensions {
+                let pixels = Double(dimensions.width) * Double(dimensions.height)
+                maxMegapixels = max(maxMegapixels, Int((pixels / 1_000_000).rounded()))
+            }
+        }
+        deviceMaxMegapixels = maxMegapixels
 
         // ⚠️ 出力側の上限は**ここで一度だけ**いちばん大きい値へ上げておく。
         //    撮影のたびに動かすと「重いパイプライン再構成」が走る（SDK ヘッダーの警告）。
@@ -556,6 +573,13 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             sessionQueue.async {
                 continuation.resume(returning: self.preferredRawPixelFormatType() != nil)
             }
+        }
+    }
+
+    /// このデバイスが全フォーマットを通じて出せる最大解像度（MP。診断用）。
+    public func deviceMaximumMegapixels() async -> Int {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Int, Never>) in
+            sessionQueue.async { continuation.resume(returning: self.deviceMaxMegapixels) }
         }
     }
 

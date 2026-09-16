@@ -135,6 +135,9 @@ enum CameraCaptureService {
             "available_mp": capture.availableMegapixels,
             // ⭐️ 記録形式。RAW がどれだけ使われるかで、容量まわりの設計判断が変わる。
             "photo_format": capture.photoFormat.rawValue,
+            // ⭐️ 診断用。available_mp が小さいとき、デバイスの限界なのか
+            //    いま使っているフォーマット（仮想デバイスの都合）の限界なのかを切り分ける。
+            "device_max_mp": capture.deviceMaxMegapixels,
             "sky_priority_measured": capture.skyPriorityMeasured,
             // ⭐️ 閾値較正のための実測値。効かなかったときに
             //    「閾値が高すぎる」のか「本当に飛んでいない」のかを区別する。
