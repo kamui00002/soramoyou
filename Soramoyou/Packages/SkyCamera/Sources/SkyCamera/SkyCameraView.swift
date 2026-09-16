@@ -299,14 +299,6 @@ final class SkyCameraViewModel: ObservableObject {
             let result = try await controller.capturePhoto(
                 fallbackOrientation: Self.fallbackOrientation(for: reading)
             )
-            #if DEBUG
-            // 実機で `{Exif}.DateTimeOriginal` が載っているかを確認するための開発用ログ。
-            // キー名だけを出すので写真の内容や位置情報は残らない。
-            print("📷 SkyCamera metadata keys=\(result.metadata.keys.sorted())")
-            if let exif = result.metadata["{Exif}"] as? [String: Any] {
-                print("📷 SkyCamera {Exif} keys=\(exif.keys.sorted())")
-            }
-            #endif
             return SkyCameraCapture(
                 photoData: result.data,
                 metadata: result.metadata,
