@@ -119,6 +119,13 @@ enum CameraCaptureService {
             "roll_deg": Int((capture.rollDegrees ?? 0).rounded()),
             "saved_to_library": savedToLibrary,
             "deferred_start": capture.usedDeferredStart,
+            // 空優先 AE（白飛び防止）が ON だったか。
+            "sky_priority_enabled": capture.skyPriorityEnabled,
+            // ⭐️ 実際に露出を下げたか。ON でもこれが false なら「出番が無かった」だけで、
+            //    機能が壊れているのとは意味が違う。両方を残さないと切り分けられない。
+            "sky_priority_engaged": capture.exposureBiasEV < 0,
+            // 補正量は 0.1 EV 刻みに丸める（小数をそのまま送ると値の種類だけ増えて集計できない）。
+            "exposure_bias_ev": Double((capture.exposureBiasEV * 10).rounded()) / 10,
         ]
     }
 

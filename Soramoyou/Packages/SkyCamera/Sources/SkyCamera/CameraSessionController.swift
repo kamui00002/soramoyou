@@ -52,6 +52,18 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// AE/AF を明示的にロック中か（長押し）。被写体変化で自動へ戻してよいかの判断に使う。
     private var isFocusLocked = false
 
+    /// 空優先 AE（白飛び防止）の測光器。プレビュー映像から白飛び率を実測する。
+    private var exposureMeter: SkyExposureMeter?
+
+    /// 空優先 AE をユーザーが ON にしているか（sessionQueue 上でのみ読み書きする）。
+    private var isSkyPriorityDesired = false
+
+    /// いま端末へかけている露出補正値（EV）。sessionQueue 上でのみ読み書きする。
+    private var appliedExposureBias: Float = 0
+
+    /// 空優先 AE の判定パラメータ。
+    private let exposureTuning = SkyPriorityExposure.Tuning.default
+
     /// プレビュー View（回転の追従に使う）。sessionQueue 上でのみ読み書きする。
     /// ⚠️ **weak で持つ**。View は `onTap` クロージャ経由で ViewModel → 本コントローラを
     ///    強参照しているので、こちらが強参照すると循環参照になる。
@@ -127,6 +139,23 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
                 photoOutput.isDeferredStartEnabled = true
                 didEnableDeferredStart = true
             }
+        }
+
+        // 空優先 AE の測光用出力。プレビューと同じ映像を低頻度で読んで白飛び率を測る。
+        // ⚠️ `prepare()` は **addOutput の後**に呼ぶこと。
+        //    `availableVideoPixelFormatTypes` はセッションに繋がって初めて埋まるため、
+        //    先に呼ぶと一覧が空になり、輝度の Range 判定を取り違える。
+        // ⚠️ Deferred Start には**あえて乗せない**。測光を後回しにすると
+        //    「開いた直後の 1 枚」が白飛びから守られないため。
+        let meter = SkyExposureMeter(clipThreshold: exposureTuning.clipThreshold) { [weak self] fraction in
+            guard let self else { return }
+            self.sessionQueue.async { self.applyMeasuredClippingOnSessionQueue(fraction) }
+        }
+        if session.canAddOutput(meter.output) {
+            session.addOutput(meter.output)
+            meter.prepare()
+            meter.setEnabled(isSkyPriorityDesired)
+            exposureMeter = meter
         }
 
         videoDevice = device
@@ -210,6 +239,11 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     public func stop() {
         sessionQueue.async {
             self.isRunningDesired = false
+            // 露出補正は端末（AVCaptureDevice）側に残る設定なので、画面を閉じるときは素へ戻す。
+            // 戻さないと「OFF にしたのに暗いまま」「次に開いたら暗い」が起きる。
+            if self.appliedExposureBias != 0, let device = self.videoDevice {
+                self.setExposureBiasOnSessionQueue(0, device: device)
+            }
             guard self.session.isRunning else { return }
             self.session.stopRunning()
         }
@@ -345,6 +379,60 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             } catch {
                 // 設定できない端末・状態でも撮影自体は続けられるので、ここでは無視する。
             }
+        }
+    }
+
+    // MARK: - 空優先 AE（白飛び防止）
+
+    /// 空優先 AE の ON/OFF を切り替える。
+    ///
+    /// OFF にしたときは必ず補正を 0 EV へ戻す。戻さないと直前の補正が端末に残り、
+    /// 「OFF にしたのに暗いまま」という説明のつかない状態になる。
+    public func setSkyPriorityExposureEnabled(_ enabled: Bool) {
+        sessionQueue.async {
+            self.isSkyPriorityDesired = enabled
+            self.exposureMeter?.setEnabled(enabled)
+            guard !enabled, self.appliedExposureBias != 0, let device = self.videoDevice else { return }
+            self.setExposureBiasOnSessionQueue(0, device: device)
+        }
+    }
+
+    /// いまかかっている露出補正値（EV）。計装用。
+    public func currentExposureBias() async -> Float {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Float, Never>) in
+            sessionQueue.async { continuation.resume(returning: self.appliedExposureBias) }
+        }
+    }
+
+    /// 測光結果（白飛び率）を受けて露出補正を更新する（sessionQueue 上で呼ぶこと）。
+    private func applyMeasuredClippingOnSessionQueue(_ clippedFraction: Double) {
+        // ユーザーが長押しで AE をロックしているあいだは意図を尊重して触らない。
+        guard isSkyPriorityDesired, !isFocusLocked, let device = videoDevice else { return }
+        // ⚠️ `lower...upper` は lower > upper だと実行時トラップする。端末の値を信用せず確かめる。
+        let lower = device.minExposureTargetBias
+        let upper = device.maxExposureTargetBias
+        guard lower <= upper else { return }
+
+        let next = SkyPriorityExposure.decideBias(
+            clippedFraction: clippedFraction,
+            currentBias: appliedExposureBias,
+            tuning: exposureTuning,
+            deviceLimits: lower...upper
+        )
+        guard next != appliedExposureBias else { return }
+        setExposureBiasOnSessionQueue(next, device: device)
+    }
+
+    /// 露出補正値を端末へ書き込む（sessionQueue 上で呼ぶこと）。
+    private func setExposureBiasOnSessionQueue(_ bias: Float, device: AVCaptureDevice) {
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.setExposureTargetBias(bias, completionHandler: nil)
+            // 端末への書き込みが成功したときだけ記録する（失敗時に嘘の現在値を持たないため）。
+            appliedExposureBias = bias
+        } catch {
+            // 別アプリがカメラ設定を掴んでいる等。次の測光でやり直せるので握りつぶす。
         }
     }
 

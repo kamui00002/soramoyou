@@ -53,6 +53,13 @@ public struct SkyCameraCapture {
     /// Deferred Start（iOS 26+）が有効だったか（計装用・起動体感の分析）
     public let usedDeferredStart: Bool
 
+    /// 撮影時に空優先 AE（白飛び防止）が ON だったか（計装用）
+    public let skyPriorityEnabled: Bool
+
+    /// 撮影時に実際にかかっていた露出補正値（EV。計装用）。
+    /// 0 なら「ON だが下げる必要が無かった」＝機能が効いていないのではなく出番が無かった、と読む。
+    public let exposureBiasEV: Float
+
     /// シャッターを切った時刻。EXIF に撮影日時が無い場合の代替として本体が使う。
     public let shutterDate: Date
 
@@ -65,6 +72,8 @@ public struct SkyCameraCapture {
         isLevel: Bool,
         rollDegrees: Double?,
         usedDeferredStart: Bool,
+        skyPriorityEnabled: Bool,
+        exposureBiasEV: Float,
         shutterDate: Date
     ) {
         self.photoData = photoData
@@ -75,6 +84,8 @@ public struct SkyCameraCapture {
         self.isLevel = isLevel
         self.rollDegrees = rollDegrees
         self.usedDeferredStart = usedDeferredStart
+        self.skyPriorityEnabled = skyPriorityEnabled
+        self.exposureBiasEV = exposureBiasEV
         self.shutterDate = shutterDate
     }
 }

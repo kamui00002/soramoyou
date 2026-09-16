@@ -23,6 +23,8 @@ public struct SkyCameraView: View {
     private let gridDefaultsKey: String
     /// 水平線ガイド表示の保存先キー。
     private let horizonDefaultsKey: String
+    /// 空優先 AE（白飛び防止）の保存先キー。
+    private let skyPriorityDefaultsKey: String
     /// 設定の保存先（テスト時に差し替えられるよう注入可能にしてある）。
     private let defaults: UserDefaults
 
@@ -34,6 +36,7 @@ public struct SkyCameraView: View {
     public init(
         gridDefaultsKey: String = "skyCamera.gridEnabled",
         horizonDefaultsKey: String = "skyCamera.horizonEnabled",
+        skyPriorityDefaultsKey: String = "skyCamera.skyPriorityEnabled",
         defaults: UserDefaults = .standard,
         onCapture: @escaping (SkyCameraCapture) async -> Void,
         onCancel: @escaping () -> Void,
@@ -41,6 +44,7 @@ public struct SkyCameraView: View {
     ) {
         self.gridDefaultsKey = gridDefaultsKey
         self.horizonDefaultsKey = horizonDefaultsKey
+        self.skyPriorityDefaultsKey = skyPriorityDefaultsKey
         self.defaults = defaults
         self.onCapture = onCapture
         self.onCancel = onCancel
@@ -49,7 +53,10 @@ public struct SkyCameraView: View {
         // UserDefaults に値が無いときに false にならないよう、object(forKey:) で有無を見てから既定を決める。
         _model = StateObject(wrappedValue: SkyCameraViewModel(
             gridEnabled: defaults.object(forKey: gridDefaultsKey) as? Bool ?? true,
-            horizonEnabled: defaults.object(forKey: horizonDefaultsKey) as? Bool ?? true
+            horizonEnabled: defaults.object(forKey: horizonDefaultsKey) as? Bool ?? true,
+            // 空優先 AE も既定 ON。「そらもようで撮ると空がちゃんと写る」が売りなので、
+            // 既定で効いていないと大半のユーザーに価値が届かない。
+            skyPriorityEnabled: defaults.object(forKey: skyPriorityDefaultsKey) as? Bool ?? true
         ))
     }
 
@@ -154,6 +161,15 @@ public struct SkyCameraView: View {
                 model.horizonEnabled.toggle()
                 defaults.set(model.horizonEnabled, forKey: horizonDefaultsKey)
             }
+
+            toggleButton(
+                systemName: "cloud.sun",
+                isOn: model.skyPriorityEnabled,
+                label: "空優先（白飛び防止）"
+            ) {
+                model.setSkyPriorityEnabled(!model.skyPriorityEnabled)
+                defaults.set(model.skyPriorityEnabled, forKey: skyPriorityDefaultsKey)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
@@ -240,6 +256,8 @@ final class SkyCameraViewModel: ObservableObject {
 
     @Published var gridEnabled: Bool
     @Published var horizonEnabled: Bool
+    /// 空優先 AE（白飛び防止）が ON か。切り替えは `setSkyPriorityEnabled(_:)` を通す。
+    @Published private(set) var skyPriorityEnabled: Bool
     /// AE/AF ロック中か。
     @Published private(set) var isLocked = false
     /// 撮影処理中か（シャッターの二度押し防止）。
@@ -258,9 +276,16 @@ final class SkyCameraViewModel: ObservableObject {
     /// 直近の失敗が権限によるものか（「設定を開く」導線を出すかの判断に使う）。
     @Published private(set) var isPermissionError = false
 
-    init(gridEnabled: Bool, horizonEnabled: Bool) {
+    init(gridEnabled: Bool, horizonEnabled: Bool, skyPriorityEnabled: Bool) {
         self.gridEnabled = gridEnabled
         self.horizonEnabled = horizonEnabled
+        self.skyPriorityEnabled = skyPriorityEnabled
+    }
+
+    /// 空優先 AE を切り替える。表示状態とセッション側の設定を必ず同時に動かす。
+    func setSkyPriorityEnabled(_ enabled: Bool) {
+        skyPriorityEnabled = enabled
+        controller.setSkyPriorityExposureEnabled(enabled)
     }
 
     /// 権限確認 → セッション構成 → 開始。
@@ -278,6 +303,8 @@ final class SkyCameraViewModel: ObservableObject {
         }
         do {
             try await controller.configure()
+            // ⚠️ 構成の**後**に伝える。configure 前に呼んでも測光器がまだ存在しない。
+            controller.setSkyPriorityExposureEnabled(skyPriorityEnabled)
             controller.start()
             usedDeferredStart = await controller.usedDeferredStart()
             isReady = true
@@ -338,6 +365,8 @@ final class SkyCameraViewModel: ObservableObject {
                 isLevel: reading.isLevel,
                 rollDegrees: reading.isReliable ? reading.rollDegrees : nil,
                 usedDeferredStart: usedDeferredStart,
+                skyPriorityEnabled: skyPriorityEnabled,
+                exposureBiasEV: await controller.currentExposureBias(),
                 shutterDate: shutterDate
             ))
             return nil
