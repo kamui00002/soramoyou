@@ -24,7 +24,9 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     /// 測定結果（白飛び率 0〜1）の通知先。`queue` 上で呼ばれる。
     private let onMeasure: (Double) -> Void
 
-    /// 届くバッファが Full Range かどうか。`prepare()` で確定する。
+    /// 届くバッファが Full Range かどうか。`prepare()` で確定し、以後は読むだけ。
+    /// ⚠️ 他の可変状態と同じく `queue` の上でのみ触る。`prepare()` は別のキューから
+    ///    呼ばれるため、値の反映も `queue.async` を通す（下の理由を参照）。
     private var isFullRange = true
 
     /// 有効化フラグ。`queue` 上でのみ読み書きしてデータ競合を避ける。
@@ -59,15 +61,21 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         let full = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
         let video = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         let available = output.availableVideoPixelFormatTypes
+        var resolvedFullRange = true
         if available.contains(full) {
             output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: full]
-            isFullRange = true
+            resolvedFullRange = true
         } else if available.contains(video) {
             output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: video]
-            isFullRange = false
+            resolvedFullRange = false
         }
         // 処理が間に合わないフレームは捨てる。溜めるとメモリを食うだけで露出判定には無意味。
         output.alwaysDiscardsLateVideoFrames = true
+
+        // ⚠️ `queue` はシリアルなので、ここで積んだ代入は必ず後続のデリゲート呼び出しより
+        //    先に実行される（FIFO）。デリゲートを張る**前**に積むことで、
+        //    「別キューから書いた値を測光キューで読む」競合を消している。
+        queue.async { self.isFullRange = resolvedFullRange }
         output.setSampleBufferDelegate(self, queue: queue)
     }
 
