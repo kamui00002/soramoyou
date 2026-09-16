@@ -48,6 +48,8 @@ final class CameraCaptureServiceTests: XCTestCase {
         zoomDisplayed: Double = 1,
         photoMegapixels: Int = 12,
         availableMegapixels: String = "12",
+        photoFormat: SkyCameraPhotoFormat = .heic,
+        rawPhotoData: Data? = nil,
         skyPriorityMeasured: Bool = true,
         skyClippedFraction: Double = 0,
         skyPeakLuma: Int = 0,
@@ -56,6 +58,7 @@ final class CameraCaptureServiceTests: XCTestCase {
     ) -> SkyCameraCapture {
         SkyCameraCapture(
             photoData: Data(),
+            rawPhotoData: rawPhotoData,
             metadata: metadata,
             gridEnabled: gridEnabled,
             horizonEnabled: horizonEnabled,
@@ -68,6 +71,7 @@ final class CameraCaptureServiceTests: XCTestCase {
             zoomDisplayed: zoomDisplayed,
             photoMegapixels: photoMegapixels,
             availableMegapixels: availableMegapixels,
+            photoFormat: photoFormat,
             skyPriorityMeasured: skyPriorityMeasured,
             skyClippedFraction: skyClippedFraction,
             skyPeakLuma: skyPeakLuma,

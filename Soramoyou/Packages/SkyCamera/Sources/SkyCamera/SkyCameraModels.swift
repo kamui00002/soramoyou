@@ -30,7 +30,12 @@ public enum SkyCameraAuthorization: String {
 public struct SkyCameraCapture {
 
     /// 撮影データ（HEIC もしくは JPEG。`AVCapturePhoto.fileDataRepresentation()`）
+    /// RAW 撮影時は**現像済みの方**が入る（編集パイプラインは DNG を扱えないため）。
     public let photoData: Data
+
+    /// RAW 撮影時の DNG データ。RAW を選んでいないときは nil。
+    /// 写真ライブラリにはこちらを残す（標準カメラと同じ扱い）。
+    public let rawPhotoData: Data?
 
     /// 撮影メタデータ（`AVCapturePhoto.metadata`。`{Exif}` 等を含む）
     public let metadata: [String: Any]
@@ -76,6 +81,9 @@ public struct SkyCameraCapture {
     ///    これが無いと「効いたから静かなのか、最初から静かなのか」を後から区別できない。
     public let skyMaxPeakLuma: Int
 
+    /// 撮影時の記録形式（計装用）。
+    public let photoFormat: SkyCameraPhotoFormat
+
     /// 撮影時の解像度（百万画素。計装用）。
     /// ⭐️ 「指定を忘れて最小で撮っていた」が本番で直ったかを確かめるための値。
     public let photoMegapixels: Int
@@ -100,6 +108,7 @@ public struct SkyCameraCapture {
 
     public init(
         photoData: Data,
+        rawPhotoData: Data?,
         metadata: [String: Any],
         gridEnabled: Bool,
         horizonEnabled: Bool,
@@ -112,6 +121,7 @@ public struct SkyCameraCapture {
         zoomDisplayed: Double,
         photoMegapixels: Int,
         availableMegapixels: String,
+        photoFormat: SkyCameraPhotoFormat,
         skyPriorityMeasured: Bool,
         skyClippedFraction: Double,
         skyPeakLuma: Int,
@@ -120,6 +130,7 @@ public struct SkyCameraCapture {
         shutterDate: Date
     ) {
         self.photoData = photoData
+        self.rawPhotoData = rawPhotoData
         self.metadata = metadata
         self.gridEnabled = gridEnabled
         self.horizonEnabled = horizonEnabled
@@ -132,6 +143,7 @@ public struct SkyCameraCapture {
         self.zoomDisplayed = zoomDisplayed
         self.photoMegapixels = photoMegapixels
         self.availableMegapixels = availableMegapixels
+        self.photoFormat = photoFormat
         self.skyPriorityMeasured = skyPriorityMeasured
         self.skyClippedFraction = skyClippedFraction
         self.skyPeakLuma = skyPeakLuma
@@ -155,6 +167,36 @@ public struct SkyPriorityStatus: Sendable {
     public let maxClippedFraction: Double
     /// 画面を開いてからの最大輝度（0〜255）。
     public let maxPeakLuma: UInt8
+}
+
+/// 記録形式。
+public enum SkyCameraPhotoFormat: String, CaseIterable, Sendable {
+    /// 既定。容量が小さく EXIF もそのまま載る。
+    case heic
+    /// 他アプリへ渡すときの逃げ道。
+    case jpeg
+    /// Apple ProRAW（Linear DNG）。編集の余地が大きいかわりに容量も大きい。
+    /// ⚠️ 1 回の撮影で **DNG と現像済み画像の 2 枚**が届く。
+    ///    DNG は写真ライブラリへ、現像済みの方を編集画面へ渡す。
+    case raw
+
+    /// バッジに出す短い文字。
+    public var label: String {
+        switch self {
+        case .heic: return "HEIC"
+        case .jpeg: return "JPEG"
+        case .raw: return "RAW"
+        }
+    }
+
+    /// メニューに出す説明つきの文字。
+    public var menuTitle: String {
+        switch self {
+        case .heic: return "HEIC（容量が小さい）"
+        case .jpeg: return "JPEG（他アプリで開きやすい）"
+        case .raw: return "RAW（編集の余地が大きい・容量が大きい）"
+        }
+    }
 }
 
 /// 撮影解像度。

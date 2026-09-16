@@ -98,10 +98,8 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// いま選んでいる撮影解像度。nil なら端末既定（＝最小）。
     private var selectedResolution: SkyCameraPhotoResolution?
 
-    /// 記録形式を JPEG に固定するか。
-    /// 既定は false ＝ HEIC（容量が小さく EXIF もそのまま載る）。
-    /// JPEG は古い環境へ渡すときのための逃げ道として残す。
-    private var prefersJPEG = false
+    /// 記録形式（sessionQueue 上でのみ読み書きする）。
+    private var photoFormat: SkyCameraPhotoFormat = .heic
 
     /// 空優先 AE の判定パラメータ。
     private let exposureTuning = SkyPriorityExposure.Tuning.default
@@ -274,6 +272,12 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         if let largest = supported.last {
             photoOutput.maxPhotoDimensions = CMVideoDimensions(
                 width: largest.width, height: largest.height)
+        }
+
+        // ProRAW は「使う」と宣言して初めて availableRawPhotoPixelFormatTypes に現れる。
+        // 対応端末なら常に有効化しておく（実際に RAW で撮るかは撮影設定側で決める）。
+        if photoOutput.isAppleProRAWSupported {
+            photoOutput.isAppleProRAWEnabled = true
         }
     }
 
@@ -448,8 +452,8 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// - Returns: 撮影データとメタデータ
     public func capturePhoto(
         fallbackOrientation: AVCaptureVideoOrientation
-    ) async throws -> (data: Data, metadata: [String: Any]) {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(data: Data, metadata: [String: Any]), Error>) in
+    ) async throws -> (data: Data, rawData: Data?, metadata: [String: Any]) {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(data: Data, rawData: Data?, metadata: [String: Any]), Error>) in
             sessionQueue.async {
                 guard self.isConfigured else {
                     continuation.resume(throwing: SkyCameraError.configurationFailed)
@@ -491,12 +495,7 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
 
     /// 撮影設定。既定は HEIC（容量が小さく EXIF もそのまま載る）。
     private func makePhotoSettings() -> AVCapturePhotoSettings {
-        let settings: AVCapturePhotoSettings
-        if !prefersJPEG, photoOutput.availablePhotoCodecTypes.contains(.hevc) {
-            settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
-        } else {
-            settings = AVCapturePhotoSettings()
-        }
+        let settings = makeBaseSettings()
         // ⚠️ `.quality` にするとナイトモード・Deep Fusion が自動で効くようになるが、
         //    そのぶんシャッターが待たされる。空の連続撮影を優先して `.balanced` のままにしてある
         //    （段階 A での意図的な選択。変えるならシャッター体感の再確認とセットで）。
@@ -513,6 +512,32 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         return settings
     }
 
+    /// 記録形式に応じた撮影設定の土台を作る。
+    private func makeBaseSettings() -> AVCapturePhotoSettings {
+        let hevcAvailable = photoOutput.availablePhotoCodecTypes.contains(.hevc)
+        let processedFormat: [String: Any]? = hevcAvailable
+            ? [AVVideoCodecKey: AVVideoCodecType.hevc] : nil
+
+        if photoFormat == .raw, let rawType = preferredRawPixelFormatType() {
+            // ⚠️ RAW 単独にはしない。DNG は編集パイプラインで開けないので、
+            //    必ず現像済みの 1 枚を同時に受け取って、そちらを編集へ渡す。
+            return AVCapturePhotoSettings(
+                rawPixelFormatType: rawType,
+                processedFormat: processedFormat ?? [AVVideoCodecKey: AVVideoCodecType.jpeg])
+        }
+        if photoFormat == .heic, let processedFormat {
+            return AVCapturePhotoSettings(format: processedFormat)
+        }
+        // JPEG、または HEVC が使えない端末。
+        return AVCapturePhotoSettings()
+    }
+
+    /// 使う RAW の画素形式。Apple ProRAW を優先する（素の Bayer RAW より扱いやすい）。
+    private func preferredRawPixelFormatType() -> OSType? {
+        let available = photoOutput.availableRawPhotoPixelFormatTypes
+        return available.first { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) } ?? available.first
+    }
+
     // MARK: - 撮影の設定
 
     /// フラッシュの動作を変える。
@@ -521,9 +546,17 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     }
 
     /// 記録形式を切り替える。
-    /// - Parameter prefersJPEG: true なら JPEG、false なら HEIC（既定）
-    public func setPrefersJPEG(_ prefersJPEG: Bool) {
-        sessionQueue.async { self.prefersJPEG = prefersJPEG }
+    public func setPhotoFormat(_ format: SkyCameraPhotoFormat) {
+        sessionQueue.async { self.photoFormat = format }
+    }
+
+    /// この端末で RAW（Apple ProRAW）を使えるか。使えないならメニューに出さない。
+    public func isRAWAvailable() async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            sessionQueue.async {
+                continuation.resume(returning: self.preferredRawPixelFormatType() != nil)
+            }
+        }
     }
 
     /// 選べる撮影解像度の一覧（小さい順）。
@@ -830,7 +863,10 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
 /// `AVCapturePhotoOutput` はデリゲートを弱参照で持たないため、呼び出し側で寿命を管理する。
 private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
 
-    private let completion: (Result<(data: Data, metadata: [String: Any]), Error>) -> Void
+    private let completion: (Result<(data: Data, rawData: Data?, metadata: [String: Any]), Error>) -> Void
+
+    /// RAW 撮影で先に届いた DNG（現像済みが来るまで預かっておく）。
+    private var rawData: Data?
 
     /// 1 回の撮影が完全に終わったときに呼ぶ後始末（デリゲートの解放）。
     private let onFinished: () -> Void
@@ -841,7 +877,7 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
     private var hasCompleted = false
 
     init(
-        completion: @escaping (Result<(data: Data, metadata: [String: Any]), Error>) -> Void,
+        completion: @escaping (Result<(data: Data, rawData: Data?, metadata: [String: Any]), Error>) -> Void,
         onFinished: @escaping () -> Void
     ) {
         self.completion = completion
@@ -854,17 +890,24 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
         error: Error?
     ) {
         guard !hasCompleted else { return }
-        hasCompleted = true
 
         if let error {
+            hasCompleted = true
             completion(.failure(SkyCameraError.captureFailed(error.localizedDescription)))
             return
         }
         guard let data = photo.fileDataRepresentation() else {
-            completion(.failure(SkyCameraError.captureFailed("データを取り出せませんでした")))
+            // ⚠️ ここで失敗にしない。RAW 撮影では 2 枚届くので、片方が取れなくても
+            //    もう片方で成立する可能性がある。取りこぼしは didFinishCaptureFor が拾う。
             return
         }
-        completion(.success((data: data, metadata: photo.metadata)))
+        // ⚠️ RAW（DNG）だけでは編集画面へ渡せない。預かって現像済みの到着を待つ。
+        if photo.isRawPhoto {
+            rawData = data
+            return
+        }
+        hasCompleted = true
+        completion(.success((data: data, rawData: rawData, metadata: photo.metadata)))
     }
 
     /// 1 回の撮影で **必ず最後に** 呼ばれるコールバック。

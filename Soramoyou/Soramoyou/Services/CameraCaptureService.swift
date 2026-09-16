@@ -133,6 +133,8 @@ enum CameraCaptureService {
             "photo_mp": capture.photoMegapixels,
             // ⭐️ 端末が返した選択肢そのもの。「選べない」の原因切り分けに使う。
             "available_mp": capture.availableMegapixels,
+            // ⭐️ 記録形式。RAW がどれだけ使われるかで、容量まわりの設計判断が変わる。
+            "photo_format": capture.photoFormat.rawValue,
             "sky_priority_measured": capture.skyPriorityMeasured,
             // ⭐️ 閾値較正のための実測値。効かなかったときに
             //    「閾値が高すぎる」のか「本当に飛んでいない」のかを区別する。
@@ -159,7 +161,10 @@ enum CameraCaptureService {
     /// 撮影 → 写真ライブラリ保存 → 計装 → 投稿パイプライン用の素材づくり、を 1 本にしたもの。
     /// - Returns: 投稿パイプラインへ渡す画像と外部編集情報。画像を作れなかった場合は nil
     static func process(capture: SkyCameraCapture) async -> (image: UIImage, info: ExternalEditInfo)? {
-        let savedToLibrary = await saveToPhotoLibrary(photoData: capture.photoData)
+        // ⚠️ RAW 撮影では写真ライブラリに **DNG** を残す（標準カメラと同じ扱い）。
+        //    編集パイプラインへ渡すのは現像済みの `photoData` の方（DNG は開けない）。
+        let savedToLibrary = await saveToPhotoLibrary(
+            photoData: capture.rawPhotoData ?? capture.photoData)
         LoggingService.shared.logEvent(
             "camera_capture",
             parameters: captureParameters(capture: capture, savedToLibrary: savedToLibrary)

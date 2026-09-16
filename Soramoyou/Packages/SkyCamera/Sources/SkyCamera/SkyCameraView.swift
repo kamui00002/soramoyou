@@ -27,8 +27,8 @@ public struct SkyCameraView: View {
     private let skyPriorityDefaultsKey: String
     /// フラッシュ設定の保存先キー。
     private let flashDefaultsKey: String
-    /// 記録形式（JPEG を選んだか）の保存先キー。
-    private let jpegDefaultsKey: String
+    /// 記録形式の保存先キー。
+    private let formatDefaultsKey: String
     /// 撮影解像度（幅で覚える）の保存先キー。
     private let resolutionDefaultsKey: String
     /// 設定の保存先（テスト時に差し替えられるよう注入可能にしてある）。
@@ -47,7 +47,7 @@ public struct SkyCameraView: View {
         horizonDefaultsKey: String = "skyCamera.horizonEnabled",
         skyPriorityDefaultsKey: String = "skyCamera.skyPriorityEnabled",
         flashDefaultsKey: String = "skyCamera.flashMode",
-        jpegDefaultsKey: String = "skyCamera.prefersJPEG",
+        formatDefaultsKey: String = "skyCamera.photoFormat",
         resolutionDefaultsKey: String = "skyCamera.photoResolutionWidth",
         defaults: UserDefaults = .standard,
         onCapture: @escaping (SkyCameraCapture) async -> Void,
@@ -58,7 +58,7 @@ public struct SkyCameraView: View {
         self.horizonDefaultsKey = horizonDefaultsKey
         self.skyPriorityDefaultsKey = skyPriorityDefaultsKey
         self.flashDefaultsKey = flashDefaultsKey
-        self.jpegDefaultsKey = jpegDefaultsKey
+        self.formatDefaultsKey = formatDefaultsKey
         self.resolutionDefaultsKey = resolutionDefaultsKey
         self.defaults = defaults
         self.onCapture = onCapture
@@ -75,7 +75,8 @@ public struct SkyCameraView: View {
             // 空にフラッシュは届かないので既定はオフ。
             flashMode: (defaults.string(forKey: flashDefaultsKey))
                 .flatMap(SkyCameraFlashMode.init(rawValue:)) ?? .off,
-            prefersJPEG: defaults.bool(forKey: jpegDefaultsKey)
+            photoFormat: defaults.string(forKey: formatDefaultsKey)
+                .flatMap(SkyCameraPhotoFormat.init(rawValue:)) ?? .heic
         ))
     }
 
@@ -244,8 +245,15 @@ public struct SkyCameraView: View {
     private var formatButton: some View {
         Menu {
             Section("記録形式") {
-                formatMenuItem(title: "HEIC（容量が小さい）", isJPEG: false)
-                formatMenuItem(title: "JPEG（他アプリで開きやすい）", isJPEG: true)
+                ForEach(model.availableFormats, id: \.self) { format in
+                    Button {
+                        model.setPhotoFormat(format)
+                        defaults.set(format.rawValue, forKey: formatDefaultsKey)
+                    } label: {
+                        Label(format.menuTitle,
+                              systemImage: model.photoFormat == format ? "checkmark" : "")
+                    }
+                }
             }
             // 1 つしか無いときも節ごと出す。空欄だと「選べないのか壊れているのか」が
             // ユーザーにも開発者にも分からなくなる（実際それで原因の切り分けに手間取った）。
@@ -276,18 +284,10 @@ public struct SkyCameraView: View {
 
     /// バッジの文字（例: "HEIC 12"）。解像度が 1 つしか無い端末では形式だけ出す。
     private var formatBadgeText: String {
-        let format = model.prefersJPEG ? "JPEG" : "HEIC"
-        guard let megapixels = model.selectedResolution?.megapixels else { return format }
-        return "\(format) \(megapixels)"
-    }
-
-    private func formatMenuItem(title: String, isJPEG: Bool) -> some View {
-        Button {
-            model.setPrefersJPEG(isJPEG)
-            defaults.set(isJPEG, forKey: jpegDefaultsKey)
-        } label: {
-            Label(title, systemImage: model.prefersJPEG == isJPEG ? "checkmark" : "")
+        guard let megapixels = model.selectedResolution?.megapixels else {
+            return model.photoFormat.label
         }
+        return "\(model.photoFormat.label) \(megapixels)"
     }
 
     /// ON/OFF を色で示すトグルボタン。
@@ -386,8 +386,11 @@ final class SkyCameraViewModel: ObservableObject {
     /// フラッシュの動作。
     @Published private(set) var flashMode: SkyCameraFlashMode
 
-    /// 記録形式に JPEG を選んでいるか（false = HEIC）。
-    @Published private(set) var prefersJPEG: Bool
+    /// 記録形式。
+    @Published private(set) var photoFormat: SkyCameraPhotoFormat
+
+    /// この端末で選べる記録形式。RAW 非対応の端末では RAW を外す。
+    @Published private(set) var availableFormats: [SkyCameraPhotoFormat] = [.heic, .jpeg]
 
     /// この端末でフラッシュを使えるか（使えないならボタンを出さない）。
     @Published private(set) var isFlashAvailable = false
@@ -416,12 +419,12 @@ final class SkyCameraViewModel: ObservableObject {
     @Published private(set) var isPermissionError = false
 
     init(gridEnabled: Bool, horizonEnabled: Bool, skyPriorityEnabled: Bool,
-         flashMode: SkyCameraFlashMode, prefersJPEG: Bool) {
+         flashMode: SkyCameraFlashMode, photoFormat: SkyCameraPhotoFormat) {
         self.gridEnabled = gridEnabled
         self.horizonEnabled = horizonEnabled
         self.skyPriorityEnabled = skyPriorityEnabled
         self.flashMode = flashMode
-        self.prefersJPEG = prefersJPEG
+        self.photoFormat = photoFormat
     }
 
     /// フラッシュの動作を変える。
@@ -431,9 +434,9 @@ final class SkyCameraViewModel: ObservableObject {
     }
 
     /// 記録形式を切り替える。
-    func setPrefersJPEG(_ prefersJPEG: Bool) {
-        self.prefersJPEG = prefersJPEG
-        controller.setPrefersJPEG(prefersJPEG)
+    func setPhotoFormat(_ format: SkyCameraPhotoFormat) {
+        photoFormat = format
+        controller.setPhotoFormat(format)
     }
 
     /// 撮影解像度を選ぶ。
@@ -484,8 +487,15 @@ final class SkyCameraViewModel: ObservableObject {
             lensConfiguration = await controller.lensConfiguration()
             // 保存してある設定をセッションへ反映する（構成の後でないと出力が無い）。
             controller.setFlashMode(flashMode)
-            controller.setPrefersJPEG(prefersJPEG)
+            controller.setPhotoFormat(photoFormat)
             isFlashAvailable = await controller.isFlashAvailable()
+            // RAW を積んでいない端末ではメニューに出さない（選んでも撮れないため）。
+            if await controller.isRAWAvailable() {
+                availableFormats = [.heic, .jpeg, .raw]
+            } else if photoFormat == .raw {
+                // 以前 RAW を選んだ端末から機種変更した場合の保険。
+                setPhotoFormat(.heic)
+            }
             await loadPhotoResolutions(preferredWidth: preferredResolutionWidth)
             controller.start()
             usedDeferredStart = await controller.usedDeferredStart()
@@ -551,6 +561,7 @@ final class SkyCameraViewModel: ObservableObject {
             let status = await controller.skyPriorityStatus()
             await handOff(SkyCameraCapture(
                 photoData: result.data,
+                rawPhotoData: result.rawData,
                 metadata: result.metadata,
                 gridEnabled: gridEnabled,
                 horizonEnabled: horizonEnabled,
@@ -568,6 +579,7 @@ final class SkyCameraViewModel: ObservableObject {
                 photoMegapixels: selectedResolution?.megapixels ?? 0,
                 availableMegapixels: photoResolutions.map { String($0.megapixels) }
                     .joined(separator: ","),
+                photoFormat: photoFormat,
                 skyPriorityMeasured: status.hasMeasured,
                 skyClippedFraction: status.clippedFraction,
                 skyPeakLuma: Int(status.peakLuma),
