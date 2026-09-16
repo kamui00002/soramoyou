@@ -74,24 +74,47 @@ public struct LensConfiguration: Equatable, Sendable {
 
     // MARK: - プリセット
 
-    /// ボタンに並べる表示倍率（例: 0.5x / 1x / 3x）。
+    /// iPhone 標準カメラが並べる倍々の停留点。
+    private static let doublingStops: [CGFloat] = [2, 4, 8]
+
+    /// ボタンを並べる上限。これ以上増やすと 1 つが小さくなって押し間違える。
+    private static let maxPresetCount = 5
+
+    /// ボタンに並べる表示倍率（例: 0.5x / 1x / 2x / 4x / 8x）。
     ///
-    /// 光学的に意味のある点だけを出す。デジタルズームの途中に区切りを置いても、
-    /// ユーザーにとっては「押す理由のないボタン」が増えるだけなので入れない。
+    /// 光学的な切替点（レンズが変わる位置）を優先し、そのうえで iPhone 標準カメラと
+    /// 同じ倍々の停留点を足す。近い値が並ぶと押し分けられないので、
+    /// **15% 以内に寄っているものは先に入れた方（＝光学側）を残す**。
     public var presetDisplayedZooms: [CGFloat] {
-        var zooms: [CGFloat] = []
+        // 優先順に候補を積む。あとで近いもの同士をまとめるとき、先に入れた方が残る。
+        var candidates: [CGFloat] = []
         if hasUltraWide {
             // いちばん広いレンズの表示倍率（3眼なら 0.5 前後）。
-            zooms.append(displayedZoom(forVideoZoomFactor: minFactor))
+            candidates.append(displayedZoom(forVideoZoomFactor: minFactor))
         }
-        zooms.append(1)
-        // 標準より望遠側の切替点（＝望遠レンズが始まる点）を足す。
+        candidates.append(1)
+        // 標準より望遠側の切替点（＝望遠レンズが始まる点）。
         for factor in switchOverFactors where factor > baseFactor {
-            zooms.append(displayedZoom(forVideoZoomFactor: factor))
+            candidates.append(displayedZoom(forVideoZoomFactor: factor))
         }
-        // 端末が上限を絞っている場合に、届かない倍率を出さない。
+        // ⚠️ 倍々の停留点はレンズが複数ある端末にだけ出す。
+        //    単眼端末（iPhone SE など）に並べると全部デジタルズーム＝画質が落ちるだけの
+        //    ボタンになる。iPhone 標準カメラも単眼機では 1x しか出さない。
+        let hasMultipleLenses = hasUltraWide || !switchOverFactors.isEmpty
+        if hasMultipleLenses {
+            candidates.append(contentsOf: Self.doublingStops)
+        }
+
         let maxDisplayed = displayedZoom(forVideoZoomFactor: maxFactor)
-        return zooms.filter { $0 <= maxDisplayed + 0.0001 }
+        var kept: [CGFloat] = []
+        for zoom in candidates where zoom <= maxDisplayed + 0.0001 {
+            // 相対差で見る。0.5 と 0.6 は近いが、4 と 4.1 も近い、を同じ物差しで扱うため。
+            let isTooClose = kept.contains { abs($0 - zoom) / max($0, 0.0001) < 0.15 }
+            if isTooClose { continue }
+            kept.append(zoom)
+            if kept.count == Self.maxPresetCount { break }
+        }
+        return kept.sorted()
     }
 
     // MARK: - 表示

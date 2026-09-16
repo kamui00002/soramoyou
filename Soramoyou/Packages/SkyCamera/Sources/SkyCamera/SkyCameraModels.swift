@@ -144,6 +144,51 @@ public struct SkyPriorityStatus: Sendable {
     public let maxPeakLuma: UInt8
 }
 
+/// フラッシュの動作。
+public enum SkyCameraFlashMode: String, CaseIterable, Sendable {
+    /// 光らせない（空の撮影では基本これ。空にフラッシュは届かない）。
+    case off
+    /// 暗ければ自動で光る。
+    case auto
+    /// 必ず光る。
+    case on
+
+    var avFlashMode: AVCaptureDevice.FlashMode {
+        switch self {
+        case .off: return .off
+        case .auto: return .auto
+        case .on: return .on
+        }
+    }
+
+    /// 上部バーに出すアイコン（SF Symbols）。
+    public var systemImageName: String {
+        switch self {
+        case .off: return "bolt.slash"
+        case .auto: return "bolt.badge.a"
+        case .on: return "bolt.fill"
+        }
+    }
+
+    /// 読み上げ・表示用の名前。
+    public var label: String {
+        switch self {
+        case .off: return "フラッシュ オフ"
+        case .auto: return "フラッシュ 自動"
+        case .on: return "フラッシュ オン"
+        }
+    }
+
+    /// 押すたびに off → auto → on → off と巡回する。
+    public var next: SkyCameraFlashMode {
+        switch self {
+        case .off: return .auto
+        case .auto: return .on
+        case .on: return .off
+        }
+    }
+}
+
 // MARK: - 計装イベント
 
 /// 画面内で起きたことを本体へ知らせるためのイベント。

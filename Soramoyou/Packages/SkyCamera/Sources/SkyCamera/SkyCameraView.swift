@@ -25,6 +25,10 @@ public struct SkyCameraView: View {
     private let horizonDefaultsKey: String
     /// 空優先 AE（白飛び防止）の保存先キー。
     private let skyPriorityDefaultsKey: String
+    /// フラッシュ設定の保存先キー。
+    private let flashDefaultsKey: String
+    /// 記録形式（JPEG を選んだか）の保存先キー。
+    private let jpegDefaultsKey: String
     /// 設定の保存先（テスト時に差し替えられるよう注入可能にしてある）。
     private let defaults: UserDefaults
 
@@ -40,6 +44,8 @@ public struct SkyCameraView: View {
         gridDefaultsKey: String = "skyCamera.gridEnabled",
         horizonDefaultsKey: String = "skyCamera.horizonEnabled",
         skyPriorityDefaultsKey: String = "skyCamera.skyPriorityEnabled",
+        flashDefaultsKey: String = "skyCamera.flashMode",
+        jpegDefaultsKey: String = "skyCamera.prefersJPEG",
         defaults: UserDefaults = .standard,
         onCapture: @escaping (SkyCameraCapture) async -> Void,
         onCancel: @escaping () -> Void,
@@ -48,6 +54,8 @@ public struct SkyCameraView: View {
         self.gridDefaultsKey = gridDefaultsKey
         self.horizonDefaultsKey = horizonDefaultsKey
         self.skyPriorityDefaultsKey = skyPriorityDefaultsKey
+        self.flashDefaultsKey = flashDefaultsKey
+        self.jpegDefaultsKey = jpegDefaultsKey
         self.defaults = defaults
         self.onCapture = onCapture
         self.onCancel = onCancel
@@ -59,7 +67,11 @@ public struct SkyCameraView: View {
             horizonEnabled: defaults.object(forKey: horizonDefaultsKey) as? Bool ?? true,
             // 空優先 AE も既定 ON。「そらもようで撮ると空がちゃんと写る」が売りなので、
             // 既定で効いていないと大半のユーザーに価値が届かない。
-            skyPriorityEnabled: defaults.object(forKey: skyPriorityDefaultsKey) as? Bool ?? true
+            skyPriorityEnabled: defaults.object(forKey: skyPriorityDefaultsKey) as? Bool ?? true,
+            // 空にフラッシュは届かないので既定はオフ。
+            flashMode: (defaults.string(forKey: flashDefaultsKey))
+                .flatMap(SkyCameraFlashMode.init(rawValue:)) ?? .off,
+            prefersJPEG: defaults.bool(forKey: jpegDefaultsKey)
         ))
     }
 
@@ -156,7 +168,9 @@ public struct SkyCameraView: View {
 
     /// 上部バー（閉じる・グリッド・水平線）。
     private var topBar: some View {
-        HStack(spacing: 20) {
+        // ⚠️ ボタンが増えたので間隔を詰める。44pt × 6 個 ＋ 間隔 6pt × 5 = 294pt で、
+        //    いちばん狭い iPhone SE（375pt − 左右余白 40pt = 335pt）にも収まる。
+        HStack(spacing: 6) {
             Button(action: onCancel) {
                 Image(systemName: "xmark")
                     .font(.title3.weight(.semibold))
@@ -199,9 +213,41 @@ public struct SkyCameraView: View {
                 model.setSkyPriorityEnabled(!model.skyPriorityEnabled)
                 defaults.set(model.skyPriorityEnabled, forKey: skyPriorityDefaultsKey)
             }
+
+            // フラッシュを積んでいない端末ではボタン自体を出さない（押せても何も起きないため）。
+            if model.isFlashAvailable {
+                toggleButton(
+                    systemName: model.flashMode.systemImageName,
+                    isOn: model.flashMode != .off,
+                    label: model.flashMode.label,
+                    hint: "フラッシュを オフ→自動→オン の順に切り替えます"
+                ) {
+                    model.setFlashMode(model.flashMode.next)
+                    defaults.set(model.flashMode.rawValue, forKey: flashDefaultsKey)
+                }
+            }
+
+            formatButton
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
+    }
+
+    /// 記録形式（HEIC / JPEG）の切り替え。アイコンでは伝わらないので文字で出す。
+    private var formatButton: some View {
+        Button {
+            model.setPrefersJPEG(!model.prefersJPEG)
+            defaults.set(model.prefersJPEG, forKey: jpegDefaultsKey)
+        } label: {
+            Text(model.prefersJPEG ? "JPEG" : "HEIC")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(model.prefersJPEG ? .black : .white)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(model.prefersJPEG ? Color.yellow : .black.opacity(0.35)))
+        }
+        .accessibilityLabel("記録形式")
+        .accessibilityValue(model.prefersJPEG ? "JPEG" : "HEIC")
+        .accessibilityHint("写真の保存形式を切り替えます。HEIC は容量が小さく、JPEG は他のアプリで開きやすいです")
     }
 
     /// ON/OFF を色で示すトグルボタン。
@@ -296,6 +342,15 @@ final class SkyCameraViewModel: ObservableObject {
 
     /// いま表示している倍率。既定は標準カメラと同じ 1x。
     @Published var displayedZoom: CGFloat = 1
+
+    /// フラッシュの動作。
+    @Published private(set) var flashMode: SkyCameraFlashMode
+
+    /// 記録形式に JPEG を選んでいるか（false = HEIC）。
+    @Published private(set) var prefersJPEG: Bool
+
+    /// この端末でフラッシュを使えるか（使えないならボタンを出さない）。
+    @Published private(set) var isFlashAvailable = false
     /// AE/AF ロック中か。
     @Published private(set) var isLocked = false
     /// 撮影処理中か（シャッターの二度押し防止）。
@@ -314,10 +369,25 @@ final class SkyCameraViewModel: ObservableObject {
     /// 直近の失敗が権限によるものか（「設定を開く」導線を出すかの判断に使う）。
     @Published private(set) var isPermissionError = false
 
-    init(gridEnabled: Bool, horizonEnabled: Bool, skyPriorityEnabled: Bool) {
+    init(gridEnabled: Bool, horizonEnabled: Bool, skyPriorityEnabled: Bool,
+         flashMode: SkyCameraFlashMode, prefersJPEG: Bool) {
         self.gridEnabled = gridEnabled
         self.horizonEnabled = horizonEnabled
         self.skyPriorityEnabled = skyPriorityEnabled
+        self.flashMode = flashMode
+        self.prefersJPEG = prefersJPEG
+    }
+
+    /// フラッシュの動作を変える。
+    func setFlashMode(_ mode: SkyCameraFlashMode) {
+        flashMode = mode
+        controller.setFlashMode(mode)
+    }
+
+    /// 記録形式を切り替える。
+    func setPrefersJPEG(_ prefersJPEG: Bool) {
+        self.prefersJPEG = prefersJPEG
+        controller.setPrefersJPEG(prefersJPEG)
     }
 
     /// 空優先 AE を切り替える。表示状態とセッション側の設定を必ず同時に動かす。
@@ -344,6 +414,10 @@ final class SkyCameraViewModel: ObservableObject {
             // ⚠️ 構成の**後**に伝える。configure 前に呼んでも測光器がまだ存在しない。
             controller.setSkyPriorityExposureEnabled(skyPriorityEnabled)
             lensConfiguration = await controller.lensConfiguration()
+            // 保存してある設定をセッションへ反映する（構成の後でないと出力が無い）。
+            controller.setFlashMode(flashMode)
+            controller.setPrefersJPEG(prefersJPEG)
+            isFlashAvailable = await controller.isFlashAvailable()
             controller.start()
             usedDeferredStart = await controller.usedDeferredStart()
             isReady = true

@@ -68,33 +68,35 @@ final class SkyCameraZoomTests: XCTestCase {
     // MARK: - プリセット
 
     func testTriplePresets() {
-        // 超広角・標準・望遠 → 0.5 / 1 / 3
-        let presets = triple.presetDisplayedZooms
-        XCTAssertEqual(presets.count, 3)
-        XCTAssertEqual(presets[0], 0.5, accuracy: 0.0001)
-        XCTAssertEqual(presets[1], 1, accuracy: 0.0001)
-        XCTAssertEqual(presets[2], 3, accuracy: 0.0001)
+        // 光学の切替点（0.5 / 1 / 3）に倍々の停留点（2 / 4）が混ざり、昇順で並ぶ。
+        XCTAssertEqual(triple.presetDisplayedZooms.map { round($0 * 10) / 10 },
+                       [0.5, 1, 2, 3, 4])
     }
 
     func testDualWidePresetsHaveNoTelephoto() {
-        let presets = dualWide.presetDisplayedZooms
-        XCTAssertEqual(presets.count, 2)
-        XCTAssertEqual(presets[0], 0.5, accuracy: 0.0001)
-        XCTAssertEqual(presets[1], 1, accuracy: 0.0001)
+        // 望遠が無いので光学の切替点は 1 まで。以降は倍々の停留点で埋まる。
+        XCTAssertEqual(dualWide.presetDisplayedZooms.map { round($0 * 10) / 10 },
+                       [0.5, 1, 2, 4, 8])
     }
 
     func testDualTelePresetsHaveNoUltraWide() {
         // ⭐️ 超広角の無い端末に 0.5x ボタンを出してはいけない（押しても何も起きない）。
         let presets = dualTele.presetDisplayedZooms
-        XCTAssertEqual(presets.count, 2)
-        XCTAssertEqual(presets[0], 1, accuracy: 0.0001)
-        XCTAssertEqual(presets[1], 2, accuracy: 0.0001)
+        XCTAssertFalse(presets.contains { $0 < 0.9999 }, "超広角の無い端末に 1x 未満を出している")
+        XCTAssertEqual(presets.map { round($0 * 10) / 10 }, [1, 2, 4, 8])
     }
 
     func testSingleLensHasOnlyOnePreset() {
-        // 単眼端末ではボタンを並べる意味が無い（1x だけ）。
+        // ⭐️ 単眼端末に倍々のボタンを並べない。全部デジタルズーム＝画質が落ちるだけで、
+        //    iPhone 標準カメラも単眼機では 1x しか出さない。
         XCTAssertEqual(single.presetDisplayedZooms.count, 1)
         XCTAssertEqual(single.presetDisplayedZooms[0], 1, accuracy: 0.0001)
+    }
+
+    func testPresetCountIsCapped() {
+        // 押し間違えるので 5 個より増やさない。
+        XCTAssertLessThanOrEqual(triple.presetDisplayedZooms.count, 5)
+        XCTAssertLessThanOrEqual(dualWide.presetDisplayedZooms.count, 5)
     }
 
     func testPresetsNeverExceedDeviceMaximum() {
@@ -144,13 +146,13 @@ final class SkyCameraZoomTests: XCTestCase {
 
     func testNextPresetCyclesForward() {
         XCTAssertEqual(triple.nextPreset(after: 0.5), 1, accuracy: 0.0001)
-        XCTAssertEqual(triple.nextPreset(after: 1), 3, accuracy: 0.0001)
+        XCTAssertEqual(triple.nextPreset(after: 1), 2, accuracy: 0.0001)
         // いちばん望遠まで行ったら先頭（超広角）へ戻る。
-        XCTAssertEqual(triple.nextPreset(after: 3), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(triple.nextPreset(after: 4), 0.5, accuracy: 0.0001)
     }
 
     func testNextPresetFromMidZoomGoesToNextStop() {
-        // スライダーで 1.7x にしてからボタンを押したら、次の光学点（3x）へ。
-        XCTAssertEqual(triple.nextPreset(after: 1.7), 3, accuracy: 0.0001)
+        // スライダーで 1.7x にしてからボタンを押したら、次の停留点（2x）へ。
+        XCTAssertEqual(triple.nextPreset(after: 1.7), 2, accuracy: 0.0001)
     }
 }

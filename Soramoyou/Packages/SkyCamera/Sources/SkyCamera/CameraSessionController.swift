@@ -89,6 +89,14 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     ///    恒久的に機能しない経路はすべてここが false のままになる。
     private var hasMeasuredClipping = false
 
+    /// フラッシュの動作（sessionQueue 上でのみ読み書きする）。
+    private var flashMode: AVCaptureDevice.FlashMode = .off
+
+    /// 記録形式を JPEG に固定するか。
+    /// 既定は false ＝ HEIC（容量が小さく EXIF もそのまま載る）。
+    /// JPEG は古い環境へ渡すときのための逃げ道として残す。
+    private var prefersJPEG = false
+
     /// 空優先 AE の判定パラメータ。
     private let exposureTuning = SkyPriorityExposure.Tuning.default
 
@@ -449,16 +457,48 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         }
     }
 
-    /// 撮影設定。HEIC が使えるなら HEIC（容量が小さく EXIF もそのまま載る）。
+    /// 撮影設定。既定は HEIC（容量が小さく EXIF もそのまま載る）。
     private func makePhotoSettings() -> AVCapturePhotoSettings {
         let settings: AVCapturePhotoSettings
-        if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
+        if !prefersJPEG, photoOutput.availablePhotoCodecTypes.contains(.hevc) {
             settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
         } else {
             settings = AVCapturePhotoSettings()
         }
+        // ⚠️ `.quality` にするとナイトモード・Deep Fusion が自動で効くようになるが、
+        //    そのぶんシャッターが待たされる。空の連続撮影を優先して `.balanced` のままにしてある
+        //    （段階 A での意図的な選択。変えるならシャッター体感の再確認とセットで）。
         settings.photoQualityPrioritization = .balanced
+        // 端末・状態によって使えるフラッシュは変わるので、必ず現時点の可否を見てから入れる。
+        if photoOutput.supportedFlashModes.contains(flashMode) {
+            settings.flashMode = flashMode
+        }
         return settings
+    }
+
+    // MARK: - 撮影の設定
+
+    /// フラッシュの動作を変える。
+    public func setFlashMode(_ mode: SkyCameraFlashMode) {
+        sessionQueue.async { self.flashMode = mode.avFlashMode }
+    }
+
+    /// 記録形式を切り替える。
+    /// - Parameter prefersJPEG: true なら JPEG、false なら HEIC（既定）
+    public func setPrefersJPEG(_ prefersJPEG: Bool) {
+        sessionQueue.async { self.prefersJPEG = prefersJPEG }
+    }
+
+    /// この端末でフラッシュを使えるか（UI の出し分けに使う）。
+    public func isFlashAvailable() async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            sessionQueue.async {
+                // supportedFlashModes は .off だけの端末でも1件返るので、
+                // 「off 以外があるか」で判断する。
+                let modes = self.photoOutput.supportedFlashModes
+                continuation.resume(returning: modes.contains(.on) || modes.contains(.auto))
+            }
+        }
     }
 
     /// 撮影コネクションに向きを与える。iOS 17+ は水平基準の回転角、iOS 16 は重力由来の向き。
