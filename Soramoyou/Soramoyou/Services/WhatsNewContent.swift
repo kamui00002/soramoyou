@@ -18,10 +18,10 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    // 2026-09-09: 私のお気に入りの空（🔖 で自分だけのアルバムに保存）。
-    // ⚠️ 前回の "2026-08-connections" は 1.9.9 で既に消費済み（＝全ユーザーが既読）。
+    // 2026-09-16: 空カメラ（グリッド・水平線ガイド付きのアプリ内カメラ）。
+    // ⚠️ 前回の "2026-09-favorites" は 1.10.0/1.10.1 で既に消費済み（＝全ユーザーが既読）。
     //    同じ識別子のまま機能を足しても誰にも表示されないため、必ず新しい値にする。
-    static let currentID = "2026-09-favorites"
+    static let currentID = "2026-09-sky-camera"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -38,18 +38,17 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（2026-09 お気に入り）の新機能紹介ページ。
-    /// アイコンは実UIと揃えている（bookmark.fill = 各画面の 🔖 ボタンと
-    /// プロフィールの「私のお気に入りの空」）。
+    /// 今回（2026-09 空カメラ）の新機能紹介ページ。
+    /// アイコンは実UIと揃えている（camera.fill = 投稿画面「撮る」ボタン）。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "bookmark.fill",
+            icon: "camera.fill",
             badge: "新機能",
-            title: "私のお気に入りの空",
-            description: "気になった空に 🔖 を付けると、あなただけのアルバムに集まります。\nプロフィールの「私のお気に入りの空」からいつでも見返せます",
+            title: "空カメラ",
+            description: "投稿の「撮る」から、グリッドと水平線ガイド付きで\n空を撮れるようになりました",
             gradientColors: [
-                Color(red: 1.0, green: 0.85, blue: 0.60),
-                Color(red: 0.98, green: 0.65, blue: 0.45),
+                Color(red: 0.45, green: 0.72, blue: 0.98),
+                Color(red: 0.20, green: 0.35, blue: 0.75),
             ]
         ),
     ]

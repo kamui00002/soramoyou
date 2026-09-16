@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		A776EF40BE7A9AE95FECE753 /* OpenCV in Frameworks */ = {isa = PBXBuildFile; productRef = 339305E0AFD13F7BCE8948CF /* OpenCV */; };
 		B05705100000000000000003 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = B05705100000000000000002 /* PostHog */; };
+		5CA0000000000000000001 /* SkyCamera in Frameworks */ = {isa = PBXBuildFile; productRef = 5CA0000000000000000002 /* SkyCamera */; };
+		5CA0000000000000000003 /* SkyCamera in Frameworks */ = {isa = PBXBuildFile; productRef = 5CA0000000000000000004 /* SkyCamera */; };
 		E051CA452EE49ACB00CC78AB /* FirebaseAI in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA442EE49ACB00CC78AB /* FirebaseAI */; };
 		E051CA472EE49ACB00CC78AB /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA462EE49ACB00CC78AB /* FirebaseAnalytics */; };
 		E051CA492EE49ACB00CC78AB /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA482EE49ACB00CC78AB /* FirebaseAuth */; };
@@ -147,6 +149,7 @@
 				FCEE0A0100000000000000B1 /* FirebaseMessaging in Frameworks */,
 				A776EF40BE7A9AE95FECE753 /* OpenCV in Frameworks */,
 				B05705100000000000000003 /* PostHog in Frameworks */,
+				5CA0000000000000000001 /* SkyCamera in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -163,6 +166,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5CA0000000000000000003 /* SkyCamera in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -243,6 +247,7 @@
 				FCEE0A0200000000000000B2 /* FirebaseMessaging */,
 				339305E0AFD13F7BCE8948CF /* OpenCV */,
 				B05705100000000000000002 /* PostHog */,
+				5CA0000000000000000002 /* SkyCamera */,
 			);
 			productName = Soramoyou;
 			productReference = E051C9D62EE497CA00CC78AB /* Soramoyou.app */;
@@ -287,6 +292,9 @@
 				TEST1002000000000001 /* SoramoyouTests */,
 			);
 			name = SoramoyouTests;
+			packageProductDependencies = (
+				5CA0000000000000000004 /* SkyCamera */,
+			);
 			productName = SoramoyouTests;
 			productReference = TEST1001000000000001 /* SoramoyouTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -353,6 +361,7 @@
 				E051CA512EE49B3400CC78AB /* XCRemoteSwiftPackageReference "swift-package-manager-google-mobile-ads" */,
 				5146A8BEE2068F396EF810AA /* XCRemoteSwiftPackageReference "opencv-spm" */,
 				B05705100000000000000001 /* XCRemoteSwiftPackageReference "posthog-ios" */,
+				5CA0000000000000000005 /* XCLocalSwiftPackageReference "Packages/SkyCamera" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E051C9D72EE497CA00CC78AB /* Products */;
@@ -615,7 +624,8 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "投稿への位置情報の追加と、ゴールデンアワー通知の時刻計算のために位置情報を使用します。";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "投稿への位置情報の追加と、ゴールデンアワー通知の時刻計算のために位置情報を使用します。";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "編集した写真を保存するために、カメラロールへの書き込みアクセスが必要です。";
+				INFOPLIST_KEY_NSCameraUsageDescription = "空を撮影して投稿するためにカメラを使用します。";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "撮影・編集した写真を保存するために、カメラロールへの書き込みアクセスが必要です。";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "空の写真を選択して投稿するために、カメラロールへのアクセスが必要です。";
 				INFOPLIST_KEY_NSUserTrackingUsageDescription = "このアプリでは、より関連性の高い広告を表示するために、トラッキングの許可をお願いしています。許可しない場合でも、アプリの機能は制限されません。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -662,7 +672,8 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "投稿への位置情報の追加と、ゴールデンアワー通知の時刻計算のために位置情報を使用します。";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "投稿への位置情報の追加と、ゴールデンアワー通知の時刻計算のために位置情報を使用します。";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "編集した写真を保存するために、カメラロールへの書き込みアクセスが必要です。";
+				INFOPLIST_KEY_NSCameraUsageDescription = "空を撮影して投稿するためにカメラを使用します。";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "撮影・編集した写真を保存するために、カメラロールへの書き込みアクセスが必要です。";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "空の写真を選択して投稿するために、カメラロールへのアクセスが必要です。";
 				INFOPLIST_KEY_NSUserTrackingUsageDescription = "このアプリでは、より関連性の高い広告を表示するために、トラッキングの許可をお願いしています。許可しない場合でも、アプリの機能は制限されません。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -879,6 +890,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		5CA0000000000000000005 /* XCLocalSwiftPackageReference "Packages/SkyCamera" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/SkyCamera;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		5146A8BEE2068F396EF810AA /* XCRemoteSwiftPackageReference "opencv-spm" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -977,6 +995,14 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B05705100000000000000001 /* XCRemoteSwiftPackageReference "posthog-ios" */;
 			productName = PostHog;
+		};
+		5CA0000000000000000002 /* SkyCamera */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SkyCamera;
+		};
+		5CA0000000000000000004 /* SkyCamera */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SkyCamera;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -40,6 +40,9 @@ class PostViewModel: ObservableObject {
     /// 投稿種別。.single=通常 / .collage=配置写真 / .panorama=広角合成。
     /// 入口（PostView のモード選択）で確定し、savePost の畳み込み・保存メタ分岐を駆動する。
     @Published var postKind: PostKind = .single
+    /// 写真の出どころ（ライブラリ / 空カメラ）。計装のみに使い、Firestore には保存しない。
+    /// 合成投稿・下書きからの再開は常に `.library` になる（既知の制約）。
+    var photoSource: PhotoSource = .library
     /// 配置写真のレイアウト（postKind==.collage のとき有効）。
     @Published var collageLayout: CollageLayout = .grid2x2
     /// 配置写真の各パネルの一言ラベル（朝/昼/夜/雨 など・任意。index は selectedImages と対応）。
@@ -628,6 +631,8 @@ class PostViewModel: ObservableObject {
                 // post_kind / is_reedit で分析側が絞る。撮影日時（isComposite）と色（isCollage）の
                 // 分岐の非対称は意図的なもので、ここでは揃えない。
                 "colors_from_sky": extractedInfo?.colorsFromSky ?? false,
+                // 判定ゲート: アプリ内カメラ経由の投稿比率を見るための属性。
+                "photo_source": photoSource.rawValue,
             ]
             // 空の被覆率はマスクを生成できたときだけ載せる（小数 2 桁。取れないときはキー自体を出さない）
             if let skyCoverage = extractedInfo?.skyCoverage {

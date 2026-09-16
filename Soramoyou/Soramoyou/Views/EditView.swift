@@ -69,6 +69,8 @@ struct EditView: View {
     private let editingContext: PostEditingContext?
     /// 投稿種別（通常/配置写真/広角合成）。入口モードから引き継ぎ PostInfoView へ渡す。
     private let postKind: PostKind
+    /// 写真の出どころ（ライブラリ / 空カメラ）。計装のみに使い、入口から素通しする。
+    private let photoSource: PhotoSource
 
     init(
         images: [UIImage],
@@ -76,13 +78,15 @@ struct EditView: View {
         externalEditInfos: [ExternalEditInfo?] = [],
         initialRecipe: EditRecipe? = nil,
         editingContext: PostEditingContext? = nil,
-        postKind: PostKind = .single
+        postKind: PostKind = .single,
+        photoSource: PhotoSource = .library
     ) {
         self.userId = userId
         originalImages = images
         self.externalEditInfos = externalEditInfos
         self.editingContext = editingContext
         self.postKind = postKind
+        self.photoSource = photoSource
         // initialRecipe: レシピ共有（他の投稿のレシピで編集）/ 再編集 から起動された場合の初期レシピ
         _viewModel = StateObject(wrappedValue: EditViewModel(
             images: images,
@@ -270,7 +274,8 @@ struct EditView: View {
                             userId: userId,
                             externalEditInfos: externalEditInfos,
                             editingContext: editingContext,
-                            postKind: postKind
+                            postKind: postKind,
+                            photoSource: photoSource
                         )
                     }
                     .navigationViewStyle(.stack)
