@@ -104,8 +104,9 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     // MARK: - Private
 
     /// 輝度プレーン（plane 0）を間引いて読む。
+    /// 合成バッファでの検証ができるよう internal にしてある（`@testable import` から呼ぶ）。
     /// - Returns: 間引いた輝度サンプル。読めなければ nil
-    private func sampleLumaPlane(_ pixelBuffer: CVPixelBuffer) -> [UInt8]? {
+    func sampleLumaPlane(_ pixelBuffer: CVPixelBuffer) -> [UInt8]? {
         // 読み取り中にバッファが書き換わらないようロックする。
         // defer で必ず解除する（途中 return でも取りこぼさない）。
         guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
