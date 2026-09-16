@@ -37,7 +37,7 @@ final class SkyExposureMeterTests: XCTestCase {
     }
 
     private func makeMeter() -> SkyExposureMeter {
-        SkyExposureMeter(clipThreshold: 250) { _ in }
+        SkyExposureMeter(clipThreshold: 250) { _, _ in }
     }
 
     // MARK: - 行の読み出し

@@ -22,8 +22,10 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     /// フレーム処理専用のキュー。セッションキューを塞ぐと撮影が詰まるので必ず分ける。
     private let queue = DispatchQueue(label: "app.soramoyou.skycamera.meter", qos: .userInitiated)
 
-    /// 測定結果（白飛び率 0〜1）の通知先。`queue` 上で呼ばれる。
-    private let onMeasure: (Double) -> Void
+    /// 測定結果の通知先。`queue` 上で呼ばれる。
+    /// - `clipped`: 白飛びしている画素の割合（0〜1）
+    /// - `peakLuma`: そのフレームの最大輝度（0〜255。較正用）
+    private let onMeasure: (_ clipped: Double, _ peakLuma: UInt8) -> Void
 
     /// 有効化フラグ。`queue` 上でのみ読み書きしてデータ競合を避ける。
     private var isEnabled = false
@@ -48,7 +50,7 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
 
     // MARK: - Init
 
-    init(clipThreshold: UInt8, onMeasure: @escaping (Double) -> Void) {
+    init(clipThreshold: UInt8, onMeasure: @escaping (_ clipped: Double, _ peakLuma: UInt8) -> Void) {
         self.clipThreshold = clipThreshold
         self.onMeasure = onMeasure
         super.init()
@@ -119,7 +121,7 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
             fullRangeThreshold: clipThreshold,
             isFullRange: Self.isFullRange(pixelBuffer))
         let fraction = SkyPriorityExposure.clippedFraction(luma: luma, threshold: threshold)
-        onMeasure(fraction)
+        onMeasure(fraction, SkyPriorityExposure.peakLuma(luma: luma))
     }
 
     // MARK: - Private

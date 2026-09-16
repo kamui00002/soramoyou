@@ -61,6 +61,19 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// いま端末へかけている露出補正値（EV）。sessionQueue 上でのみ読み書きする。
     private var appliedExposureBias: Float = 0
 
+    /// 直近に測れた白飛び率と最大輝度（較正用の計装）。
+    /// ⚠️ 「効かなかった」ときに、閾値が高すぎるのか本当に飛んでいないのかを
+    ///    区別するために要る。これが無いと数値を当てずっぽうで動かすことになる。
+    private var lastClippedFraction: Double = 0
+    private var lastPeakLuma: UInt8 = 0
+
+    /// この画面を開いてからの最大値（較正用）。
+    /// ⚠️ 「直近」だけでは足りない。空優先 AE は飛びを見つけると露出を下げて飛びを消すので、
+    ///    撮影時点の値は**補正後の落ち着いた姿**しか映さない。
+    ///    補正する前にどこまで明るかったかは、最大値を覚えていないと永久に分からない。
+    private var maxClippedFraction: Double = 0
+    private var maxPeakLuma: UInt8 = 0
+
     /// 測光が一度でも成立したか（計装用）。
     /// ⚠️ これが無いと「ON だが一度も測れていない（壊れている）」と
     ///    「ON だが下げる必要が無かった（正常）」が本番データで区別できない。
@@ -161,11 +174,15 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         //    先に呼ぶと一覧が空になり、輝度の Range 判定を取り違える。
         // ⚠️ Deferred Start には**あえて乗せない**。測光を後回しにすると
         //    「開いた直後の 1 枚」が白飛びから守られないため。
-        let meter = SkyExposureMeter(clipThreshold: exposureTuning.clipThreshold) { [weak self] fraction in
+        let meter = SkyExposureMeter(clipThreshold: exposureTuning.clipThreshold) { [weak self] fraction, peak in
             guard let self else { return }
             self.sessionQueue.async {
                 // 適用の可否に関わらず「測れた」ことは記録する（壊れていない証拠になる）。
                 self.hasMeasuredClipping = true
+                self.lastClippedFraction = fraction
+                self.lastPeakLuma = peak
+                self.maxClippedFraction = max(self.maxClippedFraction, fraction)
+                self.maxPeakLuma = max(self.maxPeakLuma, peak)
                 self.applyMeasuredClippingOnSessionQueue(fraction)
             }
         }
@@ -421,11 +438,19 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
 
     /// 空優先 AE の現況（計装用）。
     /// - Returns: `bias` = いまかかっている露出補正値（EV。EXIF が取れないときの保険）、
-    ///   `hasMeasured` = 測光が一度でも成立したか
-    public func skyPriorityStatus() async -> (bias: Float, hasMeasured: Bool) {
-        await withCheckedContinuation { (continuation: CheckedContinuation<(bias: Float, hasMeasured: Bool), Never>) in
+    ///   `hasMeasured` = 測光が一度でも成立したか、
+    ///   `clippedFraction` / `peakLuma` = 直近の測定値（閾値較正のため）
+    public func skyPriorityStatus() async -> SkyPriorityStatus {
+        await withCheckedContinuation { (continuation: CheckedContinuation<SkyPriorityStatus, Never>) in
             sessionQueue.async {
-                continuation.resume(returning: (self.appliedExposureBias, self.hasMeasuredClipping))
+                continuation.resume(returning: SkyPriorityStatus(
+                    bias: self.appliedExposureBias,
+                    hasMeasured: self.hasMeasuredClipping,
+                    clippedFraction: self.lastClippedFraction,
+                    peakLuma: self.lastPeakLuma,
+                    maxClippedFraction: self.maxClippedFraction,
+                    maxPeakLuma: self.maxPeakLuma
+                ))
             }
         }
     }

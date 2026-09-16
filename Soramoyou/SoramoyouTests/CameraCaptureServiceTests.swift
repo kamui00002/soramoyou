@@ -45,7 +45,11 @@ final class CameraCaptureServiceTests: XCTestCase {
         usedDeferredStart: Bool = true,
         skyPriorityEnabled: Bool = true,
         exposureBiasEV: Float = 0,
-        skyPriorityMeasured: Bool = true
+        skyPriorityMeasured: Bool = true,
+        skyClippedFraction: Double = 0,
+        skyPeakLuma: Int = 0,
+        skyMaxClippedFraction: Double = 0,
+        skyMaxPeakLuma: Int = 0
     ) -> SkyCameraCapture {
         SkyCameraCapture(
             photoData: Data(),
@@ -59,6 +63,10 @@ final class CameraCaptureServiceTests: XCTestCase {
             skyPriorityEnabled: skyPriorityEnabled,
             exposureBiasEV: exposureBiasEV,
             skyPriorityMeasured: skyPriorityMeasured,
+            skyClippedFraction: skyClippedFraction,
+            skyPeakLuma: skyPeakLuma,
+            skyMaxClippedFraction: skyMaxClippedFraction,
+            skyMaxPeakLuma: skyMaxPeakLuma,
             shutterDate: shutterDate
         )
     }

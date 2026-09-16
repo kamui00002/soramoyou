@@ -60,6 +60,22 @@ public struct SkyCameraCapture {
     /// 0 なら「ON だが下げる必要が無かった」＝機能が効いていないのではなく出番が無かった、と読む。
     public let exposureBiasEV: Float
 
+    /// 直近に測れた白飛び率（0〜1。較正用）。
+    public let skyClippedFraction: Double
+
+    /// 直近に測れたフレームの最大輝度（0〜255。較正用）。
+    /// ⭐️ 閾値（既定 250）に届く高さがそもそも来ているかを見るための値。
+    ///    これが常に 240 前後なら、飛んでいないのではなく**閾値が高すぎる**。
+    public let skyPeakLuma: Int
+
+    /// 画面を開いてからの白飛び率の最大値（較正用）。
+    public let skyMaxClippedFraction: Double
+
+    /// 画面を開いてからの最大輝度（較正用）。
+    /// ⭐️ 補正**前**にどこまで明るかったかを残す。撮影時点の値は露出を下げたあとの姿なので、
+    ///    これが無いと「効いたから静かなのか、最初から静かなのか」を後から区別できない。
+    public let skyMaxPeakLuma: Int
+
     /// 測光が一度でも成立したか（計装用）。
     /// `skyPriorityEnabled` が true なのにこれが false なら、出番が無かったのではなく
     /// **機能が動いていない**（測光出力を挿せなかった等）。この 2 つを混ぜてはいけない。
@@ -80,6 +96,10 @@ public struct SkyCameraCapture {
         skyPriorityEnabled: Bool,
         exposureBiasEV: Float,
         skyPriorityMeasured: Bool,
+        skyClippedFraction: Double,
+        skyPeakLuma: Int,
+        skyMaxClippedFraction: Double,
+        skyMaxPeakLuma: Int,
         shutterDate: Date
     ) {
         self.photoData = photoData
@@ -93,8 +113,28 @@ public struct SkyCameraCapture {
         self.skyPriorityEnabled = skyPriorityEnabled
         self.exposureBiasEV = exposureBiasEV
         self.skyPriorityMeasured = skyPriorityMeasured
+        self.skyClippedFraction = skyClippedFraction
+        self.skyPeakLuma = skyPeakLuma
+        self.skyMaxClippedFraction = skyMaxClippedFraction
+        self.skyMaxPeakLuma = skyMaxPeakLuma
         self.shutterDate = shutterDate
     }
+}
+
+/// 空優先 AE の現況スナップショット（計装・較正用）。
+public struct SkyPriorityStatus: Sendable {
+    /// いまかかっている露出補正値（EV）。
+    public let bias: Float
+    /// 測光が一度でも成立したか。
+    public let hasMeasured: Bool
+    /// 直近に測れた白飛び率（0〜1）。
+    public let clippedFraction: Double
+    /// 直近に測れたフレームの最大輝度（0〜255）。
+    public let peakLuma: UInt8
+    /// 画面を開いてからの白飛び率の最大値（0〜1）。
+    public let maxClippedFraction: Double
+    /// 画面を開いてからの最大輝度（0〜255）。
+    public let maxPeakLuma: UInt8
 }
 
 // MARK: - 計装イベント

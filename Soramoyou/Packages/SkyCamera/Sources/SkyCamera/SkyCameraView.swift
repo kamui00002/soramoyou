@@ -382,6 +382,10 @@ final class SkyCameraViewModel: ObservableObject {
                 exposureBiasEV: SkyPriorityExposure.exposureBias(fromMetadata: result.metadata)
                     ?? status.bias,
                 skyPriorityMeasured: status.hasMeasured,
+                skyClippedFraction: status.clippedFraction,
+                skyPeakLuma: Int(status.peakLuma),
+                skyMaxClippedFraction: status.maxClippedFraction,
+                skyMaxPeakLuma: Int(status.maxPeakLuma),
                 shutterDate: shutterDate
             ))
             return nil

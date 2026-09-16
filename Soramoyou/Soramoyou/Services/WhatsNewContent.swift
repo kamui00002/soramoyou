@@ -18,7 +18,10 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    // 2026-09-16: 空カメラ（グリッド・水平線ガイド付きのアプリ内カメラ）。
+    // 2026-09-16: 空カメラ（グリッド・水平線ガイド・空優先AE 付きのアプリ内カメラ）。
+    // ⚠️ 空優先AE は段階 A と**同一ビルドで出荷**するためこの識別子を据え置く。
+    //    後追いビルドに変わった場合は必ず新しい値へ変えること
+    //    （段階 A で既読になるので、同じ ID のまま文言だけ足しても誰にも表示されない）。
     // ⚠️ 前回の "2026-09-favorites" は 1.10.0/1.10.1 で既に消費済み（＝全ユーザーが既読）。
     //    同じ識別子のまま機能を足しても誰にも表示されないため、必ず新しい値にする。
     static let currentID = "2026-09-sky-camera"
@@ -39,7 +42,7 @@ enum WhatsNewContent {
     // MARK: - 紹介ページ
 
     /// 今回（2026-09 空カメラ）の新機能紹介ページ。
-    /// アイコンは実UIと揃えている（camera.fill = 投稿画面「撮る」ボタン）。
+    /// アイコンは実UIと揃えている（camera.fill = 投稿画面「撮る」ボタン / cloud.sun = 空優先AE のトグル）。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
             icon: "camera.fill",
@@ -49,6 +52,16 @@ enum WhatsNewContent {
             gradientColors: [
                 Color(red: 0.45, green: 0.72, blue: 0.98),
                 Color(red: 0.20, green: 0.35, blue: 0.75),
+            ]
+        ),
+        WhatsNewPage(
+            icon: "cloud.sun",
+            badge: "新機能",
+            title: "空が白く飛ばない",
+            description: "明るい空も白くつぶれにくくなりました\n上の ☁️ ボタンで切り替えられます",
+            gradientColors: [
+                Color(red: 0.99, green: 0.80, blue: 0.45),
+                Color(red: 0.36, green: 0.58, blue: 0.90),
             ]
         ),
     ]

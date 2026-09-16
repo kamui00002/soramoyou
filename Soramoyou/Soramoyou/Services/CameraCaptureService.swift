@@ -128,6 +128,15 @@ enum CameraCaptureService {
             //    **動いていない**。この属性が無いと、恒久的な故障が
             //    「たまたま下げる必要が無かった撮影」に紛れて永遠に気づけない。
             "sky_priority_measured": capture.skyPriorityMeasured,
+            // ⭐️ 閾値較正のための実測値。効かなかったときに
+            //    「閾値が高すぎる」のか「本当に飛んでいない」のかを区別する。
+            //    率は 0.1% 刻みへ丸める（生値だと値の種類だけ増えて集計できない）。
+            "sky_clipped_pct": Double((capture.skyClippedFraction * 1000).rounded()) / 10,
+            "sky_peak_luma": capture.skyPeakLuma,
+            // ⭐️ 補正**前**の最大値。空優先AEは飛びを見つけると消しにかかるので、
+            //    撮影時点の値だけでは「効いた結果の静けさ」と「元々静か」を区別できない。
+            "sky_max_clipped_pct": Double((capture.skyMaxClippedFraction * 1000).rounded()) / 10,
+            "sky_max_peak_luma": capture.skyMaxPeakLuma,
             // 補正量は 0.1 EV 刻みに丸める（小数をそのまま送ると値の種類だけ増えて集計できない）。
             "exposure_bias_ev": Double((capture.exposureBiasEV * 10).rounded()) / 10,
         ]
