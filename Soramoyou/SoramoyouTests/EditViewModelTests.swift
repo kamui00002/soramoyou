@@ -926,6 +926,24 @@ class MockImageService: ImageServiceProtocol {
         6500
     }
 
+    /// 直近の CIImage 版 `extractColors` に空マスクが渡されたか（nil=まだ呼ばれていない）
+    var lastExtractColorsHadSkyMask: Bool?
+
+    func extractColors(from _: CIImage, maxCount _: Int, skyMask: CIImage?) async throws -> [String] {
+        lastExtractColorsHadSkyMask = skyMask != nil
+        return ["#87CEEB", "#F0F8FF", "#FFFFFF"]
+    }
+
+    /// 直近の CIImage 版 `calculateColorTemperature` に空マスクが渡されたか（nil=まだ呼ばれていない）
+    /// review-full codex keep: 従来は引数を握りつぶしていたため、色温度側だけ空マスクを渡し忘れる
+    /// 回帰があっても検出できなかった。
+    var lastColorTemperatureHadSkyMask: Bool?
+
+    func calculateColorTemperature(from _: CIImage, skyMask: CIImage?) async throws -> Int {
+        lastColorTemperatureHadSkyMask = skyMask != nil
+        return 6500
+    }
+
     func detectSkyType(_: UIImage) async throws -> SkyType {
         .clear
     }
@@ -986,11 +1004,19 @@ final class MockSkyMaskProvider: SkyMaskProviderProtocol {
     var delayNanoseconds: UInt64 = 0
     var coverage: Double = 0.5
     var confidence: Double = 0.5
+    /// true なら `makeSkyMask` が `SkyMaskError.generationFailed` を投げる（マスク生成失敗時の続行を検証する）
+    var shouldThrow = false
     /// makeSkyMask が呼ばれた回数（キャッシュ再利用の検証に使う）
     private(set) var callCount = 0
+    /// 直近の makeSkyMask が受け取った画像の extent（向きの焼き込み・origin 正規化の検証に使う）
+    private(set) var lastImageExtent: CGRect?
 
     func makeSkyMask(for image: CIImage, quality _: SkyMaskQuality) async throws -> SkyMask {
         callCount += 1
+        lastImageExtent = image.extent
+        if shouldThrow {
+            throw SkyMaskError.generationFailed
+        }
         if delayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }

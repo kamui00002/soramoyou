@@ -371,7 +371,8 @@ enum SkyColorGate {
 
     // MARK: - 画素読み出し（HeuristicSkyMaskProvider.readRGBA8Pixels と同型のパターン）
 
-    private static func readRGBA8(_ image: CIImage, gridW: Int, gridH: Int, ciContext: CIContext) -> [UInt8]? {
+    /// - Note: `ImageService` の空マスク加重の色抽出（主要色・色温度）でも共用するため internal にしている。
+    static func readRGBA8(_ image: CIImage, gridW: Int, gridH: Int, ciContext: CIContext) -> [UInt8]? {
         let extent = image.extent
         guard extent.width > 0, extent.height > 0 else { return nil }
 
