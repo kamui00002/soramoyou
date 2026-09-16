@@ -376,13 +376,14 @@ struct PostView: View {
                 }) {
                     SkyCameraView(
                         onCapture: { capture in
-                            Task {
-                                // 写真ライブラリ保存・計装・向きの焼き込みはサービスに任せる。
-                                if let processed = await CameraCaptureService.process(capture: capture) {
-                                    pendingCaptured = processed
-                                }
-                                showCamera = false
+                            // ⚠️ ここは `Task {}` で包まない。包むと呼び出し元がすぐ戻ってしまい、
+                            //    保存の最中に閉じるボタンが有効になって撮れた 1 枚が消える。
+                            //    `async` のまま await されることで、処理中は撮影中扱いが続く。
+                            // 写真ライブラリ保存・計装・向きの焼き込みはサービスに任せる。
+                            if let processed = await CameraCaptureService.process(capture: capture) {
+                                pendingCaptured = processed
                             }
+                            showCamera = false
                         },
                         onCancel: { showCamera = false },
                         onEvent: { event in CameraCaptureService.log(event: event) }

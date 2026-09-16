@@ -37,8 +37,26 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// 一度でも構成に成功したか（二重構成の防止）。
     private var isConfigured = false
 
-    /// アプリがバックグラウンドへ行く直前に走っていたか（復帰時に再開すべきかの判断に使う）。
-    private var wasRunningBeforeInterruption = false
+    /// セッションを動かしておきたいか（＝カメラ画面が開いている）。
+    /// ⚠️ 「動かしたいか」と「なぜ今止まっているか」は必ず別の変数で持つ。
+    ///    1 つのフラグに混ぜると、中断中にバックグラウンドへ行ったときに
+    ///    片方の書き手がもう片方の意図を上書きしてしまい、前面へ戻っても再開できなくなる。
+    private var isRunningDesired = false
+
+    /// システム都合で中断中か（着信・他アプリのカメラ利用・Control Center など）。
+    private var isInterrupted = false
+
+    /// アプリがバックグラウンドにいるか。
+    private var isInBackground = false
+
+    /// AE/AF を明示的にロック中か（長押し）。被写体変化で自動へ戻してよいかの判断に使う。
+    private var isFocusLocked = false
+
+    /// プレビュー層（回転の追従に使う）。sessionQueue 上でのみ読み書きする。
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+
+    /// プレビュー回転角の監視（iOS 17+）。sessionQueue 上で読み書きする（deinit を除く）。
+    private var rotationObservation: NSKeyValueObservation?
 
     // MARK: - Lifecycle
 
@@ -49,6 +67,8 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        // KVO は invalidate() がどのスレッドからでも安全なので deinit で解除してよい。
+        rotationObservation?.invalidate()
     }
 
     // MARK: - Configuration
@@ -108,12 +128,70 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         }
 
         videoDevice = device
-        if #available(iOS 17.0, *) {
-            // プレビュー層は後から生成されるため、ここでは preview なしで作る
-            //（撮影向きの算出には preview は不要）。
-            rotationCoordinatorStorage = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
-        }
+
+        // タップ AF/AE は「1 回合わせたら止まる」一発モード（.autoFocus / .autoExpose）なので、
+        // 被写体が変わったタイミングで自動追従へ戻してやる必要がある。
+        // ⚠️ これを購読しないと `isSubjectAreaChangeMonitoringEnabled` が名前倒れになり、
+        //    通常タップが実質 AE/AF ロックとして振る舞う（長押しロックと区別が付かなくなる）。
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSubjectAreaDidChange),
+            name: .AVCaptureDeviceSubjectAreaDidChange,
+            object: device
+        )
+
+        // プレビュー層は View 生成時に別経路で届くので、届いていればそれ込みで作る。
+        // 撮影向きだけなら層は不要だが、プレビューの回転には層が要る。
+        rebuildRotationCoordinatorOnSessionQueue()
         isConfigured = true
+    }
+
+    // MARK: - プレビュー層の結びつけ
+
+    /// プレビュー層を受け取り、端末の回転にプレビュー映像を追従させる。
+    ///
+    /// ⚠️ **これを呼ばないと横持ちでプレビューだけ回らない**。
+    ///    `AVCaptureVideoPreviewLayer` は端末回転に自動追従しないため、
+    ///    コネクションの回転角を明示的に更新してやる必要がある
+    ///    （静止画側は撮影直前に `applyRotation` で立てているので影響を受けない）。
+    /// - Parameter layer: `CameraPreviewUIView` が持つプレビュー層
+    public func attachPreviewLayer(_ layer: AVCaptureVideoPreviewLayer) {
+        sessionQueue.async {
+            self.previewLayer = layer
+            self.rebuildRotationCoordinatorOnSessionQueue()
+        }
+    }
+
+    /// 回転コーディネータを（プレビュー層が分かっていればそれ込みで）作り直す。
+    ///
+    /// iOS 17+ は `RotationCoordinator` を KVO で監視してプレビューへ流す。
+    /// iOS 16 は `CameraPreviewUIView.layoutSubviews` 側が向きを更新するのでここでは何もしない。
+    private func rebuildRotationCoordinatorOnSessionQueue() {
+        guard #available(iOS 17.0, *), let device = videoDevice else { return }
+
+        let layer = previewLayer
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: layer)
+        rotationCoordinatorStorage = coordinator
+
+        // ⚠️ 回転角は端末を回すたびに変わる。一度読むだけでは追従しないので必ず KVO で監視する。
+        rotationObservation?.invalidate()
+        guard let layer else {
+            rotationObservation = nil
+            return
+        }
+        rotationObservation = coordinator.observe(
+            \.videoRotationAngleForHorizonLevelPreview,
+            options: [.initial, .new]
+        ) { _, change in
+            guard let angle = change.newValue else { return }
+            // プレビュー層とそのコネクションは UI 層なのでメインスレッドで触る。
+            // 層はクロージャが直接掴む（sessionQueue 専用プロパティを他スレッドから読まないため）。
+            DispatchQueue.main.async {
+                guard let connection = layer.connection,
+                      connection.isVideoRotationAngleSupported(angle) else { return }
+                connection.videoRotationAngle = angle
+            }
+        }
     }
 
     // MARK: - Running
@@ -121,17 +199,26 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// セッションを開始する（すでに動いていれば何もしない）。
     public func start() {
         sessionQueue.async {
-            guard self.isConfigured, !self.session.isRunning else { return }
-            self.session.startRunning()
+            self.isRunningDesired = true
+            self.startIfPossibleOnSessionQueue()
         }
     }
 
     /// セッションを停止する。
     public func stop() {
         sessionQueue.async {
+            self.isRunningDesired = false
             guard self.session.isRunning else { return }
             self.session.stopRunning()
         }
+    }
+
+    /// 「動かしたい」かつ「止める理由が無い」ときだけ開始する。
+    /// 中断中・バックグラウンド中は OS 側が開始を拒むので、条件が揃うまで待つ。
+    private func startIfPossibleOnSessionQueue() {
+        guard isRunningDesired, !isInterrupted, !isInBackground else { return }
+        guard isConfigured, !session.isRunning else { return }
+        session.startRunning()
     }
 
     /// Deferred Start を実際に有効化できたか（計装用）。
@@ -156,6 +243,12 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
                     continuation.resume(throwing: SkyCameraError.configurationFailed)
                     return
                 }
+                // 停止中のセッションへ撮影を投げるとコールバックが 1 本も返らず、
+                // continuation が resume されないまま画面がロックされる。手前で必ず弾く。
+                guard self.session.isRunning else {
+                    continuation.resume(throwing: SkyCameraError.sessionNotRunning)
+                    return
+                }
 
                 // 撮影直前にコネクションの向きを決める（画面の向きロック中でも正しく立てるため）。
                 if let connection = self.photoOutput.connection(with: .video) {
@@ -163,14 +256,21 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
                 }
 
                 let settings = self.makePhotoSettings()
-                let delegate = PhotoCaptureDelegate { [weak self] result in
-                    guard let self else { return }
-                    // 完了通知は任意のキューで来るため、辞書操作は sessionQueue に寄せる。
-                    self.sessionQueue.async {
-                        self.captureDelegates[settings.uniqueID] = nil
+                let delegate = PhotoCaptureDelegate(
+                    completion: { result in
+                        continuation.resume(with: result)
+                    },
+                    // ⚠️ 解放は「必ず最後に来る」`didFinishCaptureFor` からだけ行う。
+                    //    先に解放するとバックストップが呼ばれる前にデリゲートが消える
+                    //    （`AVCapturePhotoOutput` はデリゲートを保持しないため）。
+                    onFinished: { [weak self] in
+                        guard let self else { return }
+                        // 完了通知は任意のキューで来るため、辞書操作は sessionQueue に寄せる。
+                        self.sessionQueue.async {
+                            self.captureDelegates[settings.uniqueID] = nil
+                        }
                     }
-                    continuation.resume(with: result)
-                }
+                )
                 self.captureDelegates[settings.uniqueID] = delegate
                 self.photoOutput.capturePhoto(with: settings, delegate: delegate)
             }
@@ -213,6 +313,7 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     public func focus(at devicePoint: CGPoint, locked: Bool) {
         sessionQueue.async {
             guard let device = self.videoDevice else { return }
+            self.isFocusLocked = locked
             do {
                 try device.lockForConfiguration()
                 defer { device.unlockForConfiguration() }
@@ -248,20 +349,46 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// AE/AF のロックを解除して自動追従へ戻す。
     public func unlockFocusAndExposure() {
         sessionQueue.async {
-            guard let device = self.videoDevice else { return }
-            do {
-                try device.lockForConfiguration()
-                defer { device.unlockForConfiguration() }
-                if device.isFocusModeSupported(.continuousAutoFocus) {
-                    device.focusMode = .continuousAutoFocus
+            self.isFocusLocked = false
+            self.returnToContinuousOnSessionQueue(resetPointToCenter: false)
+        }
+    }
+
+    /// 被写体が変わったら自動追従へ戻す（標準カメラと同じ挙動）。
+    /// 長押しで明示的にロック中のときは、ユーザーの意図を尊重して触らない。
+    @objc private func handleSubjectAreaDidChange() {
+        sessionQueue.async {
+            guard !self.isFocusLocked else { return }
+            // 被写体が変わった＝それまでの注視点はもう意味が無いので中央基準へ戻す。
+            self.returnToContinuousOnSessionQueue(resetPointToCenter: true)
+        }
+    }
+
+    /// 連続 AF/AE へ戻す共通処理（sessionQueue 上で呼ぶこと）。
+    /// - Parameter resetPointToCenter: 注視点を画面中央へ戻すか
+    private func returnToContinuousOnSessionQueue(resetPointToCenter: Bool) {
+        guard let device = videoDevice else { return }
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            if resetPointToCenter {
+                let center = CGPoint(x: 0.5, y: 0.5)
+                if device.isFocusPointOfInterestSupported {
+                    device.focusPointOfInterest = center
                 }
-                if device.isExposureModeSupported(.continuousAutoExposure) {
-                    device.exposureMode = .continuousAutoExposure
+                if device.isExposurePointOfInterestSupported {
+                    device.exposurePointOfInterest = center
                 }
-                device.isSubjectAreaChangeMonitoringEnabled = true
-            } catch {
-                // 解除できなくても致命的ではない（次回のタップでやり直せる）。
             }
+            if device.isFocusModeSupported(.continuousAutoFocus) {
+                device.focusMode = .continuousAutoFocus
+            }
+            if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+            device.isSubjectAreaChangeMonitoringEnabled = true
+        } catch {
+            // 解除できなくても致命的ではない（次回のタップでやり直せる）。
         }
     }
 
@@ -317,21 +444,23 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     }
 
     @objc private func handleSessionInterrupted() {
-        sessionQueue.async { self.wasRunningBeforeInterruption = true }
+        sessionQueue.async {
+            self.isInterrupted = true
+        }
     }
 
     @objc private func handleSessionInterruptionEnded() {
         sessionQueue.async {
-            guard self.wasRunningBeforeInterruption else { return }
-            self.wasRunningBeforeInterruption = false
-            guard self.isConfigured, !self.session.isRunning else { return }
-            self.session.startRunning()
+            self.isInterrupted = false
+            // バックグラウンド中に中断が明けた場合はここでは開始しない
+            //（前面へ戻ったときに `handleWillEnterForeground` が改めて判定する）。
+            self.startIfPossibleOnSessionQueue()
         }
     }
 
     @objc private func handleDidEnterBackground() {
         sessionQueue.async {
-            self.wasRunningBeforeInterruption = self.session.isRunning
+            self.isInBackground = true
             guard self.session.isRunning else { return }
             self.session.stopRunning()
         }
@@ -339,10 +468,8 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
 
     @objc private func handleWillEnterForeground() {
         sessionQueue.async {
-            guard self.wasRunningBeforeInterruption else { return }
-            self.wasRunningBeforeInterruption = false
-            guard self.isConfigured, !self.session.isRunning else { return }
-            self.session.startRunning()
+            self.isInBackground = false
+            self.startIfPossibleOnSessionQueue()
         }
     }
 }
@@ -355,11 +482,20 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
 
     private let completion: (Result<(data: Data, metadata: [String: Any]), Error>) -> Void
 
+    /// 1 回の撮影が完全に終わったときに呼ぶ後始末（デリゲートの解放）。
+    private let onFinished: () -> Void
+
     /// 二重呼び出し防止（エラーと完了が両方来るケースがある）。
+    /// ⚠️ `withCheckedThrowingContinuation` は二重 resume でクラッシュするので、
+    ///    このフラグは「安全のための飾り」ではなく**落ちないための必須条件**。
     private var hasCompleted = false
 
-    init(completion: @escaping (Result<(data: Data, metadata: [String: Any]), Error>) -> Void) {
+    init(
+        completion: @escaping (Result<(data: Data, metadata: [String: Any]), Error>) -> Void,
+        onFinished: @escaping () -> Void
+    ) {
         self.completion = completion
+        self.onFinished = onFinished
     }
 
     func photoOutput(
@@ -379,5 +515,24 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
             return
         }
         completion(.success((data: data, metadata: photo.metadata)))
+    }
+
+    /// 1 回の撮影で **必ず最後に** 呼ばれるコールバック。
+    ///
+    /// `didFinishProcessingPhoto` は撮影が途中で打ち切られると届かないことがある。
+    /// そのとき continuation が resume されないと、呼び出し側の `isCapturing` が
+    /// 下りずカメラ画面から出られなくなる（強制終了以外に脱出手段が無くなる）。
+    /// ここを唯一の「必ず通る出口」にして、取りこぼしを構造的に塞ぐ。
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+        error: Error?
+    ) {
+        if !hasCompleted {
+            hasCompleted = true
+            let reason = error?.localizedDescription ?? "撮影が完了しませんでした"
+            completion(.failure(SkyCameraError.captureFailed(reason)))
+        }
+        onFinished()
     }
 }

@@ -33,6 +33,35 @@ public final class CameraPreviewUIView: UIView {
         addGestureRecognizer(longPress)
     }
 
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        // iOS 16 は `RotationCoordinator` が無いので、画面の向きが変わるたびに
+        // プレビューのコネクションへ向きを反映する（回転時は必ず layoutSubviews が走る）。
+        // iOS 17+ は `CameraSessionController` の KVO が担当するのでここでは何もしない。
+        if #available(iOS 17.0, *) { return }
+        applyLegacyPreviewOrientation()
+    }
+
+    /// iOS 16 用: 画面の向き → プレビューの向き。
+    /// `UIInterfaceOrientation` と `AVCaptureVideoOrientation` は同名ケースが 1:1 に対応する
+    ///（端末の向き `UIDeviceOrientation` とは左右が逆になるので、必ず**画面**の向きを使う）。
+    private func applyLegacyPreviewOrientation() {
+        guard let connection = previewLayer.connection,
+              connection.isVideoOrientationSupported,
+              let interfaceOrientation = window?.windowScene?.interfaceOrientation else { return }
+
+        let videoOrientation: AVCaptureVideoOrientation
+        switch interfaceOrientation {
+        case .portrait:           videoOrientation = .portrait
+        case .portraitUpsideDown: videoOrientation = .portraitUpsideDown
+        case .landscapeLeft:      videoOrientation = .landscapeLeft
+        case .landscapeRight:     videoOrientation = .landscapeRight
+        default:                  return
+        }
+        guard connection.videoOrientation != videoOrientation else { return }
+        connection.videoOrientation = videoOrientation
+    }
+
     @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
         let layerPoint = recognizer.location(in: self)
         onTap?(previewLayer.captureDevicePointConverted(fromLayerPoint: layerPoint))
@@ -52,19 +81,23 @@ public struct CameraPreviewView: UIViewRepresentable {
     private let session: AVCaptureSession
     private let onTap: (CGPoint) -> Void
     private let onLongPress: (CGPoint) -> Void
+    private let onPreviewLayerReady: (AVCaptureVideoPreviewLayer) -> Void
 
     /// - Parameters:
     ///   - session: 表示するセッション
     ///   - onTap: タップ位置（デバイス座標）を受け取る
     ///   - onLongPress: 長押し位置（デバイス座標）を受け取る
+    ///   - onPreviewLayerReady: 生成したプレビュー層を受け取る（回転の追従に使う）
     public init(
         session: AVCaptureSession,
         onTap: @escaping (CGPoint) -> Void,
-        onLongPress: @escaping (CGPoint) -> Void
+        onLongPress: @escaping (CGPoint) -> Void,
+        onPreviewLayerReady: @escaping (AVCaptureVideoPreviewLayer) -> Void
     ) {
         self.session = session
         self.onTap = onTap
         self.onLongPress = onLongPress
+        self.onPreviewLayerReady = onPreviewLayerReady
     }
 
     public func makeUIView(context: Context) -> CameraPreviewUIView {
@@ -76,6 +109,8 @@ public struct CameraPreviewView: UIViewRepresentable {
         view.installGesturesIfNeeded()
         view.onTap = onTap
         view.onLongPress = onLongPress
+        // 回転追従のため、生成直後に層を外へ渡す（`RotationCoordinator` の作り直しに使う）。
+        onPreviewLayerReady(view.previewLayer)
         return view
     }
 

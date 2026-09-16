@@ -41,11 +41,14 @@ public struct HorizonGuideView: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .onChange(of: reading.isLevel) { isLevel in
-            guard reading.isReliable else { return }
-            if isLevel && !wasLevel {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            }
+            // ⚠️ 記憶の更新は guard より**前**に行う。
+            //    真上（空）を向いて計測不能になっている間も「水平だった」と覚えたままだと、
+            //    水平に戻したときに `isLevel && !wasLevel` が成立せずハプティクスが 1 回鳴らない。
+            //    計測不能時は `isLevel` が必ず false になるので、ここで記憶も一緒に落ちる。
+            let wasLevelBefore = wasLevel
             wasLevel = isLevel
+            guard reading.isReliable, isLevel, !wasLevelBefore else { return }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
     }
 }

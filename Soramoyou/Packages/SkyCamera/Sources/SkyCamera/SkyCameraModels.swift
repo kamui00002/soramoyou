@@ -121,8 +121,12 @@ public enum SkyCameraAvailability {
 public enum SkyCameraError: LocalizedError {
     /// 背面カメラが見つからない
     case deviceUnavailable
+    /// カメラ権限が拒否・制限されている（アプリからは戻せないので設定アプリへ案内する）
+    case permissionDenied
     /// セッションの構成に失敗した
     case configurationFailed
+    /// セッションが動いていない状態で撮影しようとした
+    case sessionNotRunning
     /// 撮影に失敗した（下位のエラーを添える）
     case captureFailed(String)
 
@@ -130,8 +134,12 @@ public enum SkyCameraError: LocalizedError {
         switch self {
         case .deviceUnavailable:
             return "カメラを利用できません。"
+        case .permissionDenied:
+            return "設定アプリの「そらもよう」からカメラへのアクセスを許可してください。"
         case .configurationFailed:
             return "カメラの準備に失敗しました。"
+        case .sessionNotRunning:
+            return "カメラが停止しています。開き直してください。"
         case .captureFailed(let reason):
             return "撮影に失敗しました（\(reason)）。"
         }
@@ -140,9 +148,17 @@ public enum SkyCameraError: LocalizedError {
     /// 計装に載せる短い理由（PII なし）
     public var reasonCode: String {
         switch self {
-        case .deviceUnavailable:  return "device_unavailable"
+        case .deviceUnavailable:   return "device_unavailable"
+        case .permissionDenied:    return "permission_denied"
         case .configurationFailed: return "configuration_failed"
-        case .captureFailed:      return "capture_failed"
+        case .sessionNotRunning:   return "session_not_running"
+        case .captureFailed:       return "capture_failed"
         }
+    }
+
+    /// 権限が原因か（画面側で「設定を開く」導線を出すかの判断に使う）。
+    public var isPermissionDenied: Bool {
+        if case .permissionDenied = self { return true }
+        return false
     }
 }

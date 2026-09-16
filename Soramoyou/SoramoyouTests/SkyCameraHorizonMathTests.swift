@@ -24,15 +24,30 @@ final class SkyCameraHorizonMathTests: XCTestCase {
     }
 
     /// 5°傾けたら「水平ではない」。ズレの大きさは約5°。
-    func testFiveDegreeTiltIsNotLevel() {
+    ///
+    /// ⚠️ **符号まで固定する**。`rollDegrees` は `rotationEffect(.degrees(_:))` へそのまま渡す
+    ///    契約（`HorizonMath.Reading` のドキュコメント）なので、符号が反転するとガイド線が
+    ///    逆向きに回る。`abs()` で比較すると反転しても緑のまま通ってしまい、計測が効かない。
+    func testFiveDegreeTiltClockwiseGivesNegativeRoll() {
         // 端末を時計回りに 5° 傾けると、端末座標系の重力は反時計回りに 5° 回る。
         let radians = 5.0 * .pi / 180.0
         let reading = HorizonMath.reading(gravityX: sin(radians), gravityY: -cos(radians))
 
-        XCTAssertEqual(abs(reading.rollDegrees), 5, accuracy: 0.01)
+        // 端末が時計回り → 画面上の水平線は反時計回りに見える →
+        // SwiftUI の rotationEffect（正が時計回り）へ渡す値は負。
+        XCTAssertEqual(reading.rollDegrees, -5, accuracy: 0.01)
         XCTAssertFalse(reading.isLevel, "5°は許容(±1°)の外なので水平ではない")
         XCTAssertTrue(reading.isReliable)
         XCTAssertEqual(reading.orientation, .portrait, "5°程度なら最寄りの基準はポートレートのまま")
+    }
+
+    /// 反対向きに傾けたら符号も反対になる（上のテストと対で符号反転を検出する）。
+    func testFiveDegreeTiltCounterClockwiseGivesPositiveRoll() {
+        let radians = 5.0 * .pi / 180.0
+        let reading = HorizonMath.reading(gravityX: -sin(radians), gravityY: -cos(radians))
+
+        XCTAssertEqual(reading.rollDegrees, 5, accuracy: 0.01)
+        XCTAssertEqual(reading.orientation, .portrait)
     }
 
     /// 0.5° のズレは許容範囲（±1°）内なので「水平」。

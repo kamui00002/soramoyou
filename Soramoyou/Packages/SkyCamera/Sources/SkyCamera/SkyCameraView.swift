@@ -11,7 +11,9 @@ public struct SkyCameraView: View {
     // MARK: - Callbacks
 
     /// 撮影完了（撮影データ一式を本体へ渡す）。
-    private let onCapture: (SkyCameraCapture) -> Void
+    /// ⚠️ `async` なのは意図的。本体側の後処理（写真ライブラリ保存など）が終わるまで
+    ///    撮影中フラグを下げないことで、処理中に閉じられて 1 枚失う事故を構造的に防ぐ。
+    private let onCapture: (SkyCameraCapture) async -> Void
     /// 閉じる（撮らずに戻る）。
     private let onCancel: () -> Void
     /// 計装イベント。
@@ -33,7 +35,7 @@ public struct SkyCameraView: View {
         gridDefaultsKey: String = "skyCamera.gridEnabled",
         horizonDefaultsKey: String = "skyCamera.horizonEnabled",
         defaults: UserDefaults = .standard,
-        onCapture: @escaping (SkyCameraCapture) -> Void,
+        onCapture: @escaping (SkyCameraCapture) async -> Void,
         onCancel: @escaping () -> Void,
         onEvent: @escaping (SkyCameraEvent) -> Void
     ) {
@@ -59,8 +61,10 @@ public struct SkyCameraView: View {
 
             CameraPreviewView(
                 session: model.controller.session,
-                onTap: { devicePoint in model.focus(at: devicePoint, locked: false) },
-                onLongPress: { devicePoint in model.toggleLock(at: devicePoint) }
+                onTap: { devicePoint in model.focus(at: devicePoint) },
+                onLongPress: { devicePoint in model.toggleLock(at: devicePoint) },
+                // 横持ちでプレビュー映像が回らないのを防ぐため、層をコントローラへ結びつける。
+                onPreviewLayerReady: { layer in model.controller.attachPreviewLayer(layer) }
             )
             .ignoresSafeArea()
 
@@ -98,7 +102,17 @@ public struct SkyCameraView: View {
             horizonMonitor.stop()
             model.controller.stop()
         }
-        .alert("カメラエラー", isPresented: $model.isShowingError) {
+        .alert(model.isPermissionError ? "カメラを使えません" : "カメラエラー", isPresented: $model.isShowingError) {
+            // 権限はアプリ側からは戻せないので、設定アプリへ送る導線を必ず出す
+            //（本体の「撮る」ボタン側 `PostView.startCamera` と同じ作法に揃える）。
+            if model.isPermissionError {
+                Button("設定を開く") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                    onCancel()
+                }
+            }
             Button("閉じる", role: .cancel) { onCancel() }
         } message: {
             Text(model.errorMessage ?? "カメラを利用できません。")
@@ -203,12 +217,12 @@ public struct SkyCameraView: View {
     // MARK: - Actions
 
     /// シャッター。撮影結果に「そのときの UI 状態」を添えて本体へ渡す。
+    /// 受け渡し（`onCapture`）まで含めて ViewModel に任せることで、
+    /// 後処理の途中で閉じられて撮れた 1 枚が消える経路を無くしている。
     private func capture() {
         let reading = horizonMonitor.reading
         Task {
-            if let capture = await model.capture(reading: reading) {
-                onCapture(capture)
-            } else if let failure = model.failureReason {
+            if let failure = await model.capture(reading: reading, handOff: onCapture) {
                 onEvent(.failed(reason: failure))
             }
         }
@@ -241,6 +255,9 @@ final class SkyCameraViewModel: ObservableObject {
     /// 直近の失敗理由（計装用の短いコード）。
     private(set) var failureReason: String?
 
+    /// 直近の失敗が権限によるものか（「設定を開く」導線を出すかの判断に使う）。
+    @Published private(set) var isPermissionError = false
+
     init(gridEnabled: Bool, horizonEnabled: Bool) {
         self.gridEnabled = gridEnabled
         self.horizonEnabled = horizonEnabled
@@ -254,7 +271,9 @@ final class SkyCameraViewModel: ObservableObject {
             authorization = await SkyCameraAvailability.requestAuthorization()
         }
         guard authorization == .authorized else {
-            present(error: SkyCameraError.deviceUnavailable)
+            // 「カメラが無い端末」と「ユーザーが拒否した」は原因も打ち手も違う。
+            // 同じ理由コードに潰すと、計装でも画面でも区別が付かなくなる。
+            present(error: SkyCameraError.permissionDenied)
             return authorization
         }
         do {
@@ -268,10 +287,10 @@ final class SkyCameraViewModel: ObservableObject {
         return authorization
     }
 
-    /// タップ = その点に AF/AE（ロックは解除）。
-    func focus(at devicePoint: CGPoint, locked: Bool) {
-        controller.focus(at: devicePoint, locked: locked)
-        if isLocked && !locked {
+    /// タップ = その点に AF/AE を合わせる（ロック中なら解除する）。
+    func focus(at devicePoint: CGPoint) {
+        controller.focus(at: devicePoint, locked: false)
+        if isLocked {
             isLocked = false
         }
     }
@@ -288,8 +307,19 @@ final class SkyCameraViewModel: ObservableObject {
         }
     }
 
-    /// 撮影。失敗時は nil を返し `failureReason` に理由を残す。
-    func capture(reading: HorizonMath.Reading) async -> SkyCameraCapture? {
+    /// 撮影して、その場で本体へ受け渡すところまでを 1 本にする。
+    ///
+    /// ⚠️ `handOff` が終わるまで `isCapturing` を下げない。
+    ///    ここを分けて先に下げると、本体側の後処理（写真ライブラリ保存。初回は権限プロンプトが出る）
+    ///    の最中に閉じるボタンが有効になり、撮れた 1 枚が誰にも渡らないまま消える。
+    /// - Parameters:
+    ///   - reading: シャッターを切った瞬間の傾き
+    ///   - handOff: 撮影結果の受け取り手（本体側の後処理）
+    /// - Returns: 失敗した場合の理由コード。成功なら nil
+    func capture(
+        reading: HorizonMath.Reading,
+        handOff: (SkyCameraCapture) async -> Void
+    ) async -> String? {
         guard !isCapturing, isReady else { return nil }
         isCapturing = true
         defer { isCapturing = false }
@@ -299,7 +329,7 @@ final class SkyCameraViewModel: ObservableObject {
             let result = try await controller.capturePhoto(
                 fallbackOrientation: Self.fallbackOrientation(for: reading)
             )
-            return SkyCameraCapture(
+            await handOff(SkyCameraCapture(
                 photoData: result.data,
                 metadata: result.metadata,
                 gridEnabled: gridEnabled,
@@ -309,10 +339,11 @@ final class SkyCameraViewModel: ObservableObject {
                 rollDegrees: reading.isReliable ? reading.rollDegrees : nil,
                 usedDeferredStart: usedDeferredStart,
                 shutterDate: shutterDate
-            )
+            ))
+            return nil
         } catch {
             present(error: error)
-            return nil
+            return failureReason
         }
     }
 
@@ -332,6 +363,7 @@ final class SkyCameraViewModel: ObservableObject {
     private func present(error: Error) {
         errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         failureReason = (error as? SkyCameraError)?.reasonCode ?? "unknown"
+        isPermissionError = (error as? SkyCameraError)?.isPermissionDenied ?? false
         isShowingError = true
         isReady = false
     }
