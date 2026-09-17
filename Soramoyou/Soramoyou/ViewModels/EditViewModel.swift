@@ -1500,11 +1500,14 @@ class EditViewModel: ObservableObject {
             // リクエストIDが変わっていたら結果を破棄
             guard requestId == currentPreviewRequestId else { return }
 
-            // 空補正が設定されているのにマスク未生成（レシピ共有・Undo/Redo等での復元）なら
-            // ここで生成しておく。ベストエフォート: 失敗しても補正なしでプレビューを継続する。
-            if let intensity = editRecipe.skyCorrectionIntensity,
-               intensity > skyCorrectionActiveThreshold
-            {
+            // 空マスクを必要とする設定が入っているのにマスク未生成（レシピ共有・再編集・
+            // Undo/Redo 等での復元）なら、ここで生成しておく。
+            // ベストエフォート: 失敗しても補正なし・全体適用でプレビューを継続する。
+            //
+            // ⚠️ 空マスクを必要とする機能は2つ（ワンタップ空補正・適用範囲「空だけ」）。
+            // 片方しか見ないと、復元した側が「レシピは空だけ・見た目は全体」のまま表示される。
+            let needsMaskForCorrection = (editRecipe.skyCorrectionIntensity ?? 0) > skyCorrectionActiveThreshold
+            if needsMaskForCorrection || editRecipe.isSkyOnlyScope {
                 do {
                     try await ensureSkyMaskCached(quality: .preview)
                 } catch {
