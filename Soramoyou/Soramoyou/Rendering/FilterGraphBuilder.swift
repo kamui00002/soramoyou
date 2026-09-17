@@ -49,8 +49,9 @@ final class FilterGraphBuilder {
     ///   - source: 入力画像（CIImage）
     ///   - quality: レンダリング品質モード（既定 `.final`）。リアルタイムドラッグ経路
     ///     （`ImageService.generatePreviewFromCIImage`）のみ `.interactive` を渡す。
-    ///   - skyMask: ワンタップ空補正用の空マスク（グレースケール CIImage、1.0=空）。
-    ///     `nil` または `recipe.skyCorrectionIntensity` が中立ならスキップされる。
+    ///   - skyMask: 空マスク（グレースケール CIImage、1.0=空）。以下の2つの用途で使う。
+    ///     ①ワンタップ空補正（`recipe.skyCorrectionIntensity`）②適用範囲「空だけ」
+    ///     （`recipe.editScope == .skyOnly`）。どちらも `nil` ならスキップされる。
     ///     呼び出し側（`EditViewModel`）がキャッシュ済みマスクを渡す想定で、本関数自身は
     ///     マスクを生成しない（重い解析処理をレンダリングのホットパスに持ち込まないため）。
     /// - Returns: フィルター適用済みの CIImage グラフ
@@ -60,6 +61,41 @@ final class FilterGraphBuilder {
         quality: RenderQuality = .final,
         skyMask: CIImage? = nil
     ) -> CIImage {
+        // ── 適用範囲「空だけ」: 絵づくりのステップ全体を空マスクで包む ──
+        //
+        // `applySkyCorrection` が実証済みの「派生レシピ＋再帰＋CIBlendWithMask」パターンを再利用する。
+        // 27ツールの係数を二重実装しないため、派生レシピを `buildGraph` 自身に再帰で通す。
+        //
+        // ⚠️ `skyMask` が nil のときはこの分岐に入らず、全体経路で描画される（＝編集が画像全体に効く）。
+        // これは意図的なフォールバックで、呼び出し側は「マスクが取れなかったときはレシピの
+        // `editScope` も nil（全体）に戻す」ことで**描いたものとレシピを一致させる**責任を持つ。
+        // レシピだけ `.skyOnly` のまま残すと「レシピは空だけ・見た目は全体」という永続的な不一致が
+        // Firestore に残る（`EditViewModel.ExportSkyMaskResult.failed` と同じ原則・コミット913a3cd 参照）。
+        if recipe.isSkyOnlyScope, let mask = skyMask {
+            // 派生レシピ: 「絵づくり」だけを全体に掛けた画を作るためのレシピ。
+            var derived = recipe
+            derived.editScope = .whole              // 無限再帰の防止（この分岐に再入させない）
+            // 下の3つは包まず、合成後に全体へ適用する（理由は `applyGlobalTail` のコメント参照）
+            derived.targetDynamicRange = nil
+            derived.skyCorrectionIntensity = nil
+            derived.cropRectNorm = nil
+
+            // 二重露光（ステップ23）はこの「包む側」に入る。`original` を 15px ぼかして
+            // スクリーン合成する extent 保存の絵づくり処理で、再帰でも `original == source` が
+            // そのまま渡るため、空領域の見た目は全体経路と一致する。
+            let edited = buildGraph(recipe: derived, source: source, quality: quality, skyMask: nil)
+
+            // CIBlendWithMask: マスクが白(1.0)の画素は inputImage、黒(0.0)の画素は backgroundImage。
+            // SkyMask は 1.0=空 なので、inputImage=編集後 / backgroundImage=編集前（元画像）が正しい。
+            let blend = CIFilter.blendWithMask()
+            blend.inputImage = edited
+            blend.backgroundImage = source
+            blend.maskImage = featheredMask(mask, toMatch: source.extent)
+            let blended = blend.outputImage?.cropped(to: source.extent) ?? edited
+
+            return applyGlobalTail(recipe: recipe, skyMask: mask, to: blended, quality: quality)
+        }
+
         var img = source
 
         // 1. フィルターを適用（プリセットエフェクト）
@@ -240,6 +276,31 @@ final class FilterGraphBuilder {
             img = applyStyle2D(toneNorm: s2dTone, colorNorm: s2dColor, to: img)
         }
 
+        // 24〜25. 全体に掛ける仕上げステップ（HDR・空補正・クロップ）
+        return applyGlobalTail(recipe: recipe, skyMask: skyMask, to: img, quality: quality)
+    }
+
+    // ── 全体に掛ける仕上げステップ（ステップ 24〜25） ──
+
+    /// 適用範囲（`EditRecipe.editScope`）に関わらず**常に画像全体へ**掛ける仕上げステップ。
+    ///
+    /// 「空だけ」スコープ経路と全体経路の両方から呼ぶ。両経路にコピーで持つと、
+    /// 将来ステップを足したときに片方だけ更新される事故になるため一本化している。
+    ///
+    /// なぜこの3つは「空だけ」スコープでも全体に掛かるのか:
+    /// - **24 HDR トーンマッピング**: 出力ダイナミックレンジの整形。空だけに掛けると
+    ///   空と地上で輝度レンジが食い違い、地平線に段差が出る。
+    /// - **24.5 ワンタップ空補正**: それ自体が既に空スコープ。「空だけ」経路の内側に
+    ///   入れると空へ二重適用になる。
+    /// - **25 クロップ**: キャンバスの extent を変える処理。マスクと extent がずれる。
+    private static func applyGlobalTail(
+        recipe: EditRecipe,
+        skyMask: CIImage?,
+        to image: CIImage,
+        quality: RenderQuality
+    ) -> CIImage {
+        var img = image
+
         // 24. iOS 18+ HDR トーンマッピング（Display P3 出力時に HDR 輝度を抑制）
         //
         // 🔧 2026-04-24 修正 (コードレビュー M6):
@@ -303,19 +364,8 @@ final class FilterGraphBuilder {
         // skyMask: nil で再帰呼び出しし、空補正ステップ自体はスキップさせる（無限再帰防止）。
         let corrected = buildGraph(recipe: derived, source: image, quality: quality, skyMask: nil)
 
-        // マスクを image の extent に合わせてスケール（呼び出し元のキャッシュ済みマスクが
-        // 低解像度プレビュー用など異なる解像度の場合に対応）
-        let scaledMask = scaleMask(mask, toMatch: image.extent)
-
-        // フェザリング: clampedToExtent() → gaussianBlur → cropped(to:) の順（定石）。
-        // 旧順序（blur 後に clamp）は縁のマスク値を下げ「画像の縁の細い帯」の原因になる
-        // （HeuristicSkyMaskProvider.smoothAndSharpenEdges / SkyReplacementCompositor.feather と同型）。
-        let shortSide = min(image.extent.width, image.extent.height)
-        let featherRadius = max(1.0, shortSide * skyCorrectionFeatherFraction)
-        let blur = CIFilter.gaussianBlur()
-        blur.inputImage = scaledMask.clampedToExtent()
-        blur.radius = Float(featherRadius)
-        let featheredMask = blur.outputImage?.cropped(to: image.extent) ?? scaledMask
+        // マスクのスケール合わせ＋フェザリング（`featheredMask` に一本化）
+        let featheredMask = featheredMask(mask, toMatch: image.extent)
 
         // CIBlendWithMask: マスクが白(1.0)の画素は inputImage、黒(0.0)の画素は backgroundImage。
         // SkyMask は 1.0=空 なので、inputImage=補正後 / backgroundImage=補正前が正しい
@@ -325,6 +375,25 @@ final class FilterGraphBuilder {
         blend.backgroundImage = image
         blend.maskImage = featheredMask
         return blend.outputImage?.cropped(to: image.extent) ?? image
+    }
+
+    /// 空マスクを `targetExtent` に合わせて拡縮し、境界をフェザリング（ぼかし）して返す。
+    ///
+    /// 「空だけ」スコープ（`buildGraph`）とワンタップ空補正（`applySkyCorrection`）の
+    /// 両方から呼ぶ。両者でコピー実装すると下記のブラー順序を片方だけ間違える事故になるため一本化する。
+    ///
+    /// ⚠️ ブラーの順序は `clampedToExtent() → gaussianBlur → cropped(to:)` が定石。
+    /// 旧順序（blur 後に clamp）は縁のマスク値を下げ「画像の縁の細い帯」の原因になる
+    /// （`HeuristicSkyMaskProvider.smoothAndSharpenEdges` / `SkyReplacementCompositor.feather` と同型）。
+    private static func featheredMask(_ mask: CIImage, toMatch targetExtent: CGRect) -> CIImage {
+        // 呼び出し元のキャッシュ済みマスクが低解像度プレビュー用など異なる解像度の場合に対応
+        let scaledMask = scaleMask(mask, toMatch: targetExtent)
+        let shortSide = min(targetExtent.width, targetExtent.height)
+        let featherRadius = max(1.0, shortSide * skyMaskFeatherFraction)
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = scaledMask.clampedToExtent()
+        blur.radius = Float(featherRadius)
+        return blur.outputImage?.cropped(to: targetExtent) ?? scaledMask
     }
 
     /// 空マスクを `targetExtent` に合わせて拡縮する（`HeuristicSkyMaskProvider.readRGBA8Pixels` と
@@ -371,8 +440,9 @@ final class FilterGraphBuilder {
     private static let skyCorrectionContrastScale: Double = 0.15
     /// 空補正: 彩度のスケール係数（中立 1.0 からの加算量）
     private static let skyCorrectionSaturationScale: Double = 0.1
-    /// 空補正: フェザー半径（短辺に対する比率）
-    private static let skyCorrectionFeatherFraction: CGFloat = 0.01
+    /// 空マスク合成: フェザー半径（短辺に対する比率）。
+    /// ワンタップ空補正と「空だけ」スコープの両方で使う共通値。
+    private static let skyMaskFeatherFraction: CGFloat = 0.01
 
     // ── クロップ ──
     /// 正規化矩形 (0.0〜1.0, 左上原点) を CIImage の座標系（左下原点）に変換して切り出す

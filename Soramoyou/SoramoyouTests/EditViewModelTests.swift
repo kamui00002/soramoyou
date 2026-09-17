@@ -761,12 +761,12 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertEqual(vm.corpusSampleCount(for: .clear), 0, "履歴が無い空タイプは0件")
     }
 
-    /// 🆕 `EditRecipe.mergingPhotoSpecificFields(from:includeSkyCorrection:)` の
-    /// `includeSkyCorrection` 引数そのものを検証する（候補パス/サムネイル生成パスの土台となる純関数）。
-    /// - `includeSkyCorrection: false`（サムネイル生成用）→ skyCorrectionIntensity は nil になる
-    ///   （skyMask なしで描画するため intensity を転写しても見た目に反映されず、
+    /// 🆕 `EditRecipe.mergingPhotoSpecificFields(from:skyMaskAvailable:)` の
+    /// `skyMaskAvailable` 引数そのものを検証する（候補パス/サムネイル生成パスの土台となる純関数）。
+    /// - `skyMaskAvailable: false`（サムネイル生成用）→ 空マスク依存フィールドは nil になる
+    ///   （skyMask なしで描画するため転写しても見た目に反映されず、
     ///   「レシピは値あり・見た目は補正なし」の食い違いになるのを防ぐ挙動）。
-    /// - `includeSkyCorrection` 省略時（既定 true・本適用用）→ 現在値をそのまま転写する。
+    /// - 省略時（既定 true・本適用用）→ 現在値をそのまま転写する。
     func testMergingPhotoSpecificFields_excludesSkyCorrectionWhenRequested() async {
         var candidateRecipe = EditRecipe()
         candidateRecipe.exposureEV = 0.5
@@ -776,15 +776,15 @@ final class EditViewModelTests: XCTestCase {
         current.cropRectNorm = CGRect(x: 0.1, y: 0.1, width: 0.6, height: 0.6)
         current.targetDynamicRange = .hdr
 
-        // includeSkyCorrection: false を明示 → skyCorrectionIntensity は転写されず nil
+        // skyMaskAvailable: false を明示 → 空マスク依存フィールドは転写されず nil
         let mergedWithoutSkyCorrection = candidateRecipe.mergingPhotoSpecificFields(
-            from: current, includeSkyCorrection: false
+            from: current, skyMaskAvailable: false
         )
-        XCTAssertNil(mergedWithoutSkyCorrection.skyCorrectionIntensity, "includeSkyCorrection: false では空補正強度を転写しない")
-        XCTAssertEqual(mergedWithoutSkyCorrection.cropRectNorm, current.cropRectNorm, "クロップは includeSkyCorrection に関わらず常に転写される")
+        XCTAssertNil(mergedWithoutSkyCorrection.skyCorrectionIntensity, "skyMaskAvailable: false では空補正強度を転写しない")
+        XCTAssertEqual(mergedWithoutSkyCorrection.cropRectNorm, current.cropRectNorm, "クロップは skyMaskAvailable に関わらず常に転写される")
         XCTAssertEqual(mergedWithoutSkyCorrection.targetDynamicRange, current.targetDynamicRange, "HDR指定も常に転写される")
 
-        // includeSkyCorrection 省略（既定 true）→ 現在値を転写する
+        // 省略（既定 true）→ 現在値を転写する
         let mergedWithSkyCorrection = candidateRecipe.mergingPhotoSpecificFields(from: current)
         XCTAssertEqual(mergedWithSkyCorrection.skyCorrectionIntensity ?? -1, 0.7, accuracy: 0.0001,
                        "既定(true)では空補正強度を転写する")
