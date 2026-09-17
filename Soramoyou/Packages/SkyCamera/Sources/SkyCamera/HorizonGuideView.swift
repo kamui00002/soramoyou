@@ -83,3 +83,21 @@ public struct HorizonGuideView: View {
         }
     }
 }
+
+// MARK: - 再描画の隔離
+
+/// 傾きの監視を**この中だけ**で観測し、ガイドだけを再描画させるための器。
+///
+/// ⚠️ `HorizonMonitor` は 30Hz で値を流す。これを親ビュー（カメラ画面全体）が
+///    `@StateObject` / `@ObservedObject` で持つと、毎秒 30 回すべてが作り直され、
+///    上部バーやメニューのタップが取りこぼされる（実機で「3〜4回押さないと反応しない」
+///    という症状として現れた）。SwiftUI は値を読まなくても**持っているだけで購読する**
+///    ので、「読まなければ大丈夫」ではなく「観測の置き場所」を変える必要がある。
+struct HorizonGuideContainer: View {
+
+    @ObservedObject var monitor: HorizonMonitor
+
+    var body: some View {
+        HorizonGuideView(reading: monitor.reading)
+    }
+}

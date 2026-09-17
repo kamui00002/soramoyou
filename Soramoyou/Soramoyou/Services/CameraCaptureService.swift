@@ -124,6 +124,24 @@ enum CameraCaptureService {
             // ⭐️ 実際に露出を下げたか。ON でもこれが false なら「出番が無かった」だけで、
             //    機能が壊れているのとは意味が違う。両方を残さないと切り分けられない。
             "sky_priority_engaged": capture.exposureBiasEV < 0,
+            // ⭐️ どのレンズで空を撮ったか。0.1 刻みへ丸める。
+            "zoom": Double((capture.zoomDisplayed * 10).rounded()) / 10,
+            // ⭐️ 撮影解像度。指定を忘れると端末の最小で撮られるので、本番で効いているか見る。
+            "photo_mp": capture.photoMegapixels,
+            // ⭐️ 端末が返した選択肢そのもの。「選べない」の原因切り分けに使う。
+            "available_mp": capture.availableMegapixels,
+            // ⭐️ 記録形式。RAW がどれだけ使われるかで、容量まわりの設計判断が変わる。
+            "photo_format": capture.photoFormat.rawValue,
+            // ⭐️ フラッシュ設定。空にフラッシュは届かないので、既定を「自動」のままで
+            //    よいかの判断材料になる（自動で光ってしまう撮影が多いなら見直す）。
+            "flash_mode": capture.flashMode.rawValue,
+            // ⭐️ 診断用。available_mp が小さいとき、デバイスの限界なのか
+            //    いま使っているフォーマット（仮想デバイスの都合）の限界なのかを切り分ける。
+            "device_max_mp": capture.deviceMaxMegapixels,
+            // ⭐️ 物理レンズごとの最大解像度。どのレンズでどこまで撮れるかの一次資料。
+            //    ⚠️ 以前あった `wide_max_mp` はこの文字列の `wide:` に含まれるので外した
+            //    （同じ数字を 2 経路で送ると、片方だけ直す事故が起きる）。
+            "lens_max_mp": capture.lensMaxMegapixels,
             // ⭐️ 測光が一度でも成立したか。ON かつ false なら「出番が無かった」ではなく
             //    **動いていない**。この属性が無いと、恒久的な故障が
             //    「たまたま下げる必要が無かった撮影」に紛れて永遠に気づけない。
@@ -153,7 +171,10 @@ enum CameraCaptureService {
     /// 撮影 → 写真ライブラリ保存 → 計装 → 投稿パイプライン用の素材づくり、を 1 本にしたもの。
     /// - Returns: 投稿パイプラインへ渡す画像と外部編集情報。画像を作れなかった場合は nil
     static func process(capture: SkyCameraCapture) async -> (image: UIImage, info: ExternalEditInfo)? {
-        let savedToLibrary = await saveToPhotoLibrary(photoData: capture.photoData)
+        // ⚠️ RAW 撮影では写真ライブラリに **DNG** を残す（標準カメラと同じ扱い）。
+        //    編集パイプラインへ渡すのは現像済みの `photoData` の方（DNG は開けない）。
+        let savedToLibrary = await saveToPhotoLibrary(
+            photoData: capture.rawPhotoData ?? capture.photoData)
         LoggingService.shared.logEvent(
             "camera_capture",
             parameters: captureParameters(capture: capture, savedToLibrary: savedToLibrary)
