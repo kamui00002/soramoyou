@@ -424,6 +424,8 @@ final class SkyCameraViewModel: ObservableObject {
     private(set) var deviceMaxMegapixels = 0
     /// 単眼の広角デバイスが出せる最大解像度（MP。診断用）。
     private(set) var wideCameraMaxMegapixels = 0
+    /// 背面の物理レンズごとの最大解像度（診断用）。
+    private(set) var lensMaxMegapixels = ""
 
     /// いま選んでいる撮影解像度（ユーザーの希望）。メニューのチェックはこちら。
     @Published private(set) var selectedResolution: SkyCameraPhotoResolution?
@@ -488,6 +490,7 @@ final class SkyCameraViewModel: ObservableObject {
         let diagnostics = await controller.maximumMegapixelsDiagnostics()
         deviceMaxMegapixels = diagnostics.current
         wideCameraMaxMegapixels = diagnostics.wide
+        lensMaxMegapixels = diagnostics.lenses
         // ⚠️ 既定を最小のままにしてある。ここを勝手に最大へ上げると、
         //    1 枚あたりのファイルが数倍になって写真ライブラリを静かに圧迫する。
         //    「今まで最小で撮っていた」という事実はユーザーへ伝えたうえで選ばせる。
@@ -633,6 +636,7 @@ final class SkyCameraViewModel: ObservableObject {
                 photoFormat: photoFormat,
                 deviceMaxMegapixels: deviceMaxMegapixels,
                 wideCameraMaxMegapixels: wideCameraMaxMegapixels,
+                lensMaxMegapixels: lensMaxMegapixels,
                 skyPriorityMeasured: status.hasMeasured,
                 skyClippedFraction: status.clippedFraction,
                 skyPeakLuma: Int(status.peakLuma),

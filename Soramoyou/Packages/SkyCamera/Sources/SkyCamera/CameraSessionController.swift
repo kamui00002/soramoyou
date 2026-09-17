@@ -140,6 +140,12 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     ///    大工事の**前に**確かめるための値。ここが 48 でなければ移る意味が無い。
     private var wideCameraMaxMegapixels = 0
 
+    /// **背面の物理レンズごと**の最大解像度（例: `"ultra:12,wide:48,tele:12"`。診断用）。
+    /// ⚠️ 「48MP を超広角・望遠でも撮れるのか」は**測らないと分からない**。
+    ///    カタログ上のセンサー画素数と、AVFoundation が写真として出せる寸法は別物なので、
+    ///    仕様表を根拠に実装を始めない。ここが 48 でなければ、その大工事に意味は無い。
+    private var lensMaxMegapixels = ""
+
     /// 記録形式（sessionQueue 上でのみ読み書きする）。
     private var photoFormat: SkyCameraPhotoFormat = .heic
 
@@ -295,6 +301,7 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         deviceMaxMegapixels = maxMegapixels
         wideCameraMaxMegapixels = Self.maximumMegapixels(
             for: AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back))
+        lensMaxMegapixels = Self.lensMaxMegapixelsSummary()
 
         // ⚠️ 出力側の上限は**ここで一度だけ**いちばん大きい値へ上げておく。
         //    撮影のたびに動かすと「重いパイプライン再構成」が走る（SDK ヘッダーの警告）。
@@ -724,13 +731,38 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         return maxMegapixels
     }
 
+    /// 背面の物理レンズごとの最大解像度を 1 行にまとめる（副作用なし・読むだけ）。
+    ///
+    /// ⭐️ 掴まずに `formats` を読むだけなので、セッションには一切影響しない。
+    ///    「超広角でも 48MP を出せるのか」を、実装に着手する**前に**数字で確かめるための値。
+    private static func lensMaxMegapixelsSummary() -> String {
+        let lenses: [(String, AVCaptureDevice.DeviceType)] = [
+            ("ultra", .builtInUltraWideCamera),
+            ("wide", .builtInWideAngleCamera),
+            ("tele", .builtInTelephotoCamera)
+        ]
+        var parts: [String] = []
+        for (name, type) in lenses {
+            guard let device = AVCaptureDevice.default(type, for: .video, position: .back) else {
+                // 持っていないレンズは「0」ではなく欠席として残す（0 は「測って 0 だった」と紛らわしい）。
+                parts.append("\(name):-")
+                continue
+            }
+            parts.append("\(name):\(Self.maximumMegapixels(for: device))")
+        }
+        return parts.joined(separator: ",")
+    }
+
     /// 診断用の解像度まわりの実測値。
     /// - Returns: `current` = いま掴んでいるデバイスの最大、
-    ///   `wide` = 単眼の広角デバイスの最大（掴み替えずに読んだもの）
-    public func maximumMegapixelsDiagnostics() async -> (current: Int, wide: Int) {
-        await withCheckedContinuation { (continuation: CheckedContinuation<(current: Int, wide: Int), Never>) in
+    ///   `wide` = 単眼の広角デバイスの最大（掴み替えずに読んだもの）、
+    ///   `lenses` = 物理レンズごとの最大（例 `"ultra:12,wide:48,tele:12"`）
+    public func maximumMegapixelsDiagnostics() async -> (current: Int, wide: Int, lenses: String) {
+        await withCheckedContinuation { (continuation: CheckedContinuation<(current: Int, wide: Int, lenses: String), Never>) in
             sessionQueue.async {
-                continuation.resume(returning: (self.deviceMaxMegapixels, self.wideCameraMaxMegapixels))
+                continuation.resume(returning: (self.deviceMaxMegapixels,
+                                                self.wideCameraMaxMegapixels,
+                                                self.lensMaxMegapixels))
             }
         }
     }

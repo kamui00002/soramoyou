@@ -92,6 +92,10 @@ public struct SkyCameraCapture {
     ///    大工事の前に数字で確かめるための値。
     public let wideCameraMaxMegapixels: Int
 
+    /// 背面の物理レンズごとの最大解像度（例 `"ultra:12,wide:48,tele:12"`。診断用）。
+    /// ⭐️ 「48MP を超広角でも撮れるようにする」大工事に意味があるかを、着手前に決める値。
+    public let lensMaxMegapixels: String
+
     /// 撮影時の記録形式（計装用）。
     public let photoFormat: SkyCameraPhotoFormat
 
@@ -135,6 +139,7 @@ public struct SkyCameraCapture {
         photoFormat: SkyCameraPhotoFormat,
         deviceMaxMegapixels: Int,
         wideCameraMaxMegapixels: Int,
+        lensMaxMegapixels: String,
         skyPriorityMeasured: Bool,
         skyClippedFraction: Double,
         skyPeakLuma: Int,
@@ -159,6 +164,7 @@ public struct SkyCameraCapture {
         self.photoFormat = photoFormat
         self.deviceMaxMegapixels = deviceMaxMegapixels
         self.wideCameraMaxMegapixels = wideCameraMaxMegapixels
+        self.lensMaxMegapixels = lensMaxMegapixels
         self.skyPriorityMeasured = skyPriorityMeasured
         self.skyClippedFraction = skyClippedFraction
         self.skyPeakLuma = skyPeakLuma
