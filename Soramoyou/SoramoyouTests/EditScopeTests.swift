@@ -244,6 +244,40 @@ final class EditScopeTests: XCTestCase {
         )
     }
 
+    /// 「空だけ」スコープが、全体に掛かる仕上げステップ（クロップ・ワンタップ空補正）と
+    /// 同時に指定されても破綻しないこと。
+    ///
+    /// `.skyOnly` 経路は派生レシピでこの3つ（HDR・空補正・クロップ）を nil にしてから
+    /// 再帰し、合成後に `applyGlobalTail` で全体へ掛け直す設計。
+    /// 設計上いちばん絡む組み合わせなので、明示的に通しておく。
+    func test_skyOnlyScope_composesWithCropAndSkyCorrection() throws {
+        let source = makeTwoBandImage(
+            top: UIColor(red: 0.35, green: 0.55, blue: 0.90, alpha: 1),
+            bottom: UIColor(red: 0.45, green: 0.35, blue: 0.25, alpha: 1)
+        )
+        let mask = makeTopHalfSkyMask()
+        assertExtentMatchesImageSize(source)
+
+        var recipe = makeStrongRecipe(scope: .skyOnly)
+        recipe.skyCorrectionIntensity = 0.7                                  // 全体経路で空にだけ効く
+        recipe.cropRectNorm = CGRect(x: 0.0, y: 0.0, width: 1.0, height: 0.5) // 上半分＝空側だけ残す
+
+        let result = FilterGraphBuilder.buildGraph(recipe: recipe, source: source, skyMask: mask)
+
+        // クロップが最終 extent に効いている（＝ `applyGlobalTail` まで到達している）
+        XCTAssertEqual(
+            result.extent.height, Self.imageSize.height * 0.5, accuracy: 1.0,
+            "クロップが最終出力に反映されていない（全体に掛ける仕上げステップに到達していない疑い）"
+        )
+        XCTAssertEqual(result.extent.width, Self.imageSize.width, accuracy: 1.0)
+
+        // 実体化できる（フィルタグラフが壊れていない）
+        XCTAssertNotNil(
+            context.createCGImage(result, from: result.extent),
+            "「空だけ」＋クロップ＋空補正の組み合わせでグラフの実体化に失敗した"
+        )
+    }
+
     /// `editScope` を持たない旧レシピ（Firestore の既存ドキュメント）が読めること。
     /// nil は `.whole`（全体）として解釈される。
     func test_legacyRecipeWithoutEditScope_decodesAsWholeScope() throws {

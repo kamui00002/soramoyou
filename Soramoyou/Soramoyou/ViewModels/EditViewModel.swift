@@ -1040,8 +1040,30 @@ class EditViewModel: ObservableObject {
         }
     }
 
+    /// 高速プレビュー（ドラッグ中の同期/低解像度経路）を描いてよいか。
+    ///
+    /// 高速プレビューは重いマスク生成を行わず、キャッシュ済みマスクだけを使う。
+    /// そのため適用範囲「空だけ」なのにマスクが未生成のあいだ描くと、描画側は全体経路へ
+    /// フォールバックし「編集が画像全体に広がった絵」が出る。マスクが揃った瞬間に空だけへ
+    /// 戻るので、ドラッグ中ずっと領域がちらつくことになる。
+    ///
+    /// 到達経路: `.skyOnly` の投稿を再編集して開いた直後（`initialRecipe` は init で
+    /// そのまま代入され、マスクは `generatePreview()` の復元フックが非同期で作る）に
+    /// スライダーを触ると、その生成が終わる前にここへ来る。
+    ///
+    /// 間違った領域を見せるより直前のプレビューを保つほうが安全なのでスキップする
+    /// （`generatePreview()` がマスクを用意して数百 ms 以内に追いつく）。
+    ///
+    /// ⚠️ ワンタップ空補正（`skyCorrectionIntensity`）は同じ状況でも「補正が乗っていない絵」が
+    /// 出るだけで**領域は変わらない**ため、従来どおりスキップせずに描く（挙動を変えない）。
+    private var canRenderFastPreview: Bool {
+        !(editRecipe.isSkyOnlyScope && cachedSkyMask == nil)
+    }
+
     /// キャッシュが有効なら同期レンダリング、無効なら非同期でキャッシュ再構築後レンダリング
     private func renderFastPreviewOrAsync() {
+        guard canRenderFastPreview else { return }
+
         let transformKey = makeTransformKey()
         if let lowResCIImage = cachedLowResCIImage,
            cachedImageIndex == currentImageIndex,
@@ -1550,6 +1572,9 @@ class EditViewModel: ObservableObject {
             fastPreviewImage = nil
             return
         }
+        // 「空だけ」スコープでマスク未生成のあいだは描かない（理由は `canRenderFastPreview` 参照）。
+        // `fastPreviewImage` は nil にせず据え置く（nil にすると直前の絵まで消えてちらつく）。
+        guard canRenderFastPreview else { return }
 
         // 新しいリクエストIDを発行
         let requestId = UUID()
