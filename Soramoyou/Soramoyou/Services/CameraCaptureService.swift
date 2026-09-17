@@ -124,9 +124,6 @@ enum CameraCaptureService {
             // ⭐️ 実際に露出を下げたか。ON でもこれが false なら「出番が無かった」だけで、
             //    機能が壊れているのとは意味が違う。両方を残さないと切り分けられない。
             "sky_priority_engaged": capture.exposureBiasEV < 0,
-            // ⭐️ 測光が一度でも成立したか。ON かつ false なら「出番が無かった」ではなく
-            //    **動いていない**。この属性が無いと、恒久的な故障が
-            //    「たまたま下げる必要が無かった撮影」に紛れて永遠に気づけない。
             // ⭐️ どのレンズで空を撮ったか。0.1 刻みへ丸める。
             "zoom": Double((capture.zoomDisplayed * 10).rounded()) / 10,
             // ⭐️ 撮影解像度。指定を忘れると端末の最小で撮られるので、本番で効いているか見る。
@@ -135,13 +132,19 @@ enum CameraCaptureService {
             "available_mp": capture.availableMegapixels,
             // ⭐️ 記録形式。RAW がどれだけ使われるかで、容量まわりの設計判断が変わる。
             "photo_format": capture.photoFormat.rawValue,
+            // ⭐️ フラッシュ設定。空にフラッシュは届かないので、既定を「自動」のままで
+            //    よいかの判断材料になる（自動で光ってしまう撮影が多いなら見直す）。
+            "flash_mode": capture.flashMode.rawValue,
             // ⭐️ 診断用。available_mp が小さいとき、デバイスの限界なのか
             //    いま使っているフォーマット（仮想デバイスの都合）の限界なのかを切り分ける。
             "device_max_mp": capture.deviceMaxMegapixels,
-            // ⭐️ 単眼へ移れば解像度が上がるのかを、大工事の前に数字で確かめる。
-            "wide_max_mp": capture.wideCameraMaxMegapixels,
-            // 物理レンズごとの最大解像度。超広角でも 48MP を狙えるかの判断材料。
+            // ⭐️ 物理レンズごとの最大解像度。どのレンズでどこまで撮れるかの一次資料。
+            //    ⚠️ 以前あった `wide_max_mp` はこの文字列の `wide:` に含まれるので外した
+            //    （同じ数字を 2 経路で送ると、片方だけ直す事故が起きる）。
             "lens_max_mp": capture.lensMaxMegapixels,
+            // ⭐️ 測光が一度でも成立したか。ON かつ false なら「出番が無かった」ではなく
+            //    **動いていない**。この属性が無いと、恒久的な故障が
+            //    「たまたま下げる必要が無かった撮影」に紛れて永遠に気づけない。
             "sky_priority_measured": capture.skyPriorityMeasured,
             // ⭐️ 閾値較正のための実測値。効かなかったときに
             //    「閾値が高すぎる」のか「本当に飛んでいない」のかを区別する。

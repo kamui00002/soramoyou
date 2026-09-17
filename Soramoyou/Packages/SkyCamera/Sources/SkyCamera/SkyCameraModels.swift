@@ -87,10 +87,6 @@ public struct SkyCameraCapture {
     ///    いま使っているフォーマット（＝仮想デバイスの都合）の限界なのかを切り分ける。
     public let deviceMaxMegapixels: Int
 
-    /// 単眼の広角デバイスが出せる最大解像度（MP。診断用）。
-    /// ⭐️ 「レンズ切替を捨てて単眼へ移れば 48MP が取れるのか」を、
-    ///    大工事の前に数字で確かめるための値。
-    public let wideCameraMaxMegapixels: Int
 
     /// 背面の物理レンズごとの最大解像度（例 `"ultra:12,wide:48,tele:12"`。診断用）。
     /// ⭐️ 「48MP を超広角でも撮れるようにする」大工事に意味があるかを、着手前に決める値。
@@ -99,11 +95,17 @@ public struct SkyCameraCapture {
     /// 撮影時の記録形式（計装用）。
     public let photoFormat: SkyCameraPhotoFormat
 
+    /// 撮影時のフラッシュ設定（計装用）。
+    /// ⭐️ 空の撮影でフラッシュがどれだけ使われるかは、自動を既定にしてよいかの判断材料。
+    ///    同じ差分で入れた他の設定（ズーム・記録形式・解像度）はすべて計装したのに、
+    ///    これだけ落ちていた。
+    public let flashMode: SkyCameraFlashMode
+
     /// 撮影時の解像度（百万画素。計装用）。
     /// ⭐️ 「指定を忘れて最小で撮っていた」が本番で直ったかを確かめるための値。
     public let photoMegapixels: Int
 
-    /// その端末で選べた解像度の一覧（MP をカンマ区切り。例: "12,49"。計装用）。
+    /// その端末で選べた解像度の一覧（MP をカンマ区切り。例: "12,48"。計装用）。
     /// ⭐️ 「選択肢が出ない」ときに、端末が本当に 1 つしか返していないのか
     ///    読み取り位置を間違えているのかを、本番データで切り分けるため。
     public let availableMegapixels: String
@@ -137,8 +139,8 @@ public struct SkyCameraCapture {
         photoMegapixels: Int,
         availableMegapixels: String,
         photoFormat: SkyCameraPhotoFormat,
+        flashMode: SkyCameraFlashMode,
         deviceMaxMegapixels: Int,
-        wideCameraMaxMegapixels: Int,
         lensMaxMegapixels: String,
         skyPriorityMeasured: Bool,
         skyClippedFraction: Double,
@@ -162,8 +164,8 @@ public struct SkyCameraCapture {
         self.photoMegapixels = photoMegapixels
         self.availableMegapixels = availableMegapixels
         self.photoFormat = photoFormat
+        self.flashMode = flashMode
         self.deviceMaxMegapixels = deviceMaxMegapixels
-        self.wideCameraMaxMegapixels = wideCameraMaxMegapixels
         self.lensMaxMegapixels = lensMaxMegapixels
         self.skyPriorityMeasured = skyPriorityMeasured
         self.skyClippedFraction = skyClippedFraction
@@ -231,10 +233,10 @@ public struct SkyCameraPhotoResolution: Equatable, Hashable, Sendable {
     public let width: Int32
     public let height: Int32
 
-    /// この解像度を出すのに**単眼の広角デバイス**が要るか。
-    /// ⚠️ true のとき、3眼をまとめた仮想デバイスから離れることになるので
-    ///    **超広角（0.5x）などのレンズ切替が使えなくなる**。
-    ///    黙って機能が消えるのが一番よくないので、UI で必ず明示する。
+    /// この解像度を出すのに**物理レンズ単体**を掴む必要があるか。
+    /// ⚠️ true のとき、3眼をまとめた仮想デバイスから離れる。レンズ自体は引き続き
+    ///    どれでも選べる（倍率に応じて掴み直す）が、**レンズをまたぐたびに
+    ///    セッションの作り直しが要る**ので切替が一瞬もたつく。
     public let requiresPhysicalLens: Bool
 
     public init(width: Int32, height: Int32, requiresPhysicalLens: Bool = false) {
@@ -257,7 +259,7 @@ public struct SkyCameraPhotoResolution: Equatable, Hashable, Sendable {
     /// ボタンに出す文字（例: "12MP"）。
     public var label: String { "\(megapixels)MP" }
 
-    /// メニューに出す文字。レンズ切替を失うものにはその旨を添える。
+    /// メニューに出す文字。
     public var menuTitle: String {
         // レンズはどの倍率でも選べるので、メニューに但し書きは要らない。
         // （代償はレンズ切替が一瞬もたつくことだが、メニューで断るような話ではない）
@@ -441,11 +443,26 @@ public struct SkyCameraLensState: Equatable, Sendable {
     /// いま掴んでいるカメラ（仮想デバイスか、どの物理レンズか）。
     public let lens: SkyCameraLensRequirement
 
+    /// AE/AF ロック中か。
+    /// ⚠️ ロックは**デバイスごと**の状態なので、レンズを掴み直すと解ける。
+    ///    画面のロック表示を実体に合わせ直すために一緒に流す。
+    public let isFocusLocked: Bool
+
+    /// この状態がどのズーム要求に対する結果か。
+    /// ⚠️ 付け替えには時間がかかるので、**完了通知が古い倍率を持って後から届く**ことがある。
+    ///    受け手はこの番号が自分の最新要求と一致するときだけ倍率を採用する。
+    ///    そうしないと、指を離した後に表示だけ前の位置へ巻き戻る。
+    public let zoomRequestID: UInt64
+
     public init(displayedZoom: CGFloat,
                 effectiveResolution: SkyCameraPhotoResolution?,
-                lens: SkyCameraLensRequirement) {
+                lens: SkyCameraLensRequirement,
+                isFocusLocked: Bool,
+                zoomRequestID: UInt64) {
         self.displayedZoom = displayedZoom
         self.effectiveResolution = effectiveResolution
         self.lens = lens
+        self.isFocusLocked = isFocusLocked
+        self.zoomRequestID = zoomRequestID
     }
 }

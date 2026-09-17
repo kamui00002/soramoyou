@@ -184,8 +184,10 @@ public struct SkyCameraView: View {
 
     /// 上部バー（閉じる・グリッド・水平線）。
     private var topBar: some View {
-        // ⚠️ ボタンが増えたので間隔を詰める。44pt × 6 個 ＋ 間隔 6pt × 5 = 294pt で、
-        //    いちばん狭い iPhone SE（375pt − 左右余白 40pt = 335pt）にも収まる。
+        // ⚠️ ボタンが増えたので間隔を詰める。44pt × 5 個 ＋ 記録形式バッジ 64pt
+        //    ＋ 間隔 6pt × 5 = 314pt で、いちばん狭い iPhone SE
+        //    （375pt − 左右余白 40pt = 335pt）にぎりぎり収まる。**残り 21pt**。
+        //    次にボタンを足すならここが破綻するので、先にこの式を更新すること。
         HStack(spacing: 6) {
             Button(action: onCancel) {
                 Image(systemName: "xmark")
@@ -260,7 +262,7 @@ public struct SkyCameraView: View {
                         defaults.set(format.rawValue, forKey: formatDefaultsKey)
                     } label: {
                         Label(format.menuTitle,
-                              systemImage: model.photoFormat == format ? "checkmark" : "")
+                              systemImage: model.photoFormat == format ? "checkmark" : "circle")
                     }
                 }
             }
@@ -274,7 +276,7 @@ public struct SkyCameraView: View {
                             defaults.set(Int(resolution.width), forKey: resolutionDefaultsKey)
                         } label: {
                             Label(resolution.menuTitle,
-                                  systemImage: model.selectedResolution == resolution ? "checkmark" : "")
+                                  systemImage: model.selectedResolution == resolution ? "checkmark" : "circle")
                         }
                     }
                 }
@@ -395,15 +397,18 @@ final class SkyCameraViewModel: ObservableObject {
 
     /// ズーム UI（ボタン・ピンチ）の基準にするレンズ構成。
     ///
-    /// ⭐️ **常に仮想デバイス（超広角・望遠つき）の構成**を使う。48MP のあいだは単眼デバイスを
-    ///    掴んでいるが、そちらの構成で UI を組むとボタンが 1 個になり、カプセルごと消える。
-    ///    ユーザーには「レンズが選べなくなった」としか見えないので、UI の基準は固定する。
-    ///    本当に単眼しか無い端末（iPhone SE など）では中身も単眼構成になり、
-    ///    従来どおりボタンは出ない。
+    /// ⭐️ **常に仮想デバイス（超広角・望遠つき）の構成**を使う。48MP のあいだは物理レンズを
+    ///    1 本だけ掴んでいるが、そちらの構成で UI を組むとボタンが 1 個になり、
+    ///    カプセルごと消える。ユーザーには「レンズが選べなくなった」としか見えないので、
+    ///    UI の基準は固定する。本当に単眼しか無い端末（iPhone SE など）では
+    ///    中身も単眼構成になり、従来どおりボタンは出ない。
     @Published private(set) var zoomUIConfiguration: LensConfiguration?
 
     /// いま表示している倍率。既定は標準カメラと同じ 1x。
     @Published var displayedZoom: CGFloat = 1
+
+    /// 最後に出したズーム要求の連番（古い完了通知を捨てるための照合に使う）。
+    private var zoomRequestID: UInt64 = 0
 
     /// フラッシュの動作。
     @Published private(set) var flashMode: SkyCameraFlashMode
@@ -422,8 +427,6 @@ final class SkyCameraViewModel: ObservableObject {
 
     /// デバイスが全フォーマットを通じて出せる最大解像度（MP。診断用）。
     private(set) var deviceMaxMegapixels = 0
-    /// 単眼の広角デバイスが出せる最大解像度（MP。診断用）。
-    private(set) var wideCameraMaxMegapixels = 0
     /// 背面の物理レンズごとの最大解像度（診断用）。
     private(set) var lensMaxMegapixels = ""
 
@@ -489,7 +492,6 @@ final class SkyCameraViewModel: ObservableObject {
         photoResolutions = resolutions
         let diagnostics = await controller.maximumMegapixelsDiagnostics()
         deviceMaxMegapixels = diagnostics.current
-        wideCameraMaxMegapixels = diagnostics.wide
         lensMaxMegapixels = diagnostics.lenses
         // ⚠️ 既定を最小のままにしてある。ここを勝手に最大へ上げると、
         //    1 枚あたりのファイルが数倍になって写真ライブラリを静かに圧迫する。
@@ -532,8 +534,15 @@ final class SkyCameraViewModel: ObservableObject {
                 // ⚠️ 通知はセッション側のスレッドから来るので、必ずメインへ渡してから触る。
                 Task { @MainActor in
                     guard let self else { return }
-                    self.displayedZoom = state.displayedZoom
+                    // ⚠️ 倍率は**自分の最新要求に対する結果のときだけ**採る。
+                    //    付け替え中に次の操作をしていると、完了通知が古い倍率を持って
+                    //    後から届き、指を離した後に表示だけ巻き戻る。
+                    if state.zoomRequestID == self.zoomRequestID {
+                        self.displayedZoom = state.displayedZoom
+                    }
+                    // 解像度とロック表示は「いまの実体」なので、番号によらず必ず合わせる。
                     self.effectiveResolution = state.effectiveResolution
+                    self.isLocked = state.isFocusLocked
                 }
             }
             // 保存してある設定をセッションへ反映する（構成の後でないと出力が無い）。
@@ -560,7 +569,11 @@ final class SkyCameraViewModel: ObservableObject {
     /// ズーム倍率を変える。表示とセッション側を必ず同時に動かす。
     func setZoom(_ zoom: CGFloat, animated: Bool) {
         displayedZoom = zoom
-        controller.setZoom(displayedZoom: zoom, animated: animated)
+        // ⚠️ 要求ごとに番号を進める。付け替えを伴うズームは完了までに時間がかかるので、
+        //    その間に次の操作が来ると**古い結果が後から届いて表示を巻き戻す**。
+        //    番号を照合して、古い通知の倍率は捨てられるようにする。
+        zoomRequestID &+= 1
+        controller.setZoom(displayedZoom: zoom, animated: animated, requestID: zoomRequestID)
     }
 
     /// タップ = その点に AF/AE を合わせる（ロック中なら解除する）。
@@ -634,8 +647,8 @@ final class SkyCameraViewModel: ObservableObject {
                 availableMegapixels: photoResolutions.map { String($0.megapixels) }
                     .joined(separator: ","),
                 photoFormat: photoFormat,
+                flashMode: flashMode,
                 deviceMaxMegapixels: deviceMaxMegapixels,
-                wideCameraMaxMegapixels: wideCameraMaxMegapixels,
                 lensMaxMegapixels: lensMaxMegapixels,
                 skyPriorityMeasured: status.hasMeasured,
                 skyClippedFraction: status.clippedFraction,
