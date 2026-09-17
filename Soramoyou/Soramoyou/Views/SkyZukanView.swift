@@ -387,7 +387,7 @@ struct SkyZukanView: View {
     /// （そらもよう側に `CFBundleURLTypes: amana` を足すのは**誤り**。あれは「自分が
     ///   amana:// を受け取る」宣言で、2アプリが同じスキームを名乗ると挙動が未定義になる。）
     private func openAmana() {
-        LoggingService.shared.logEvent("amana_referral_tap", parameters: ["source": "sky_zukan"])
+        LoggingService.shared.logEvent("amana_referral_tapped", parameters: ["source": "sky_zukan"])
 
         guard let deepLink = URL(string: "amana://"),
               let storeURL = URL(string: "https://apps.apple.com/app/id6790911086") else { return }
@@ -395,7 +395,7 @@ struct SkyZukanView: View {
         UIApplication.shared.open(deepLink, options: [:]) { opened in
             guard !opened else { return }
             // 未インストール。App Store の天名のページへ。
-            LoggingService.shared.logEvent("amana_referral_fallback_store",
+            LoggingService.shared.logEvent("amana_referral_store_fallback",
                                            parameters: ["source": "sky_zukan"])
             UIApplication.shared.open(storeURL)
         }
