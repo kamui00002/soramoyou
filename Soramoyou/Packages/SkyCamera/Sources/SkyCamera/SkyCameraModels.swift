@@ -224,9 +224,16 @@ public struct SkyCameraPhotoResolution: Equatable, Hashable, Sendable {
     public let width: Int32
     public let height: Int32
 
-    public init(width: Int32, height: Int32) {
+    /// この解像度を出すのに**単眼の広角デバイス**が要るか。
+    /// ⚠️ true のとき、3眼をまとめた仮想デバイスから離れることになるので
+    ///    **超広角（0.5x）などのレンズ切替が使えなくなる**。
+    ///    黙って機能が消えるのが一番よくないので、UI で必ず明示する。
+    public let requiresSingleLens: Bool
+
+    public init(width: Int32, height: Int32, requiresSingleLens: Bool = false) {
         self.width = width
         self.height = height
+        self.requiresSingleLens = requiresSingleLens
     }
 
     /// 百万画素（MP）に丸めた値。
@@ -236,6 +243,11 @@ public struct SkyCameraPhotoResolution: Equatable, Hashable, Sendable {
 
     /// ボタンに出す文字（例: "12MP"）。
     public var label: String { "\(megapixels)MP" }
+
+    /// メニューに出す文字。レンズ切替を失うものにはその旨を添える。
+    public var menuTitle: String {
+        requiresSingleLens ? "\(label)（超広角・望遠は使えません）" : label
+    }
 
     /// ⚠️ 24MP (5712×4284) は**遅延写真配信（deferred photo delivery）を有効にしたときだけ**
     ///    24MP として提供される、と SDK ヘッダーに明記されている。

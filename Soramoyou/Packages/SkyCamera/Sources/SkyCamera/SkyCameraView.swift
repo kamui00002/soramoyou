@@ -273,7 +273,7 @@ public struct SkyCameraView: View {
                             model.setPhotoResolution(resolution)
                             defaults.set(Int(resolution.width), forKey: resolutionDefaultsKey)
                         } label: {
-                            Label(resolution.label,
+                            Label(resolution.menuTitle,
                                   systemImage: model.selectedResolution == resolution ? "checkmark" : "")
                         }
                     }
@@ -458,9 +458,18 @@ final class SkyCameraViewModel: ObservableObject {
     }
 
     /// 撮影解像度を選ぶ。
+    ///
+    /// ⚠️ 単眼が要る解像度ではデバイスごと付け替わるので、**レンズ構成も変わる**
+    ///    （超広角・望遠が消える）。表示を取り直さないと、押しても何も起きない
+    ///    0.5x ボタンが残ってしまう。
     func setPhotoResolution(_ resolution: SkyCameraPhotoResolution) {
         selectedResolution = resolution
         controller.setPhotoResolution(resolution)
+        Task {
+            lensConfiguration = await controller.lensConfiguration()
+            // 付け替え後は 1x から始まる（コントローラ側で基準倍率へ揃えている）。
+            displayedZoom = 1
+        }
     }
 
     /// 端末が返した一覧から、保存してある選択（無ければ最小）を復元する。
