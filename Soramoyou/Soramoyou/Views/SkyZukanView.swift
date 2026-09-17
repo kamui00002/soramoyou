@@ -12,6 +12,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct SkyZukanView: View {
     let userId: String
@@ -81,6 +82,10 @@ struct SkyZukanView: View {
                         matrixSection
                         badgesSection
                     }
+                    // 空の有無で出し分けない（＝ゲートしない）。
+                    // 「条件を満たした人にだけ出す」導線は実運用で一度も発火しないことがある
+                    // （天名 1.1.0 の `saved >= 2` ゲートが実例）。図鑑を開いた人には必ず見せる。
+                    amanaSection
                 }
                 .padding(DesignTokens.Spacing.screenMargin)
             }
@@ -316,6 +321,83 @@ struct SkyZukanView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - 天名 -Amana- への送客 ⭐️
+
+    /// そらもよう →  天名 -Amana- の**一方通行**の送客。天名側は改修ゼロで受けられる。
+    ///
+    /// なぜ図鑑に置くか：ここは「空を集める」が完成する場所で、天名の「空に名を授ける」は
+    /// その延長線にある。設定画面だけに置くと誰にも届かない（天名 1.1.0 の通知オプトインが
+    /// 実ユーザー 0 人だった原因がまさにこれ）。
+    private var amanaSection: some View {
+        glassCard {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                HStack(alignment: .top, spacing: DesignTokens.Spacing.sm) {
+                    Image(systemName: "highlighter")
+                        .font(.title3)
+                        .foregroundColor(DesignTokens.Colors.goldenHour)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("集めた空に、名前をつける")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundColor(DesignTokens.Colors.textPrimary)
+                        // 「この空（＝図鑑の1枚）に名前がつく」とは書かない。天名は改修ゼロ＝
+                        // 写真を渡せないので、開いた先に出るのは天名自身の「今の空」。
+                        // 文言で約束していいのは "別のアプリがある" ところまで。
+                        Text("天名 -Amana- は、空に名前を授けるアプリです。同じ作者がつくっています。")
+                            .font(.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Button(action: openAmana) {
+                    HStack(spacing: DesignTokens.Spacing.xs) {
+                        Text("天名をひらく")
+                            .font(.subheadline.weight(.semibold))
+                        Image(systemName: "arrow.up.forward")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DesignTokens.Spacing.sm + 2)
+                    .background(DesignTokens.Colors.glassPrimary,
+                                in: RoundedRectangle(cornerRadius: DesignTokens.Radius.button))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DesignTokens.Radius.button)
+                            .stroke(DesignTokens.Colors.glassBorderPrimary, lineWidth: 1)
+                    )
+                }
+                .accessibilityLabel("天名をひらく")
+                .accessibilityHint("空に名前をつけるアプリ 天名 を開きます。入っていなければ App Store を開きます")
+            }
+        }
+    }
+
+    /// 天名を開く。入っていなければ App Store へ逃がす。
+    ///
+    /// ⚠️ URL は必ず**ホスト無しの `amana://`**。`amana://paywall` にしてはいけない——
+    ///    天名の `onOpenURL` は `url.host == "paywall"` でペイウォールを全画面表示するので、
+    ///    送客した人がいきなり課金画面に着く（体験として最悪で、App Store 3.1.2 的にも危うい）。
+    ///    ホスト無しなら天名の guard に弾かれて、ホーム＝「今の空」で開く。
+    ///
+    /// 判定に `canOpenURL` は使わない。あれは Info.plist の `LSApplicationQueriesSchemes` を
+    /// 要求するのに、`open` の completionHandler だけで同じ「開けたか」が取れるため。
+    /// （そらもよう側に `CFBundleURLTypes: amana` を足すのは**誤り**。あれは「自分が
+    ///   amana:// を受け取る」宣言で、2アプリが同じスキームを名乗ると挙動が未定義になる。）
+    private func openAmana() {
+        LoggingService.shared.logEvent("amana_referral_tap", parameters: ["source": "sky_zukan"])
+
+        guard let deepLink = URL(string: "amana://"),
+              let storeURL = URL(string: "https://apps.apple.com/app/id6790911086") else { return }
+
+        UIApplication.shared.open(deepLink, options: [:]) { opened in
+            guard !opened else { return }
+            // 未インストール。App Store の天名のページへ。
+            LoggingService.shared.logEvent("amana_referral_fallback_store",
+                                           parameters: ["source": "sky_zukan"])
+            UIApplication.shared.open(storeURL)
         }
     }
 }
