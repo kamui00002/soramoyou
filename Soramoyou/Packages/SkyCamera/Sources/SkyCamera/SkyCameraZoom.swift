@@ -72,6 +72,15 @@ public struct LensConfiguration: Equatable, Sendable {
         min(maxFactor, max(minFactor, factor))
     }
 
+    /// 望遠レンズが始まる表示倍率。望遠を持たない端末では nil。
+    ///
+    /// 「この倍率より望遠側は、単眼の広角デバイスでは光学的に届かない」という境界。
+    /// 48MP のためにデバイスを付け替えるかどうかの判断に使う。
+    public var teleSwitchOverDisplayedZoom: CGFloat? {
+        guard let factor = switchOverFactors.first(where: { $0 > baseFactor }) else { return nil }
+        return displayedZoom(forVideoZoomFactor: factor)
+    }
+
     // MARK: - プリセット
 
     /// iPhone 標準カメラが並べる倍々の停留点。
@@ -135,5 +144,65 @@ public struct LensConfiguration: Equatable, Sendable {
         guard !presets.isEmpty else { return 1 }
         // いまの倍率より大きい最初のプリセット。無ければ先頭へ戻る。
         return presets.first { $0 > zoom + 0.0001 } ?? presets[0]
+    }
+}
+
+// MARK: - デバイス要件
+
+/// いま掴むべき背面カメラの種類。
+public enum SkyCameraLensRequirement: Equatable, Sendable {
+
+    /// 超広角・望遠を含む仮想デバイス（レンズ切替が使える／最大 24MP 程度）。
+    case virtual
+
+    /// 単眼の広角デバイス（48MP が撮れる／超広角・望遠は無い）。
+    case singleWide
+}
+
+/// 「いまの倍率と希望解像度なら、どちらのデバイスを掴むべきか」を決める純関数。
+///
+/// ⭐️ **なぜ純関数に切り出すか**: デバイスの付け替えは実機でしか起きないので、
+///    判断とセッション操作が混ざっていると境界値（0.999x・ちょうど 1x・望遠の切替点）を
+///    テストできない。判断だけを取り出せば、端末無しで全部の分岐を固定できる。
+///
+/// ⭐️ **判断の中身**: iPhone 標準カメラと同じ流儀。48MP は**メインカメラの範囲にいる間だけ**
+///    有効で、超広角や望遠へ移ったらレンズを優先して解像度が下がる。
+///    ユーザーから見ると「レンズはいつでも選べる」が成り立つ。
+public enum SkyCameraLensSwitching {
+
+    /// 倍率の比較に使う許容誤差。ドラッグで 0.9999 のような値が入っても
+    /// 「1x ちょうど」として扱うために要る。
+    public static let zoomEpsilon: CGFloat = 0.001
+
+    /// 境界の不感帯。**いま掴んでいるデバイス側に倍率の幅を足す**。
+    ///
+    /// ⚠️ これが無いと、1x のすぐ近くで指が震えただけで境界を何度もまたぎ、
+    ///    そのたびにデバイスが付け替わる（＝プレビューが黒く落ちる）。
+    ///    付け替えはセッションの作り直しなので、ズームと違って取り返しが重い。
+    ///    空優先 AE で不感帯を入れたのと同じ理由。
+    public static let switchHysteresis: CGFloat = 0.05
+
+    /// - Parameters:
+    ///   - displayedZoom: これから合わせたい表示倍率
+    ///   - preferredRequiresSingleLens: ユーザーが選んだ解像度が単眼デバイスを要求するか（＝48MP か）
+    ///   - teleSwitchOverDisplayedZoom: 望遠レンズが始まる表示倍率（無ければ nil）
+    ///   - current: いま掴んでいるデバイス（不感帯をどちら側に付けるかの判断に使う）
+    public static func requiredDevice(displayedZoom: CGFloat,
+                                      preferredRequiresSingleLens: Bool,
+                                      teleSwitchOverDisplayedZoom: CGFloat?,
+                                      current: SkyCameraLensRequirement) -> SkyCameraLensRequirement {
+        // 48MP を求めていないなら、常にレンズ切替が使える仮想デバイスでよい。
+        guard preferredRequiresSingleLens else { return .virtual }
+        // いま単眼にいるなら、離れるのに余分に動かす必要がある（＝居座りやすくする）。
+        let margin = (current == .singleWide) ? switchHysteresis : 0
+        // 1x より広い＝超広角が要る。単眼の広角では光学的に届かない。
+        if displayedZoom < 1 - zoomEpsilon - margin { return .virtual }
+        // 望遠の切替点より望遠側＝望遠レンズが要る。
+        if let tele = teleSwitchOverDisplayedZoom,
+           displayedZoom >= tele + margin - zoomEpsilon {
+            return .virtual
+        }
+        // 1x 〜 望遠手前はメインカメラの担当。ここだけ 48MP が活きる。
+        return .singleWide
     }
 }

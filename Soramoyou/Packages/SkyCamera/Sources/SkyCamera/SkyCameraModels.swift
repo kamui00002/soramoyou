@@ -1,6 +1,7 @@
 // ⭐️ 空カメラの公開データ型（撮影結果・計装イベント・利用可否）
 import AVFoundation
 import Foundation
+import ImageIO
 
 // MARK: - 権限状態
 
@@ -252,7 +253,20 @@ public struct SkyCameraPhotoResolution: Equatable, Hashable, Sendable {
 
     /// メニューに出す文字。レンズ切替を失うものにはその旨を添える。
     public var menuTitle: String {
-        requiresSingleLens ? "\(label)（超広角・望遠は使えません）" : label
+        requiresSingleLens ? "\(label)（メインカメラのみ）" : label
+    }
+
+    /// 撮れた 1 枚の EXIF から**実際に届いた寸法**を読む。
+    ///
+    /// ⭐️ 要求値（設定で選んだ解像度）と実測値は別物。ズームやレンズの都合で
+    ///    要求どおり届かないことがあるので、計装には必ずこちらを使う。
+    ///    露出補正で EXIF を正としているのと同じ考え方。
+    public static func delivered(fromMetadata metadata: [String: Any]) -> SkyCameraPhotoResolution? {
+        guard let width = metadata[kCGImagePropertyPixelWidth as String] as? NSNumber,
+              let height = metadata[kCGImagePropertyPixelHeight as String] as? NSNumber else {
+            return nil
+        }
+        return SkyCameraPhotoResolution(width: width.int32Value, height: height.int32Value)
     }
 
     /// ⚠️ 24MP (5712×4284) は**遅延写真配信（deferred photo delivery）を有効にしたときだけ**
@@ -399,5 +413,31 @@ public enum SkyCameraError: LocalizedError {
     public var isTransient: Bool {
         if case .sessionNotRunning = self { return true }
         return false
+    }
+}
+
+
+/// レンズまわりのいまの状態。付け替えで変わったときだけ UI へ流す。
+///
+/// ⭐️ **なぜ 3 つをまとめて 1 つの型にするか**: 倍率・実際の解像度・どのデバイスか、は
+///    必ず同時に変わる。別々に流すと「バッジは 48 のままなのに実体は 12MP」という
+///    中途半端な瞬間が生まれ、ユーザーには嘘の表示に見える。
+public struct SkyCameraLensState: Equatable, Sendable {
+
+    /// いま合わせている表示倍率。
+    public let displayedZoom: CGFloat
+
+    /// いま実際に撮れる解像度（希望より下がっていることがある）。
+    public let effectiveResolution: SkyCameraPhotoResolution?
+
+    /// 単眼の広角デバイスを掴んでいるか（＝48MP が活きている状態か）。
+    public let isUsingSingleWideDevice: Bool
+
+    public init(displayedZoom: CGFloat,
+                effectiveResolution: SkyCameraPhotoResolution?,
+                isUsingSingleWideDevice: Bool) {
+        self.displayedZoom = displayedZoom
+        self.effectiveResolution = effectiveResolution
+        self.isUsingSingleWideDevice = isUsingSingleWideDevice
     }
 }

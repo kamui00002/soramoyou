@@ -104,7 +104,7 @@ public struct SkyCameraView: View {
             .simultaneousGesture(
                 MagnificationGesture()
                     .onChanged { scale in
-                        guard let configuration = model.lensConfiguration else { return }
+                        guard let configuration = model.zoomUIConfiguration else { return }
                         let start = pinchStartZoom ?? model.displayedZoom
                         if pinchStartZoom == nil { pinchStartZoom = start }
                         let lower = configuration.displayedZoom(forVideoZoomFactor: configuration.minFactor)
@@ -134,7 +134,7 @@ public struct SkyCameraView: View {
                 if model.isLocked {
                     lockBadge
                 }
-                if let configuration = model.lensConfiguration {
+                if let configuration = model.zoomUIConfiguration {
                     ZoomControl(
                         configuration: configuration,
                         displayedZoom: $model.displayedZoom
@@ -292,8 +292,11 @@ public struct SkyCameraView: View {
     }
 
     /// バッジの文字（例: "HEIC 12"）。解像度が 1 つしか無い端末では形式だけ出す。
+    ///
+    /// ⚠️ 選んだ値ではなく**いま実際に撮れる値**を出す。48MP のまま超広角へ移ると
+    ///    12MP に落ちるので、選択値を出すとバッジが嘘になる。
     private var formatBadgeText: String {
-        guard let megapixels = model.selectedResolution?.megapixels else {
+        guard let megapixels = model.effectiveResolution?.megapixels else {
             return model.photoFormat.label
         }
         return "\(model.photoFormat.label) \(megapixels)"
@@ -390,8 +393,14 @@ final class SkyCameraViewModel: ObservableObject {
     /// 空優先 AE（白飛び防止）が ON か。切り替えは `setSkyPriorityEnabled(_:)` を通す。
     @Published private(set) var skyPriorityEnabled: Bool
 
-    /// 端末のレンズ構成。構成前と単眼端末では nil（＝ズーム UI を出さない）。
-    @Published private(set) var lensConfiguration: LensConfiguration?
+    /// ズーム UI（ボタン・ピンチ）の基準にするレンズ構成。
+    ///
+    /// ⭐️ **常に仮想デバイス（超広角・望遠つき）の構成**を使う。48MP のあいだは単眼デバイスを
+    ///    掴んでいるが、そちらの構成で UI を組むとボタンが 1 個になり、カプセルごと消える。
+    ///    ユーザーには「レンズが選べなくなった」としか見えないので、UI の基準は固定する。
+    ///    本当に単眼しか無い端末（iPhone SE など）では中身も単眼構成になり、
+    ///    従来どおりボタンは出ない。
+    @Published private(set) var zoomUIConfiguration: LensConfiguration?
 
     /// いま表示している倍率。既定は標準カメラと同じ 1x。
     @Published var displayedZoom: CGFloat = 1
@@ -416,8 +425,12 @@ final class SkyCameraViewModel: ObservableObject {
     /// 単眼の広角デバイスが出せる最大解像度（MP。診断用）。
     private(set) var wideCameraMaxMegapixels = 0
 
-    /// いま選んでいる撮影解像度。
+    /// いま選んでいる撮影解像度（ユーザーの希望）。メニューのチェックはこちら。
     @Published private(set) var selectedResolution: SkyCameraPhotoResolution?
+
+    /// いま実際に撮れる解像度。レンズの都合で希望より下がることがある。
+    /// バッジと計装はこちらを使う。
+    @Published private(set) var effectiveResolution: SkyCameraPhotoResolution?
     /// AE/AF ロック中か。
     @Published private(set) var isLocked = false
     /// 撮影処理中か（シャッターの二度押し防止）。
@@ -459,17 +472,13 @@ final class SkyCameraViewModel: ObservableObject {
 
     /// 撮影解像度を選ぶ。
     ///
-    /// ⚠️ 単眼が要る解像度ではデバイスごと付け替わるので、**レンズ構成も変わる**
-    ///    （超広角・望遠が消える）。表示を取り直さないと、押しても何も起きない
-    ///    0.5x ボタンが残ってしまう。
+    /// ⚠️ 48MP ではデバイスごと付け替わるが、**ズーム UI は触らない**。
+    ///    レンズはいつでも選べるままにして、超広角・望遠へ移ったときに
+    ///    こちらが自動で解像度を落とす（iPhone 標準カメラと同じ振る舞い）。
+    ///    倍率とバッジの更新は `setLensStateHandler` 経由で届く。
     func setPhotoResolution(_ resolution: SkyCameraPhotoResolution) {
         selectedResolution = resolution
         controller.setPhotoResolution(resolution)
-        Task {
-            lensConfiguration = await controller.lensConfiguration()
-            // 付け替え後は 1x から始まる（コントローラ側で基準倍率へ揃えている）。
-            displayedZoom = 1
-        }
     }
 
     /// 端末が返した一覧から、保存してある選択（無ければ最小）を復元する。
@@ -514,7 +523,16 @@ final class SkyCameraViewModel: ObservableObject {
             try await controller.configure()
             // ⚠️ 構成の**後**に伝える。configure 前に呼んでも測光器がまだ存在しない。
             controller.setSkyPriorityExposureEnabled(skyPriorityEnabled)
-            lensConfiguration = await controller.lensConfiguration()
+            zoomUIConfiguration = await controller.virtualLensConfiguration()
+            // 付け替えで倍率・実解像度が変わったら受け取る（変化したときだけ流れてくる）。
+            controller.setLensStateHandler { [weak self] state in
+                // ⚠️ 通知はセッション側のスレッドから来るので、必ずメインへ渡してから触る。
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.displayedZoom = state.displayedZoom
+                    self.effectiveResolution = state.effectiveResolution
+                }
+            }
             // 保存してある設定をセッションへ反映する（構成の後でないと出力が無い）。
             controller.setFlashMode(flashMode)
             controller.setPhotoFormat(photoFormat)
@@ -606,7 +624,10 @@ final class SkyCameraViewModel: ObservableObject {
                 exposureBiasEV: SkyPriorityExposure.exposureBias(fromMetadata: result.metadata)
                     ?? status.bias,
                 zoomDisplayed: Double(zoomAtShutter),
-                photoMegapixels: selectedResolution?.megapixels ?? 0,
+                // ⭐️ 実測（撮れた 1 枚の EXIF）を正とする。設定値を載せると、
+                //    ズームやレンズの都合で届いた寸法が違っても気づけない。
+                photoMegapixels: SkyCameraPhotoResolution.delivered(fromMetadata: result.metadata)?
+                    .megapixels ?? effectiveResolution?.megapixels ?? 0,
                 availableMegapixels: photoResolutions.map { String($0.megapixels) }
                     .joined(separator: ","),
                 photoFormat: photoFormat,

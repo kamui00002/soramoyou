@@ -156,3 +156,161 @@ final class SkyCameraZoomTests: XCTestCase {
         XCTAssertEqual(triple.nextPreset(after: 1.7), 2, accuracy: 0.0001)
     }
 }
+
+// MARK: - どちらのデバイスを掴むか（48MP とレンズの両立）
+
+extension SkyCameraZoomTests {
+
+    /// 望遠が始まる表示倍率。単眼の広角デバイスでは光学的に届かない境界。
+    func testTeleSwitchOverDisplayedZoom() {
+        // 3眼: 内部 6.0 で望遠。基準が 2.0 なので表示 3x。
+        XCTAssertEqual(triple.teleSwitchOverDisplayedZoom ?? -1, 3, accuracy: 0.0001)
+        // 広角2眼: 標準より望遠側の切替点が無い。
+        XCTAssertNil(dualWide.teleSwitchOverDisplayedZoom)
+        // 2眼（標準＋望遠）: 基準が 1.0 なので表示 2x。
+        XCTAssertEqual(dualTele.teleSwitchOverDisplayedZoom ?? -1, 2, accuracy: 0.0001)
+        // 単眼: 切替点そのものが無い。
+        XCTAssertNil(single.teleSwitchOverDisplayedZoom)
+    }
+
+    /// 48MP を求めていなければ、倍率によらず常にレンズ切替が使える側。
+    func testVirtualDeviceWhenResolutionDoesNotNeedSingleLens() {
+        for zoom in [CGFloat(0.5), 1, 2, 3, 10] {
+            XCTAssertEqual(
+                SkyCameraLensSwitching.requiredDevice(
+                    displayedZoom: zoom,
+                    preferredRequiresSingleLens: false,
+                    teleSwitchOverDisplayedZoom: 3,
+                    current: .virtual),
+                .virtual,
+                "12MP では \(zoom)x でも仮想デバイスのままであるべき")
+        }
+    }
+
+    /// ちょうど 1x は単眼側（＝48MP が活きる）。
+    func testSingleWideAtExactlyOneX() {
+        XCTAssertEqual(
+            SkyCameraLensSwitching.requiredDevice(
+                displayedZoom: 1,
+                preferredRequiresSingleLens: true,
+                teleSwitchOverDisplayedZoom: 3,
+                current: .virtual),
+            .singleWide)
+    }
+
+    /// 1x のわずか下は誤差として吸収する（ボタンを押した直後の 0.9999 で付け替わらないため）。
+    func testZoomJustUnderOneXIsAbsorbedAsOneX() {
+        XCTAssertEqual(
+            SkyCameraLensSwitching.requiredDevice(
+                displayedZoom: 0.9995,
+                preferredRequiresSingleLens: true,
+                teleSwitchOverDisplayedZoom: 3,
+                current: .virtual),
+            .singleWide)
+    }
+
+    /// はっきり 1x より広ければ超広角が要るので仮想デバイスへ。
+    func testVirtualDeviceBelowOneX() {
+        XCTAssertEqual(
+            SkyCameraLensSwitching.requiredDevice(
+                displayedZoom: 0.5,
+                preferredRequiresSingleLens: true,
+                teleSwitchOverDisplayedZoom: 3,
+                current: .virtual),
+            .virtual)
+    }
+
+    /// 望遠の切替点ちょうどは望遠レンズが要る＝仮想デバイス。
+    func testVirtualDeviceAtTeleSwitchOver() {
+        XCTAssertEqual(
+            SkyCameraLensSwitching.requiredDevice(
+                displayedZoom: 3,
+                preferredRequiresSingleLens: true,
+                teleSwitchOverDisplayedZoom: 3,
+                current: .virtual),
+            .virtual)
+    }
+
+    /// 望遠の手前はメインカメラのデジタルズーム＝48MP が活きる。
+    func testSingleWideJustUnderTeleSwitchOver() {
+        XCTAssertEqual(
+            SkyCameraLensSwitching.requiredDevice(
+                displayedZoom: 2.9,
+                preferredRequiresSingleLens: true,
+                teleSwitchOverDisplayedZoom: 3,
+                current: .virtual),
+            .singleWide)
+    }
+
+    /// 望遠を持たない端末では、上限までメインカメラで面倒を見る。
+    func testSingleWideWhenDeviceHasNoTelephoto() {
+        for zoom in [CGFloat(1), 2, 5, 10] {
+            XCTAssertEqual(
+                SkyCameraLensSwitching.requiredDevice(
+                    displayedZoom: zoom,
+                    preferredRequiresSingleLens: true,
+                    teleSwitchOverDisplayedZoom: nil,
+                    current: .virtual),
+                .singleWide,
+                "望遠が無い端末では \(zoom)x でも単眼のままであるべき")
+        }
+    }
+
+    // MARK: - 不感帯（付け替えのばたつき防止）
+
+    /// 単眼にいる間は、境界のすぐ下へ入っても居座る。
+    /// ⚠️ ここが効かないと、1x 付近で指が震えるたびにセッションが作り直され、
+    ///    プレビューが繰り返し黒く落ちる。
+    func testStaysOnSingleWideWithinHysteresisBelowOneX() {
+        XCTAssertEqual(
+            SkyCameraLensSwitching.requiredDevice(
+                displayedZoom: 0.97,
+                preferredRequiresSingleLens: true,
+                teleSwitchOverDisplayedZoom: 3,
+                current: .singleWide),
+            .singleWide)
+        // 同じ倍率でも、仮想デバイスにいるなら戻らない（＝不感帯が向きを持っている）。
+        XCTAssertEqual(
+            SkyCameraLensSwitching.requiredDevice(
+                displayedZoom: 0.97,
+                preferredRequiresSingleLens: true,
+                teleSwitchOverDisplayedZoom: 3,
+                current: .virtual),
+            .virtual)
+    }
+
+    /// 不感帯を超えて広げれば、ちゃんと超広角側へ渡す。
+    func testLeavesSingleWideBeyondHysteresis() {
+        XCTAssertEqual(
+            SkyCameraLensSwitching.requiredDevice(
+                displayedZoom: 0.9,
+                preferredRequiresSingleLens: true,
+                teleSwitchOverDisplayedZoom: 3,
+                current: .singleWide),
+            .virtual)
+    }
+
+    /// 望遠側にも同じ不感帯が付く。
+    func testStaysOnSingleWideWithinHysteresisBelowTele() {
+        XCTAssertEqual(
+            SkyCameraLensSwitching.requiredDevice(
+                displayedZoom: 3.02,
+                preferredRequiresSingleLens: true,
+                teleSwitchOverDisplayedZoom: 3,
+                current: .singleWide),
+            .singleWide)
+        XCTAssertEqual(
+            SkyCameraLensSwitching.requiredDevice(
+                displayedZoom: 3.2,
+                preferredRequiresSingleLens: true,
+                teleSwitchOverDisplayedZoom: 3,
+                current: .singleWide),
+            .virtual)
+    }
+
+    /// 本当に単眼しか無い端末（iPhone SE など）では、従来どおりボタンを出さない。
+    /// ⚠️ 48MP のためにボタンを出しっぱなしにする改修で、ここを壊しやすい。
+    func testGenuinelySingleLensDeviceStillShowsNoPresets() {
+        XCTAssertEqual(single.presetDisplayedZooms, [1])
+    }
+}
