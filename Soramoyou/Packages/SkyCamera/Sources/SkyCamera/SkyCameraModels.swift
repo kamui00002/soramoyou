@@ -236,9 +236,15 @@ public struct SkyCameraPhotoResolution: Equatable, Hashable, Sendable {
         self.requiresSingleLens = requiresSingleLens
     }
 
-    /// 百万画素（MP）に丸めた値。
+    /// 百万画素（MP）。
+    ///
+    /// ⚠️ **四捨五入ではなく切り捨て**にすること。センサーの実画素数は
+    ///    宣伝上の値より必ず少し多いので、四捨五入すると1つ大きい数字になる。
+    ///      4032×3024 = 12.19MP → 12MP（Apple 表記）
+    ///      5712×4284 = 24.47MP → 24MP
+    ///      8064×6048 = 48.77MP → 48MP（四捨五入すると 49 になってしまう）
     public var megapixels: Int {
-        Int((Double(width) * Double(height) / 1_000_000).rounded())
+        Int(Double(width) * Double(height) / 1_000_000)
     }
 
     /// ボタンに出す文字（例: "12MP"）。

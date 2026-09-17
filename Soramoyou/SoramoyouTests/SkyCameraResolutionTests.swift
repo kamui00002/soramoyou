@@ -12,11 +12,15 @@ import XCTest
 
 final class SkyCameraResolutionTests: XCTestCase {
 
-    func testMegapixelsAreRounded() {
-        // 4032×3024 = 12,192,768 → 12MP
+    func testMegapixelsMatchAppleLabels() {
+        // ⭐️ 四捨五入ではなく**切り捨て**。センサーの実画素数は宣伝値より必ず少し多いので、
+        //    四捨五入すると 1 つ大きい数字が出る（実機で「49MP」と表示されて発覚した）。
+        // 4032×3024 = 12.19MP → 12
         XCTAssertEqual(SkyCameraPhotoResolution(width: 4032, height: 3024).megapixels, 12)
-        // 8064×6048 = 48,771,072 → 49MP（切り上げではなく四捨五入なので 49）
-        XCTAssertEqual(SkyCameraPhotoResolution(width: 8064, height: 6048).megapixels, 49)
+        // 5712×4284 = 24.47MP → 24
+        XCTAssertEqual(SkyCameraPhotoResolution(width: 5712, height: 4284).megapixels, 24)
+        // 8064×6048 = 48.77MP → 48（四捨五入だと 49 になる）
+        XCTAssertEqual(SkyCameraPhotoResolution(width: 8064, height: 6048).megapixels, 48)
     }
 
     func testLabel() {

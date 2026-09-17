@@ -657,8 +657,9 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         var maxMegapixels = 0
         for format in device.formats {
             for dimensions in format.supportedMaxPhotoDimensions {
-                let pixels = Double(dimensions.width) * Double(dimensions.height)
-                maxMegapixels = max(maxMegapixels, Int((pixels / 1_000_000).rounded()))
+                let resolution = SkyCameraPhotoResolution(
+                    width: dimensions.width, height: dimensions.height)
+                maxMegapixels = max(maxMegapixels, resolution.megapixels)
             }
         }
         return maxMegapixels
