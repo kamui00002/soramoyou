@@ -235,12 +235,12 @@ public struct SkyCameraPhotoResolution: Equatable, Hashable, Sendable {
     /// ⚠️ true のとき、3眼をまとめた仮想デバイスから離れることになるので
     ///    **超広角（0.5x）などのレンズ切替が使えなくなる**。
     ///    黙って機能が消えるのが一番よくないので、UI で必ず明示する。
-    public let requiresSingleLens: Bool
+    public let requiresPhysicalLens: Bool
 
-    public init(width: Int32, height: Int32, requiresSingleLens: Bool = false) {
+    public init(width: Int32, height: Int32, requiresPhysicalLens: Bool = false) {
         self.width = width
         self.height = height
-        self.requiresSingleLens = requiresSingleLens
+        self.requiresPhysicalLens = requiresPhysicalLens
     }
 
     /// 百万画素（MP）。
@@ -259,7 +259,9 @@ public struct SkyCameraPhotoResolution: Equatable, Hashable, Sendable {
 
     /// メニューに出す文字。レンズ切替を失うものにはその旨を添える。
     public var menuTitle: String {
-        requiresSingleLens ? "\(label)（メインカメラのみ）" : label
+        // レンズはどの倍率でも選べるので、メニューに但し書きは要らない。
+        // （代償はレンズ切替が一瞬もたつくことだが、メニューで断るような話ではない）
+        label
     }
 
     /// 撮れた 1 枚の EXIF から**実際に届いた寸法**を読む。
@@ -436,14 +438,14 @@ public struct SkyCameraLensState: Equatable, Sendable {
     /// いま実際に撮れる解像度（希望より下がっていることがある）。
     public let effectiveResolution: SkyCameraPhotoResolution?
 
-    /// 単眼の広角デバイスを掴んでいるか（＝48MP が活きている状態か）。
-    public let isUsingSingleWideDevice: Bool
+    /// いま掴んでいるカメラ（仮想デバイスか、どの物理レンズか）。
+    public let lens: SkyCameraLensRequirement
 
     public init(displayedZoom: CGFloat,
                 effectiveResolution: SkyCameraPhotoResolution?,
-                isUsingSingleWideDevice: Bool) {
+                lens: SkyCameraLensRequirement) {
         self.displayedZoom = displayedZoom
         self.effectiveResolution = effectiveResolution
-        self.isUsingSingleWideDevice = isUsingSingleWideDevice
+        self.lens = lens
     }
 }

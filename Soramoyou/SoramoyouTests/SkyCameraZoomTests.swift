@@ -157,155 +157,148 @@ final class SkyCameraZoomTests: XCTestCase {
     }
 }
 
-// MARK: - どちらのデバイスを掴むか（48MP とレンズの両立）
+// MARK: - 物理レンズ単体を掴んだときの倍率換算
 
 extension SkyCameraZoomTests {
 
-    /// 望遠が始まる表示倍率。単眼の広角デバイスでは光学的に届かない境界。
-    func testTeleSwitchOverDisplayedZoom() {
-        // 3眼: 内部 6.0 で望遠。基準が 2.0 なので表示 3x。
-        XCTAssertEqual(triple.teleSwitchOverDisplayedZoom ?? -1, 3, accuracy: 0.0001)
-        // 広角2眼: 標準より望遠側の切替点が無い。
-        XCTAssertNil(dualWide.teleSwitchOverDisplayedZoom)
-        // 2眼（標準＋望遠）: 基準が 1.0 なので表示 2x。
-        XCTAssertEqual(dualTele.teleSwitchOverDisplayedZoom ?? -1, 2, accuracy: 0.0001)
-        // 単眼: 切替点そのものが無い。
-        XCTAssertNil(single.teleSwitchOverDisplayedZoom)
+    /// ⭐️ **最重要**: 素の画角ちょうどを指定したら、そのレンズの等倍（1.0）になること。
+    /// ⚠️ ここが逆になっていると「ボタンは 1x なのに画角は 0.5x」というズレ方をする。
+    ///    実機では気づきにくく、写真を見比べて初めて分かる類のバグ。
+    func testPhysicalLensNativeZoomMapsToUnity() {
+        // 超広角（素の画角 0.5x）: 表示 0.5x → そのレンズの等倍
+        let ultra = LensConfiguration(nativeDisplayedZoom: 0.5, minFactor: 1, deviceMaxFactor: 100)
+        XCTAssertEqual(ultra.baseFactor, 2, accuracy: 0.0001)
+        XCTAssertEqual(ultra.videoZoomFactor(forDisplayedZoom: 0.5), 1, accuracy: 0.0001)
+
+        // 標準（素の画角 1x）
+        let wide = LensConfiguration(nativeDisplayedZoom: 1, minFactor: 1, deviceMaxFactor: 100)
+        XCTAssertEqual(wide.videoZoomFactor(forDisplayedZoom: 1), 1, accuracy: 0.0001)
+
+        // 望遠（素の画角 3x）: baseFactor は 1/3
+        let tele = LensConfiguration(nativeDisplayedZoom: 3, minFactor: 1, deviceMaxFactor: 100)
+        XCTAssertEqual(tele.baseFactor, 1.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(tele.videoZoomFactor(forDisplayedZoom: 3), 1, accuracy: 0.0001)
     }
 
-    /// 48MP を求めていなければ、倍率によらず常にレンズ切替が使える側。
-    func testVirtualDeviceWhenResolutionDoesNotNeedSingleLens() {
+    /// 素の画角から離れた倍率でも、比が保たれること（＝デジタルズームの量が正しい）。
+    func testPhysicalLensDigitalZoomScales() {
+        let ultra = LensConfiguration(nativeDisplayedZoom: 0.5, minFactor: 1, deviceMaxFactor: 100)
+        // 0.5x の 1.6 倍 = 0.8x
+        XCTAssertEqual(ultra.videoZoomFactor(forDisplayedZoom: 0.8), 1.6, accuracy: 0.0001)
+
+        let tele = LensConfiguration(nativeDisplayedZoom: 3, minFactor: 1, deviceMaxFactor: 100)
+        // 3x の 4/3 倍 = 4x
+        XCTAssertEqual(tele.videoZoomFactor(forDisplayedZoom: 4), 4.0 / 3.0, accuracy: 0.0001)
+    }
+
+    /// 物理レンズは素の画角より広くは写せない（下限が素の画角で止まる）。
+    func testPhysicalLensCannotGoWiderThanItsNativeZoom() {
+        let tele = LensConfiguration(nativeDisplayedZoom: 3, minFactor: 1, deviceMaxFactor: 100)
+        // 望遠に 2x を頼んでも、いちばん広い 3x で止まる。
+        let factor = tele.videoZoomFactor(forDisplayedZoom: 2)
+        XCTAssertEqual(tele.displayedZoom(forVideoZoomFactor: factor), 3, accuracy: 0.0001)
+    }
+
+    /// 素の画角は仮想デバイスの切替点から導く（定数で持たない）。
+    func testNativeDisplayedZoomIsDerivedFromVirtualConfiguration() {
+        XCTAssertEqual(triple.nativeDisplayedZoom(for: .ultraWide) ?? -1, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(triple.nativeDisplayedZoom(for: .wide) ?? -1, 1, accuracy: 0.0001)
+        XCTAssertEqual(triple.nativeDisplayedZoom(for: .telephoto) ?? -1, 3, accuracy: 0.0001)
+
+        // 望遠を持たない端末では望遠が nil。
+        XCTAssertNil(dualWide.nativeDisplayedZoom(for: .telephoto))
+        // 超広角を持たない端末では超広角が nil。
+        XCTAssertNil(dualTele.nativeDisplayedZoom(for: .ultraWide))
+        XCTAssertEqual(dualTele.nativeDisplayedZoom(for: .telephoto) ?? -1, 2, accuracy: 0.0001)
+        // 単眼は標準だけ。
+        XCTAssertNil(single.nativeDisplayedZoom(for: .ultraWide))
+        XCTAssertNil(single.nativeDisplayedZoom(for: .telephoto))
+    }
+}
+
+// MARK: - どのレンズを掴むか（48MP とレンズの両立）
+
+extension SkyCameraZoomTests {
+
+    /// 3眼端末の素の画角で判断させるための補助。
+    private func required(_ zoom: CGFloat,
+                          needs48MP: Bool = true,
+                          current: SkyCameraLensRequirement = .virtual,
+                          ultra: CGFloat? = 0.5,
+                          tele: CGFloat? = 3) -> SkyCameraLensRequirement {
+        SkyCameraLensSwitching.requiredDevice(
+            displayedZoom: zoom,
+            preferredRequiresPhysicalLens: needs48MP,
+            ultraWideNativeZoom: ultra,
+            teleNativeZoom: tele,
+            current: current)
+    }
+
+    /// 48MP を求めていなければ、倍率によらず切替がなめらかな仮想デバイス。
+    func testVirtualDeviceWhenResolutionDoesNotNeedPhysicalLens() {
         for zoom in [CGFloat(0.5), 1, 2, 3, 10] {
-            XCTAssertEqual(
-                SkyCameraLensSwitching.requiredDevice(
-                    displayedZoom: zoom,
-                    preferredRequiresSingleLens: false,
-                    teleSwitchOverDisplayedZoom: 3,
-                    current: .virtual),
-                .virtual,
-                "12MP では \(zoom)x でも仮想デバイスのままであるべき")
+            XCTAssertEqual(required(zoom, needs48MP: false), .virtual,
+                           "12MP では \(zoom)x でも仮想デバイスのままであるべき")
         }
     }
 
-    /// ちょうど 1x は単眼側（＝48MP が活きる）。
-    func testSingleWideAtExactlyOneX() {
-        XCTAssertEqual(
-            SkyCameraLensSwitching.requiredDevice(
-                displayedZoom: 1,
-                preferredRequiresSingleLens: true,
-                teleSwitchOverDisplayedZoom: 3,
-                current: .virtual),
-            .singleWide)
+    /// 倍率ごとに担当レンズが変わる。
+    func testEachZoomRangePicksItsLens() {
+        XCTAssertEqual(required(0.5), .physical(.ultraWide))
+        XCTAssertEqual(required(0.7), .physical(.ultraWide))
+        XCTAssertEqual(required(1), .physical(.wide))       // ちょうど 1x は標準
+        XCTAssertEqual(required(2.9), .physical(.wide))
+        XCTAssertEqual(required(3), .physical(.telephoto))  // ちょうど切替点は望遠
+        XCTAssertEqual(required(6), .physical(.telephoto))
     }
 
     /// 1x のわずか下は誤差として吸収する（ボタンを押した直後の 0.9999 で付け替わらないため）。
     func testZoomJustUnderOneXIsAbsorbedAsOneX() {
-        XCTAssertEqual(
-            SkyCameraLensSwitching.requiredDevice(
-                displayedZoom: 0.9995,
-                preferredRequiresSingleLens: true,
-                teleSwitchOverDisplayedZoom: 3,
-                current: .virtual),
-            .singleWide)
+        XCTAssertEqual(required(0.9995), .physical(.wide))
     }
 
-    /// はっきり 1x より広ければ超広角が要るので仮想デバイスへ。
-    func testVirtualDeviceBelowOneX() {
-        XCTAssertEqual(
-            SkyCameraLensSwitching.requiredDevice(
-                displayedZoom: 0.5,
-                preferredRequiresSingleLens: true,
-                teleSwitchOverDisplayedZoom: 3,
-                current: .virtual),
-            .virtual)
+    /// 超広角を持たない端末では超広角を選ばない。
+    func testNeverPicksUltraWideWhenDeviceHasNone() {
+        XCTAssertEqual(required(0.5, ultra: nil, tele: 2), .physical(.wide))
     }
 
-    /// 望遠の切替点ちょうどは望遠レンズが要る＝仮想デバイス。
-    func testVirtualDeviceAtTeleSwitchOver() {
-        XCTAssertEqual(
-            SkyCameraLensSwitching.requiredDevice(
-                displayedZoom: 3,
-                preferredRequiresSingleLens: true,
-                teleSwitchOverDisplayedZoom: 3,
-                current: .virtual),
-            .virtual)
-    }
-
-    /// 望遠の手前はメインカメラのデジタルズーム＝48MP が活きる。
-    func testSingleWideJustUnderTeleSwitchOver() {
-        XCTAssertEqual(
-            SkyCameraLensSwitching.requiredDevice(
-                displayedZoom: 2.9,
-                preferredRequiresSingleLens: true,
-                teleSwitchOverDisplayedZoom: 3,
-                current: .virtual),
-            .singleWide)
-    }
-
-    /// 望遠を持たない端末では、上限までメインカメラで面倒を見る。
-    func testSingleWideWhenDeviceHasNoTelephoto() {
-        for zoom in [CGFloat(1), 2, 5, 10] {
-            XCTAssertEqual(
-                SkyCameraLensSwitching.requiredDevice(
-                    displayedZoom: zoom,
-                    preferredRequiresSingleLens: true,
-                    teleSwitchOverDisplayedZoom: nil,
-                    current: .virtual),
-                .singleWide,
-                "望遠が無い端末では \(zoom)x でも単眼のままであるべき")
+    /// 望遠を持たない端末では望遠を選ばない。
+    func testNeverPicksTelephotoWhenDeviceHasNone() {
+        for zoom in [CGFloat(1), 3, 10] {
+            XCTAssertEqual(required(zoom, tele: nil), .physical(.wide),
+                           "望遠が無い端末では \(zoom)x でも標準のままであるべき")
         }
     }
 
     // MARK: - 不感帯（付け替えのばたつき防止）
 
-    /// 単眼にいる間は、境界のすぐ下へ入っても居座る。
-    /// ⚠️ ここが効かないと、1x 付近で指が震えるたびにセッションが作り直され、
-    ///    プレビューが繰り返し黒く落ちる。
-    func testStaysOnSingleWideWithinHysteresisBelowOneX() {
-        XCTAssertEqual(
-            SkyCameraLensSwitching.requiredDevice(
-                displayedZoom: 0.97,
-                preferredRequiresSingleLens: true,
-                teleSwitchOverDisplayedZoom: 3,
-                current: .singleWide),
-            .singleWide)
-        // 同じ倍率でも、仮想デバイスにいるなら戻らない（＝不感帯が向きを持っている）。
-        XCTAssertEqual(
-            SkyCameraLensSwitching.requiredDevice(
-                displayedZoom: 0.97,
-                preferredRequiresSingleLens: true,
-                teleSwitchOverDisplayedZoom: 3,
-                current: .virtual),
-            .virtual)
+    /// ⭐️ **符号の検出器**: 同じ倍率でも、いまいるレンズによって答えが変わること。
+    /// ⚠️ 3 つのうち 2 つが同じ答えになったら、不感帯の符号がどこかで逆になっている。
+    ///    0.97x は「1x のすぐ下」なので、標準にいるなら居座り、超広角にいるなら居座る。
+    func testHysteresisDependsOnWhichLensWeAreOn() {
+        // 超広角にいる → 境界が上へずれるので、まだ超広角の担当
+        XCTAssertEqual(required(0.97, current: .physical(.ultraWide)), .physical(.ultraWide))
+        // 標準にいる → 境界が下へずれるので、まだ標準の担当（＝付け替えない）
+        XCTAssertEqual(required(0.97, current: .physical(.wide)), .physical(.wide))
+        // 仮想デバイスからの初回判断は不感帯なし → 素直に超広角
+        XCTAssertEqual(required(0.97, current: .virtual), .physical(.ultraWide))
     }
 
-    /// 不感帯を超えて広げれば、ちゃんと超広角側へ渡す。
-    func testLeavesSingleWideBeyondHysteresis() {
-        XCTAssertEqual(
-            SkyCameraLensSwitching.requiredDevice(
-                displayedZoom: 0.9,
-                preferredRequiresSingleLens: true,
-                teleSwitchOverDisplayedZoom: 3,
-                current: .singleWide),
-            .virtual)
+    /// 不感帯を超えて広げれば、ちゃんと超広角へ渡す。
+    func testLeavesWideBeyondHysteresis() {
+        XCTAssertEqual(required(0.9, current: .physical(.wide)), .physical(.ultraWide))
     }
 
-    /// 望遠側にも同じ不感帯が付く。
-    func testStaysOnSingleWideWithinHysteresisBelowTele() {
-        XCTAssertEqual(
-            SkyCameraLensSwitching.requiredDevice(
-                displayedZoom: 3.02,
-                preferredRequiresSingleLens: true,
-                teleSwitchOverDisplayedZoom: 3,
-                current: .singleWide),
-            .singleWide)
-        XCTAssertEqual(
-            SkyCameraLensSwitching.requiredDevice(
-                displayedZoom: 3.2,
-                preferredRequiresSingleLens: true,
-                teleSwitchOverDisplayedZoom: 3,
-                current: .singleWide),
-            .virtual)
+    /// 望遠側の境界にも同じ向きの不感帯が付く。
+    func testHysteresisOnTelephotoBoundary() {
+        // 標準にいる → 切替点を少し越えても標準に居座る
+        XCTAssertEqual(required(3.02, current: .physical(.wide)), .physical(.wide))
+        // 離れれば望遠へ渡す
+        XCTAssertEqual(required(3.2, current: .physical(.wide)), .physical(.telephoto))
+        // 望遠にいる → 切替点を少し下回っても望遠に居座る
+        XCTAssertEqual(required(2.98, current: .physical(.telephoto)), .physical(.telephoto))
+        // 離れれば標準へ戻す
+        XCTAssertEqual(required(2.8, current: .physical(.telephoto)), .physical(.wide))
     }
 
     /// 本当に単眼しか無い端末（iPhone SE など）では、従来どおりボタンを出さない。

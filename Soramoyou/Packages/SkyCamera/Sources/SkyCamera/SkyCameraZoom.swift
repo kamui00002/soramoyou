@@ -55,6 +55,25 @@ public struct LensConfiguration: Equatable, Sendable {
                              self.minFactor)
     }
 
+    /// **物理レンズ単体**を掴んだときの構成。
+    ///
+    /// ⚠️ 単眼デバイスは `virtualDeviceSwitchOverVideoZoomFactors` が空なので、
+    ///    通常の初期化では基準倍率が 1.0 になってしまう。ところが超広角を単体で掴むと
+    ///    その子にとっての `videoZoomFactor = 1.0` は**表示 0.5x** なので、
+    ///    1.0 のままだと「ボタンは 1x なのに画角は 0.5x」というズレ方をする。
+    ///    そこで基準倍率を外から与える: **baseFactor = 1 ÷ 素の表示倍率**。
+    ///    （素の表示倍率 0.5 の超広角なら baseFactor = 2.0。
+    ///     表示 0.5x → videoZoomFactor = 0.5 × 2.0 = 1.0 ＝ そのレンズの等倍。）
+    public init(nativeDisplayedZoom: CGFloat, minFactor: CGFloat, deviceMaxFactor: CGFloat) {
+        let native = max(nativeDisplayedZoom, 0.0001)   // 0 除算よけ
+        self.hasUltraWide = false
+        self.switchOverFactors = []
+        self.baseFactor = 1 / native
+        self.minFactor = max(minFactor, 0.0001)
+        self.maxFactor = max(min(deviceMaxFactor, self.baseFactor * Self.maxDisplayedZoom),
+                             self.minFactor)
+    }
+
     // MARK: - 換算
 
     /// 内部値 → 表示倍率。
@@ -79,6 +98,22 @@ public struct LensConfiguration: Equatable, Sendable {
     public var teleSwitchOverDisplayedZoom: CGFloat? {
         guard let factor = switchOverFactors.first(where: { $0 > baseFactor }) else { return nil }
         return displayedZoom(forVideoZoomFactor: factor)
+    }
+
+    /// 物理レンズを**単体で**掴んだときの「素の画角」を表示倍率で表す。
+    ///
+    /// ⭐️ 仮想デバイスが報告する切替点から導く。定数で持つと端末ごとの違いに追随できない
+    ///    （0.5x が 0.6x の端末もある）。持っていないレンズは nil。
+    public func nativeDisplayedZoom(for lens: SkyCameraPhysicalLens) -> CGFloat? {
+        switch lens {
+        case .ultraWide:
+            guard hasUltraWide else { return nil }
+            return displayedZoom(forVideoZoomFactor: minFactor)
+        case .wide:
+            return 1
+        case .telephoto:
+            return teleSwitchOverDisplayedZoom
+        }
     }
 
     // MARK: - プリセット
@@ -149,14 +184,23 @@ public struct LensConfiguration: Equatable, Sendable {
 
 // MARK: - デバイス要件
 
-/// いま掴むべき背面カメラの種類。
+/// 背面の物理レンズ。
+public enum SkyCameraPhysicalLens: Equatable, Sendable, CaseIterable {
+    case ultraWide
+    case wide
+    case telephoto
+}
+
+/// いま掴むべき背面カメラ。
 public enum SkyCameraLensRequirement: Equatable, Sendable {
 
-    /// 超広角・望遠を含む仮想デバイス（レンズ切替が使える／最大 24MP 程度）。
+    /// 複数レンズをまとめた仮想デバイス。OS が継ぎ目なくレンズを切り替えてくれる代わりに、
+    /// 出せる解像度に蓋がかかる（実機で 24MP 上限と実測）。
     case virtual
 
-    /// 単眼の広角デバイス（48MP が撮れる／超広角・望遠は無い）。
-    case singleWide
+    /// 物理レンズを 1 本だけ掴む。48MP が出せる代わりに、
+    /// レンズをまたぐたびにセッションの作り直し（＝一瞬のもたつき）が要る。
+    case physical(SkyCameraPhysicalLens)
 }
 
 /// 「いまの倍率と希望解像度なら、どちらのデバイスを掴むべきか」を決める純関数。
@@ -165,9 +209,9 @@ public enum SkyCameraLensRequirement: Equatable, Sendable {
 ///    判断とセッション操作が混ざっていると境界値（0.999x・ちょうど 1x・望遠の切替点）を
 ///    テストできない。判断だけを取り出せば、端末無しで全部の分岐を固定できる。
 ///
-/// ⭐️ **判断の中身**: iPhone 標準カメラと同じ流儀。48MP は**メインカメラの範囲にいる間だけ**
-///    有効で、超広角や望遠へ移ったらレンズを優先して解像度が下がる。
-///    ユーザーから見ると「レンズはいつでも選べる」が成り立つ。
+/// ⭐️ **判断の中身**: 48MP を選んでいる間は、狙った倍率を担当する**物理レンズを 1 本だけ**掴む。
+///    12MP のときは仮想デバイスのままにして、レンズ切替のなめらかさを保つ。
+///    つまり「画質を取るか、切替のなめらかさを取るか」を解像度の選択で切り替えている。
 public enum SkyCameraLensSwitching {
 
     /// 倍率の比較に使う許容誤差。ドラッグで 0.9999 のような値が入っても
@@ -184,25 +228,41 @@ public enum SkyCameraLensSwitching {
 
     /// - Parameters:
     ///   - displayedZoom: これから合わせたい表示倍率
-    ///   - preferredRequiresSingleLens: ユーザーが選んだ解像度が単眼デバイスを要求するか（＝48MP か）
-    ///   - teleSwitchOverDisplayedZoom: 望遠レンズが始まる表示倍率（無ければ nil）
+    ///   - preferredRequiresPhysicalLens: 選んだ解像度が物理レンズ単体を要求するか（＝48MP か）
+    ///   - ultraWideNativeZoom: 超広角の素の表示倍率（持っていなければ nil）
+    ///   - teleNativeZoom: 望遠の素の表示倍率（持っていなければ nil）
     ///   - current: いま掴んでいるデバイス（不感帯をどちら側に付けるかの判断に使う）
     public static func requiredDevice(displayedZoom: CGFloat,
-                                      preferredRequiresSingleLens: Bool,
-                                      teleSwitchOverDisplayedZoom: CGFloat?,
+                                      preferredRequiresPhysicalLens: Bool,
+                                      ultraWideNativeZoom: CGFloat?,
+                                      teleNativeZoom: CGFloat?,
                                       current: SkyCameraLensRequirement) -> SkyCameraLensRequirement {
-        // 48MP を求めていないなら、常にレンズ切替が使える仮想デバイスでよい。
-        guard preferredRequiresSingleLens else { return .virtual }
-        // いま単眼にいるなら、離れるのに余分に動かす必要がある（＝居座りやすくする）。
-        let margin = (current == .singleWide) ? switchHysteresis : 0
-        // 1x より広い＝超広角が要る。単眼の広角では光学的に届かない。
-        if displayedZoom < 1 - zoomEpsilon - margin { return .virtual }
-        // 望遠の切替点より望遠側＝望遠レンズが要る。
-        if let tele = teleSwitchOverDisplayedZoom,
-           displayedZoom >= tele + margin - zoomEpsilon {
-            return .virtual
+        // 48MP を求めていないなら、切替がなめらかな仮想デバイスでよい。
+        guard preferredRequiresPhysicalLens else { return .virtual }
+
+        let staying: SkyCameraPhysicalLens?
+        if case .physical(let lens) = current { staying = lens } else { staying = nil }
+
+        // ⚠️ 不感帯は**いま掴んでいるレンズの担当範囲を両側へ広げる**向きに付ける。
+        //    標準レンズにいるなら下にも上にも広げ、超広角にいるなら上へだけ、
+        //    望遠にいるなら下へだけ広げる。ここで符号を 1 つ間違えると、
+        //    境界の手前で行ったり来たりしてセッションが作り直され続ける。
+        var lower: CGFloat = 1                       // 超広角 ↔ 標準 の境界
+        if staying == .ultraWide { lower += switchHysteresis }
+        else if staying == .wide { lower -= switchHysteresis }
+
+        var upper = teleNativeZoom                   // 標準 ↔ 望遠 の境界
+        if let tele = teleNativeZoom {
+            if staying == .wide { upper = tele + switchHysteresis }
+            else if staying == .telephoto { upper = tele - switchHysteresis }
         }
-        // 1x 〜 望遠手前はメインカメラの担当。ここだけ 48MP が活きる。
-        return .singleWide
+
+        if ultraWideNativeZoom != nil, displayedZoom < lower - zoomEpsilon {
+            return .physical(.ultraWide)
+        }
+        if let upper, displayedZoom >= upper - zoomEpsilon {
+            return .physical(.telephoto)
+        }
+        return .physical(.wide)
     }
 }
