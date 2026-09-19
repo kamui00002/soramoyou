@@ -377,6 +377,33 @@ final class EditViewModelTests: XCTestCase {
                        "style2DColorNorm が脱落している（スタイル調整が基準に戻る不具合）")
     }
 
+    /// 🔧 回帰テスト（不具合: 「空だけ」を選んでからスライダーを触ると「全体」に戻る）:
+    /// 適用範囲（editScope）も EditSettings に存在しない EditRecipe 専用フィールドのため、
+    /// editSettings の setter で保全しないとスライダー操作のたびに nil（＝全体）へ戻り、
+    /// 編集が画像全体に掛かる。2026-09-19 の実写ハッピーパスで発見。修正前はこのテストは FAIL する。
+    ///
+    /// スライダーの書き込み経路は2つ（指を離したとき＝setToolValue / ドラッグ中＝setToolValueRealtime）
+    /// あり、どちらも setter を通るため両方を確認する。
+    func testEditSettingsSetterPreservesEditScope() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        // 事前条件: 適用範囲を「空だけ」に設定
+        // （空マスクのゲート判定は setEditScope 側の責務で、ここでは setter の保全だけを見るため直接代入）
+        viewModel.editRecipe.editScope = .skyOnly
+
+        // 指を離したときの経路
+        viewModel.setToolValue(0.5, for: .exposure)
+        XCTAssertEqual(viewModel.editRecipe.editScope, .skyOnly,
+                       "setToolValue で editScope が脱落している（適用範囲が「全体」に戻る不具合）")
+
+        // ドラッグ中の経路
+        viewModel.setToolValueRealtime(0.3, for: .saturation)
+        XCTAssertEqual(viewModel.editRecipe.editScope, .skyOnly,
+                       "setToolValueRealtime で editScope が脱落している（適用範囲が「全体」に戻る不具合）")
+    }
+
     /// 🔧 回帰テスト（リセット経路の保全確認）:
     /// resetStyle2D() で意図的に基準へ戻したあとに普通編集ツールを操作しても、スタイルが
     /// nil のまま維持される（サルベージが意図したリセットを壊さない）ことを検証する。

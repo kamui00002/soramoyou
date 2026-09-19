@@ -70,6 +70,9 @@ class EditViewModel: ObservableObject {
             // 空補正強度も同様に EditSettings に存在しない EditRecipe 専用フィールドのため保全する
             // （空補正適用後に普通編集ツールを触ると補正が消える不具合を防止）
             let existingSkyCorrectionIntensity = editRecipe.skyCorrectionIntensity
+            // 適用範囲（空だけ / 全体）も同様に保全する
+            // （「空だけ」を選んだ後にスライダーを触ると全体適用に戻る不具合を防止）
+            let existingEditScope = editRecipe.editScope
             var newRecipe = EditRecipe(from: newValue)
             newRecipe.toneCurvePoints = existingPoints
             newRecipe.targetDynamicRange = existingDynamicRange
@@ -77,6 +80,7 @@ class EditViewModel: ObservableObject {
             newRecipe.style2DToneNorm = existingStyleTone
             newRecipe.style2DColorNorm = existingStyleColor
             newRecipe.skyCorrectionIntensity = existingSkyCorrectionIntensity
+            newRecipe.editScope = existingEditScope
             editRecipe = newRecipe
         }
     }
