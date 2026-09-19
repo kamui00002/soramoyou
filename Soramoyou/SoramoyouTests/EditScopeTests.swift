@@ -348,4 +348,59 @@ final class EditScopeTests: XCTestCase {
         XCTAssertNil(seed.editScope, "共有する種には適用範囲を含めない")
         XCTAssertEqual(seed.saturationCI, 1.4, "写真に依存しない編集値は保たれる")
     }
+
+    /// 🔧 回帰テスト（レビュー指摘A）: レンズ補正は画素を**動かす**処理なので「空だけ」に包まず、
+    /// 合成後に画像全体へ掛ける。包むと、マスク（歪める前の形）で「歪めた空」と「歪めていない地上」を
+    /// 継ぎ合わせることになり、地平線や電線が境界で**ずれて切れる**。
+    ///
+    /// レンズ補正だけのレシピなら、`.skyOnly` と `.whole` は**画素単位で同じ**になるはず。
+    /// 市松模様を使うのは、単色だと画素が動いても平均色が変わらず、ずれを検出できないため。
+    ///
+    /// 陽性対照: 先に「レンズ補正で地上の画素が確かに動く」ことを確認してから一致を見る。
+    func test_skyOnlyScope_appliesLensCorrectionToWholeImage() throws {
+        let size = Self.imageSize
+        let checker = CIFilter.checkerboardGenerator()
+        checker.center = .zero
+        checker.color0 = CIColor(red: 1, green: 1, blue: 1)
+        checker.color1 = CIColor(red: 0, green: 0, blue: 0)
+        checker.width = 8
+        let source = try XCTUnwrap(checker.outputImage)
+            .cropped(to: CGRect(origin: .zero, size: size))
+
+        var recipe = EditRecipe()
+        recipe.lensCorrectionNorm = 1.0 // スライダー最大（-1...1）。歪みがはっきり出る値
+
+        recipe.editScope = .whole
+        let whole = FilterGraphBuilder.buildGraph(recipe: recipe, source: source, skyMask: nil)
+        recipe.editScope = .skyOnly
+        let skyOnly = FilterGraphBuilder.buildGraph(recipe: recipe, source: source, skyMask: makeTopHalfSkyMask())
+
+        // 陽性対照: レンズ補正で地上の市松が確かに動いている（＝差分計測が効いている）
+        let movedByLens = averageRGB(absoluteDifference(whole, source), in: groundBand)
+        XCTAssertGreaterThan(
+            maxChannelDelta(movedByLens, (0, 0, 0)), Self.changedThreshold,
+            "陽性対照: レンズ補正で地上の画素が動いていない（計測が効いていない）"
+        )
+
+        // 本題: 地上側も空側と同じく歪んでいる＝全体経路と一致する。
+        //
+        // ⚠️ 絶対値ではなく「空側の差」を基準線にして比べる。空は修正の前後どちらでも両経路で歪めるので、
+        //    空側の差は「処理経路の違いだけで出る誤差」になる。実測（2026-09-20・Mac の CoreImage で再現）では
+        //    合成を1段挟むだけで白黒の境目の補間結果がリニア色空間ぶん変わり、空・地上とも約 0.04 ずれる
+        //    （色管理を切ると 1/255 まで消える＝スコープとは無関係）。修正前は地上だけが約 0.73 ずれる。
+        let skyDiff = maxChannelDelta(averageRGB(absoluteDifference(skyOnly, whole), in: skyBand), (0, 0, 0))
+        let groundDiff = maxChannelDelta(averageRGB(absoluteDifference(skyOnly, whole), in: groundBand), (0, 0, 0))
+        XCTAssertLessThan(
+            groundDiff - skyDiff, Self.unchangedTolerance,
+            "「空だけ」でレンズ補正が地上に掛かっていない（空と地上の境界で像がずれる）: ground=\(groundDiff) sky=\(skyDiff)"
+        )
+    }
+
+    /// 2画像の画素ごとの差の絶対値（`CIDifferenceBlendMode`）
+    private func absoluteDifference(_ a: CIImage, _ b: CIImage) -> CIImage {
+        let filter = CIFilter.differenceBlendMode()
+        filter.inputImage = a
+        filter.backgroundImage = b
+        return filter.outputImage ?? a
+    }
 }

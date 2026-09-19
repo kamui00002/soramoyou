@@ -79,6 +79,10 @@ final class FilterGraphBuilder {
             derived.targetDynamicRange = nil
             derived.skyCorrectionIntensity = nil
             derived.cropRectNorm = nil
+            // ⭐️ レビュー指摘A対応: レンズ補正（ステップ22）は画素を**動かす**処理なので包まない。
+            // マスクは歪める前の形なので、包むと「歪めた空」と「歪めていない地上」を継ぎ合わせることになり、
+            // 地平線や電線が境界でずれて切れる。合成後に画像全体へ掛ける（下の `withLens`）。
+            derived.lensCorrectionNorm = nil
 
             // 二重露光（ステップ23）はこの「包む側」に入る。`original` を 15px ぼかして
             // スクリーン合成する extent 保存の絵づくり処理で、再帰でも `original == source` が
@@ -93,7 +97,14 @@ final class FilterGraphBuilder {
             blend.maskImage = featheredMask(mask, toMatch: source.extent)
             let blended = blend.outputImage?.cropped(to: source.extent) ?? edited
 
-            return applyGlobalTail(recipe: recipe, skyMask: mask, to: blended, quality: quality)
+            // レンズ補正は合成後に全体へ（extent を保つ処理なので、ステップ24以降の前に置けば全体経路と同じ順序）。
+            // ⚠️ 二重露光（ステップ23）と併用した場合だけ、全体経路（レンズ→二重露光）と順序が入れ替わる。
+            var withLens = blended
+            if let v = recipe.lensCorrectionNorm, v != 0 {
+                withLens = applyLensCorrection(normalized: v, to: blended)
+            }
+
+            return applyGlobalTail(recipe: recipe, skyMask: mask, to: withLens, quality: quality)
         }
 
         var img = source
