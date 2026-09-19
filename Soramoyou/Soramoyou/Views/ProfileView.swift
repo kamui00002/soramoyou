@@ -544,7 +544,7 @@ struct ProfileView: View {
 
                 Spacer()
 
-                if viewModel.isLoadingPosts {
+                if viewModel.isLoadingPosts || viewModel.isLoadingMorePosts {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(0.8)
@@ -574,6 +574,20 @@ struct ProfileView: View {
         .padding(.vertical, 20)
     }
 
+    /// 最後の投稿が画面に出たら、続きの投稿を読み込む ⭐️
+    ///
+    /// 追加した投稿のいいね・お気に入り状態も確認する（初回読み込みと同じ扱いにしないと、
+    /// 51 件目以降だけハートが常に空で表示される）。
+    private func loadMorePostsIfLast(_ post: Post) {
+        guard post.id == viewModel.userPosts.last?.id, viewModel.hasMorePosts else { return }
+        Task {
+            let added = await viewModel.loadMoreUserPosts()
+            guard !added.isEmpty else { return }
+            await likeManager.checkLikeStatus(for: added)
+            await favoriteManager.checkFavoriteStatus(for: added)
+        }
+    }
+
     private var postsContentView: some View {
         Group {
             if displayMode == .grid {
@@ -586,6 +600,7 @@ struct ProfileView: View {
                             PostGridItem(post: post)
                         }
                         .buttonStyle(CardButtonStyle())
+                        .onAppear { loadMorePostsIfLast(post) }
                         .contextMenu {
                             Button {
                                 Task { await savePostImage(post: post) }
@@ -623,6 +638,7 @@ struct ProfileView: View {
                                 selectedPost = post
                             }
                         )
+                        .onAppear { loadMorePostsIfLast(post) }
                         .contextMenu {
                             Button {
                                 Task { await savePostImage(post: post) }

@@ -27,6 +27,8 @@ protocol FirestoreServiceProtocol {
     func fetchPost(postId: String) async throws -> Post
     func deletePost(postId: String, userId: String) async throws
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
+    /// 自分のプロフィールのグリッド用: 次ページのカーソル（最後のドキュメント）も一緒に返す ⭐️
+    func fetchUserPostsPage(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?)
     /// 他ユーザーのプロフィール用: 閲覧可能な公開範囲だけに絞って投稿を取得する ⭐️
     /// - Important: `fetchUserPosts` は公開範囲で絞らないため、他人のプロフィールで使うと
     ///   Firestore Security Rules が「private も含みうるクエリ」と判断してクエリ全体が
@@ -52,7 +54,10 @@ protocol FirestoreServiceProtocol {
     /// 通知の配信プレフ3つ（＋updatedAt）だけを更新するターゲット更新。
     /// User 全体を書く updateUser と違い、followersCount 等の他フィールドを古い値で巻き戻さない。
     func updateNotificationPreferences(userId: String, notifyReactions: Bool, notifyNewPostsFromFollowing: Bool, notifyNewPostsFromEveryone: Bool) async throws
-    func syncPostsCount(userId: String, count: Int) async throws
+    /// 投稿数を count() 集計で数え直し、users（全投稿）と publicProfiles（公開投稿のみ）へ保存する ⭐️
+    /// - Returns: 全投稿数（本人のプロフィールに表示する値）
+    @discardableResult
+    func recountPostsCount(userId: String) async throws -> Int
     /// ハッシュタグをフォローする（users/{uid}.followedTags へ arrayUnion）⭐️
     /// ⚠️ 30件の上限チェックは呼び出し側で行うこと（arrayUnion は上限を知らない）。
     func followTag(userId: String, tag: String) async throws
@@ -174,11 +179,9 @@ class FirestoreService: FirestoreServiceProtocol {
 
             try await docRef.setData(data)
 
-            // users と publicProfiles の postsCount をインクリメント
-            let countIncrement: [String: Any] = ["postsCount": FieldValue.increment(Int64(1))]
-            try await usersCollection.document(post.userId).updateData(countIncrement)
-            // publicProfiles が存在しない場合はエラーを無視（マイグレーション未実施ユーザー対応）
-            try? await publicProfilesCollection.document(post.userId).updateData(countIncrement)
+            // 投稿数は +1 せず数え直す（publicProfiles は公開投稿だけを数えるため、
+            // 公開範囲を見ずに +1 すると非公開投稿の分だけズレる）
+            await recountPostsCountLogged(userId: post.userId)
 
             // 作成された投稿を返す（IDは既に設定されている）
             return post
@@ -196,6 +199,8 @@ class FirestoreService: FirestoreServiceProtocol {
         do {
             let data = post.toFirestoreData()
             try await postsCollection.document(post.id).setData(data)
+            // 再編集で公開範囲（公開⇄非公開）が変わりうるので、公開投稿数を数え直す
+            await recountPostsCountLogged(userId: post.userId)
             return post
         } catch let error as FirestoreServiceError {
             throw error
@@ -322,10 +327,8 @@ class FirestoreService: FirestoreServiceProtocol {
 
             try await postsCollection.document(postId).delete()
 
-            // users と publicProfiles の postsCount をデクリメント（0未満にはならない）
-            let countDecrement: [String: Any] = ["postsCount": FieldValue.increment(Int64(-1))]
-            try await usersCollection.document(userId).updateData(countDecrement)
-            try? await publicProfilesCollection.document(userId).updateData(countDecrement)
+            // 投稿数は −1 せず数え直す（createPost と同じ理由）
+            await recountPostsCountLogged(userId: userId)
         } catch let error as FirestoreServiceError {
             throw error
         } catch {
@@ -350,6 +353,45 @@ class FirestoreService: FirestoreServiceProtocol {
             return try snapshot.documents.compactMap { document in
                 try Post(from: document.data())
             }
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    /// 自分の投稿を 1 ページ分取得し、次ページ用のカーソルも返す ⭐️
+    ///
+    /// `fetchUserPosts` と同じクエリ形状（userId 等値 + createdAt 降順）なので、
+    /// 既存の複合インデックスでそのまま動く（新規インデックス不要）。
+    /// - Returns: 投稿と「このページの最後のドキュメント」。ページが空なら lastDocument は nil。
+    func fetchUserPostsPage(
+        userId: String,
+        limit: Int,
+        lastDocument: DocumentSnapshot?
+    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+        do {
+            var query: Query = postsCollection
+                .whereField("userId", isEqualTo: userId)
+                .order(by: "createdAt", descending: true)
+                .limit(to: limit)
+
+            if let lastDocument {
+                query = query.start(afterDocument: lastDocument)
+            }
+
+            let snapshot = try await query.getDocuments()
+            // ⚠️ compactMap { try? } で黙って落とさない（tech-spec のルール）。
+            //    壊れたドキュメントは 1 件だけスキップし、パスを必ずログに残す。
+            let posts: [Post] = snapshot.documents.compactMap { document in
+                do {
+                    return try Post(from: document.data())
+                } catch {
+                    print("❌ 投稿デコード失敗 path=\(document.reference.path) error=\(error.localizedDescription)")
+                    return nil
+                }
+            }
+            // カーソルはデコード失敗分も含めた「実際に読んだ最後の 1 件」にする
+            // （デコード後の配列で決めると、壊れたドキュメントが末尾にあるとき同じページを読み直す）
+            return (posts, snapshot.documents.last)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -579,14 +621,53 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
 
-    /// 投稿数カウンターをFirestoreと同期する（既存データの不整合を修正）
-    func syncPostsCount(userId: String, count: Int) async throws {
+    /// 投稿数を count() 集計で数え直して保存する ⭐️
+    ///
+    /// 旧実装（syncPostsCount）は「画面用に取得した最新 50 件」の件数をそのまま保存していたため、
+    /// 投稿が 50 件を超えると postsCount が 50 に書き戻されていた。
+    /// count() はドキュメントの中身を読まずに件数だけをサーバーで数えるので、取得上限に左右されない。
+    ///
+    /// - users.postsCount: 全投稿（本人だけが見る値。非公開・フォロワー限定を含む）
+    /// - publicProfiles.postsCount: 公開投稿のみ（他人に見せる値。非公開投稿の件数を漏らさない）
+    ///
+    /// どちらのクエリも等値フィルタだけなので複合インデックスは不要。
+    /// Security Rules 上も「userId == 自分」は isOwner で、「visibility == public」は公開枝で証明できる。
+    /// - Returns: 全投稿数
+    @discardableResult
+    func recountPostsCount(userId: String) async throws -> Int {
         do {
-            let countData: [String: Any] = ["postsCount": count]
-            try await usersCollection.document(userId).updateData(countData)
-            try? await publicProfilesCollection.document(userId).updateData(countData)
+            let ownPosts = postsCollection.whereField("userId", isEqualTo: userId)
+            let allSnapshot = try await ownPosts.count.getAggregation(source: .server)
+            let publicSnapshot = try await ownPosts
+                .whereField("visibility", isEqualTo: Visibility.public.rawValue)
+                .count.getAggregation(source: .server)
+            let allCount = allSnapshot.count.intValue
+            let publicCount = publicSnapshot.count.intValue
+
+            try await usersCollection.document(userId).updateData(["postsCount": allCount])
+            // publicProfiles が存在しない場合はエラーを無視（マイグレーション未実施ユーザー対応）
+            // ⚠️ ただし黙って落とさない。今はここが publicProfiles.postsCount の唯一の書き込み経路なので、
+            //    未作成以外の理由（通信・権限など）で失敗し続けても気づけるようログに残す。
+            //    users 側は保存済みなので throw はしない（呼び出し元の契約は変えない）。
+            do {
+                try await publicProfilesCollection.document(userId).updateData(["postsCount": publicCount])
+            } catch {
+                print("⚠️ publicProfiles.postsCount 更新失敗 userId=\(userId) error=\(error.localizedDescription)")
+            }
+            return allCount
         } catch {
             throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// 投稿の作成・更新・削除のついでに数え直す。
+    /// 投稿そのものは成功しているので、数え直しの失敗で呼び出し元を失敗扱いにはしない
+    /// （次にプロフィールを開いたときに再度数え直される）。ただし必ずログに残す。
+    private func recountPostsCountLogged(userId: String) async {
+        do {
+            try await recountPostsCount(userId: userId)
+        } catch {
+            print("⚠️ 投稿数の数え直しに失敗 userId=\(userId) error=\(error.localizedDescription)")
         }
     }
 
