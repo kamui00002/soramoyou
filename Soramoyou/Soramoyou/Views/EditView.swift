@@ -136,6 +136,10 @@ struct EditView: View {
                     // 「空を整える」ワンタップ空補正バー
                     skyCorrectionBar
 
+                    // 編集ツールの適用範囲（全体 / 空だけ）。直下の編集コントロールに
+                    // 掛かる範囲を決めるので、操作対象のすぐ上に置く。
+                    editScopeBar
+
                     // 編集コントロール（3タブ構成）
                     editControlsView
                 }
@@ -332,6 +336,43 @@ struct EditView: View {
         .accessibilityLabel("AIで自動編集")
     }
 
+    // MARK: - 適用範囲バー（空だけ / 全体） ⭐️
+
+    /// 編集ツールの適用範囲を切り替えるセグメント。
+    ///
+    /// 「空だけ」を選ぶと空マスクの生成が要るため、生成中はスピナーを出して操作を止める
+    /// （`viewModel.isGeneratingSkyMask` は空補正と共有）。空が検出できなかった場合は
+    /// ViewModel 側でスコープを変えずに `errorMessage` を出すので、セグメントは
+    /// `viewModel.editScopeValue` を見ているだけで自動的に「全体」へ戻る。
+    private var editScopeBar: some View {
+        HStack(spacing: 8) {
+            Text("適用範囲")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.white.opacity(0.8))
+
+            Picker("適用範囲", selection: Binding(
+                get: { viewModel.editScopeValue },
+                set: { newScope in
+                    Task { await viewModel.setEditScope(newScope) }
+                }
+            )) {
+                Text("全体").tag(EditScope.whole)
+                Text("空だけ").tag(EditScope.skyOnly)
+            }
+            .pickerStyle(.segmented)
+            .disabled(viewModel.isGeneratingSkyMask)
+
+            if viewModel.isGeneratingSkyMask {
+                ProgressView()
+                    .tint(.white)
+            }
+        }
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.top, DesignTokens.Spacing.sm)
+        .accessibilityLabel("編集の適用範囲")
+        .accessibilityHint("空だけを選ぶと、編集が空の領域だけに適用されます")
+    }
+
     // MARK: - 空を整えるバー（ワンタップ空補正） ⭐️
 
     /// 空補正が未適用（`skyCorrectionIntensity` が nil/0）なら「空を整える」ボタンを、
@@ -449,7 +490,8 @@ struct EditView: View {
                             .background(.white.opacity(0.2))
                             .clipShape(Circle())
                     }
-                    .disabled(viewModel.currentImageIndex == 0)
+                    // マスク生成中の切替は「空だけ」の判定対象がずれる原因になるため止める（「次へ」と揃える）
+                    .disabled(viewModel.currentImageIndex == 0 || viewModel.isGeneratingSkyMask)
 
                     Spacer()
 
@@ -463,7 +505,7 @@ struct EditView: View {
                             .background(.white.opacity(0.2))
                             .clipShape(Circle())
                     }
-                    .disabled(viewModel.currentImageIndex >= viewModel.originalImages.count - 1)
+                    .disabled(viewModel.currentImageIndex >= viewModel.originalImages.count - 1 || viewModel.isGeneratingSkyMask)
                 }
                 .padding()
             }
