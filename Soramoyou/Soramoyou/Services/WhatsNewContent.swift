@@ -19,6 +19,7 @@ enum WhatsNewContent {
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
     // 2026-09-16: 空カメラ（グリッド・水平線ガイド付きのアプリ内カメラ）。
+    // 2026-09-19: 編集の適用範囲「空だけ」を同じリリースに追加（空カメラは未出荷のため識別子は据え置き）。
     // ⚠️ 前回の "2026-09-favorites" は 1.10.0/1.10.1 で既に消費済み（＝全ユーザーが既読）。
     //    同じ識別子のまま機能を足しても誰にも表示されないため、必ず新しい値にする。
     static let currentID = "2026-09-sky-camera"
@@ -38,8 +39,9 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（2026-09 空カメラ）の新機能紹介ページ。
-    /// アイコンは実UIと揃えている（camera.fill = 投稿画面「撮る」ボタン）。
+    /// 今回（2026-09 空カメラ＋適用範囲「空だけ」）の新機能紹介ページ。
+    /// アイコンは実UIと揃えている（camera.fill = 投稿画面「撮る」ボタン、
+    /// slider.horizontal.3 = 編集画面の「編集ツール」タブ）。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
             icon: "camera.fill",
@@ -49,6 +51,19 @@ enum WhatsNewContent {
             gradientColors: [
                 Color(red: 0.45, green: 0.72, blue: 0.98),
                 Color(red: 0.20, green: 0.35, blue: 0.75),
+            ]
+        ),
+        // ⚠️ 文言は控えめにしている: 空の判定はヒューリスティックで、夕焼けなどでは
+        //    空の一部にしか効かないことがある（SkyColorGate の縦方向フェード由来・2026-09-19 実写で確認）。
+        //    「空だけを正確に」とは約束せず「空のあたりに絞って」と書く。
+        WhatsNewPage(
+            icon: "slider.horizontal.3",
+            badge: "新機能",
+            title: "空だけ編集",
+            description: "編集画面の「適用範囲」を「空だけ」にすると、\n明るさや色の調整を空のあたりに絞れます",
+            gradientColors: [
+                Color(red: 0.55, green: 0.80, blue: 0.98),
+                Color(red: 0.25, green: 0.50, blue: 0.85),
             ]
         ),
     ]
