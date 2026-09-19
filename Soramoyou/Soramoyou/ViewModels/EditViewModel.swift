@@ -1556,6 +1556,18 @@ class EditViewModel: ObservableObject {
                     logSkyMaskFailureOncePerState(error)
                 }
                 guard requestId == currentPreviewRequestId else { return }
+
+                // ⭐️ レビュー指摘C対応: マスクが取れなかったら適用範囲を「全体」に戻す。
+                // 描画側（`FilterGraphBuilder`）はマスク無しの「空だけ」を全体経路で描くので、
+                // レシピだけ `.skyOnly` のまま残すと「レシピは空だけ・見た目は全体」になり、
+                // 高速プレビュー（`canRenderFastPreview`）も止まったままになる。
+                // 書き出し経路（`makeExportSkyMask` の失敗時）と同じ契約。requestId の確認より後に置くのは、
+                // 古いプレビュー要求が新しい状態のレシピを書き換えないようにするため。
+                // 一度戻せば `isSkyOnlyScope` が偽になるので、メッセージが繰り返し出ることはない。
+                if cachedSkyMask == nil, editRecipe.isSkyOnlyScope {
+                    editRecipe.editScope = nil
+                    errorMessage = "空をうまく見つけられなかったため、適用範囲を「全体」に戻しました"
+                }
             }
 
             // EditRecipe を直接渡す（toneCurvePoints などを保全するため）

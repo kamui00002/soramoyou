@@ -599,6 +599,31 @@ final class EditViewModelTests: XCTestCase {
                      "切替で中断した操作は画像0にも適用しない（ユーザーはもう画像0を見ていない）")
     }
 
+    /// 🔧 回帰テスト（レビュー指摘C）: プレビュー経路で空マスクの生成に失敗したら、
+    /// 適用範囲を「全体」（nil）に戻す。書き出し経路（`makeExportSkyMask` の失敗時）と同じ契約。
+    /// 戻さないと「レシピは空だけ・見た目は全体」になり、スライダーの高速プレビュー
+    /// （`canRenderFastPreview`）も止まったままになる。
+    func testGeneratePreviewResetsSkyOnlyScopeWhenMaskGenerationFails() async {
+        let failingProvider = MockSkyMaskProvider()
+        failingProvider.shouldThrow = true
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: nil,
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            skyMaskProvider: failingProvider
+        )
+        await Task.yield()
+
+        // 再編集・Undo などで「空だけ」のレシピが復元された状態を再現する（ゲートを通らない経路）
+        vm.editRecipe.editScope = .skyOnly
+        await vm.generatePreview()
+
+        XCTAssertGreaterThanOrEqual(failingProvider.callCount, 1, "陽性対照: マスク生成が試みられている")
+        XCTAssertNil(vm.editRecipe.editScope, "マスクが取れないのに「空だけ」が残っている")
+        XCTAssertNotNil(vm.errorMessage, "「全体」に戻したことをユーザーに知らせるべき")
+    }
+
     // MARK: - Helper Methods
 
     // MARK: - パーソナルAI編集「AIで自動編集」（柱1 v1 / G5）
