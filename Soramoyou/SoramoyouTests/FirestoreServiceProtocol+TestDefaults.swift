@@ -67,6 +67,14 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.fetchUserPosts は未実装です")
     }
 
+    func fetchUserPostsPage(
+        userId _: String,
+        limit _: Int,
+        lastDocument _: DocumentSnapshot?
+    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+        fatalError("MockFirestoreService.fetchUserPostsPage は未実装です")
+    }
+
     func fetchVisibleUserPosts(
         userId: String,
         visibilities: [Visibility],
@@ -108,8 +116,8 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.updateEditTools は未実装です")
     }
 
-    func syncPostsCount(userId _: String, count _: Int) async throws {
-        fatalError("MockFirestoreService.syncPostsCount は未実装です")
+    func recountPostsCount(userId _: String) async throws -> Int {
+        fatalError("MockFirestoreService.recountPostsCount は未実装です")
     }
 
     func followTag(userId _: String, tag _: String) async throws {

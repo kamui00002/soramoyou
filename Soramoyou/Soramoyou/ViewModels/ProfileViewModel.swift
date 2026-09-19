@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import FirebaseFirestore
 import UIKit
 import os
 
@@ -22,6 +23,10 @@ class ProfileViewModel: ObservableObject {
     @Published var equippedTools: [EditTool] = []
     @Published var isLoading = false
     @Published var isLoadingPosts = false
+    /// 投稿グリッドの続き（次ページ）を読み込み中か
+    @Published private(set) var isLoadingMorePosts = false
+    /// まだ読んでいない投稿が残っているか（false になったら追加読み込みしない）
+    @Published private(set) var hasMorePosts = false
     @Published var errorMessage: String?
 
     // 編集用の一時的な値
@@ -44,6 +49,14 @@ class ProfileViewModel: ObservableObject {
     /// 認証サービス（Firebase直参照を排除し、テスタビリティを向上）
     private let authService: AuthServiceProtocol
     private var cancellables = Set<AnyCancellable>()
+
+    /// 投稿グリッドの 1 ページあたりの件数
+    static let postsPageSize = 50
+    /// 次ページ取得用のカーソル（直前ページで最後に読んだドキュメント）
+    private var postsCursor: DocumentSnapshot?
+    /// 投稿一覧の取得世代。loadUserPosts のたびに進め、await 中に世代が変わった
+    /// 追加読み込みの結果は新しい一覧へ混ぜずに捨てる（PaginatedPostsViewModel と同じ流儀）。
+    private var postsGeneration = 0
     /// 投稿作成通知の購読を保持
     private var postCreatedObserver: NSObjectProtocol?
 
@@ -387,15 +400,24 @@ class ProfileViewModel: ObservableObject {
         // すべてのパス（early return含む）で確実にローディング状態を解除する
         defer { isLoadingPosts = false }
 
+        // 新しい取得世代を開始（読み込み途中の追加ページがあれば、それは捨てられる）
+        postsGeneration += 1
+        let generation = postsGeneration
+
         do {
             // リトライ可能な操作として実行
-            let posts = try await RetryableOperation.executeIfRetryable { [self] in
-                try await self.firestoreService.fetchUserPosts(
+            let page = try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.fetchUserPostsPage(
                     userId: userId,
-                    limit: 50,
+                    limit: Self.postsPageSize,
                     lastDocument: nil
                 )
             }
+            guard generation == postsGeneration else { return }
+            let posts = page.posts
+            postsCursor = page.lastDocument
+            // 1 ページ分きっちり取れたなら、続きがある可能性がある
+            hasMorePosts = posts.count >= Self.postsPageSize
 
             logger.info("loadUserPosts: fetched \(posts.count) posts")
 
@@ -407,23 +429,18 @@ class ProfileViewModel: ObservableObject {
                 userPosts = posts
             }
 
-            // postsCount を実際の取得数で補正（Firestoreデータの不整合を修正）
-            // User は struct（値型）のため user?.postsCount = x は @Published に反映されない。
-            // いったん取り出して代入し直すことで ObservableObject の変更通知を確実に発行する。
-            let actualCount = isOwnProfile ? posts.count : userPosts.count
-            if user?.postsCount != actualCount {
-                logger.debug("loadUserPosts: postsCount mismatch (\(self.user?.postsCount ?? -1) → \(actualCount)), correcting")
-                if var updatedUser = user {
-                    updatedUser.postsCount = actualCount
-                    user = updatedUser  // @Published への再代入でUI更新を発火
-                }
-                // 自分のプロフィールの場合はFirestoreにも書き戻す（バックグラウンドで実行）
-                if isOwnProfile {
-                    let correctionUserId = userId
-                    Task { [weak self] in
-                        try? await self?.firestoreService.syncPostsCount(userId: correctionUserId, count: actualCount)
-                    }
-                }
+            // 投稿数の補正は自分のプロフィールだけ行う。
+            // ⚠️ 旧実装は「取得した件数（最大 50）」を正しい投稿数として保存していたため、
+            //    投稿が 50 件を超えると postsCount が 50 に書き戻されていた。
+            //    取得件数は画面に並べる 1 ページ分でしかないので、件数の根拠に使わない。
+            //    代わりに count() 集計で全件を数え直す（取得上限に左右されない）。
+            if isOwnProfile {
+                // 一覧は表示済みなので、数え直し（集計 2 本＋書き込み 2 本）を待つ間は
+                // 「読み込み中」を解除しておく。解除しないと、その間に末尾まで
+                // スクロールしたときの続き読み込みが !isLoadingPosts ガードで捨てられ、
+                // スクロールし直すまで次のページが出ない（defer の再代入は無害）。
+                isLoadingPosts = false
+                await refreshOwnPostsCount(userId: userId)
             }
         } catch {
             // エラーをログに記録（デバッグ用に詳細を出力）
@@ -543,6 +560,75 @@ class ProfileViewModel: ObservableObject {
         }
     }
 
+    /// 投稿グリッドの続き（次の 1 ページ）を読み込む ⭐️
+    ///
+    /// グリッド／リストの最後の投稿が画面に出たときに View から呼ぶ。
+    /// - Returns: 今回追加した投稿（いいね・お気に入り状態の確認に使う）。追加が無ければ空配列。
+    @discardableResult
+    func loadMoreUserPosts() async -> [Post] {
+        guard hasMorePosts, !isLoadingMorePosts, !isLoadingPosts,
+              let userId else { return [] }
+        // カーソルは guard で要求しない（FollowListViewModel.loadMore と同じ流儀）。
+        // 本番では hasMorePosts == true ⇔ 直前ページを 50 件読めた ⇔ カーソルあり なので挙動は同じで、
+        // テストでは作れない DocumentSnapshot が無くても続き読み込みを検証できる。
+        let cursor = postsCursor
+
+        // このページが属する取得世代。await 中に loadUserPosts（引っ張って更新など）が
+        // 走ったら、古いカーソルで取ったページを新しい一覧へ混ぜないよう捨てる。
+        let generation = postsGeneration
+        isLoadingMorePosts = true
+        // 世代不一致で早期 return しても追加読み込みが恒久ブロックされないよう、必ず解除する。
+        defer { isLoadingMorePosts = false }
+
+        do {
+            let page = try await RetryableOperation.executeIfRetryable { [self] in
+                try await self.firestoreService.fetchUserPostsPage(
+                    userId: userId,
+                    limit: Self.postsPageSize,
+                    lastDocument: cursor
+                )
+            }
+            guard generation == postsGeneration else { return [] }
+
+            postsCursor = page.lastDocument
+            hasMorePosts = page.posts.count >= Self.postsPageSize
+
+            // 他人のプロフィールは初回と同じく公開投稿だけに絞る
+            let visible = isOwnProfile ? page.posts : page.posts.filter { $0.visibility == .public }
+            // 念のため重複を除く（ページ境界の前後で同じ投稿が 2 回並ばないように）
+            let existingIds = Set(userPosts.map(\.id))
+            let newPosts = visible.filter { !existingIds.contains($0.id) }
+            userPosts.append(contentsOf: newPosts)
+            logger.info("loadMoreUserPosts: appended \(newPosts.count) posts (hasMore=\(self.hasMorePosts))")
+            return newPosts
+        } catch {
+            // 追加読み込みの失敗はダイアログを出さない（一覧は既に見えているため）。
+            // hasMorePosts は維持するので、もう一度スクロールすれば再試行される。
+            logger.error("loadMoreUserPosts error: \(error.localizedDescription)")
+            ErrorHandler.logError(error, context: "ProfileViewModel.loadMoreUserPosts", userId: userId)
+            return []
+        }
+    }
+
+    /// 自分の投稿数を count() 集計で数え直し、表示と Firestore の両方を正しい値にする ⭐️
+    ///
+    /// 数え直しに失敗しても投稿一覧の表示は妨げない（ログだけ残し、表示中の値を維持する）。
+    private func refreshOwnPostsCount(userId: String) async {
+        do {
+            let total = try await firestoreService.recountPostsCount(userId: userId)
+            // User は struct（値型）のため user?.postsCount = x は @Published に反映されない。
+            // いったん取り出して代入し直すことで ObservableObject の変更通知を確実に発行する。
+            if var updatedUser = user, updatedUser.postsCount != total {
+                logger.debug("refreshOwnPostsCount: \(updatedUser.postsCount) → \(total)")
+                updatedUser.postsCount = total
+                user = updatedUser
+            }
+        } catch {
+            logger.error("refreshOwnPostsCount error: \(error.localizedDescription)")
+            ErrorHandler.logError(error, context: "ProfileViewModel.refreshOwnPostsCount", userId: userId)
+        }
+    }
+
     // MARK: - Delete Post
 
     /// 投稿を削除する（自分の投稿のみ）
@@ -554,7 +640,7 @@ class ProfileViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            // Firestoreから投稿を削除（postsCountもデクリメント）
+            // Firestoreから投稿を削除（postsCount はサービス側で数え直される）
             try await RetryableOperation.executeIfRetryable {
                 try await self.firestoreService.deletePost(postId: post.id, userId: userId)
             }

@@ -85,6 +85,123 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.userPosts.count, testPosts.count)
     }
     
+    /// ⭐️ 回帰防止: 投稿が 50 件を超えても投稿数が 50 に書き戻されないこと。
+    /// 旧実装は「取得した 1 ページ分の件数」を投稿数として保存していた。
+    func testLoadUserPosts_自分の投稿数は取得件数でなく集計値になる() async {
+        // Given: 画面に並べるのは 2 件だが、実際の投稿は 104 件ある
+        let testUser = createTestUser()
+        mockFirestoreService.userPosts = createTestPosts(userId: testUser.id)
+        mockFirestoreService.recountedPostsCount = 104
+        let authService = MockAuthService()
+        authService.currentUserValue = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService,
+            authService: authService
+        )
+        viewModel.user = testUser  // postsCount = 5（古い値）
+
+        // When
+        await viewModel.loadUserPosts()
+
+        // Then: 取得件数（2）ではなく、集計した 104 が表示される
+        XCTAssertEqual(mockFirestoreService.recountPostsCountCallCount, 1)
+        XCTAssertEqual(viewModel.user?.postsCount, 104)
+        XCTAssertEqual(viewModel.userPosts.count, 2)
+    }
+
+    /// ⭐️ 他人のプロフィールでは投稿数を数え直さない（書き込み権限も無い）
+    func testLoadUserPosts_他人のプロフィールでは投稿数を数え直さない() async {
+        let testUser = createTestUser()
+        mockFirestoreService.userPosts = createTestPosts(userId: testUser.id)
+        let authService = MockAuthService()
+        authService.currentUserValue = User(id: "someone-else", email: "other@example.com")
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService,
+            authService: authService
+        )
+        viewModel.user = testUser
+
+        await viewModel.loadUserPosts()
+
+        XCTAssertEqual(mockFirestoreService.recountPostsCountCallCount, 0)
+        XCTAssertEqual(viewModel.user?.postsCount, 5)
+    }
+
+    /// ⭐️ 1 ページ目がページサイズぴったりなら「続きあり」、足りなければ「続きなし」
+    func testLoadUserPosts_1ページ目の件数で続きの有無が決まる() async {
+        let testUser = createTestUser()
+        let imageInfo = ImageInfo(url: "https://example.com/image.jpg", width: 1024, height: 768, order: 0)
+        let makePost = { (id: String) in
+            Post(id: id, userId: testUser.id, images: [imageInfo], caption: nil, visibility: .public)
+        }
+        let onePost = makePost("post-single")
+        let fullPage = (0..<ProfileViewModel.postsPageSize).map { makePost("post-\($0)") }
+        mockFirestoreService.userPostPages = [fullPage]
+        // 本物の AuthService（Auth.auth()）に触れないようモックを注入する（自分のプロフィール扱い）
+        let authService = MockAuthService()
+        authService.currentUserValue = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService,
+            authService: authService
+        )
+
+        await viewModel.loadUserPosts()
+        XCTAssertTrue(viewModel.hasMorePosts)
+
+        // 引っ張って更新 → 今度は 1 件しか無い
+        mockFirestoreService.userPostPages = [[onePost]]
+        mockFirestoreService.fetchUserPostsPageCallCount = 0
+        await viewModel.loadUserPosts()
+        XCTAssertFalse(viewModel.hasMorePosts)
+        XCTAssertEqual(viewModel.userPosts.count, 1)
+    }
+
+    /// ⭐️ 続き読み込み: 2 ページ目が末尾に追記され、境界の重複は除かれ、最終ページで止まる
+    func testLoadMoreUserPosts_2ページ目を追記し重複を除き最終ページで止まる() async {
+        let testUser = createTestUser()
+        let imageInfo = ImageInfo(url: "https://example.com/image.jpg", width: 1024, height: 768, order: 0)
+        let makePost = { (id: String) in
+            Post(id: id, userId: testUser.id, images: [imageInfo], caption: nil, visibility: .public)
+        }
+        let fullPage = (0..<ProfileViewModel.postsPageSize).map { makePost("post-\($0)") }
+        // 2 ページ目の先頭は 1 ページ目の最後と同じ投稿（ページ境界の重複）
+        let lastOfFirstPage = "post-\(ProfileViewModel.postsPageSize - 1)"
+        let secondPage = [makePost(lastOfFirstPage), makePost("post-a"), makePost("post-b")]
+        mockFirestoreService.userPostPages = [fullPage, secondPage]
+        let authService = MockAuthService()
+        authService.currentUserValue = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService,
+            authService: authService
+        )
+
+        await viewModel.loadUserPosts()
+        XCTAssertTrue(viewModel.hasMorePosts)
+
+        // When: 末尾まで来たので続きを読む
+        let added = await viewModel.loadMoreUserPosts()
+
+        // Then: 重複を除いた 2 件だけが末尾に追記され、続きは無くなる
+        XCTAssertEqual(added.map(\.id), ["post-a", "post-b"])
+        XCTAssertEqual(viewModel.userPosts.count, ProfileViewModel.postsPageSize + 2)
+        XCTAssertEqual(viewModel.userPosts.last?.id, "post-b")
+        XCTAssertFalse(viewModel.hasMorePosts)
+        XCTAssertFalse(viewModel.isLoadingMorePosts)
+
+        // 続きが無いので、もう一度呼んでも取得しない
+        let again = await viewModel.loadMoreUserPosts()
+        XCTAssertTrue(again.isEmpty)
+        XCTAssertEqual(mockFirestoreService.fetchUserPostsPageCallCount, 2)
+    }
+
     func testUpdateProfile() async {
         // Given
         let testUser = createTestUser()
@@ -425,6 +542,27 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
         return userPosts
     }
+
+    /// fetchUserPostsPage が返すページ（未設定なら userPosts を 1 ページで返す）⭐️
+    var userPostPages: [[Post]]?
+    /// fetchUserPostsPage が呼ばれた回数
+    var fetchUserPostsPageCallCount = 0
+    /// recountPostsCount が返す「全投稿数」（nil なら userPosts.count）⭐️
+    var recountedPostsCount: Int?
+    /// recountPostsCount が呼ばれた回数
+    var recountPostsCountCallCount = 0
+
+    func fetchUserPostsPage(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+        defer { fetchUserPostsPageCallCount += 1 }
+        guard let pages = userPostPages else { return (userPosts, nil) }
+        let index = fetchUserPostsPageCallCount
+        return (index < pages.count ? pages[index] : [], nil)
+    }
+
+    func recountPostsCount(userId: String) async throws -> Int {
+        recountPostsCountCallCount += 1
+        return recountedPostsCount ?? userPosts.count
+    }
     
     // その他のメソッドは空実装
     func createPost(_ post: Post) async throws -> Post { return post }
@@ -448,7 +586,6 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
         colorThreshold: Double?,
         limit: Int
     ) async throws -> [Post] { return [] }
-    func syncPostsCount(userId: String, count: Int) async throws {}
     func fetchPublicProfile(userId: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
     func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
         updatePublicProfileFieldsCalls.append((userId: userId, displayName: displayName, photoURL: photoURL, bio: bio))
