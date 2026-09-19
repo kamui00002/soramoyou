@@ -601,22 +601,9 @@ class EditViewModel: ObservableObject {
         isGeneratingSkyMask = true
         defer { isGeneratingSkyMask = false }
 
-        do {
-            try await ensureSkyMaskCached(quality: .preview)
-        } catch {
-            ErrorHandler.logError(error, context: "EditViewModel.applySkyCorrection")
-            errorMessage = error.userFriendlyMessage
-            return
-        }
-
-        guard let coverage = cachedSkyMaskCoverage,
-              let confidence = cachedSkyMaskConfidence,
-              coverage >= Self.skyCorrectionMinCoverage,
-              confidence >= Self.skyCorrectionMinConfidence
-        else {
-            errorMessage = "空が見つかりませんでした。別の写真でお試しください。"
-            return
-        }
+        guard let (coverage, confidence) = await prepareGatedSkyMask(
+            context: "EditViewModel.applySkyCorrection"
+        ) else { return }
 
         historyManager.push(currentSnapshot)
         notifyHistoryChange()
@@ -630,6 +617,37 @@ class EditViewModel: ObservableObject {
         ])
 
         await generatePreview()
+    }
+
+    /// 空マスクを（未生成なら）生成し、空の覆い率・確信度のゲートを通す。
+    ///
+    /// ワンタップ空補正と適用範囲「空だけ」で共通の前処理（⭐️ レビュー指摘G対応: 重複の集約）。
+    /// 失敗時は `errorMessage` を設定して nil を返す。
+    ///
+    /// ⚠️ 画像切替のガードはここに**入れない**。`applySkyCorrection` は await 後も続行して
+    /// 切替後の画像でマスクを再生成する挙動を既存テスト（`testEnsureSkyMaskCachedTags…`）が
+    /// 前提にしているため、ガードは呼び出し側（`setEditScope`）に置く。
+    ///
+    /// - Parameter context: エラーログに残す呼び出し元
+    /// - Returns: ゲートを通過したときの (覆い率, 確信度)。通過しなければ nil
+    private func prepareGatedSkyMask(context: String) async -> (coverage: Double, confidence: Double)? {
+        do {
+            try await ensureSkyMaskCached(quality: .preview)
+        } catch {
+            ErrorHandler.logError(error, context: context)
+            errorMessage = error.userFriendlyMessage
+            return nil
+        }
+
+        guard let coverage = cachedSkyMaskCoverage,
+              let confidence = cachedSkyMaskConfidence,
+              coverage >= Self.skyCorrectionMinCoverage,
+              confidence >= Self.skyCorrectionMinConfidence
+        else {
+            errorMessage = "空が見つかりませんでした。別の写真でお試しください。"
+            return nil
+        }
+        return (coverage, confidence)
     }
 
     /// 空補正強度スライダーのリアルタイム更新（ドラッグ中）。
@@ -685,22 +703,15 @@ class EditViewModel: ObservableObject {
             isGeneratingSkyMask = true
             defer { isGeneratingSkyMask = false }
 
-            do {
-                try await ensureSkyMaskCached(quality: .preview)
-            } catch {
-                ErrorHandler.logError(error, context: "EditViewModel.setEditScope")
-                errorMessage = error.userFriendlyMessage
-                return
-            }
-
-            guard let coverage = cachedSkyMaskCoverage,
-                  let confidence = cachedSkyMaskConfidence,
-                  coverage >= Self.skyCorrectionMinCoverage,
-                  confidence >= Self.skyCorrectionMinConfidence
-            else {
-                errorMessage = "空が見つかりませんでした。別の写真でお試しください。"
-                return
-            }
+            // ⭐️ レビュー指摘B対応: マスク生成（await）の前に対象画像を控える。
+            // 生成中に画像を切り替えられると、await 後の `editRecipe` / 履歴は**切替後の画像**のものに
+            // 差し替わっている。そのまま書くと、切替前の画像のマスクで判定した「空だけ」が別画像に漏れる
+            // （`ensureSkyMaskCached` の `targetIndex` と同じ前例）。切替されたら何もせずに終わる。
+            let targetIndex = currentImageIndex
+            guard let (coverage, confidence) = await prepareGatedSkyMask(
+                context: "EditViewModel.setEditScope"
+            ) else { return }
+            guard currentImageIndex == targetIndex else { return }
 
             historyManager.push(currentSnapshot)
             notifyHistoryChange()

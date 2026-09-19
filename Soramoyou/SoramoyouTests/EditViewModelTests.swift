@@ -563,6 +563,42 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertNotNil(vmLowConfidence.errorMessage, "confidence不足時は errorMessage を表示するべき")
     }
 
+    /// 🔧 回帰テスト（レビュー指摘B）: 「空だけ」への切替でマスクを生成している間に
+    /// 画像を切り替えると、旧実装は await 後に**切替後の画像**のレシピへ `.skyOnly` を書き込んでいた
+    /// （空の判定は切替前の画像のマスクで行うため、切替後の画像では空チェックも素通りになる）。
+    /// 修正後は await 後に対象画像が変わっていれば何もせずに終わる。
+    func testSetEditScopeIsAbandonedWhenImageSwitchedDuringMaskGeneration() async {
+        let slowProvider = MockSkyMaskProvider()
+        slowProvider.delayNanoseconds = 100_000_000 // 100ms: 画像切替を割り込ませるための猶予
+        let vm = EditViewModel(
+            images: [createTestImage(), createTestImage()],
+            userId: nil,
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            skyMaskProvider: slowProvider
+        )
+        await Task.yield()
+
+        // 画像0で「空だけ」に切り替え始める（makeSkyMask の await 中に中断される）
+        let scopeTask = Task { @MainActor in
+            await vm.setEditScope(.skyOnly)
+        }
+        for _ in 0 ..< 5 {
+            await Task.yield()
+        }
+        XCTAssertEqual(slowProvider.callCount, 1, "この時点で makeSkyMask は呼ばれ始めているべき")
+        vm.nextImage()
+        XCTAssertEqual(vm.currentImageIndex, 1)
+
+        await scopeTask.value
+
+        XCTAssertNil(vm.editRecipe.editScope,
+                     "切替後の画像1に「空だけ」が書き込まれている（別画像のマスクで判定した結果が漏れた）")
+        vm.previousImage()
+        XCTAssertNil(vm.editRecipe.editScope,
+                     "切替で中断した操作は画像0にも適用しない（ユーザーはもう画像0を見ていない）")
+    }
+
     // MARK: - Helper Methods
 
     // MARK: - パーソナルAI編集「AIで自動編集」（柱1 v1 / G5）

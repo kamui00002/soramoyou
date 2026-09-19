@@ -490,7 +490,8 @@ struct EditView: View {
                             .background(.white.opacity(0.2))
                             .clipShape(Circle())
                     }
-                    .disabled(viewModel.currentImageIndex == 0)
+                    // マスク生成中の切替は「空だけ」の判定対象がずれる原因になるため止める（「次へ」と揃える）
+                    .disabled(viewModel.currentImageIndex == 0 || viewModel.isGeneratingSkyMask)
 
                     Spacer()
 
@@ -504,7 +505,7 @@ struct EditView: View {
                             .background(.white.opacity(0.2))
                             .clipShape(Circle())
                     }
-                    .disabled(viewModel.currentImageIndex >= viewModel.originalImages.count - 1)
+                    .disabled(viewModel.currentImageIndex >= viewModel.originalImages.count - 1 || viewModel.isGeneratingSkyMask)
                 }
                 .padding()
             }
