@@ -377,6 +377,33 @@ final class EditViewModelTests: XCTestCase {
                        "style2DColorNorm が脱落している（スタイル調整が基準に戻る不具合）")
     }
 
+    /// 🔧 回帰テスト（不具合: 「空だけ」を選んでからスライダーを触ると「全体」に戻る）:
+    /// 適用範囲（editScope）も EditSettings に存在しない EditRecipe 専用フィールドのため、
+    /// editSettings の setter で保全しないとスライダー操作のたびに nil（＝全体）へ戻り、
+    /// 編集が画像全体に掛かる。2026-09-19 の実写ハッピーパスで発見。修正前はこのテストは FAIL する。
+    ///
+    /// スライダーの書き込み経路は2つ（指を離したとき＝setToolValue / ドラッグ中＝setToolValueRealtime）
+    /// あり、どちらも setter を通るため両方を確認する。
+    func testEditSettingsSetterPreservesEditScope() async {
+        let testImage = createTestImage()
+        viewModel.setImages([testImage])
+        await Task.yield()
+
+        // 事前条件: 適用範囲を「空だけ」に設定
+        // （空マスクのゲート判定は setEditScope 側の責務で、ここでは setter の保全だけを見るため直接代入）
+        viewModel.editRecipe.editScope = .skyOnly
+
+        // 指を離したときの経路
+        viewModel.setToolValue(0.5, for: .exposure)
+        XCTAssertEqual(viewModel.editRecipe.editScope, .skyOnly,
+                       "setToolValue で editScope が脱落している（適用範囲が「全体」に戻る不具合）")
+
+        // ドラッグ中の経路
+        viewModel.setToolValueRealtime(0.3, for: .saturation)
+        XCTAssertEqual(viewModel.editRecipe.editScope, .skyOnly,
+                       "setToolValueRealtime で editScope が脱落している（適用範囲が「全体」に戻る不具合）")
+    }
+
     /// 🔧 回帰テスト（リセット経路の保全確認）:
     /// resetStyle2D() で意図的に基準へ戻したあとに普通編集ツールを操作しても、スタイルが
     /// nil のまま維持される（サルベージが意図したリセットを壊さない）ことを検証する。
@@ -534,6 +561,67 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertEqual(vmLowConfidence.editRecipe.skyCorrectionIntensity, intensityBeforeLowConfidence,
                        "confidence不足時は intensity を変更してはならない")
         XCTAssertNotNil(vmLowConfidence.errorMessage, "confidence不足時は errorMessage を表示するべき")
+    }
+
+    /// 🔧 回帰テスト（レビュー指摘B）: 「空だけ」への切替でマスクを生成している間に
+    /// 画像を切り替えると、旧実装は await 後に**切替後の画像**のレシピへ `.skyOnly` を書き込んでいた
+    /// （空の判定は切替前の画像のマスクで行うため、切替後の画像では空チェックも素通りになる）。
+    /// 修正後は await 後に対象画像が変わっていれば何もせずに終わる。
+    func testSetEditScopeIsAbandonedWhenImageSwitchedDuringMaskGeneration() async {
+        let slowProvider = MockSkyMaskProvider()
+        slowProvider.delayNanoseconds = 100_000_000 // 100ms: 画像切替を割り込ませるための猶予
+        let vm = EditViewModel(
+            images: [createTestImage(), createTestImage()],
+            userId: nil,
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            skyMaskProvider: slowProvider
+        )
+        await Task.yield()
+
+        // 画像0で「空だけ」に切り替え始める（makeSkyMask の await 中に中断される）
+        let scopeTask = Task { @MainActor in
+            await vm.setEditScope(.skyOnly)
+        }
+        for _ in 0 ..< 5 {
+            await Task.yield()
+        }
+        XCTAssertEqual(slowProvider.callCount, 1, "この時点で makeSkyMask は呼ばれ始めているべき")
+        vm.nextImage()
+        XCTAssertEqual(vm.currentImageIndex, 1)
+
+        await scopeTask.value
+
+        XCTAssertNil(vm.editRecipe.editScope,
+                     "切替後の画像1に「空だけ」が書き込まれている（別画像のマスクで判定した結果が漏れた）")
+        vm.previousImage()
+        XCTAssertNil(vm.editRecipe.editScope,
+                     "切替で中断した操作は画像0にも適用しない（ユーザーはもう画像0を見ていない）")
+    }
+
+    /// 🔧 回帰テスト（レビュー指摘C）: プレビュー経路で空マスクの生成に失敗したら、
+    /// 適用範囲を「全体」（nil）に戻す。書き出し経路（`makeExportSkyMask` の失敗時）と同じ契約。
+    /// 戻さないと「レシピは空だけ・見た目は全体」になり、スライダーの高速プレビュー
+    /// （`canRenderFastPreview`）も止まったままになる。
+    func testGeneratePreviewResetsSkyOnlyScopeWhenMaskGenerationFails() async {
+        let failingProvider = MockSkyMaskProvider()
+        failingProvider.shouldThrow = true
+        let vm = EditViewModel(
+            images: [createTestImage()],
+            userId: nil,
+            imageService: MockImageService(),
+            firestoreService: MockFirestoreService(),
+            skyMaskProvider: failingProvider
+        )
+        await Task.yield()
+
+        // 再編集・Undo などで「空だけ」のレシピが復元された状態を再現する（ゲートを通らない経路）
+        vm.editRecipe.editScope = .skyOnly
+        await vm.generatePreview()
+
+        XCTAssertGreaterThanOrEqual(failingProvider.callCount, 1, "陽性対照: マスク生成が試みられている")
+        XCTAssertNil(vm.editRecipe.editScope, "マスクが取れないのに「空だけ」が残っている")
+        XCTAssertNotNil(vm.errorMessage, "「全体」に戻したことをユーザーに知らせるべき")
     }
 
     // MARK: - Helper Methods
@@ -761,12 +849,12 @@ final class EditViewModelTests: XCTestCase {
         XCTAssertEqual(vm.corpusSampleCount(for: .clear), 0, "履歴が無い空タイプは0件")
     }
 
-    /// 🆕 `EditRecipe.mergingPhotoSpecificFields(from:includeSkyCorrection:)` の
-    /// `includeSkyCorrection` 引数そのものを検証する（候補パス/サムネイル生成パスの土台となる純関数）。
-    /// - `includeSkyCorrection: false`（サムネイル生成用）→ skyCorrectionIntensity は nil になる
-    ///   （skyMask なしで描画するため intensity を転写しても見た目に反映されず、
+    /// 🆕 `EditRecipe.mergingPhotoSpecificFields(from:skyMaskAvailable:)` の
+    /// `skyMaskAvailable` 引数そのものを検証する（候補パス/サムネイル生成パスの土台となる純関数）。
+    /// - `skyMaskAvailable: false`（サムネイル生成用）→ 空マスク依存フィールドは nil になる
+    ///   （skyMask なしで描画するため転写しても見た目に反映されず、
     ///   「レシピは値あり・見た目は補正なし」の食い違いになるのを防ぐ挙動）。
-    /// - `includeSkyCorrection` 省略時（既定 true・本適用用）→ 現在値をそのまま転写する。
+    /// - 省略時（既定 true・本適用用）→ 現在値をそのまま転写する。
     func testMergingPhotoSpecificFields_excludesSkyCorrectionWhenRequested() async {
         var candidateRecipe = EditRecipe()
         candidateRecipe.exposureEV = 0.5
@@ -776,15 +864,15 @@ final class EditViewModelTests: XCTestCase {
         current.cropRectNorm = CGRect(x: 0.1, y: 0.1, width: 0.6, height: 0.6)
         current.targetDynamicRange = .hdr
 
-        // includeSkyCorrection: false を明示 → skyCorrectionIntensity は転写されず nil
+        // skyMaskAvailable: false を明示 → 空マスク依存フィールドは転写されず nil
         let mergedWithoutSkyCorrection = candidateRecipe.mergingPhotoSpecificFields(
-            from: current, includeSkyCorrection: false
+            from: current, skyMaskAvailable: false
         )
-        XCTAssertNil(mergedWithoutSkyCorrection.skyCorrectionIntensity, "includeSkyCorrection: false では空補正強度を転写しない")
-        XCTAssertEqual(mergedWithoutSkyCorrection.cropRectNorm, current.cropRectNorm, "クロップは includeSkyCorrection に関わらず常に転写される")
+        XCTAssertNil(mergedWithoutSkyCorrection.skyCorrectionIntensity, "skyMaskAvailable: false では空補正強度を転写しない")
+        XCTAssertEqual(mergedWithoutSkyCorrection.cropRectNorm, current.cropRectNorm, "クロップは skyMaskAvailable に関わらず常に転写される")
         XCTAssertEqual(mergedWithoutSkyCorrection.targetDynamicRange, current.targetDynamicRange, "HDR指定も常に転写される")
 
-        // includeSkyCorrection 省略（既定 true）→ 現在値を転写する
+        // 省略（既定 true）→ 現在値を転写する
         let mergedWithSkyCorrection = candidateRecipe.mergingPhotoSpecificFields(from: current)
         XCTAssertEqual(mergedWithSkyCorrection.skyCorrectionIntensity ?? -1, 0.7, accuracy: 0.0001,
                        "既定(true)では空補正強度を転写する")
@@ -972,7 +1060,6 @@ class MockFirestoreService: FirestoreServiceProtocol {
     func deleteDraft(draftId _: String) async throws {}
     func updateUser(_ user: User) async throws -> User { user }
     func updateEditTools(userId _: String, tools _: [EditTool], order _: [String]) async throws {}
-    func syncPostsCount(userId _: String, count _: Int) async throws {}
     func fetchPublicProfile(userId _: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
     func createPublicProfile(from _: User) async throws {}
     func deleteUserData(userId _: String) async throws {}

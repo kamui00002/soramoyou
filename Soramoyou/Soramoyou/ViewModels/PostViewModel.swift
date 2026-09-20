@@ -463,6 +463,14 @@ class PostViewModel: ObservableObject {
     /// スコープ外のため置換しない。既存箇所の置換は別タスクで行う。
     private var isCollagePost: Bool { postKind == .collage }
 
+    /// この投稿の画像ごとの編集レシピ（中立・重複も含む生の一覧）。
+    /// 複数画像投稿では画像ごとの editRecipes（EditView「次へ」経由）を優先し、
+    /// 未設定（下書き経路など）の場合は単数の editRecipe にフォールバックする。
+    /// コーパス記録（`recipesToRecordInCorpus`）と `post_completed` の計装で同じ出所を使うための単一ソース。
+    private var postedRecipes: [EditRecipe] {
+        editRecipes.isEmpty ? (editRecipe.map { [$0] } ?? []) : editRecipes
+    }
+
     /// パーソナルAI編集の学習コーパスに記録する対象レシピ一覧を返す（中立レシピ・重複レシピは除外）。
     /// 複数画像投稿では画像ごとの editRecipes（EditView「次へ」経由）を優先し、
     /// 未設定（下書き経路など）の場合は従来どおり単数の editRecipe にフォールバックする。
@@ -477,7 +485,7 @@ class PostViewModel: ObservableObject {
     /// collage（配置写真）も同じ扱い（畳み込み後は1枚の見た目なのにNパネル分が全体定番だけを
     /// 膨張させる問題＝G2 も同時解消）。
     func recipesToRecordInCorpus() -> [EditRecipe] {
-        let source = editRecipes.isEmpty ? (editRecipe.map { [$0] } ?? []) : editRecipes
+        let source = postedRecipes
         let nonNeutral = source.filter { !$0.isNeutral }
 
         var deduped: [EditRecipe] = []
@@ -633,6 +641,10 @@ class PostViewModel: ObservableObject {
                 "colors_from_sky": extractedInfo?.colorsFromSky ?? false,
                 // 判定ゲート: アプリ内カメラ経由の投稿比率を見るための属性。
                 "photo_source": photoSource.rawValue,
+                // 編集の適用範囲「空だけ」を使った投稿か（いずれかの画像で使っていれば true）。
+                // `edit_scope_changed` はトグル操作の回数で、「全体」に戻した場合も数えるため、
+                // 投稿で実際に使われた比率はこの属性でしか測れない。空マスク改善（案A）の出荷判断にも使う。
+                "edit_scope_sky_only": postedRecipes.contains { $0.isSkyOnlyScope },
             ]
             // 空の被覆率はマスクを生成できたときだけ載せる（小数 2 桁。取れないときはキー自体を出さない）
             if let skyCoverage = extractedInfo?.skyCoverage {

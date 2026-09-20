@@ -18,13 +18,11 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    // 2026-09-16: 空カメラ（グリッド・水平線ガイド・空優先AE 付きのアプリ内カメラ）。
-    // ⚠️ 空優先AE は段階 A と**同一ビルドで出荷**するためこの識別子を据え置く。
-    //    後追いビルドに変わった場合は必ず新しい値へ変えること
-    //    （段階 A で既読になるので、同じ ID のまま文言だけ足しても誰にも表示されない）。
-    // ⚠️ 前回の "2026-09-favorites" は 1.10.0/1.10.1 で既に消費済み（＝全ユーザーが既読）。
-    //    同じ識別子のまま機能を足しても誰にも表示されないため、必ず新しい値にする。
-    static let currentID = "2026-09-sky-camera"
+    // 2026-09-21: 空優先AE（白飛び防止）。
+    // ⚠️ "2026-09-sky-camera" は 1.11.0 / build 100（空カメラ段階A＋空だけ編集）で消費済み
+    //    ＝全ユーザーが既読。空優先AE は後追いビルドになったので、ここで新しい値に変える
+    //    （同じ ID のままページを足しても、誰にも表示されない）。
+    static let currentID = "2026-09-sky-ae"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -41,19 +39,10 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（2026-09 空カメラ）の新機能紹介ページ。
-    /// アイコンは実UIと揃えている（camera.fill = 投稿画面「撮る」ボタン / cloud.sun = 空優先AE のトグル）。
+    /// 今回（2026-09 空優先AE）の新機能紹介ページ。
+    /// アイコンは実UIと揃えている（cloud.sun = 空カメラ上部の空優先AE 切替ボタン）。
+    /// ⚠️ 空カメラ段階A・空だけ編集のページは 1.11.0 で出し切った（既読）ので載せない。
     static let pages: [WhatsNewPage] = [
-        WhatsNewPage(
-            icon: "camera.fill",
-            badge: "新機能",
-            title: "空カメラ",
-            description: "投稿の「撮る」から、グリッドと水平線ガイド付きで\n空を撮れるようになりました",
-            gradientColors: [
-                Color(red: 0.45, green: 0.72, blue: 0.98),
-                Color(red: 0.20, green: 0.35, blue: 0.75),
-            ]
-        ),
         WhatsNewPage(
             icon: "cloud.sun",
             badge: "新機能",

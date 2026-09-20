@@ -326,13 +326,13 @@ struct PersonalDefaultCandidateSheet: View {
     /// - ベース画像は `viewModel.currentTransformedImageForThumbnails()`（向き正規化＋回転・反転
     ///   焼き込み済み）を使う。生画像をそのまま使うと `cropRectNorm` の切り出し基準
     ///   （回転・反転適用後の画像）とズレてしまうため。
-    /// - 各候補は `mergingPhotoSpecificFields(from:includeSkyCorrection:)` で現在編集中の写真の
+    /// - 各候補は `mergingPhotoSpecificFields(from:skyMaskAvailable:)` で現在編集中の写真の
     ///   クロップ・トーンカーブ・ダイナミックレンジを合成してから描画する。
-    ///   `includeSkyCorrection: false` にしているのは、このサムネイルは空マスクなし
+    ///   `skyMaskAvailable: false` にしているのは、このサムネイルは空マスクなし
     ///   （`applyEditRecipe(_:to:)` の skyMask 省略オーバーロード）で描画するため、
-    ///   `skyCorrectionIntensity` を転写しても効果が反映されず
-    ///   「レシピ上は補正が効いているのに見た目は変わらない」食い違いを生むのを避ける設計
-    ///   （`EditRecipe.mergingPhotoSpecificFields` のコメント参照）。
+    ///   空マスク依存フィールド（`skyCorrectionIntensity` / `editScope`）を転写しても効果が
+    ///   反映されず「レシピ上は空だけ／補正ありなのに見た目は全体／補正なし」という食い違いを
+    ///   生むのを避ける設計（`EditRecipe.mergingPhotoSpecificFields` のコメント参照）。
     /// - `Style2DPadView.regeneratePresetThumbnails()` と同じ世代トークン方式で
     ///   race condition を防ぐ。G7 で空タイプ切替UIを追加したことで「このシートは開いている間
     ///   ずっと同一画像・同一候補プールを対象にする」という前提が崩れ、切替のたびに
@@ -398,7 +398,7 @@ struct PersonalDefaultCandidateSheet: View {
 
             let recipe = candidate.recipe.mergingPhotoSpecificFields(
                 from: viewModel.editRecipe,
-                includeSkyCorrection: false
+                skyMaskAvailable: false
             )
 
             do {
