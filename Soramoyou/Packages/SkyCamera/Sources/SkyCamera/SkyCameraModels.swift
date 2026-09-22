@@ -53,8 +53,45 @@ public struct SkyCameraCapture {
     /// Deferred Start（iOS 26+）が有効だったか（計装用・起動体感の分析）
     public let usedDeferredStart: Bool
 
+    /// 撮影時に空優先 AE（白飛び防止）が ON だったか（計装用）
+    public let skyPriorityEnabled: Bool
+
+    /// 撮影時に実際にかかっていた露出補正値（EV。計装用）。
+    /// 0 なら「ON だが下げる必要が無かった」＝機能が効いていないのではなく出番が無かった、と読む。
+    public let exposureBiasEV: Float
+
+    /// 直近に測れた白飛び率（0〜1。較正用）。
+    public let skyClippedFraction: Double
+
+    /// 直近に測れたフレームの最大輝度（0〜255。較正用）。
+    /// ⭐️ 閾値（既定 250）に届く高さがそもそも来ているかを見るための値。
+    ///    これが常に 240 前後なら、飛んでいないのではなく**閾値が高すぎる**。
+    public let skyPeakLuma: Int
+
+    /// 画面を開いてからの白飛び率の最大値（較正用）。
+    public let skyMaxClippedFraction: Double
+
+    /// 画面を開いてからの最大輝度（較正用）。
+    /// ⭐️ 補正**前**にどこまで明るかったかを残す。撮影時点の値は露出を下げたあとの姿なので、
+    ///    これが無いと「効いたから静かなのか、最初から静かなのか」を後から区別できない。
+    public let skyMaxPeakLuma: Int
+
+    /// 測光が一度でも成立したか（計装用）。
+    /// `skyPriorityEnabled` が true なのにこれが false なら、出番が無かったのではなく
+    /// **機能が動いていない**（測光出力を挿せなかった等）。この 2 つを混ぜてはいけない。
+    public let skyPriorityMeasured: Bool
+
     /// シャッターを切った時刻。EXIF に撮影日時が無い場合の代替として本体が使う。
     public let shutterDate: Date
+
+    /// 測光で届いたバッファが Full Range（0〜255）だったか（較正用・測れていなければ nil）。
+    /// ⭐️ `skyPeakLuma` / `skyMaxPeakLuma` は届いたバッファの流儀のままの生値。
+    ///    Video Range なら最大 235 なので、これが無いと「235 = 真っ白」なのか
+    ///    「まだ余裕がある」のかを集計で区別できない。
+    public let lumaFullRange: Bool?
+
+    /// 空優先 AE の測光がどの範囲を測ったか（`"upper"` / `"whole_frame"`・測れていなければ nil）。
+    public let skyMeterRegion: String?
 
     public init(
         photoData: Data,
@@ -65,7 +102,16 @@ public struct SkyCameraCapture {
         isLevel: Bool,
         rollDegrees: Double?,
         usedDeferredStart: Bool,
-        shutterDate: Date
+        skyPriorityEnabled: Bool,
+        exposureBiasEV: Float,
+        skyPriorityMeasured: Bool,
+        skyClippedFraction: Double,
+        skyPeakLuma: Int,
+        skyMaxClippedFraction: Double,
+        skyMaxPeakLuma: Int,
+        shutterDate: Date,
+        lumaFullRange: Bool? = nil,
+        skyMeterRegion: String? = nil
     ) {
         self.photoData = photoData
         self.metadata = metadata
@@ -75,8 +121,37 @@ public struct SkyCameraCapture {
         self.isLevel = isLevel
         self.rollDegrees = rollDegrees
         self.usedDeferredStart = usedDeferredStart
+        self.skyPriorityEnabled = skyPriorityEnabled
+        self.exposureBiasEV = exposureBiasEV
+        self.skyPriorityMeasured = skyPriorityMeasured
+        self.skyClippedFraction = skyClippedFraction
+        self.skyPeakLuma = skyPeakLuma
+        self.skyMaxClippedFraction = skyMaxClippedFraction
+        self.skyMaxPeakLuma = skyMaxPeakLuma
         self.shutterDate = shutterDate
+        self.lumaFullRange = lumaFullRange
+        self.skyMeterRegion = skyMeterRegion
     }
+}
+
+/// 空優先 AE の現況スナップショット（計装・較正用）。
+public struct SkyPriorityStatus: Sendable {
+    /// いまかかっている露出補正値（EV）。
+    public let bias: Float
+    /// 測光が一度でも成立したか。
+    public let hasMeasured: Bool
+    /// 直近に測れた白飛び率（0〜1）。
+    public let clippedFraction: Double
+    /// 直近に測れたフレームの最大輝度（0〜255）。
+    public let peakLuma: UInt8
+    /// 画面を開いてからの白飛び率の最大値（0〜1）。
+    public let maxClippedFraction: Double
+    /// 画面を開いてからの最大輝度（0〜255）。
+    public let maxPeakLuma: UInt8
+    /// 直近の測光で届いたバッファが Full Range だったか（まだ測れていなければ nil）。
+    public let lumaFullRange: Bool?
+    /// 直近の測光がどの範囲を測ったか（まだ測れていなければ nil）。
+    public let meterRegion: SkyPriorityExposure.MeterRegion?
 }
 
 // MARK: - 計装イベント

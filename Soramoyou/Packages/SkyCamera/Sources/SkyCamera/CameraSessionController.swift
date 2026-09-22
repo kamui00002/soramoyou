@@ -52,6 +52,53 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// AE/AF を明示的にロック中か（長押し）。被写体変化で自動へ戻してよいかの判断に使う。
     private var isFocusLocked = false
 
+    /// 空優先 AE（白飛び防止）の測光器。プレビュー映像から白飛び率を実測する。
+    private var exposureMeter: SkyExposureMeter?
+
+    /// 空優先 AE をユーザーが ON にしているか（sessionQueue 上でのみ読み書きする）。
+    private var isSkyPriorityDesired = false
+
+    /// いま端末へかけている露出補正値（EV）。sessionQueue 上でのみ読み書きする。
+    private var appliedExposureBias: Float = 0
+
+    /// 直近に測れた白飛び率と最大輝度（較正用の計装）。
+    /// ⚠️ 「効かなかった」ときに、閾値が高すぎるのか本当に飛んでいないのかを
+    ///    区別するために要る。これが無いと数値を当てずっぽうで動かすことになる。
+    private var lastClippedFraction: Double = 0
+    private var lastPeakLuma: UInt8 = 0
+
+    /// この画面を開いてからの最大値（較正用）。
+    /// ⚠️ 「直近」だけでは足りない。空優先 AE は飛びを見つけると露出を下げて飛びを消すので、
+    ///    撮影時点の値は**補正後の落ち着いた姿**しか映さない。
+    ///    補正する前にどこまで明るかったかは、最大値を覚えていないと永久に分からない。
+    private var maxClippedFraction: Double = 0
+    private var maxPeakLuma: UInt8 = 0
+
+    /// 測光が一度でも成立したか（計装用）。
+    /// ⚠️ これが無いと「ON だが一度も測れていない（壊れている）」と
+    ///    「ON だが下げる必要が無かった（正常）」が本番データで区別できない。
+    ///    測光出力を挿せなかった端末・想定外のバッファ形式など、
+    ///    恒久的に機能しない経路はすべてここが false のままになる。
+    private var hasMeasuredClipping = false
+
+    /// 直近の測光で届いたバッファが Full Range だったか（計装用）。まだ測れていなければ nil。
+    /// ⚠️ `lastPeakLuma` / `maxPeakLuma` は届いたバッファの流儀のままの生値
+    ///    （Video Range なら最大 235）。どちらの物差しかを残さないと集計で混ざる。
+    private var lastLumaFullRange: Bool?
+
+    /// 直近の測光がどの範囲を測ったか（空の側だけ／画面全体。計装用）。
+    private var lastMeterRegion: SkyPriorityExposure.MeterRegion?
+
+    /// 空優先 AE の判定パラメータ。
+    private let exposureTuning = SkyPriorityExposure.Tuning.default
+
+    /// 露出補正を書き込んでから、反映完了の通知が来るまでに見込む最大待ち時間（秒）。
+    /// 通知が来なかった場合の保険でもあるので、実測の収束時間より長めに取る。
+    private static let exposureSettleTimeout: CFTimeInterval = 0.6
+
+    /// 反映完了の通知が来てから、AE が物理的に落ち着くまで追加で待つ時間（秒）。
+    private static let exposureSettleMargin: CFTimeInterval = 0.3
+
     /// プレビュー View（回転の追従に使う）。sessionQueue 上でのみ読み書きする。
     /// ⚠️ **weak で持つ**。View は `onTap` クロージャ経由で ViewModel → 本コントローラを
     ///    強参照しているので、こちらが強参照すると循環参照になる。
@@ -59,6 +106,10 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
 
     /// プレビュー回転角の監視（iOS 17+）。sessionQueue 上で読み書きする（deinit を除く）。
     private var rotationObservation: NSKeyValueObservation?
+
+    /// 撮影用の回転角の監視（空優先 AE の測光が「どちらが空か」を知るため）。
+    /// プレビュー用とは別に持つ。プレビュー層が無くても測光は動くので、こちらは常に張る。
+    private var captureRotationObservation: NSKeyValueObservation?
 
     // MARK: - Lifecycle
 
@@ -71,6 +122,7 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         NotificationCenter.default.removeObserver(self)
         // KVO は invalidate() がどのスレッドからでも安全なので deinit で解除してよい。
         rotationObservation?.invalidate()
+        captureRotationObservation?.invalidate()
     }
 
     // MARK: - Configuration
@@ -129,6 +181,47 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             }
         }
 
+        // 空優先 AE の測光用出力。プレビューと同じ映像を低頻度で読んで白飛び率を測る。
+        // ⚠️ `prepare()` は **addOutput の後**に呼ぶこと。
+        //    `availableVideoPixelFormatTypes` はセッションに繋がって初めて埋まるため、
+        //    先に呼ぶと一覧が空になり、輝度の Range 判定を取り違える。
+        // ⚠️ Deferred Start には**あえて乗せない**。測光を後回しにすると
+        //    「開いた直後の 1 枚」が白飛びから守られないため。
+        let meter = SkyExposureMeter(
+            clipThreshold: exposureTuning.clipThreshold,
+            skyRegionFraction: exposureTuning.skyRegionFraction
+        ) { [weak self] reading in
+            guard let self else { return }
+            self.sessionQueue.async {
+                // 適用の可否に関わらず「測れた」ことは記録する（壊れていない証拠になる）。
+                self.hasMeasuredClipping = true
+                // 測り方（空の側／画面全体・Full／Video Range）が変わったら、
+                // これまでの最大値は別の物差しの数字なので混ぜずに積み直す。
+                if SkyPriorityExposure.measurementBasisChanged(
+                    previousRegion: self.lastMeterRegion,
+                    previousFullRange: self.lastLumaFullRange,
+                    region: reading.region,
+                    isFullRange: reading.isFullRange
+                ) {
+                    self.maxClippedFraction = 0
+                    self.maxPeakLuma = 0
+                }
+                self.lastClippedFraction = reading.clippedFraction
+                self.lastPeakLuma = reading.peakLuma
+                self.maxClippedFraction = max(self.maxClippedFraction, reading.clippedFraction)
+                self.maxPeakLuma = max(self.maxPeakLuma, reading.peakLuma)
+                self.lastLumaFullRange = reading.isFullRange
+                self.lastMeterRegion = reading.region
+                self.applyMeasuredClippingOnSessionQueue(reading.clippedFraction)
+            }
+        }
+        if session.canAddOutput(meter.output) {
+            session.addOutput(meter.output)
+            meter.prepare()
+            meter.setEnabled(isSkyPriorityDesired)
+            exposureMeter = meter
+        }
+
         videoDevice = device
 
         // タップ AF/AE は「1 回合わせたら止まる」一発モード（.autoFocus / .autoExpose）なので、
@@ -175,6 +268,22 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: view?.previewLayer)
         rotationCoordinatorStorage = coordinator
 
+        // 空優先 AE の測光へ「撮影を正立させる角度」を流す。
+        // ⚠️ プレビュー層の有無に関係なく張る（下の guard より前に置く）。
+        //    測光用のバッファはセンサー本来の向きのまま届くので、この角度が無いと
+        //    どちらが空か分からず、画面全体を測ることになる。
+        captureRotationObservation?.invalidate()
+        captureRotationObservation = coordinator.observe(
+            \.videoRotationAngleForHorizonLevelCapture,
+            options: [.initial, .new]
+        ) { [weak self] _, change in
+            guard let angle = change.newValue else { return }
+            // 測光器は sessionQueue 上でのみ触る（他のプロパティと同じ規則）。
+            self?.sessionQueue.async {
+                self?.exposureMeter?.setCaptureRotation(Double(angle))
+            }
+        }
+
         // ⚠️ 回転角は端末を回すたびに変わる。一度読むだけでは追従しないので必ず KVO で監視する。
         rotationObservation?.invalidate()
         guard let view else {
@@ -202,6 +311,7 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     public func start() {
         sessionQueue.async {
             self.isRunningDesired = true
+            self.exposureMeter?.setEnabled(self.isSkyPriorityDesired)
             self.startIfPossibleOnSessionQueue()
         }
     }
@@ -210,6 +320,13 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     public func stop() {
         sessionQueue.async {
             self.isRunningDesired = false
+            // ⚠️ 復帰処理より**先に**測光を止める。止めないと、停止直前に測られた結果が
+            //    この後ろのキューに残っていて、0 EV へ戻した直後に負の補正を再適用しうる。
+            //    シリアルキューは順序を守るだけで、古い依頼を捨ててはくれない。
+            self.exposureMeter?.setEnabled(false)
+            // 露出補正は端末（AVCaptureDevice）側に残る設定なので、画面を閉じるときは素へ戻す。
+            // 戻さないと「OFF にしたのに暗いまま」「次に開いたら暗い」が起きる。
+            self.resetExposureBiasOnSessionQueue()
             guard self.session.isRunning else { return }
             self.session.stopRunning()
         }
@@ -345,6 +462,105 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             } catch {
                 // 設定できない端末・状態でも撮影自体は続けられるので、ここでは無視する。
             }
+        }
+    }
+
+    // MARK: - 空優先 AE（白飛び防止）
+
+    /// 空優先 AE の ON/OFF を切り替える。
+    ///
+    /// OFF にしたときは必ず補正を 0 EV へ戻す。戻さないと直前の補正が端末に残り、
+    /// 「OFF にしたのに暗いまま」という説明のつかない状態になる。
+    public func setSkyPriorityExposureEnabled(_ enabled: Bool) {
+        sessionQueue.async {
+            self.isSkyPriorityDesired = enabled
+            // 停止中に ON にされても測り始めない（start() で復帰させる）。
+            self.exposureMeter?.setEnabled(enabled && self.isRunningDesired)
+            guard !enabled else { return }
+            self.resetExposureBiasOnSessionQueue()
+        }
+    }
+
+    /// 真上（または真下）を向いているかを空優先 AE の測光へ伝える。
+    /// 真上を向くと画面ほぼ全部が空になるので、測光は画面全体へ切り替わる。
+    public func setMeteringLooksStraightUp(_ looksUp: Bool) {
+        sessionQueue.async {
+            self.exposureMeter?.setLooksStraightUp(looksUp)
+        }
+    }
+
+    /// 空優先 AE の現況（計装用）。
+    /// - Returns: `bias` = いまかかっている露出補正値（EV。EXIF が取れないときの保険）、
+    ///   `hasMeasured` = 測光が一度でも成立したか、
+    ///   `clippedFraction` / `peakLuma` = 直近の測定値（閾値較正のため）
+    public func skyPriorityStatus() async -> SkyPriorityStatus {
+        await withCheckedContinuation { (continuation: CheckedContinuation<SkyPriorityStatus, Never>) in
+            sessionQueue.async {
+                continuation.resume(returning: SkyPriorityStatus(
+                    bias: self.appliedExposureBias,
+                    hasMeasured: self.hasMeasuredClipping,
+                    clippedFraction: self.lastClippedFraction,
+                    peakLuma: self.lastPeakLuma,
+                    maxClippedFraction: self.maxClippedFraction,
+                    maxPeakLuma: self.maxPeakLuma,
+                    lumaFullRange: self.lastLumaFullRange,
+                    meterRegion: self.lastMeterRegion
+                ))
+            }
+        }
+    }
+
+    /// 露出補正を 0 EV（素の状態）へ戻す（sessionQueue 上で呼ぶこと）。
+    /// OFF と停止の 2 経路から呼ばれるので、条件判定ごと 1 箇所にまとめてある。
+    private func resetExposureBiasOnSessionQueue() {
+        guard appliedExposureBias != 0, let device = videoDevice else { return }
+        setExposureBiasOnSessionQueue(0, device: device)
+    }
+
+    /// 測光結果（白飛び率）を受けて露出補正を更新する（sessionQueue 上で呼ぶこと）。
+    private func applyMeasuredClippingOnSessionQueue(_ clippedFraction: Double) {
+        // ⚠️ `isRunningDesired` を必ず見る。測光結果は測られてから適用されるまでに
+        //    キューを 1 回またぐので、その間に停止・OFF が挟まりうる。
+        //    「測った時点で有効だった」ではなく「いま適用してよいか」で判断する。
+        // ユーザーが長押しで AE をロックしているあいだは意図を尊重して触らない。
+        guard isRunningDesired, isSkyPriorityDesired, !isFocusLocked,
+              let device = videoDevice else { return }
+        // ⚠️ `lower...upper` は lower > upper だと実行時トラップする。端末の値を信用せず確かめる。
+        let lower = device.minExposureTargetBias
+        let upper = device.maxExposureTargetBias
+        guard lower <= upper else { return }
+
+        let next = SkyPriorityExposure.decideBias(
+            clippedFraction: clippedFraction,
+            currentBias: appliedExposureBias,
+            tuning: exposureTuning,
+            deviceLimits: lower...upper
+        )
+        guard next != appliedExposureBias else { return }
+        setExposureBiasOnSessionQueue(next, device: device)
+    }
+
+    /// 露出補正値を端末へ書き込む（sessionQueue 上で呼ぶこと）。
+    ///
+    /// ⚠️ 書き込んだ値がセンサーに効くまでには時間がかかる（実機で数百ミリ秒）。
+    ///    その間のフレームは**まだ前の明るさ**なので、測り続けると「効いていない」と誤解して
+    ///    さらに下げ、下限まで振り切れる。だから書き込みとセットで測光を止める。
+    private func setExposureBiasOnSessionQueue(_ bias: Float, device: AVCaptureDevice) {
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.setExposureTargetBias(bias) { [weak self] _ in
+                // 反映が完了した時点から、AE が物理的に落ち着くまでさらに少し待つ。
+                self?.exposureMeter?.suppressMeasurements(for: Self.exposureSettleMargin)
+            }
+            // 反映完了の通知が来るまでの間も測らない。通知が来ない端末への保険も兼ねる。
+            exposureMeter?.suppressMeasurements(for: Self.exposureSettleTimeout)
+            // 端末への書き込みが成功したときだけ記録する（失敗時に嘘の現在値を持たないため）。
+            appliedExposureBias = bias
+        } catch {
+            // ⚠️ 到達しない想定（このアプリの lockForConfiguration は sessionQueue 上で
+            //    直列化されており、他アプリとの競合は中断通知として現れるため）。
+            //    握りつぶすのは、露出補正が書けなくても撮影自体は続けられるから。
         }
     }
 

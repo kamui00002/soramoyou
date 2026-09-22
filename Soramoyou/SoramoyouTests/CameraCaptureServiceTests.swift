@@ -42,7 +42,16 @@ final class CameraCaptureServiceTests: XCTestCase {
         aeAfLocked: Bool = false,
         isLevel: Bool = true,
         rollDegrees: Double? = 0.4,
-        usedDeferredStart: Bool = true
+        usedDeferredStart: Bool = true,
+        skyPriorityEnabled: Bool = true,
+        exposureBiasEV: Float = 0,
+        skyPriorityMeasured: Bool = true,
+        skyClippedFraction: Double = 0,
+        skyPeakLuma: Int = 0,
+        skyMaxClippedFraction: Double = 0,
+        skyMaxPeakLuma: Int = 0,
+        lumaFullRange: Bool? = nil,
+        skyMeterRegion: String? = nil
     ) -> SkyCameraCapture {
         SkyCameraCapture(
             photoData: Data(),
@@ -53,7 +62,16 @@ final class CameraCaptureServiceTests: XCTestCase {
             isLevel: isLevel,
             rollDegrees: rollDegrees,
             usedDeferredStart: usedDeferredStart,
-            shutterDate: shutterDate
+            skyPriorityEnabled: skyPriorityEnabled,
+            exposureBiasEV: exposureBiasEV,
+            skyPriorityMeasured: skyPriorityMeasured,
+            skyClippedFraction: skyClippedFraction,
+            skyPeakLuma: skyPeakLuma,
+            skyMaxClippedFraction: skyMaxClippedFraction,
+            skyMaxPeakLuma: skyMaxPeakLuma,
+            shutterDate: shutterDate,
+            lumaFullRange: lumaFullRange,
+            skyMeterRegion: skyMeterRegion
         )
     }
 
@@ -180,6 +198,49 @@ final class CameraCaptureServiceTests: XCTestCase {
         XCTAssertEqual(parameters["roll_deg"] as? Int, 5, "傾きは整数の度数へ丸める")
         XCTAssertEqual(parameters["saved_to_library"] as? Bool, false)
         XCTAssertEqual(parameters["deferred_start"] as? Bool, true)
+    }
+
+    /// ⭐️ 空優先 AE は「ON だったか」と「実際に効いたか」を別々に残す。
+    ///    ON でも空が明るくなければ補正は 0 のまま＝出番が無かっただけで、壊れてはいない。
+    ///    片方しか送らないと、この 2 つを本番データで区別できなくなる。
+    func testCaptureParametersSeparatesSkyPriorityEnabledFromEngaged() {
+        let engaged = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPriorityEnabled: true, exposureBiasEV: -0.75),
+            savedToLibrary: true
+        )
+        XCTAssertEqual(engaged["sky_priority_enabled"] as? Bool, true)
+        XCTAssertEqual(engaged["sky_priority_engaged"] as? Bool, true, "露出を下げたのに効いていない扱い")
+        XCTAssertEqual(engaged["exposure_bias_ev"] as? Double, -0.8, "0.1 EV 刻みへ丸める")
+
+        let idle = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPriorityEnabled: true, exposureBiasEV: 0),
+            savedToLibrary: true
+        )
+        XCTAssertEqual(idle["sky_priority_enabled"] as? Bool, true)
+        XCTAssertEqual(idle["sky_priority_engaged"] as? Bool, false, "出番が無かった撮影を効いた扱いにしている")
+        XCTAssertEqual(idle["exposure_bias_ev"] as? Double, 0)
+    }
+
+    /// ⭐️ 最大輝度の物差し（Full / Video Range）と、測った範囲（空の側／画面全体）を送る。
+    ///    最大輝度は生値なので、物差しが無いと「235 = 真っ白」か「まだ余裕がある」かを区別できない。
+    func testCaptureParametersCarriesLumaRangeAndMeterRegion() {
+        let parameters = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPeakLuma: 235, lumaFullRange: false, skyMeterRegion: "upper"),
+            savedToLibrary: true
+        )
+        XCTAssertEqual(parameters["luma_full_range"] as? Bool, false)
+        XCTAssertEqual(parameters["sky_meter_region"] as? String, "upper")
+    }
+
+    /// 測光が一度も成立していない（nil）なら送らない。
+    /// ⚠️ false を送ると「Video Range だった」と区別できなくなるため、既定値で埋めない。
+    func testCaptureParametersOmitsUnmeasuredLumaRangeAndRegion() {
+        let parameters = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPriorityMeasured: false),
+            savedToLibrary: true
+        )
+        XCTAssertNil(parameters["luma_full_range"])
+        XCTAssertNil(parameters["sky_meter_region"])
     }
 
     /// 真上を向いていて傾きが取れなかった場合（nil）も属性は落とさず 0 にする。
