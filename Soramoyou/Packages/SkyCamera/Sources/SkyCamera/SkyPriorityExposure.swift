@@ -151,6 +151,25 @@ public enum SkyPriorityExposure {
         }
     }
 
+    /// 測り方（範囲・輝度の物差し）が前回から変わったか。
+    ///
+    /// ⭐️ 最大値（`sky_max_*`）は画面を開いてから積み上げるが、途中で
+    ///    「空の側 ↔ 画面全体」（真上を見上げた）や「Full ↔ Video Range」が変わると、
+    ///    それまでの最大値は**別の物差しの数字**になる。混ぜたまま送ると、
+    ///    撮影時の `sky_meter_region` / `luma_full_range` と食い違う値が集計に紛れる。
+    ///    変わったら最大値を積み直す（呼び出し側）。
+    ///
+    /// - Returns: 前回の測り方が無い（初回）なら false（そのまま積み始めてよい）
+    public static func measurementBasisChanged(
+        previousRegion: MeterRegion?,
+        previousFullRange: Bool?,
+        region: MeterRegion,
+        isFullRange: Bool
+    ) -> Bool {
+        guard let previousRegion, let previousFullRange else { return false }
+        return previousRegion != region || previousFullRange != isFullRange
+    }
+
     // MARK: - 測光
 
     /// 輝度プレーン（Y）から「白飛びしている画素の割合」を数える。

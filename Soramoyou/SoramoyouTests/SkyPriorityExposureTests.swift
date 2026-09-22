@@ -232,4 +232,31 @@ final class SkyPriorityExposureTests: XCTestCase {
         let empty = SkyPriorityExposure.SampleRegion(x: 0...1, y: 0...0)
         XCTAssertEqual(empty.pixelRanges(width: 10, height: 10).y.count, 1, "0 割でも 1 行は測る")
     }
+
+
+    // MARK: - 測り方の変化（最大値の積み直し）
+
+    /// 初回（前回の測り方が無い）は積み始めてよい。
+    func testMeasurementBasisIsNotChangedOnFirstReading() {
+        XCTAssertFalse(SkyPriorityExposure.measurementBasisChanged(
+            previousRegion: nil, previousFullRange: nil, region: .upper, isFullRange: true))
+    }
+
+    /// 同じ測り方が続く限り積み上げ続ける。
+    func testMeasurementBasisIsUnchangedWhenSame() {
+        XCTAssertFalse(SkyPriorityExposure.measurementBasisChanged(
+            previousRegion: .upper, previousFullRange: true, region: .upper, isFullRange: true))
+    }
+
+    /// 真上を見上げて「空の側 → 画面全体」になったら、最大値は別の物差しになる。
+    func testMeasurementBasisChangesWhenRegionFlips() {
+        XCTAssertTrue(SkyPriorityExposure.measurementBasisChanged(
+            previousRegion: .upper, previousFullRange: true, region: .wholeFrame, isFullRange: true))
+    }
+
+    /// 輝度の物差し（Full ↔ Video Range）が変わっても、最大値は比べられない。
+    func testMeasurementBasisChangesWhenLumaRangeFlips() {
+        XCTAssertTrue(SkyPriorityExposure.measurementBasisChanged(
+            previousRegion: .upper, previousFullRange: true, region: .upper, isFullRange: false))
+    }
 }
