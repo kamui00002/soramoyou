@@ -168,6 +168,11 @@ struct EditView: View {
 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
+                        // ⚠️ 書き出し中（isGeneratingFinal）は Undo / Redo / 編集ツール設定を止める。
+                        //    書き出し中の表示（finalImageProgressOverlay）はナビバーを覆わないため、ここで個別に止める。
+                        //    Undo / Redo で編集内容が変わると、書き出した画像と一緒に渡すレシピが食い違う。
+                        //    設定シートを開くと、書き出し完了時の fullScreenCover と表示がぶつかる。
+                        //    キャンセルは、書き出しが終わらないときの逃げ道として押せるまま残す。
                         // Undo ボタン
                         Button(action: {
                             viewModel.undo()
@@ -175,8 +180,8 @@ struct EditView: View {
                             Image(systemName: "arrow.uturn.backward")
                                 .font(.body)
                         }
-                        .disabled(!viewModel.canUndo)
-                        .foregroundColor(viewModel.canUndo ? .white : .gray)
+                        .disabled(!viewModel.canUndo || isGeneratingFinal)
+                        .foregroundColor(viewModel.canUndo && !isGeneratingFinal ? .white : .gray)
 
                         // Redo ボタン
                         Button(action: {
@@ -185,8 +190,8 @@ struct EditView: View {
                             Image(systemName: "arrow.uturn.forward")
                                 .font(.body)
                         }
-                        .disabled(!viewModel.canRedo)
-                        .foregroundColor(viewModel.canRedo ? .white : .gray)
+                        .disabled(!viewModel.canRedo || isGeneratingFinal)
+                        .foregroundColor(viewModel.canRedo && !isGeneratingFinal ? .white : .gray)
 
                         // 編集ツール設定ボタン
                         Button(action: {
@@ -195,7 +200,8 @@ struct EditView: View {
                             Image(systemName: "slider.horizontal.3")
                                 .font(.body)
                         }
-                        .foregroundColor(.white)
+                        .disabled(isGeneratingFinal)
+                        .foregroundColor(isGeneratingFinal ? .gray : .white)
 
                         // 次へボタン
                         Button {
@@ -583,7 +589,12 @@ struct EditView: View {
 
     /// 押せない状態で「次へ」が押されたことを記録する（理由ごとに画面につき 1 回まで）。
     ///
-    /// 押せない状態が何秒続いているかで、「処理が遅いだけ」か「状態が戻らず固まっている」かを見分ける。
+    /// `seconds_since_open` は「画面を開いてから、押せない『次へ』を初めて押すまでの秒数」で、
+    /// 押せない状態が続いた秒数ではない（何度も押されたかは PostHog の `$rageclick` で見る）。
+    /// 書き出しが「遅いだけ」か「終わらない」かは、`edit_next_started` と `edit_next_finished`（`duration_ms`）の
+    /// 組で見分ける（started だけで finished が無ければ、終わらずに離脱している）。
+    /// ⚠️ キャンセルで画面を閉じても書き出しの Task は続くので、`edit_next_finished` は画面を離れたあとにも届く。
+    ///    「投稿情報画面に進めた」の意味では読まないこと（そちらは `post_completed` で数える）。
     private func logNextBlocked(reason: String) {
         guard !loggedNextBlockReasons.contains(reason) else { return }
         loggedNextBlockReasons.insert(reason)
@@ -598,7 +609,8 @@ struct EditView: View {
     ///
     /// ⚠️ 書き出しは端末によって数秒以上かかる。以前は何も表示しなかったため「押しても反応しない」ように見え、
     ///    iPhone 11 Pro のユーザーが「次へ」を連打した末に離脱していた（2026-09-22 のフィードバック「投稿ができない」）。
-    ///    下の操作も受け付けないようにして、書き出し中に編集内容が変わらないようにする。
+    ///    画面の中身（プレビュー・編集コントロール）の操作は受け付けない。ナビバーは覆わないので、
+    ///    Undo / Redo / 編集ツール設定はツールバー側で個別に止めている（キャンセルは押せるまま残す）。
     private var finalImageProgressOverlay: some View {
         ZStack {
             Color.black.opacity(0.55)
