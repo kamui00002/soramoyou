@@ -22,8 +22,55 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// 静止画出力。
     private let photoOutput = AVCapturePhotoOutput()
 
-    /// 背面広角カメラ。構成後に確定する（sessionQueue 上でのみ触る）。
+    /// 背面カメラ。構成後に確定する（sessionQueue 上でのみ触る）。
+    /// ⭐️ 可能なら**仮想デバイス**（3眼などをまとめた 1 つのデバイス）を掴む。
+    ///    レンズごとに別デバイスへ差し替えると、そのたびにセッションの再構成が要り、
+    ///    露出・回転・水平線ガイドの結びつけも作り直しになる。
+    ///    仮想デバイスならズーム倍率を変えるだけで OS がレンズを切り替えてくれるので、
+    ///    こちらは**デバイスを一度も持ち替えない**（＝既存の配線に一切触らない）。
     private var videoDevice: AVCaptureDevice?
+
+    /// 掴んだデバイスのレンズ構成（倍率の換算に使う）。sessionQueue 上でのみ触る。
+    private var lensConfigurationStorage: LensConfiguration?
+
+    /// いまセッションへ挿している入力（デバイスを付け替えるときに外すため保持する）。
+    private var videoInput: AVCaptureDeviceInput?
+
+    /// いま掴んでいるカメラの種別。
+    /// ⚠️ 「単眼かどうか」の真偽値では足りない。48MP はどのレンズでも撮れるので、
+    ///    **どの物理レンズを掴んでいるか**まで持たないと付け替えの要否を判断できない。
+    private var currentLensRequirement: SkyCameraLensRequirement = .virtual
+
+    /// 付け替え先の種別（レンズ構成の作り方が違うので分けて渡す）。
+    private enum AttachTarget {
+        /// 複数レンズをまとめた仮想デバイス。倍率の基準は端末が報告する切替点から作る。
+        case virtual(hasUltraWide: Bool)
+        /// 物理レンズ 1 本。倍率の基準は「素の画角」から作る（端末は切替点を報告しない）。
+        case physical(nativeDisplayedZoom: CGFloat)
+    }
+
+    /// 超広角・望遠を含む**仮想デバイス**のレンズ構成。
+    /// ⚠️ 物理レンズを掴んでいる間も**保持し続ける**。UI のズームボタンはこちらを基準に
+    ///    組み立てるので、48MP のあいだ 0.5x / 3x が消えてはいけない。
+    ///    「構成時に一度だけ取る」にすると、保存済みの 48MP を復元した直後に
+    ///    物理レンズの構成で上書きされるかどうかが**呼び出し順に依存**してしまう。
+    ///    仮想デバイスを掴んだときにだけ更新することで順序に依存しなくなる。
+    private var virtualLensConfigurationStorage: LensConfiguration?
+
+    /// いま合わせている表示倍率（sessionQueue 上でのみ触る）。
+    private var currentDisplayedZoom: CGFloat = 1
+
+    /// レンズ状態が変わったときの通知先（メインスレッドで呼ぶ）。
+    private var lensStateHandler: (@Sendable (SkyCameraLensState) -> Void)?
+
+    /// 直近に通知したレンズ状態（同じ内容を何度も流さないため）。
+    private var lastPublishedLensState: SkyCameraLensState?
+
+    /// 最後に受け取ったズーム要求の連番。
+    /// ⚠️ 付け替えには時間がかかるので、その間に次のズーム要求が来ると、
+    ///    **完了通知が古い倍率を持って後から届く**（指を離した後に表示だけ巻き戻る）。
+    ///    どの要求に対する結果かを番号で示し、受け手が古い通知を捨てられるようにする。
+    private var latestZoomRequestID: UInt64 = 0
 
     /// iOS 17+ の回転コーディネータ。iOS 16 では nil のまま（型を隠すため Any で保持）。
     private var rotationCoordinatorStorage: Any?
@@ -81,6 +128,37 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     ///    恒久的に機能しない経路はすべてここが false のままになる。
     private var hasMeasuredClipping = false
 
+    /// フラッシュの動作（sessionQueue 上でのみ読み書きする）。
+    private var flashMode: AVCaptureDevice.FlashMode = .off
+
+    /// 選べる撮影解像度（sessionQueue 上でのみ読み書きする）。
+    private var availableResolutions: [SkyCameraPhotoResolution] = []
+
+    /// いま選んでいる撮影解像度。nil なら端末既定（＝最小）。
+    private var preferredResolution: SkyCameraPhotoResolution?
+
+    /// いま実際に撮れる解像度。レンズの都合で希望より下がることがある
+    /// （48MP のまま超広角へ移ると 12MP になる）。
+    /// ⚠️ 撮影設定には**必ずこちらを使う**。希望値をそのまま渡すと、出せないデバイスに
+    ///    出せない寸法を要求することになる。
+    private var effectiveResolutionStorage: SkyCameraPhotoResolution?
+
+    /// このデバイスの**全フォーマットを通じた**最大解像度（MP。診断用）。
+    /// ⚠️ いま使っているフォーマットが出せる最大とは別物。
+    ///    「48MP がこのデバイスに存在しないのか、いまのフォーマットが対応していないだけか」を
+    ///    区別するために要る。仮想デバイス（3眼）では 48MP が出ないことがあり、
+    ///    その場合はレンズ切替と 48MP のどちらを取るかという設計判断になる。
+    private var deviceMaxMegapixels = 0
+
+    /// **背面の物理レンズごと**の最大解像度（例: `"ultra:12,wide:48,tele:12"`。診断用）。
+    /// ⚠️ 「48MP を超広角・望遠でも撮れるのか」は**測らないと分からない**。
+    ///    カタログ上のセンサー画素数と、AVFoundation が写真として出せる寸法は別物なので、
+    ///    仕様表を根拠に実装を始めない。ここが 48 でなければ、その大工事に意味は無い。
+    private var lensMaxMegapixels = ""
+
+    /// 記録形式（sessionQueue 上でのみ読み書きする）。
+    private var photoFormat: SkyCameraPhotoFormat = .heic
+
     /// 直近の測光で届いたバッファが Full Range だったか（計装用）。まだ測れていなければ nil。
     /// ⚠️ `lastPeakLuma` / `maxPeakLuma` は届いたバッファの流儀のままの生値
     ///    （Video Range なら最大 235）。どちらの物差しかを残さないと集計で混ざる。
@@ -134,6 +212,12 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             sessionQueue.async {
                 do {
                     try self.configureOnSessionQueue()
+                    // ⚠️ 解像度は**構成が確定してから**読む。
+                    //    `sessionPreset = .photo` は commitConfiguration で初めて効くので、
+                    //    構成の内側で activeFormat を見ると**前の形式**の値を拾ってしまう
+                    //    （選べる解像度が 1 つしか無いように見える）。
+                    //    `availableVideoPixelFormatTypes` で踏んだのと同じ型の罠。
+                    self.finalizePhotoDimensionsOnSessionQueue()
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
@@ -146,9 +230,10 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     private func configureOnSessionQueue() throws {
         guard !isConfigured else { return }
 
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+        guard let selected = Self.selectBackCamera() else {
             throw SkyCameraError.deviceUnavailable
         }
+        let device = selected.device
 
         session.beginConfiguration()
         // beginConfiguration と commitConfiguration は必ず対で呼ぶ（途中 throw でも取りこぼさない）。
@@ -160,6 +245,7 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             throw SkyCameraError.configurationFailed
         }
         session.addInput(input)
+        videoInput = input
 
         guard session.canAddOutput(photoOutput) else {
             throw SkyCameraError.configurationFailed
@@ -222,7 +308,102 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             exposureMeter = meter
         }
 
+        attachDeviceOnSessionQueue(device,
+                                   target: .virtual(hasUltraWide: selected.hasUltraWide),
+                                   targetDisplayedZoom: 1)
+        isConfigured = true
+    }
+
+    /// 選べる撮影解像度を確定し、出力側の上限を上げる（sessionQueue 上・構成の**後**で呼ぶこと）。
+    private func finalizePhotoDimensionsOnSessionQueue() {
+        guard let device = videoDevice else { return }
+        // 24MP は遅延配信が要るので一覧から外す（理由は SkyCameraPhotoResolution のコメント）。
+        let supported = device.activeFormat.supportedMaxPhotoDimensions
+            .map { SkyCameraPhotoResolution(width: $0.width, height: $0.height) }
+            .filter { !$0.requiresDeferredDelivery }
+            .sorted { $0.megapixels < $1.megapixels }
+        // 物理レンズを 1 本だけ掴めば仮想デバイスより大きく撮れるので、その最大を 1 件だけ足す。
+        // ⚠️ **どのレンズでも撮れる**（実機で超広角・標準・望遠とも 48MP と実測）。
+        //    「広角だけ」ではないので、3 本の中の最大を採る。
+        // ⚠️ 一覧は**初回に一度だけ**作り、切り替えのたびに作り直さない。
+        //    作り直すと 48MP を選んだ瞬間に 12MP へ戻る道が消える。
+        var resolutions = supported
+        if let physicalBest = Self.largestPhysicalLensPhotoResolution(),
+           physicalBest.megapixels > (supported.last?.megapixels ?? 0) {
+            resolutions.append(SkyCameraPhotoResolution(
+                width: physicalBest.width, height: physicalBest.height, requiresPhysicalLens: true))
+        }
+        availableResolutions = resolutions
+        // 診断用：デバイスが持つ全フォーマットの中での最大。
+        // ⚠️ メソッドチェーンで書くと型チェックが通らない（式が複雑すぎる）。素直に回す。
+        let maxMegapixels = Self.maximumMegapixels(for: device)
+        deviceMaxMegapixels = maxMegapixels
+        lensMaxMegapixels = Self.lensMaxMegapixelsSummary()
+
+        // ⚠️ 出力側の上限は**ここで一度だけ**いちばん大きい値へ上げておく。
+        //    撮影のたびに動かすと「重いパイプライン再構成」が走る（SDK ヘッダーの警告）。
+        //    以後は撮影設定側（settings.maxPhotoDimensions）で軽く選ぶ。
+        //    startRunning の前に済ませる必要があるが、configure() は start() より先なので満たしている。
+        if let largest = supported.last {
+            photoOutput.maxPhotoDimensions = CMVideoDimensions(
+                width: largest.width, height: largest.height)
+        }
+
+        // ProRAW は「使う」と宣言して初めて availableRawPhotoPixelFormatTypes に現れる。
+        // 対応端末なら常に有効化しておく（実際に RAW で撮るかは撮影設定側で決める）。
+        if photoOutput.isAppleProRAWSupported {
+            photoOutput.isAppleProRAWEnabled = true
+        }
+    }
+
+    /// デバイスを掴んだ後の共通処理。
+    ///
+    /// ⭐️ 初回構成と、解像度都合の**付け替え**の両方がここを通る。
+    ///    道を 2 本にすると必ず片方だけ直し忘れるので、1 本に集約してある。
+    private func attachDeviceOnSessionQueue(_ device: AVCaptureDevice,
+                                            target: AttachTarget,
+                                            targetDisplayedZoom: CGFloat) {
+        // 前のデバイス向けの購読を必ず外す（残すと古いデバイスの通知で誤動作する）。
+        NotificationCenter.default.removeObserver(
+            self, name: .AVCaptureDeviceSubjectAreaDidChange, object: nil)
+
         videoDevice = device
+        let lensConfiguration: LensConfiguration
+        switch target {
+        case .virtual(let hasUltraWide):
+            lensConfiguration = Self.makeLensConfiguration(device: device, hasUltraWide: hasUltraWide)
+            // ⚠️ 仮想デバイスのときだけ覚える。物理レンズの構成で上書きすると
+            //    UI のズームボタンから 0.5x / 3x が消える。
+            virtualLensConfigurationStorage = lensConfiguration
+        case .physical(let nativeDisplayedZoom):
+            // ⚠️ 物理レンズ単体は切替点を報告しないので、基準倍率を自分で与える。
+            //    与えないと超広角の等倍が「1x」と表示され、画角と食い違う。
+            lensConfiguration = LensConfiguration(
+                nativeDisplayedZoom: nativeDisplayedZoom,
+                minFactor: device.minAvailableVideoZoomFactor,
+                deviceMaxFactor: device.maxAvailableVideoZoomFactor)
+        }
+        lensConfigurationStorage = lensConfiguration
+        // 露出補正はデバイスごとの設定なので、付け替えたら追跡値を捨てる
+        //（別のデバイスにかけた値を「いまかかっている」と思い込まないため）。
+        appliedExposureBias = 0
+        // ⚠️ AE/AF ロックも**同じ理由で捨てる**。新しいデバイスは自動追従の状態で始まるので、
+        //    フラグだけ残すと (a) 画面のロック表示が実体と食い違い、
+        //    (b) 空優先 AE が「ロック中だから触らない」と誤認して測光を止め続ける。
+        //    露出補正だけリセットして、こちらを忘れていた。
+        isFocusLocked = false
+
+        // ⚠️ 仮想デバイスは videoZoomFactor = 1.0 で始まるが、それは**いちばん広いレンズ**。
+        //    3 眼端末だと超広角なので、何もしないとカメラが 0.5x で開いてしまう。
+        //    そのため必ず倍率を明示して合わせる。
+        // ⚠️ ここで**無条件に 1x へ戻してはいけない**。付け替えは「0.5x を押した」ことが
+        //    きっかけで起きるので、1x へ戻すとユーザーの操作をそのまま捨てることになり、
+        //    「押しても何も起きない」として現れる。狙いの倍率を受け取って復元する。
+        applyZoomOnSessionQueue(displayedZoom: targetDisplayedZoom,
+                                configuration: lensConfiguration,
+                                device: device,
+                                animated: false)
+        currentDisplayedZoom = targetDisplayedZoom
 
         // タップ AF/AE は「1 回合わせたら止まる」一発モード（.autoFocus / .autoExpose）なので、
         // 被写体が変わったタイミングで自動追従へ戻してやる必要がある。
@@ -238,7 +419,102 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         // プレビュー層は View 生成時に別経路で届くので、届いていればそれ込みで作る。
         // 撮影向きだけなら層は不要だが、プレビューの回転には層が要る。
         rebuildRotationCoordinatorOnSessionQueue()
-        isConfigured = true
+    }
+
+    // MARK: - レンズ選択
+
+    /// 背面カメラを、広い画角を優先して選ぶ。
+    ///
+    /// 仮想デバイス（複数レンズを 1 つにまとめたもの）を上から順に試し、
+    /// どれも無ければ従来どおり単眼の広角カメラへ落ちる。
+    /// - Returns: 掴んだデバイスと、いちばん広いレンズが超広角かどうか
+    private static func selectBackCamera() -> (device: AVCaptureDevice, hasUltraWide: Bool)? {
+        // 「超広角を含むか」は倍率表示の基準（1x をどこに置くか）を決めるので、
+        // 端末の型から確定させる。ここを推測にすると 0.5x の表示がずれる。
+        let candidates: [(AVCaptureDevice.DeviceType, Bool)] = [
+            (.builtInTripleCamera, true),    // 超広角＋標準＋望遠
+            (.builtInDualWideCamera, true),  // 超広角＋標準
+            (.builtInDualCamera, false),     // 標準＋望遠
+            (.builtInWideAngleCamera, false) // 単眼
+        ]
+        for (type, hasUltraWide) in candidates {
+            if let device = AVCaptureDevice.default(type, for: .video, position: .back) {
+                return (device, hasUltraWide)
+            }
+        }
+        return nil
+    }
+
+    /// 端末が報告する値からレンズ構成を組み立てる。
+    private static func makeLensConfiguration(device: AVCaptureDevice,
+                                              hasUltraWide: Bool) -> LensConfiguration {
+        LensConfiguration(
+            hasUltraWide: hasUltraWide,
+            switchOverFactors: device.virtualDeviceSwitchOverVideoZoomFactors.map { CGFloat($0.doubleValue) },
+            minFactor: device.minAvailableVideoZoomFactor,
+            deviceMaxFactor: device.maxAvailableVideoZoomFactor
+        )
+    }
+
+    // MARK: - ズーム
+
+    /// 掴んだ端末のレンズ構成（UI がボタンとスライダーを組み立てるのに使う）。
+    /// 構成前・デバイスが無い場合は nil。
+    public func lensConfiguration() async -> LensConfiguration? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<LensConfiguration?, Never>) in
+            sessionQueue.async { continuation.resume(returning: self.lensConfigurationStorage) }
+        }
+    }
+
+    /// 表示倍率（0.5x / 1x / 3x …）を指定してズームする。
+    /// - Parameters:
+    ///   - displayedZoom: 画面に出している倍率
+    ///   - animated: true ならなめらかに寄る（ボタンで飛ばすとき用）。
+    ///     スライダーのように連続して呼ぶ場合は false にする
+    ///     （毎回アニメーションを開始し直すとかえってカクつくため）。
+    public func setZoom(displayedZoom: CGFloat, animated: Bool, requestID: UInt64) {
+        sessionQueue.async {
+            self.latestZoomRequestID = requestID
+            // ⚠️ 判断は「これから合わせたい倍率」で行う。付け替え**後**の実測値で判断すると、
+            //    付け替え → 倍率が変わる → また付け替え、と往復しかねない。
+            let required = self.requiredLensOnSessionQueue(displayedZoom: displayedZoom,
+                                                           resolution: self.preferredResolution)
+            if required != self.currentLensRequirement, let preferred = self.preferredResolution {
+                self.switchDeviceOnSessionQueue(to: required,
+                                                targetResolution: preferred,
+                                                targetDisplayedZoom: displayedZoom)
+                return
+            }
+            guard let device = self.videoDevice,
+                  let configuration = self.lensConfigurationStorage else { return }
+            self.applyZoomOnSessionQueue(displayedZoom: displayedZoom,
+                                         configuration: configuration,
+                                         device: device,
+                                         animated: animated)
+            self.currentDisplayedZoom = displayedZoom
+        }
+    }
+
+    /// 掴んでいるデバイスへ倍率を実際に当てる（sessionQueue 上で呼ぶこと）。
+    private func applyZoomOnSessionQueue(displayedZoom: CGFloat,
+                                         configuration: LensConfiguration,
+                                         device: AVCaptureDevice,
+                                         animated: Bool) {
+        let factor = configuration.videoZoomFactor(forDisplayedZoom: displayedZoom)
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            if animated {
+                // rate は「1 秒あたり何段変わるか」。4 は標準カメラに近い体感。
+                device.ramp(toVideoZoomFactor: factor, withRate: 4)
+            } else {
+                // ドラッグ中に ramp を重ねると前の動きと喧嘩するので、必ず止めてから直接入れる。
+                if device.isRampingVideoZoom { device.cancelVideoZoomRamp() }
+                device.videoZoomFactor = factor
+            }
+        } catch {
+            // ズームできなくても撮影自体は続けられるので握りつぶす。
+        }
     }
 
     // MARK: - プレビュー層の結びつけ
@@ -355,8 +631,8 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// - Returns: 撮影データとメタデータ
     public func capturePhoto(
         fallbackOrientation: AVCaptureVideoOrientation
-    ) async throws -> (data: Data, metadata: [String: Any]) {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(data: Data, metadata: [String: Any]), Error>) in
+    ) async throws -> (data: Data, rawData: Data?, metadata: [String: Any]) {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(data: Data, rawData: Data?, metadata: [String: Any]), Error>) in
             sessionQueue.async {
                 guard self.isConfigured else {
                     continuation.resume(throwing: SkyCameraError.configurationFailed)
@@ -396,16 +672,415 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         }
     }
 
-    /// 撮影設定。HEIC が使えるなら HEIC（容量が小さく EXIF もそのまま載る）。
+    /// 撮影設定。既定は HEIC（容量が小さく EXIF もそのまま載る）。
     private func makePhotoSettings() -> AVCapturePhotoSettings {
-        let settings: AVCapturePhotoSettings
-        if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
-            settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
-        } else {
-            settings = AVCapturePhotoSettings()
-        }
+        let settings = makeBaseSettings()
+        // ⚠️ `.quality` にするとナイトモード・Deep Fusion が自動で効くようになるが、
+        //    そのぶんシャッターが待たされる。空の連続撮影を優先して `.balanced` のままにしてある
+        //    （段階 A での意図的な選択。変えるならシャッター体感の再確認とセットで）。
         settings.photoQualityPrioritization = .balanced
+        // 指定しないと端末が出せる**最小**で撮られる（SDK ヘッダー明記）。
+        // ⚠️ 希望値ではなく**実際に撮れる解像度**を渡す。仮想デバイスへ戻っているのに
+        //    48MP の寸法を要求すると、そのデバイスが出せない寸法になる。
+        if let resolution = effectiveResolutionStorage {
+            settings.maxPhotoDimensions = CMVideoDimensions(
+                width: resolution.width, height: resolution.height)
+        }
+        // 端末・状態によって使えるフラッシュは変わるので、必ず現時点の可否を見てから入れる。
+        if photoOutput.supportedFlashModes.contains(flashMode) {
+            settings.flashMode = flashMode
+        }
         return settings
+    }
+
+    /// 記録形式に応じた撮影設定の土台を作る。
+    private func makeBaseSettings() -> AVCapturePhotoSettings {
+        let hevcAvailable = photoOutput.availablePhotoCodecTypes.contains(.hevc)
+        let processedFormat: [String: Any]? = hevcAvailable
+            ? [AVVideoCodecKey: AVVideoCodecType.hevc] : nil
+
+        if photoFormat == .raw, let rawType = preferredRawPixelFormatType() {
+            // ⚠️ RAW 単独にはしない。DNG は編集パイプラインで開けないので、
+            //    必ず現像済みの 1 枚を同時に受け取って、そちらを編集へ渡す。
+            return AVCapturePhotoSettings(
+                rawPixelFormatType: rawType,
+                processedFormat: processedFormat ?? [AVVideoCodecKey: AVVideoCodecType.jpeg])
+        }
+        if photoFormat == .heic, let processedFormat {
+            return AVCapturePhotoSettings(format: processedFormat)
+        }
+        // JPEG、または HEVC が使えない端末。
+        return AVCapturePhotoSettings()
+    }
+
+    /// 使う RAW の画素形式。Apple ProRAW を優先する（素の Bayer RAW より扱いやすい）。
+    private func preferredRawPixelFormatType() -> OSType? {
+        let available = photoOutput.availableRawPhotoPixelFormatTypes
+        // ⚠️ **Apple ProRAW だけを使う。Bayer RAW へは落とさない。**
+        //    SDK ヘッダー（AVCapturePhotoOutput.h）の Bayer RAW rules:
+        //      - photoQualityPrioritization を .speed にしなければならない
+        //      - 撮影時の videoZoomFactor が 1.0 でなければならない
+        //    破ると NSInvalidArgumentException で**落ちる**。レンズ切替とズームが主役の
+        //    このカメラでその制約は飲めないので、対応端末を絞る方を選ぶ。
+        //    ここが nil を返せば `isRAWAvailable()` も false になり、
+        //    メニューから RAW が消える（選べないものを見せない）。
+        return available.first { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }
+    }
+
+    // MARK: - 撮影の設定
+
+    /// フラッシュの動作を変える。
+    public func setFlashMode(_ mode: SkyCameraFlashMode) {
+        sessionQueue.async { self.flashMode = mode.avFlashMode }
+    }
+
+    /// 記録形式を切り替える。
+    public func setPhotoFormat(_ format: SkyCameraPhotoFormat) {
+        sessionQueue.async { self.photoFormat = format }
+    }
+
+    /// この端末で RAW（Apple ProRAW）を使えるか。使えないならメニューに出さない。
+    public func isRAWAvailable() async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            sessionQueue.async {
+                continuation.resume(returning: self.preferredRawPixelFormatType() != nil)
+            }
+        }
+    }
+
+    /// 指定デバイスが出せる最大の解像度（遅延配信が要るものは除く）。
+    private static func largestPhotoResolution(
+        for device: AVCaptureDevice?
+    ) -> SkyCameraPhotoResolution? {
+        guard let device else { return nil }
+        var best: SkyCameraPhotoResolution?
+        for format in device.formats {
+            for dimensions in format.supportedMaxPhotoDimensions {
+                let candidate = SkyCameraPhotoResolution(
+                    width: dimensions.width, height: dimensions.height)
+                guard !candidate.requiresDeferredDelivery else { continue }
+                if candidate.megapixels > (best?.megapixels ?? 0) { best = candidate }
+            }
+        }
+        return best
+    }
+
+    /// その解像度で撮れるフォーマットのうち、プレビューが軽いものを選ぶ。
+    /// ⚠️ 48MP は `.photo` プリセットが選ぶフォーマットでは出ない。
+    ///    プリセットを `.inputPriority` にして、ここで選んだフォーマットを自分で当てる。
+    private static func format(
+        for device: AVCaptureDevice, supporting resolution: SkyCameraPhotoResolution
+    ) -> AVCaptureDevice.Format? {
+        var best: AVCaptureDevice.Format?
+        var bestArea = Int.max
+        for format in device.formats {
+            let matches = format.supportedMaxPhotoDimensions.contains {
+                $0.width == resolution.width && $0.height == resolution.height
+            }
+            guard matches else { continue }
+            let videoDimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            let area = Int(videoDimensions.width) * Int(videoDimensions.height)
+            // プレビュー用の映像が小さいものを優先する（大きいほど発熱と電力を食う）。
+            if area < bestArea {
+                bestArea = area
+                best = format
+            }
+        }
+        return best
+    }
+
+    /// 指定デバイスが全フォーマットを通じて出せる最大解像度（MP）。
+    /// ⚠️ メソッドチェーンで書くと型チェックが通らない（式が複雑すぎる）。素直に回す。
+    private static func maximumMegapixels(for device: AVCaptureDevice?) -> Int {
+        guard let device else { return 0 }
+        var maxMegapixels = 0
+        for format in device.formats {
+            for dimensions in format.supportedMaxPhotoDimensions {
+                let resolution = SkyCameraPhotoResolution(
+                    width: dimensions.width, height: dimensions.height)
+                maxMegapixels = max(maxMegapixels, resolution.megapixels)
+            }
+        }
+        return maxMegapixels
+    }
+
+    /// 背面の物理レンズごとの最大解像度を 1 行にまとめる（副作用なし・読むだけ）。
+    ///
+    /// ⭐️ 掴まずに `formats` を読むだけなので、セッションには一切影響しない。
+    ///    「超広角でも 48MP を出せるのか」を、実装に着手する**前に**数字で確かめるための値。
+    private static func lensMaxMegapixelsSummary() -> String {
+        let lenses: [(String, AVCaptureDevice.DeviceType)] = [
+            ("ultra", .builtInUltraWideCamera),
+            ("wide", .builtInWideAngleCamera),
+            ("tele", .builtInTelephotoCamera)
+        ]
+        var parts: [String] = []
+        for (name, type) in lenses {
+            guard let device = AVCaptureDevice.default(type, for: .video, position: .back) else {
+                // 持っていないレンズは「0」ではなく欠席として残す（0 は「測って 0 だった」と紛らわしい）。
+                parts.append("\(name):-")
+                continue
+            }
+            parts.append("\(name):\(Self.maximumMegapixels(for: device))")
+        }
+        return parts.joined(separator: ",")
+    }
+
+    /// 診断用の解像度まわりの実測値。
+    /// - Returns: `current` = いま掴んでいるデバイスの最大、
+    ///   `lenses` = 物理レンズごとの最大（例 `"ultra:12,wide:48,tele:12"`）
+    public func maximumMegapixelsDiagnostics() async -> (current: Int, lenses: String) {
+        await withCheckedContinuation { (continuation: CheckedContinuation<(current: Int, lenses: String), Never>) in
+            sessionQueue.async {
+                continuation.resume(returning: (self.deviceMaxMegapixels, self.lensMaxMegapixels))
+            }
+        }
+    }
+
+    /// 選べる撮影解像度の一覧（小さい順）。
+    public func photoResolutions() async -> [SkyCameraPhotoResolution] {
+        await withCheckedContinuation { (continuation: CheckedContinuation<[SkyCameraPhotoResolution], Never>) in
+            sessionQueue.async { continuation.resume(returning: self.availableResolutions) }
+        }
+    }
+
+    /// 撮影解像度を選ぶ。必要ならデバイスごと付け替える。
+    public func setPhotoResolution(_ resolution: SkyCameraPhotoResolution?) {
+        sessionQueue.async {
+            self.preferredResolution = resolution
+            guard let resolution else { return }
+            // 解像度を変えても倍率は保つ。レンズはどの倍率でも選べるので寄せる必要が無い。
+            let targetZoom = self.currentDisplayedZoom
+            let required = self.requiredLensOnSessionQueue(displayedZoom: targetZoom,
+                                                           resolution: resolution)
+            self.switchDeviceOnSessionQueue(to: required,
+                                            targetResolution: resolution,
+                                            targetDisplayedZoom: targetZoom)
+        }
+    }
+
+    /// デバイスを付け替える（sessionQueue 上で呼ぶこと）。
+    ///
+    /// ⚠️ 48MP は物理レンズを 1 本だけ掴んだときにしか出せず、3眼をまとめた仮想デバイスからは
+    ///    見えない（実機で triple=24MP / 物理3本はいずれも 48MP と実測）。
+    ///    よって解像度とデバイスは切り離せない。
+    ///    ただし**ユーザーにはレンズを常に選ばせる**ので、超広角・望遠へ移るときは
+    ///    こちらが自動で仮想デバイスへ戻し、そのぶん解像度を落とす。
+    private func switchDeviceOnSessionQueue(to requirement: SkyCameraLensRequirement,
+                                            targetResolution: SkyCameraPhotoResolution,
+                                            targetDisplayedZoom: CGFloat) {
+        guard requirement != currentLensRequirement else {
+            // 付け替えは要らないが、倍率の指定は効かせる。
+            if let device = videoDevice, let configuration = lensConfigurationStorage {
+                applyZoomOnSessionQueue(displayedZoom: targetDisplayedZoom,
+                                        configuration: configuration,
+                                        device: device,
+                                        animated: true)
+            }
+            finishDeviceSwitchOnSessionQueue(targetDisplayedZoom: targetDisplayedZoom)
+            return
+        }
+
+        // 掴む先を決める。狙った物理レンズが取れない端末では仮想デバイスへ落とす。
+        var resolved: SkyCameraLensRequirement = .virtual
+        var targetDevice: AVCaptureDevice?
+        var attachTarget: AttachTarget?
+        if case .physical(let lens) = requirement,
+           let native = virtualLensConfigurationStorage?.nativeDisplayedZoom(for: lens),
+           let physical = AVCaptureDevice.default(Self.deviceType(for: lens),
+                                                  for: .video, position: .back) {
+            resolved = requirement
+            targetDevice = physical
+            attachTarget = .physical(nativeDisplayedZoom: native)
+        } else if let selected = Self.selectBackCamera() {
+            targetDevice = selected.device
+            attachTarget = .virtual(hasUltraWide: selected.hasUltraWide)
+        }
+
+        guard let targetDevice, let attachTarget, let previousInput = videoInput else {
+            // 掴めるデバイスが無い。付け替えは諦めるが、倍率の要求は捨てない。
+            abandonDeviceSwitchOnSessionQueue(targetDisplayedZoom: targetDisplayedZoom)
+            return
+        }
+        // 落とした先がいまと同じなら付け替えない（無駄な作り直しを避ける）。
+        guard resolved != currentLensRequirement else {
+            abandonDeviceSwitchOnSessionQueue(targetDisplayedZoom: targetDisplayedZoom)
+            return
+        }
+
+        session.beginConfiguration()
+        session.removeInput(previousInput)
+        guard let input = try? AVCaptureDeviceInput(device: targetDevice),
+              session.canAddInput(input) else {
+            // ⚠️ 入れ替えに失敗したら必ず元へ戻す。入力が無いセッションはプレビューが
+            //    真っ暗になり、ユーザーには「壊れた」としか見えない。
+            if session.canAddInput(previousInput) { session.addInput(previousInput) }
+            session.commitConfiguration()
+            abandonDeviceSwitchOnSessionQueue(targetDisplayedZoom: targetDisplayedZoom)
+            return
+        }
+        session.addInput(input)
+        videoInput = input
+
+        var isPhysical = false
+        if case .physical = attachTarget { isPhysical = true }
+        if isPhysical, let format = Self.format(for: targetDevice, supporting: targetResolution) {
+            // プリセットを外してフォーマットを自分で当てる（48MP を出す唯一の方法）。
+            session.sessionPreset = .inputPriority
+            do {
+                try targetDevice.lockForConfiguration()
+                defer { targetDevice.unlockForConfiguration() }
+                targetDevice.activeFormat = format
+            } catch {
+                // 当てられなければプリセット任せのまま進む（解像度は上がらないが撮れる）。
+            }
+        } else {
+            session.sessionPreset = .photo
+        }
+        session.commitConfiguration()
+
+        currentLensRequirement = resolved
+        attachDeviceOnSessionQueue(targetDevice,
+                                   target: attachTarget,
+                                   targetDisplayedZoom: targetDisplayedZoom)
+        finishDeviceSwitchOnSessionQueue(targetDisplayedZoom: targetDisplayedZoom)
+    }
+
+    /// いまの倍率と希望解像度から、掴むべきカメラを決める（sessionQueue 上で呼ぶこと）。
+    private func requiredLensOnSessionQueue(displayedZoom: CGFloat,
+                                            resolution: SkyCameraPhotoResolution?)
+        -> SkyCameraLensRequirement {
+        let virtual = virtualLensConfigurationStorage
+        return SkyCameraLensSwitching.requiredDevice(
+            displayedZoom: displayedZoom,
+            preferredRequiresPhysicalLens: resolution?.requiresPhysicalLens ?? false,
+            ultraWideNativeZoom: virtual?.nativeDisplayedZoom(for: .ultraWide),
+            teleNativeZoom: virtual?.nativeDisplayedZoom(for: .telephoto),
+            current: currentLensRequirement)
+    }
+
+    /// 物理レンズと AVFoundation のデバイス種別の対応。
+    private static func deviceType(for lens: SkyCameraPhysicalLens) -> AVCaptureDevice.DeviceType {
+        switch lens {
+        case .ultraWide: return .builtInUltraWideCamera
+        case .wide: return .builtInWideAngleCamera
+        case .telephoto: return .builtInTelephotoCamera
+        }
+    }
+
+    /// 背面の物理レンズ 3 本の中で、いちばん大きく撮れる解像度（掴まず読むだけ）。
+    private static func largestPhysicalLensPhotoResolution() -> SkyCameraPhotoResolution? {
+        var best: SkyCameraPhotoResolution?
+        for lens in SkyCameraPhysicalLens.allCases {
+            let device = AVCaptureDevice.default(Self.deviceType(for: lens),
+                                                 for: .video, position: .back)
+            guard let candidate = Self.largestPhotoResolution(for: device) else { continue }
+            if candidate.megapixels > (best?.megapixels ?? 0) { best = candidate }
+        }
+        return best
+    }
+
+    /// 付け替えを**諦めた**ときの後始末（sessionQueue 上で呼ぶこと）。
+    ///
+    /// ⚠️ ここで古い倍率のまま帰ってはいけない。UI は押された時点で新しい倍率を
+    ///    表示しているので、**表示と実体がずれたまま固定される**
+    ///    （「押しても何も起きない」に見える）。付け替えができなくても、
+    ///    要求された倍率はいま掴んでいるデバイスへ当てられるだけ当てる。
+    ///    当てた結果（端末の上下限で丸められることがある）を実体として通知する。
+    private func abandonDeviceSwitchOnSessionQueue(targetDisplayedZoom: CGFloat) {
+        guard let device = videoDevice, let configuration = lensConfigurationStorage else {
+            finishDeviceSwitchOnSessionQueue(targetDisplayedZoom: currentDisplayedZoom)
+            return
+        }
+        applyZoomOnSessionQueue(displayedZoom: targetDisplayedZoom,
+                                configuration: configuration,
+                                device: device,
+                                animated: true)
+        // 端末が受け付けた実際の倍率を求め直す（要求値ではなく実体を UI へ返すため）。
+        let applied = configuration.displayedZoom(
+            forVideoZoomFactor: configuration.videoZoomFactor(forDisplayedZoom: targetDisplayedZoom))
+        finishDeviceSwitchOnSessionQueue(targetDisplayedZoom: applied)
+    }
+
+    /// 付け替えの後始末。実際に撮れる解像度を確定し、出力側の上限を合わせ、UI へ知らせる。
+    private func finishDeviceSwitchOnSessionQueue(targetDisplayedZoom: CGFloat) {
+        let effective = resolveEffectiveResolutionOnSessionQueue()
+        effectiveResolutionStorage = effective
+        // 出力側の上限は「いま撮れる寸法」に合わせる。上げっぱなしにすると、
+        // 仮想デバイスへ戻したあとも 48MP の寸法が残ってしまう。
+        if let effective {
+            photoOutput.maxPhotoDimensions = CMVideoDimensions(
+                width: effective.width, height: effective.height)
+        }
+        currentDisplayedZoom = targetDisplayedZoom
+        publishLensStateOnSessionQueue()
+    }
+
+    /// いま実際に撮れる解像度を求める（sessionQueue 上で呼ぶこと）。
+    ///
+    /// ⭐️ **要求値から推測せず、当たっているフォーマットから読み返す。**
+    ///    「48MP を頼んだのだから 48MP のはず」と決め打ちすると、フォーマットを当て損ねた
+    ///    ときや、そのレンズが 48MP を持たないときに**バッジが嘘をつく**。
+    ///    読み返しにしておけば、表示は常に実体と一致する。
+    private func resolveEffectiveResolutionOnSessionQueue() -> SkyCameraPhotoResolution? {
+        guard let preferred = preferredResolution, let device = videoDevice else { return nil }
+        let supported = device.activeFormat.supportedMaxPhotoDimensions
+            .map { SkyCameraPhotoResolution(width: $0.width, height: $0.height) }
+            .filter { !$0.requiresDeferredDelivery }
+        guard !supported.isEmpty else { return nil }
+        // 希望を超えない中で最大。無ければ（希望より全部大きい）いちばん小さいものへ。
+        let withinPreferred = supported.filter { $0.megapixels <= preferred.megapixels }
+        return withinPreferred.max { $0.megapixels < $1.megapixels }
+            ?? supported.min { $0.megapixels < $1.megapixels }
+    }
+
+    /// レンズ状態が変わったときだけ UI へ知らせる（sessionQueue 上で呼ぶこと）。
+    ///
+    /// ⚠️ ズームのたびに流してはいけない。ドラッグ中は毎秒数十回呼ばれるので、
+    ///    そのまま `@Published` へ流すと画面全体が作り直されてタップを取りこぼす。
+    ///    変化したときだけ流す。
+    private func publishLensStateOnSessionQueue() {
+        let state = SkyCameraLensState(displayedZoom: currentDisplayedZoom,
+                                       effectiveResolution: effectiveResolutionStorage,
+                                       lens: currentLensRequirement,
+                                       isFocusLocked: isFocusLocked,
+                                       zoomRequestID: latestZoomRequestID)
+        guard state != lastPublishedLensState else { return }
+        lastPublishedLensState = state
+        guard let handler = lensStateHandler else { return }
+        DispatchQueue.main.async { handler(state) }
+    }
+
+    /// レンズ状態の通知先を登録する（構成の前でも後でもよい）。
+    public func setLensStateHandler(_ handler: @escaping @Sendable (SkyCameraLensState) -> Void) {
+        sessionQueue.async { self.lensStateHandler = handler }
+    }
+
+    /// 超広角・望遠を含む仮想デバイスのレンズ構成。
+    /// UI のズームボタンは**常にこちら**を基準に組み立てる（48MP 中も消さないため）。
+    public func virtualLensConfiguration() async -> LensConfiguration? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<LensConfiguration?, Never>) in
+            sessionQueue.async { continuation.resume(returning: self.virtualLensConfigurationStorage) }
+        }
+    }
+
+    /// いま実際に撮れる解像度（バッジ表示と計装に使う）。
+    public func effectiveResolution() async -> SkyCameraPhotoResolution? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<SkyCameraPhotoResolution?, Never>) in
+            sessionQueue.async { continuation.resume(returning: self.effectiveResolutionStorage) }
+        }
+    }
+
+    /// この端末でフラッシュを使えるか（UI の出し分けに使う）。
+    public func isFlashAvailable() async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            sessionQueue.async {
+                // supportedFlashModes は .off だけの端末でも1件返るので、
+                // 「off 以外があるか」で判断する。
+                let modes = self.photoOutput.supportedFlashModes
+                continuation.resume(returning: modes.contains(.on) || modes.contains(.auto))
+            }
+        }
     }
 
     /// 撮影コネクションに向きを与える。iOS 17+ は水平基準の回転角、iOS 16 は重力由来の向き。
@@ -698,7 +1373,16 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
 /// `AVCapturePhotoOutput` はデリゲートを弱参照で持たないため、呼び出し側で寿命を管理する。
 private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
 
-    private let completion: (Result<(data: Data, metadata: [String: Any]), Error>) -> Void
+    private let completion: (Result<(data: Data, rawData: Data?, metadata: [String: Any]), Error>) -> Void
+
+    /// 届いた DNG（RAW 撮影時のみ）。
+    private var rawData: Data?
+
+    /// 届いた現像済み画像と、その EXIF。
+    /// ⚠️ RAW と現像済みの**到着順は保証されていない**ので、どちらも預かっておいて
+    ///    「もうコールバックは来ない」と SDK が明言する時点でまとめて確定する。
+    private var processedData: Data?
+    private var processedMetadata: [String: Any] = [:]
 
     /// 1 回の撮影が完全に終わったときに呼ぶ後始末（デリゲートの解放）。
     private let onFinished: () -> Void
@@ -709,7 +1393,7 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
     private var hasCompleted = false
 
     init(
-        completion: @escaping (Result<(data: Data, metadata: [String: Any]), Error>) -> Void,
+        completion: @escaping (Result<(data: Data, rawData: Data?, metadata: [String: Any]), Error>) -> Void,
         onFinished: @escaping () -> Void
     ) {
         self.completion = completion
@@ -722,17 +1406,30 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
         error: Error?
     ) {
         guard !hasCompleted else { return }
-        hasCompleted = true
 
         if let error {
+            hasCompleted = true
             completion(.failure(SkyCameraError.captureFailed(error.localizedDescription)))
             return
         }
         guard let data = photo.fileDataRepresentation() else {
-            completion(.failure(SkyCameraError.captureFailed("データを取り出せませんでした")))
+            // ⚠️ ここで失敗にしない。RAW 撮影では 2 枚届くので、片方が取れなくても
+            //    もう片方で成立する可能性がある。取りこぼしは didFinishCaptureFor が拾う。
             return
         }
-        completion(.success((data: data, metadata: photo.metadata)))
+        // ⚠️ **ここでは確定しない。**
+        //    以前は現像済みが届いた時点で確定していたが、RAW と現像済みの到着順は
+        //    保証されていない。現像済みが先に来ると `rawData` が nil のまま成功が確定し、
+        //    後から届く DNG が二重呼び出し防止に弾かれて**静かに消える**
+        //    （RAW を選んだのに HEIC だけが保存される）。
+        //    SDK は「もうコールバックは来ない」と明言する didFinishCaptureFor を
+        //    用意しているので、両方そろうのをそこまで待つ。
+        if photo.isRawPhoto {
+            rawData = data
+        } else {
+            processedData = data
+            processedMetadata = photo.metadata
+        }
     }
 
     /// 1 回の撮影で **必ず最後に** 呼ばれるコールバック。
@@ -748,8 +1445,13 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
     ) {
         if !hasCompleted {
             hasCompleted = true
-            let reason = error?.localizedDescription ?? "撮影が完了しませんでした"
-            completion(.failure(SkyCameraError.captureFailed(reason)))
+            if let data = processedData {
+                // 現像済みが取れていれば成功。DNG は取れていれば一緒に返す。
+                completion(.success((data: data, rawData: rawData, metadata: processedMetadata)))
+            } else {
+                let reason = error?.localizedDescription ?? "撮影が完了しませんでした"
+                completion(.failure(SkyCameraError.captureFailed(reason)))
+            }
         }
         onFinished()
     }
