@@ -48,7 +48,12 @@ class ProfileViewModel: ObservableObject {
     private let storageService: StorageServiceProtocol
     /// 認証サービス（Firebase直参照を排除し、テスタビリティを向上）
     private let authService: AuthServiceProtocol
+    /// 画像処理サービス（プロフィール画像をアップロード前に縮小する）
+    private let imageService: ImageServiceProtocol
     private var cancellables = Set<AnyCancellable>()
+
+    /// プロフィール画像をアップロードするときの長辺の上限（px）
+    static let profileImageMaxDimension: CGFloat = 1024
 
     /// 投稿グリッドの 1 ページあたりの件数
     static let postsPageSize = 50
@@ -73,9 +78,11 @@ class ProfileViewModel: ObservableObject {
         userId: String? = nil,
         firestoreService: FirestoreServiceProtocol = FirestoreService(),
         storageService: StorageServiceProtocol = StorageService(),
-        authService: AuthServiceProtocol = AuthService()
+        authService: AuthServiceProtocol = AuthService(),
+        imageService: ImageServiceProtocol = ImageService()
     ) {
         self.authService = authService
+        self.imageService = imageService
         self.isExternalUserId = (userId != nil)
 
         // userIdが指定されていない場合は現在のユーザーIDを使用
@@ -504,11 +511,21 @@ class ProfileViewModel: ObservableObject {
                 }
                 photoURL = nil
             } else if let profileImage = editingProfileImage {
+                // アイコンは小さく表示するだけなので、送る前に長辺 1024px まで縮小する。
+                // ⚠️ 以前は選んだ写真を元の解像度のまま送っていたため、StorageService が JPEG にすると
+                //    5MB を超えて「画像サイズが大きすぎます」で保存できないことがあった
+                //    （1.11.0 で 5 人。Crashlytics の初出は 1.5.4）。
+                //    投稿側（PostViewModel）が送る前に 2048px へ縮小しているのと同じ考え方。
+                let maxSide = Self.profileImageMaxDimension
+                let resizedImage = try await imageService.resizeImage(
+                    profileImage,
+                    maxSize: CGSize(width: maxSide, height: maxSide)
+                )
                 // 新しい画像をアップロード（リトライ可能）
                 // storage.rules のパス形式: users/{userId}/profile/{imageId}
                 let imagePath = "users/\(userId)/profile/profile.jpg"
                 let uploadedURL = try await RetryableOperation.executeIfRetryable { [self] in
-                    try await self.storageService.uploadImage(profileImage, path: imagePath)
+                    try await self.storageService.uploadImage(resizedImage, path: imagePath)
                 }
                 photoURL = uploadedURL.absoluteString
             }

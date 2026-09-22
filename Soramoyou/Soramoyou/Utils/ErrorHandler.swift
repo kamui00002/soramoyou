@@ -37,7 +37,12 @@ struct ErrorHandler {
         }
         
         // StorageServiceError: システムエラー
-        if error is StorageServiceError {
+        // ただし「画像が大きすぎる」は同じ画像で何度送っても必ず失敗するので、再試行しない
+        // （userError は isRetryable が false になる）。以前は systemError 扱いで 3 回再試行していた。
+        if let storageError = error as? StorageServiceError {
+            if case .imageTooLarge = storageError {
+                return .userError
+            }
             return .systemError
         }
         

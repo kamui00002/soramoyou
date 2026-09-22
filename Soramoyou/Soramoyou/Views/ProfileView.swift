@@ -175,7 +175,19 @@ struct ProfileView: View {
                 await likeManager.checkLikeStatus(for: viewModel.userPosts)
                 await favoriteManager.checkFavoriteStatus(for: viewModel.userPosts)
             }
-            .alert("エラー", isPresented: Binding(errorMessage: $viewModel.errorMessage)) {
+            // ⚠️ プロフィール編集シート（ProfileEditView）は同じ viewModel を共有し、同じ errorMessage に
+            //    自分のアラートを付けている。シートを出している間に親の画面もアラートを出そうとすると、
+            //    2 つの画面が同時にアラートを出そうとしてクラッシュする
+            //    （NSInternalInconsistencyException「A view controller not containing an alert controller…」・1.10.1〜）。
+            //    シートを出している間のエラーはシート側のアラートに任せる。
+            .alert("エラー", isPresented: Binding(
+                get: { viewModel.errorMessage != nil && !showingEditProfile },
+                set: { isPresented in
+                    if !isPresented {
+                        viewModel.errorMessage = nil
+                    }
+                }
+            )) {
                 Button("OK") {
                     viewModel.errorMessage = nil
                 }
