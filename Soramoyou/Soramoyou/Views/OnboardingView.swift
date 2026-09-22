@@ -28,6 +28,20 @@ struct OnboardingView: View {
                 Color(red: 0.39, green: 0.58, blue: 0.93)
             ]
         ),
+        // ⚠️ 空カメラは投稿画面の「撮る」ボタンの先にあり、新規ユーザーには What's New も出ないため、
+        //    ここで案内する。1枚目「空を撮る」の直後に置き、1枚目のカメラアイコンと
+        //    見た目が重ならないよう、アイコンではなくガイドの図解を出す。
+        //    配色は What's New の「空カメラ」ページと揃えている。
+        OnboardingPage(
+            icon: "camera.viewfinder",
+            title: "空カメラ",
+            description: "投稿の「撮る」から\nガイド付きで空を撮れます",
+            gradientColors: [
+                Color(red: 0.45, green: 0.72, blue: 0.98),
+                Color(red: 0.20, green: 0.35, blue: 0.75)
+            ],
+            showsCameraGuide: true
+        ),
         OnboardingPage(
             icon: "slider.horizontal.3",
             title: "自由に編集",
@@ -151,17 +165,21 @@ struct OnboardingView: View {
                     .frame(width: 200, height: 200)
                     .blur(radius: 20)
 
-                // アイコン
-                Image(systemName: page.icon)
-                    .font(.system(size: 80))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.white, .white.opacity(0.8)],
-                            startPoint: .top,
-                            endPoint: .bottom
+                // アイコン（空カメラのページだけはガイドの図解）
+                if page.showsCameraGuide {
+                    SkyCameraGuideIllustration(tint: .white, width: 170)
+                } else {
+                    Image(systemName: page.icon)
+                        .font(.system(size: 80))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.white, .white.opacity(0.8)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
                         )
-                    )
-                    .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
+                        .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
+                }
             }
 
             // タイトル
@@ -303,10 +321,13 @@ struct OnboardingView: View {
 
 /// オンボーディングページのデータモデル
 struct OnboardingPage {
+    /// SF Symbol 名（showsCameraGuide=true のページでは未使用）
     let icon: String
     let title: String
     let description: String
     let gradientColors: [Color]
+    /// true の場合、SF Symbol の代わりに空カメラのガイド図解（SkyCameraGuideIllustration）を表示する。
+    var showsCameraGuide: Bool = false
 }
 
 // MARK: - Preview ☀️

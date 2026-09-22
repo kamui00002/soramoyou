@@ -45,163 +45,180 @@ struct GalleryDetailView: View {
         post.originalImages != nil && !(post.originalImages?.isEmpty ?? true)
     }
 
+    /// ⚠️ Xcode 27 の Swift コンパイラは、この body の修飾子チェーンを一続きの式として
+    ///    型チェックしきれず「unable to type-check this expression in reasonable time」で落ちる。
+    ///    そこで「中身＋ツールバー」と「アラート・ダイアログ群」の 2 つの式に割っている。
+    ///    付ける相手（スクロール本体）も順序も元のままなので、見た目・ふるまいは変わらない。
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // 投稿者情報 ☁️
-                    // InlineLoadingViewを使用して統一されたローディング表示
-                    if let user = viewModel.author {
-                        authorSection(user: user)
-                    } else if viewModel.isLoadingAuthor {
-                        InlineLoadingView(message: "投稿者情報を読み込み中...")
-                            .padding()
-                    } else {
-                        // 取得失敗時（publicProfiles 未作成の旧アカウント等）でも著者ブロックを
-                        // 消さず、プレースホルダ（灰色アイコン＋「ユーザー」）を表示する。
-                        // このビューは自分のアルバムからのみ開かれるため、旧アカウントで
-                        // 「今まで出ていた自分の名前が消える」回帰を防ぐのが主目的。
-                        authorSection(user: nil)
-                    }
+            withDialogs(contentWithToolbar)
+        }
+        .navigationViewStyle(.stack)
+    }
 
-                    // 画像表示（編集前後切り替え対応）
-                    imageSection
-
-                    // 編集前後切り替えボタン
-                    if hasOriginalImages {
-                        toggleButton
-                    }
-
-                    // 編集設定表示
-                    if let editSettings = post.editSettings {
-                        editSettingsSection(editSettings: editSettings)
-                    }
-
-                    // このレシピで編集（レシピ共有）⭐️
-                    // attachedRecipe 付き投稿（v1.7.0 以降）でのみ表示。
-                    // 中立レシピ・未ログイン時の非表示ゲートはコンポーネント内部で行う。
-                    if let recipe = post.attachedRecipe {
-                        UseRecipeButton(recipe: recipe, postId: post.id)
-                    }
-
-                    // 外部アプリ（写真App等）の編集情報・撮影特性表示 ⭐️ Issue #4
-                    if hasAnyExternalEditInfo {
-                        externalEditInfoSection
-                    }
-
-                    // 投稿情報
-                    postInfoSection
-
-                    // 空の種類・時間帯・色温度
-                    skyInfoSection
-
-                    // 統計情報
-                    statsSection
-
-                    // コメントセクション
-                    CommentSection(
-                        postId: post.id,
-                        postUserId: post.userId,
-                        commentViewModel: commentViewModel,
-                        commentText: $commentText
-                    )
+    /// 画面の中身（スクロール本体・ツールバー・全画面カバーまで）。
+    private var contentWithToolbar: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // 投稿者情報 ☁️
+                // InlineLoadingViewを使用して統一されたローディング表示
+                if let user = viewModel.author {
+                    authorSection(user: user)
+                } else if viewModel.isLoadingAuthor {
+                    InlineLoadingView(message: "投稿者情報を読み込み中...")
+                        .padding()
+                } else {
+                    // 取得失敗時（publicProfiles 未作成の旧アカウント等）でも著者ブロックを
+                    // 消さず、プレースホルダ（灰色アイコン＋「ユーザー」）を表示する。
+                    // このビューは自分のアルバムからのみ開かれるため、旧アカウントで
+                    // 「今まで出ていた自分の名前が消える」回帰を防ぐのが主目的。
+                    authorSection(user: nil)
                 }
-                .padding()
-            }
-            .background(DesignTokens.Colors.detailBackground)
-            .navigationTitle("投稿詳細")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(DesignTokens.Colors.detailBackground, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("閉じる") {
-                        dismiss()
-                    }
+
+                // 画像表示（編集前後切り替え対応）
+                imageSection
+
+                // 編集前後切り替えボタン
+                if hasOriginalImages {
+                    toggleButton
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        // 写真に保存
-                        Button {
-                            showingSaveOptions = true
-                        } label: {
-                            Label("写真に保存", systemImage: "square.and.arrow.down")
-                        }
 
-                        // 共有
-                        Button {
-                            Task { await shareCurrentImage() }
-                        } label: {
-                            Label("共有", systemImage: "square.and.arrow.up")
-                        }
-
-                        Divider()
-
-                        // 自分の投稿の場合のみ編集・削除を表示
-                        if viewModel.isOwnPost(post) {
-                            // 再編集: 元画像(originalImages)を持つ投稿のみ。
-                            // 旧投稿(元画像なし)は再編集すると焼き込み済み画像を再び焼く＝二重焼きになるため非表示。
-                            if hasOriginalImages {
-                                // Menu はタップで即閉じるためラベル切替/.disabled は見えない。
-                                // 二重起動防止は prepareReEdit() 内の guard、DL 中表示は overlay が担う。
-                                Button {
-                                    Task { await prepareReEdit() }
-                                } label: {
-                                    Label("編集", systemImage: "slider.horizontal.3")
-                                }
-                            }
-                            Button(role: .destructive) {
-                                showingDeleteConfirmation = true
-                            } label: {
-                                Label("投稿を削除", systemImage: "trash")
-                            }
-                            Divider()
-                        }
-                        Button(role: .destructive) {
-                            showingReportSheet = true
-                        } label: {
-                            Label("この投稿を通報", systemImage: "flag")
-                        }
-
-                        Button(role: .destructive) {
-                            showingBlockConfirmation = true
-                        } label: {
-                            Label("このユーザーをブロック", systemImage: "hand.raised")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
+                // 編集設定表示
+                if let editSettings = post.editSettings {
+                    editSettingsSection(editSettings: editSettings)
                 }
-            }
-            .onAppear {
-                Task {
-                    await viewModel.loadAuthor(userId: post.userId)
-                    await commentViewModel.fetchComments(postId: post.id)
+
+                // このレシピで編集（レシピ共有）⭐️
+                // attachedRecipe 付き投稿（v1.7.0 以降）でのみ表示。
+                // 中立レシピ・未ログイン時の非表示ゲートはコンポーネント内部で行う。
+                if let recipe = post.attachedRecipe {
+                    UseRecipeButton(recipe: recipe, postId: post.id)
                 }
-                // ⚠️ ギャラリーは一覧側で checkLikeStatus を呼んでいないため、
-                //    詳細で 1 read だけ足して 🔖 の表示をサーバー値に合わせる。⭐️
-                Task { await favoriteManager.checkFavoriteStatus(for: [post]) }
-            }
-            // 再編集: 元画像＋レシピをエディタへ。保存時は既存投稿を上書き更新する。
-            // item: 方式で「画像が確実に揃ってから」EditView を構築する（stale-state 回避）。
-            .fullScreenCover(item: $editLaunch) { launch in
-                EditView(
-                    images: launch.images,
-                    userId: launch.post.userId, // 自分の投稿のみ編集可なので post.userId = 自分
-                    initialRecipe: launch.post.attachedRecipe,
-                    editingContext: launch.editingContext
+
+                // 外部アプリ（写真App等）の編集情報・撮影特性表示 ⭐️ Issue #4
+                if hasAnyExternalEditInfo {
+                    externalEditInfoSection
+                }
+
+                // 投稿情報
+                postInfoSection
+
+                // 空の種類・時間帯・色温度
+                skyInfoSection
+
+                // 統計情報
+                statsSection
+
+                // コメントセクション
+                CommentSection(
+                    postId: post.id,
+                    postUserId: post.userId,
+                    commentViewModel: commentViewModel,
+                    commentText: $commentText
                 )
             }
-            // ハッシュタグ → タグ詳細画面 ⭐️
-            // この画面は NavigationView 配下ではなくシート上に載るため、
-            // .navigationDestination ではなく全画面カバーで開く（UserProfileView と同じ方式）。
-            .fullScreenCover(item: Binding<IdentifiableString?>(
-                get: { selectedTag.map(IdentifiableString.init) },
-                set: { selectedTag = $0?.id }
-            )) { wrapper in
-                TagDetailView(tag: wrapper.id, source: "gallery_detail", likeManager: likeManager, favoriteManager: favoriteManager)
+            .padding()
+        }
+        .background(DesignTokens.Colors.detailBackground)
+        .navigationTitle("投稿詳細")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(DesignTokens.Colors.detailBackground, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("閉じる") {
+                    dismiss()
+                }
             }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    // 写真に保存
+                    Button {
+                        showingSaveOptions = true
+                    } label: {
+                        Label("写真に保存", systemImage: "square.and.arrow.down")
+                    }
+
+                    // 共有
+                    Button {
+                        Task { await shareCurrentImage() }
+                    } label: {
+                        Label("共有", systemImage: "square.and.arrow.up")
+                    }
+
+                    Divider()
+
+                    // 自分の投稿の場合のみ編集・削除を表示
+                    if viewModel.isOwnPost(post) {
+                        // 再編集: 元画像(originalImages)を持つ投稿のみ。
+                        // 旧投稿(元画像なし)は再編集すると焼き込み済み画像を再び焼く＝二重焼きになるため非表示。
+                        if hasOriginalImages {
+                            // Menu はタップで即閉じるためラベル切替/.disabled は見えない。
+                            // 二重起動防止は prepareReEdit() 内の guard、DL 中表示は overlay が担う。
+                            Button {
+                                Task { await prepareReEdit() }
+                            } label: {
+                                Label("編集", systemImage: "slider.horizontal.3")
+                            }
+                        }
+                        Button(role: .destructive) {
+                            showingDeleteConfirmation = true
+                        } label: {
+                            Label("投稿を削除", systemImage: "trash")
+                        }
+                        Divider()
+                    }
+                    Button(role: .destructive) {
+                        showingReportSheet = true
+                    } label: {
+                        Label("この投稿を通報", systemImage: "flag")
+                    }
+
+                    Button(role: .destructive) {
+                        showingBlockConfirmation = true
+                    } label: {
+                        Label("このユーザーをブロック", systemImage: "hand.raised")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
+        .onAppear {
+            Task {
+                await viewModel.loadAuthor(userId: post.userId)
+                await commentViewModel.fetchComments(postId: post.id)
+            }
+            // ⚠️ ギャラリーは一覧側で checkLikeStatus を呼んでいないため、
+            //    詳細で 1 read だけ足して 🔖 の表示をサーバー値に合わせる。⭐️
+            Task { await favoriteManager.checkFavoriteStatus(for: [post]) }
+        }
+        // 再編集: 元画像＋レシピをエディタへ。保存時は既存投稿を上書き更新する。
+        // item: 方式で「画像が確実に揃ってから」EditView を構築する（stale-state 回避）。
+        .fullScreenCover(item: $editLaunch) { launch in
+            EditView(
+                images: launch.images,
+                userId: launch.post.userId, // 自分の投稿のみ編集可なので post.userId = 自分
+                initialRecipe: launch.post.attachedRecipe,
+                editingContext: launch.editingContext
+            )
+        }
+        // ハッシュタグ → タグ詳細画面 ⭐️
+        // この画面は NavigationView 配下ではなくシート上に載るため、
+        // .navigationDestination ではなく全画面カバーで開く（UserProfileView と同じ方式）。
+        .fullScreenCover(item: Binding<IdentifiableString?>(
+            get: { selectedTag.map(IdentifiableString.init) },
+            set: { selectedTag = $0?.id }
+        )) { wrapper in
+            TagDetailView(tag: wrapper.id, source: "gallery_detail", likeManager: likeManager, favoriteManager: favoriteManager)
+        }
+    }
+
+    /// アラート・ダイアログ・シート・オーバーレイをまとめて付け直す。
+    /// 元と同じ相手（スクロール本体）に、同じ順序で適用する。
+    private func withDialogs(_ content: some View) -> some View {
+        content
             // 投稿削除確認アラート
             .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
                 Button("削除", role: .destructive) {
@@ -313,8 +330,6 @@ struct GalleryDetailView: View {
                     }
                 }
             }
-        }
-        .navigationViewStyle(.stack)
     }
 
     // MARK: - Save / Share Methods

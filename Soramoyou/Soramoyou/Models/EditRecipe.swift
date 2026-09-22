@@ -140,6 +140,24 @@ struct EditRecipe: Codable, Equatable {
     /// nil は「未適用（0 相当）」として扱う。
     var skyCorrectionIntensity: Double?
 
+    // MARK: - 編集の適用範囲（空だけ / 全体）
+
+    /// 手動編集ツール（27ツール）の適用範囲。既定 nil＝`.whole`（全体）。
+    ///
+    /// `skyCorrectionIntensity`（ワンタップ空補正＝固定レシピを強度1本でスケール）とは別物で、
+    /// こちらは**ユーザーが自分で動かしたスライダーの結果**を空だけに閉じ込めるための指定。
+    /// 両者は併用できる（空だけスコープで絵を作った上に、さらにワンタップ空補正を重ねられる）。
+    ///
+    /// ⚠️ Optional にする理由は `skyCorrectionIntensity` と同じ（コンパイラ合成の
+    /// `init(from decoder:)` は非 Optional だとキー欠落で `keyNotFound` を throw し、
+    /// このキーを持たない旧下書き JSON の読み込みが全滅する）。増設フィールドの規約に合わせる。
+    var editScope: EditScope?
+
+    /// `editScope` が空だけスコープとして有効かどうか（nil＝全体 を一箇所で解釈するための単一ソース）
+    var isSkyOnlyScope: Bool {
+        editScope == .skyOnly
+    }
+
     // MARK: - 2D スタイルパッド（iPhone 写真スタイル風 複合ツール）
 
     /// 2D スタイルパッド Y 軸: トーン（正規化 -1.0...1.0）
@@ -226,6 +244,10 @@ struct EditRecipe: Codable, Equatable {
         var seed = self
         seed.cropRectNorm = nil
         seed.targetDynamicRange = nil
+        // 適用範囲も写真固有として落とす。受け手の写真は空の形も量も違うため、
+        // `.skyOnly` をそのまま渡すと「送り手が空だけに掛けた絵」が受け手では
+        // 全く別の領域に掛かる。cropRectNorm を落とすのと同じ理由。
+        seed.editScope = nil
         return seed
     }
 
@@ -234,14 +256,21 @@ struct EditRecipe: Codable, Equatable {
     /// 「あなたの定番」系（全体平均・空タイプ別・固定プリセット）の候補レシピに、現在編集中の写真固有フィールドを合成する。
     /// 本適用（EditViewModel）とサムネイル生成（候補選択シート）の両方から呼ばれる共有ロジック。
     /// 二重実装するとコミット913a3cdと同種の「skyCorrectionIntensity が黙って消える」回帰を再び生むため一本化する。
-    /// - Parameter includeSkyCorrection: true=本適用用（intensity を転写）。false=サムネイル生成用
-    ///   （skyMask なしで描画するため intensity を転写しても無視され「レシピは0.7・見た目は補正なし」の食い違いになる。よって nil にする）。
-    func mergingPhotoSpecificFields(from current: EditRecipe, includeSkyCorrection: Bool = true) -> EditRecipe {
+    /// - Parameter skyMaskAvailable: この描画経路で空マスクが使えるか。
+    ///   true=本適用用（空マスク依存フィールドを転写する）。false=サムネイル生成用。
+    ///   false のとき空マスク依存フィールドを転写すると、描画側はマスクが無いので効かず
+    ///   「レシピは空だけ／見た目は全体」「レシピは0.7／見た目は補正なし」の食い違いになる。よって nil にする。
+    ///
+    ///   ⚠️ 空マスクを必要とするフィールドは**必ずここに集約**すること。呼び出し側で個別に nil にすると
+    ///   コミット913a3cdと同種の「黙って消える／黙って食い違う」回帰を生む。
+    func mergingPhotoSpecificFields(from current: EditRecipe, skyMaskAvailable: Bool = true) -> EditRecipe {
         var merged = self
         merged.cropRectNorm = current.cropRectNorm
         merged.toneCurvePoints = current.toneCurvePoints
         merged.targetDynamicRange = current.targetDynamicRange
-        merged.skyCorrectionIntensity = includeSkyCorrection ? current.skyCorrectionIntensity : nil
+        // ── ここから下は空マスクが無いと描画できないフィールド ──
+        merged.skyCorrectionIntensity = skyMaskAvailable ? current.skyCorrectionIntensity : nil
+        merged.editScope = skyMaskAvailable ? current.editScope : nil
         return merged
     }
 
@@ -483,6 +512,7 @@ struct EditRecipe: Codable, Equatable {
         if let v = style2DToneNorm { data["style2DToneNorm"] = v }
         if let v = style2DColorNorm { data["style2DColorNorm"] = v }
         if let v = skyCorrectionIntensity { data["skyCorrectionIntensity"] = v }
+        if let v = editScope { data["editScope"] = v.rawValue }
         if let f = appliedFilter { data["appliedFilter"] = f.rawValue }
         if let tp = toneCurvePoints { data["toneCurvePoints"] = tp.toFirestoreData() }
         if let dr = targetDynamicRange { data["targetDynamicRange"] = dr.rawValue }
@@ -575,6 +605,9 @@ struct EditRecipe: Codable, Equatable {
         style2DToneNorm = Self.sanitizeNorm(firestoreData["style2DToneNorm"] as? Double)
         style2DColorNorm = Self.sanitizeNorm(firestoreData["style2DColorNorm"] as? Double)
         skyCorrectionIntensity = Self.sanitizeIntensity(firestoreData["skyCorrectionIntensity"] as? Double)
+        // 未知の文字列（将来スコープの追加・データ破損）は nil＝全体にフォールバックする。
+        // 防衛的読み込みの方針（NaN/範囲外を既定に落とす）を enum にも同じ形で適用する。
+        editScope = (firestoreData["editScope"] as? String).flatMap(EditScope.init(rawValue:))
 
         if let filterString = firestoreData["appliedFilter"] as? String {
             appliedFilter = FilterType(rawValue: filterString)
@@ -600,6 +633,19 @@ struct EditRecipe: Codable, Equatable {
             cropRectNorm = CGRect(x: x, y: y, width: w, height: h)
         }
     }
+}
+
+// MARK: - EditScope
+
+/// 手動編集ツールの適用範囲
+///
+/// 空マスク（`SkyMaskProviderProtocol`）で編集結果を空だけに閉じ込められるようにするための指定。
+/// `EditRecipe.editScope` が nil のときは `.whole` として扱う（後方互換）。
+enum EditScope: String, Codable, Equatable {
+    /// 画像全体に適用する（既定）
+    case whole
+    /// 空と判定された領域だけに適用する
+    case skyOnly
 }
 
 // MARK: - DynamicRange

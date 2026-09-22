@@ -175,7 +175,6 @@ class MockFirestoreServiceForHome: FirestoreServiceProtocol {
     func fetchUser(userId: String) async throws -> User { return User(id: userId, email: "test@example.com") }
     func updateUser(_ user: User) async throws -> User { return user }
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws {}
-    func syncPostsCount(userId: String, count: Int) async throws {}
     func fetchPublicProfile(userId: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
     func createPublicProfile(from user: User) async throws {}
     func deleteUserData(userId: String) async throws {}

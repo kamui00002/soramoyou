@@ -164,11 +164,15 @@ struct PostInfoView: View {
                     selectedLandmark: $selectedLandmark,
                     onLandmarkSelected: { landmark in
                         if let landmark {
+                            // 地図で選んだ場所にも市区町村・都道府県を入れる。
+                            // ⚠️ 以前は city / prefecture を nil 固定にしていたため、ランドマークで
+                            //    場所を付けた投稿は空図鑑の「全国の空」バッジに数えられなかった
+                            //    （バッジは location.prefecture を 47 都道府県名と照合して数える）。
                             let location = Location(
                                 latitude: landmark.placemark.coordinate.latitude,
                                 longitude: landmark.placemark.coordinate.longitude,
-                                city: nil,
-                                prefecture: nil,
+                                city: landmark.placemark.locality,
+                                prefecture: landmark.placemark.administrativeArea,
                                 landmark: landmark.name
                             )
                             viewModel.setLocation(location)

@@ -70,6 +70,9 @@ class EditViewModel: ObservableObject {
             // 空補正強度も同様に EditSettings に存在しない EditRecipe 専用フィールドのため保全する
             // （空補正適用後に普通編集ツールを触ると補正が消える不具合を防止）
             let existingSkyCorrectionIntensity = editRecipe.skyCorrectionIntensity
+            // 適用範囲（空だけ / 全体）も同様に保全する
+            // （「空だけ」を選んだ後にスライダーを触ると全体適用に戻る不具合を防止）
+            let existingEditScope = editRecipe.editScope
             var newRecipe = EditRecipe(from: newValue)
             newRecipe.toneCurvePoints = existingPoints
             newRecipe.targetDynamicRange = existingDynamicRange
@@ -77,6 +80,7 @@ class EditViewModel: ObservableObject {
             newRecipe.style2DToneNorm = existingStyleTone
             newRecipe.style2DColorNorm = existingStyleColor
             newRecipe.skyCorrectionIntensity = existingSkyCorrectionIntensity
+            newRecipe.editScope = existingEditScope
             editRecipe = newRecipe
         }
     }
@@ -597,22 +601,9 @@ class EditViewModel: ObservableObject {
         isGeneratingSkyMask = true
         defer { isGeneratingSkyMask = false }
 
-        do {
-            try await ensureSkyMaskCached(quality: .preview)
-        } catch {
-            ErrorHandler.logError(error, context: "EditViewModel.applySkyCorrection")
-            errorMessage = error.userFriendlyMessage
-            return
-        }
-
-        guard let coverage = cachedSkyMaskCoverage,
-              let confidence = cachedSkyMaskConfidence,
-              coverage >= Self.skyCorrectionMinCoverage,
-              confidence >= Self.skyCorrectionMinConfidence
-        else {
-            errorMessage = "空が見つかりませんでした。別の写真でお試しください。"
-            return
-        }
+        guard let (coverage, confidence) = await prepareGatedSkyMask(
+            context: "EditViewModel.applySkyCorrection"
+        ) else { return }
 
         historyManager.push(currentSnapshot)
         notifyHistoryChange()
@@ -626,6 +617,37 @@ class EditViewModel: ObservableObject {
         ])
 
         await generatePreview()
+    }
+
+    /// 空マスクを（未生成なら）生成し、空の覆い率・確信度のゲートを通す。
+    ///
+    /// ワンタップ空補正と適用範囲「空だけ」で共通の前処理（⭐️ レビュー指摘G対応: 重複の集約）。
+    /// 失敗時は `errorMessage` を設定して nil を返す。
+    ///
+    /// ⚠️ 画像切替のガードはここに**入れない**。`applySkyCorrection` は await 後も続行して
+    /// 切替後の画像でマスクを再生成する挙動を既存テスト（`testEnsureSkyMaskCachedTags…`）が
+    /// 前提にしているため、ガードは呼び出し側（`setEditScope`）に置く。
+    ///
+    /// - Parameter context: エラーログに残す呼び出し元
+    /// - Returns: ゲートを通過したときの (覆い率, 確信度)。通過しなければ nil
+    private func prepareGatedSkyMask(context: String) async -> (coverage: Double, confidence: Double)? {
+        do {
+            try await ensureSkyMaskCached(quality: .preview)
+        } catch {
+            ErrorHandler.logError(error, context: context)
+            errorMessage = error.userFriendlyMessage
+            return nil
+        }
+
+        guard let coverage = cachedSkyMaskCoverage,
+              let confidence = cachedSkyMaskConfidence,
+              coverage >= Self.skyCorrectionMinCoverage,
+              confidence >= Self.skyCorrectionMinConfidence
+        else {
+            errorMessage = "空が見つかりませんでした。別の写真でお試しください。"
+            return nil
+        }
+        return (coverage, confidence)
     }
 
     /// 空補正強度スライダーのリアルタイム更新（ドラッグ中）。
@@ -657,6 +679,64 @@ class EditViewModel: ObservableObject {
         }
     }
 
+    // MARK: - 編集の適用範囲（空だけ / 全体） ⭐️
+
+    /// 適用範囲セグメントの現在値（未設定時は `.whole`）。
+    /// `EditView` 側で `editRecipe.editScope ?? .whole` を重複させないための単一ソース。
+    var editScopeValue: EditScope {
+        editRecipe.editScope ?? .whole
+    }
+
+    /// 編集ツールの適用範囲を切り替える。
+    ///
+    /// `.skyOnly` に切り替えるときだけ空マスクの生成とゲート判定が要る
+    /// （`applySkyCorrection` と同じ経路・同じしきい値を使う）。空が十分に検出できない場合は
+    /// **スコープを変更せず** `errorMessage` を出す。ここで `.skyOnly` を通してしまうと、
+    /// 描画側（`FilterGraphBuilder`）はマスク無しで全体経路にフォールバックするため
+    /// 「レシピは空だけ・見た目は全体」の不一致になる。
+    ///
+    /// - Parameter scope: 切り替え先の適用範囲
+    func setEditScope(_ scope: EditScope) async {
+        guard scope != editScopeValue else { return }
+
+        if scope == .skyOnly {
+            isGeneratingSkyMask = true
+            defer { isGeneratingSkyMask = false }
+
+            // ⭐️ レビュー指摘B対応: マスク生成（await）の前に対象画像を控える。
+            // 生成中に画像を切り替えられると、await 後の `editRecipe` / 履歴は**切替後の画像**のものに
+            // 差し替わっている。そのまま書くと、切替前の画像のマスクで判定した「空だけ」が別画像に漏れる
+            // （`ensureSkyMaskCached` の `targetIndex` と同じ前例）。切替されたら何もせずに終わる。
+            let targetIndex = currentImageIndex
+            guard let (coverage, confidence) = await prepareGatedSkyMask(
+                context: "EditViewModel.setEditScope"
+            ) else { return }
+            guard currentImageIndex == targetIndex else { return }
+
+            historyManager.push(currentSnapshot)
+            notifyHistoryChange()
+            editRecipe.editScope = .skyOnly
+
+            LoggingService.shared.logEvent("edit_scope_changed", parameters: [
+                "scope": EditScope.skyOnly.rawValue,
+                "sky_coverage": coverage,
+                "confidence": confidence,
+            ])
+        } else {
+            historyManager.push(currentSnapshot)
+            notifyHistoryChange()
+            // nil に戻す（`.whole` を明示保存しない）。既定値と同義なので Firestore に
+            // 冗長なキーを残さず、旧レシピとの表現も揃う。
+            editRecipe.editScope = nil
+
+            LoggingService.shared.logEvent("edit_scope_changed", parameters: [
+                "scope": EditScope.whole.rawValue,
+            ])
+        }
+
+        await generatePreview()
+    }
+
     /// 空補正が「適用中」とみなせるか（⭐️ レビュー指摘5対応: 単一ソース化）。
     ///
     /// `EditView` 側で `(editRecipe.skyCorrectionIntensity ?? 0) > 0` を複数箇所に重複させると、
@@ -681,6 +761,11 @@ class EditViewModel: ObservableObject {
     /// 通常のプレビューと同じ変換・クロップ経路（`normalizedTransformedImage` →
     /// `imageService.generatePreview`）を通す。呼び出し側（`EditView`）は Before/After
     /// 比較の長押し開始（トグル ON）のたびに 1 回だけ呼ぶ想定。
+    ///
+    /// ⚠️ 空補正を切るのは `skyCorrectionIntensity = nil` の**1手段だけ**にすること。
+    /// マスク自体を渡さない（`skyMask: nil`）方法でも空補正は消えるが、それは副作用頼みで、
+    /// 適用範囲「空だけ」（`editScope`）まで道連れに無効化してしまう。そうなると比較画像は
+    /// 「空補正が無い絵」ではなく「編集が画像全体に掛かった別物の絵」になり、比較が成立しない。
     func prepareSkyCorrectionCompareImage() async {
         guard let image = currentImage else {
             skyCorrectionCompareImage = nil
@@ -695,7 +780,7 @@ class EditViewModel: ObservableObject {
             skyCorrectionCompareImage = try await imageService.generatePreview(
                 transformed,
                 recipe: recipeWithoutSkyCorrection,
-                skyMask: nil
+                skyMask: cachedSkyMask
             )
         } catch {
             ErrorHandler.logError(error, context: "EditViewModel.prepareSkyCorrectionCompareImage")
@@ -833,9 +918,11 @@ class EditViewModel: ObservableObject {
     /// プレビュー用キャッシュとは独立させる（複数画像書き出し時に画像ごとに異なる
     /// マスクが必要なため、キャッシュを使い回すと別画像のマスクを誤用しかねない）。
     private func makeExportSkyMask(for image: UIImage, recipe: EditRecipe) async -> ExportSkyMaskResult {
-        guard let intensity = recipe.skyCorrectionIntensity,
-              intensity > skyCorrectionActiveThreshold
-        else {
+        // 空マスクを必要とする機能は2つある。片方しか見ないと「空だけ指定で書き出したのに
+        // マスクが渡らず全体に効く」バグになるため、両方を OR で判定する。
+        let needsMaskForCorrection = (recipe.skyCorrectionIntensity ?? 0) > skyCorrectionActiveThreshold
+        let needsMaskForScope = recipe.isSkyOnlyScope
+        guard needsMaskForCorrection || needsMaskForScope else {
             return .notApplicable
         }
         guard let ciImage = CIImage(image: image) else { return .failed }
@@ -968,8 +1055,30 @@ class EditViewModel: ObservableObject {
         }
     }
 
+    /// 高速プレビュー（ドラッグ中の同期/低解像度経路）を描いてよいか。
+    ///
+    /// 高速プレビューは重いマスク生成を行わず、キャッシュ済みマスクだけを使う。
+    /// そのため適用範囲「空だけ」なのにマスクが未生成のあいだ描くと、描画側は全体経路へ
+    /// フォールバックし「編集が画像全体に広がった絵」が出る。マスクが揃った瞬間に空だけへ
+    /// 戻るので、ドラッグ中ずっと領域がちらつくことになる。
+    ///
+    /// 到達経路: `.skyOnly` の投稿を再編集して開いた直後（`initialRecipe` は init で
+    /// そのまま代入され、マスクは `generatePreview()` の復元フックが非同期で作る）に
+    /// スライダーを触ると、その生成が終わる前にここへ来る。
+    ///
+    /// 間違った領域を見せるより直前のプレビューを保つほうが安全なのでスキップする
+    /// （`generatePreview()` がマスクを用意して数百 ms 以内に追いつく）。
+    ///
+    /// ⚠️ ワンタップ空補正（`skyCorrectionIntensity`）は同じ状況でも「補正が乗っていない絵」が
+    /// 出るだけで**領域は変わらない**ため、従来どおりスキップせずに描く（挙動を変えない）。
+    private var canRenderFastPreview: Bool {
+        !(editRecipe.isSkyOnlyScope && cachedSkyMask == nil)
+    }
+
     /// キャッシュが有効なら同期レンダリング、無効なら非同期でキャッシュ再構築後レンダリング
     private func renderFastPreviewOrAsync() {
+        guard canRenderFastPreview else { return }
+
         let transformKey = makeTransformKey()
         if let lowResCIImage = cachedLowResCIImage,
            cachedImageIndex == currentImageIndex,
@@ -1428,11 +1537,14 @@ class EditViewModel: ObservableObject {
             // リクエストIDが変わっていたら結果を破棄
             guard requestId == currentPreviewRequestId else { return }
 
-            // 空補正が設定されているのにマスク未生成（レシピ共有・Undo/Redo等での復元）なら
-            // ここで生成しておく。ベストエフォート: 失敗しても補正なしでプレビューを継続する。
-            if let intensity = editRecipe.skyCorrectionIntensity,
-               intensity > skyCorrectionActiveThreshold
-            {
+            // 空マスクを必要とする設定が入っているのにマスク未生成（レシピ共有・再編集・
+            // Undo/Redo 等での復元）なら、ここで生成しておく。
+            // ベストエフォート: 失敗しても補正なし・全体適用でプレビューを継続する。
+            //
+            // ⚠️ 空マスクを必要とする機能は2つ（ワンタップ空補正・適用範囲「空だけ」）。
+            // 片方しか見ないと、復元した側が「レシピは空だけ・見た目は全体」のまま表示される。
+            let needsMaskForCorrection = (editRecipe.skyCorrectionIntensity ?? 0) > skyCorrectionActiveThreshold
+            if needsMaskForCorrection || editRecipe.isSkyOnlyScope {
                 do {
                     try await ensureSkyMaskCached(quality: .preview)
                 } catch {
@@ -1444,6 +1556,18 @@ class EditViewModel: ObservableObject {
                     logSkyMaskFailureOncePerState(error)
                 }
                 guard requestId == currentPreviewRequestId else { return }
+
+                // ⭐️ レビュー指摘C対応: マスクが取れなかったら適用範囲を「全体」に戻す。
+                // 描画側（`FilterGraphBuilder`）はマスク無しの「空だけ」を全体経路で描くので、
+                // レシピだけ `.skyOnly` のまま残すと「レシピは空だけ・見た目は全体」になり、
+                // 高速プレビュー（`canRenderFastPreview`）も止まったままになる。
+                // 書き出し経路（`makeExportSkyMask` の失敗時）と同じ契約。requestId の確認より後に置くのは、
+                // 古いプレビュー要求が新しい状態のレシピを書き換えないようにするため。
+                // 一度戻せば `isSkyOnlyScope` が偽になるので、メッセージが繰り返し出ることはない。
+                if cachedSkyMask == nil, editRecipe.isSkyOnlyScope {
+                    editRecipe.editScope = nil
+                    errorMessage = "空をうまく見つけられなかったため、適用範囲を「全体」に戻しました"
+                }
             }
 
             // EditRecipe を直接渡す（toneCurvePoints などを保全するため）
@@ -1475,6 +1599,9 @@ class EditViewModel: ObservableObject {
             fastPreviewImage = nil
             return
         }
+        // 「空だけ」スコープでマスク未生成のあいだは描かない（理由は `canRenderFastPreview` 参照）。
+        // `fastPreviewImage` は nil にせず据え置く（nil にすると直前の絵まで消えてちらつく）。
+        guard canRenderFastPreview else { return }
 
         // 新しいリクエストIDを発行
         let requestId = UUID()
@@ -1725,6 +1852,9 @@ class EditViewModel: ObservableObject {
                 exportSkyMask = nil
                 var fallbackRecipe = snapshot.recipe
                 fallbackRecipe.skyCorrectionIntensity = nil
+                // 適用範囲も全体に戻す。`.skyOnly` のまま残すと描画側はマスク無しで
+                // 全体経路にフォールバックするため「レシピは空だけ・見た目は全体」になる。
+                fallbackRecipe.editScope = nil
                 snapshot = EditorSnapshot(
                     recipe: fallbackRecipe,
                     rotationDegrees: snapshot.rotationDegrees,
@@ -1740,6 +1870,7 @@ class EditViewModel: ObservableObject {
                 // 渡る）も同期し、同じ不一致が別経路で再発しないようにする。
                 if index == currentImageIndex {
                     editRecipe.skyCorrectionIntensity = nil
+                    editRecipe.editScope = nil
                 }
             }
             let editedImage = try await imageService.applyEditRecipe(
@@ -1783,9 +1914,12 @@ class EditViewModel: ObservableObject {
             // ⭐️ レビュー指摘6対応: 画像には補正が反映されないため、レシピ側の
             // skyCorrectionIntensity もフォールバックし、「画像は補正なし・レシピは0.7」の
             // 永続不一致を防ぐ。ライブの editRecipe も同期する。
+            // 適用範囲も同じ理由で全体に戻す（描画側はマスク無しだと全体経路になるため）。
             exportSkyMask = nil
             recipe.skyCorrectionIntensity = nil
+            recipe.editScope = nil
             editRecipe.skyCorrectionIntensity = nil
+            editRecipe.editScope = nil
         }
         return try await imageService.applyEditRecipe(recipe, to: transformedImage, skyMask: exportSkyMask)
     }
