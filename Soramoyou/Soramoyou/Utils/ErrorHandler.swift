@@ -37,11 +37,13 @@ struct ErrorHandler {
         }
         
         // StorageServiceError: システムエラー
-        // ただし「画像が大きすぎる」は同じ画像で何度送っても必ず失敗するので、再試行しない
-        // （userError は isRetryable が false になる）。以前は systemError 扱いで 3 回再試行していた。
+        // ただし「画像が大きすぎる」は同じ画像で何度送っても必ず失敗する制限違反なので、businessError にして
+        // 再試行しない（isRetryable は systemError 以外 false）。以前は systemError 扱いで 3 回再試行していた。
+        // ⚠️ userError にすると Crashlytics に送られなくなり、「件数が 0 になった」ことが修正の証拠にならない。
+        //    businessError なら非致命エラーとして Crashlytics に残る。
         if let storageError = error as? StorageServiceError {
             if case .imageTooLarge = storageError {
-                return .userError
+                return .businessError
             }
             return .systemError
         }
