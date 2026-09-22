@@ -176,4 +176,60 @@ final class SkyPriorityExposureTests: XCTestCase {
         }
         XCTAssertEqual(bias, tuning.minBiasEV, accuracy: 0.0001, "下限で止まっていない")
     }
+
+
+    // MARK: - 測光領域（空の側だけを測る）
+
+    /// 0°（回転なし）: バッファの上辺がそのまま空。
+    func testUpperRegionWithoutRotationIsTopRows() {
+        let region = SkyPriorityExposure.upperRegion(rotationDegrees: 0, fraction: 0.5)
+        XCTAssertEqual(region, SkyPriorityExposure.SampleRegion(x: 0...1, y: 0...0.5))
+    }
+
+    /// 90°（縦持ちの典型）: 時計回りに 90° 回すと**左辺**が上に来るので、左側が空。
+    /// ⭐️ ここを取り違えると、縦持ちで地面を測って空を守れない（段階A の向きバグと同じ種類）。
+    func testUpperRegionAt90DegreesIsLeftColumns() {
+        let region = SkyPriorityExposure.upperRegion(rotationDegrees: 90, fraction: 0.5)
+        XCTAssertEqual(region, SkyPriorityExposure.SampleRegion(x: 0...0.5, y: 0...1))
+    }
+
+    /// 180°: 下辺が上に来るので、下側が空。
+    func testUpperRegionAt180DegreesIsBottomRows() {
+        let region = SkyPriorityExposure.upperRegion(rotationDegrees: 180, fraction: 0.5)
+        XCTAssertEqual(region, SkyPriorityExposure.SampleRegion(x: 0...1, y: 0.5...1))
+    }
+
+    /// 270°: **右辺**が上に来るので、右側が空。
+    func testUpperRegionAt270DegreesIsRightColumns() {
+        let region = SkyPriorityExposure.upperRegion(rotationDegrees: 270, fraction: 0.5)
+        XCTAssertEqual(region, SkyPriorityExposure.SampleRegion(x: 0.5...1, y: 0...1))
+    }
+
+    /// 範囲外の角度は 0〜359 に正規化してから 90° 刻みへ丸める。
+    func testUpperRegionNormalizesAngles() {
+        XCTAssertEqual(SkyPriorityExposure.upperRegion(rotationDegrees: -90, fraction: 0.5),
+                       SkyPriorityExposure.upperRegion(rotationDegrees: 270, fraction: 0.5))
+        XCTAssertEqual(SkyPriorityExposure.upperRegion(rotationDegrees: 450, fraction: 0.5),
+                       SkyPriorityExposure.upperRegion(rotationDegrees: 90, fraction: 0.5))
+        XCTAssertEqual(SkyPriorityExposure.upperRegion(rotationDegrees: 88, fraction: 0.5),
+                       SkyPriorityExposure.upperRegion(rotationDegrees: 90, fraction: 0.5),
+                       "端数は最寄りの 90° 刻みへ丸める")
+    }
+
+    /// 割合は 0〜1 に丸める（設定ミスで範囲外になっても落ちない）。
+    func testUpperRegionClampsFraction() {
+        XCTAssertEqual(SkyPriorityExposure.upperRegion(rotationDegrees: 0, fraction: 1.5),
+                       SkyPriorityExposure.SampleRegion.wholeFrame)
+    }
+
+    /// 割合から画素範囲へ直すとき、端を取りこぼさず、最低 1 画素は残す。
+    func testPixelRangesCoverEdgesAndNeverEmpty() {
+        let upper = SkyPriorityExposure.SampleRegion(x: 0...1, y: 0...0.5)
+        let ranges = upper.pixelRanges(width: 101, height: 101)
+        XCTAssertEqual(ranges.x, 0..<101)
+        XCTAssertEqual(ranges.y, 0..<51, "上半分の境目の行は含める（外側へ丸める）")
+
+        let empty = SkyPriorityExposure.SampleRegion(x: 0...1, y: 0...0)
+        XCTAssertEqual(empty.pixelRanges(width: 10, height: 10).y.count, 1, "0 割でも 1 行は測る")
+    }
 }

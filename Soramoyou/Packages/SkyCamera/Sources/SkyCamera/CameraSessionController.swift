@@ -81,6 +81,14 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     ///    恒久的に機能しない経路はすべてここが false のままになる。
     private var hasMeasuredClipping = false
 
+    /// 直近の測光で届いたバッファが Full Range だったか（計装用）。まだ測れていなければ nil。
+    /// ⚠️ `lastPeakLuma` / `maxPeakLuma` は届いたバッファの流儀のままの生値
+    ///    （Video Range なら最大 235）。どちらの物差しかを残さないと集計で混ざる。
+    private var lastLumaFullRange: Bool?
+
+    /// 直近の測光がどの範囲を測ったか（空の側だけ／画面全体。計装用）。
+    private var lastMeterRegion: SkyPriorityExposure.MeterRegion?
+
     /// 空優先 AE の判定パラメータ。
     private let exposureTuning = SkyPriorityExposure.Tuning.default
 
@@ -99,6 +107,10 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// プレビュー回転角の監視（iOS 17+）。sessionQueue 上で読み書きする（deinit を除く）。
     private var rotationObservation: NSKeyValueObservation?
 
+    /// 撮影用の回転角の監視（空優先 AE の測光が「どちらが空か」を知るため）。
+    /// プレビュー用とは別に持つ。プレビュー層が無くても測光は動くので、こちらは常に張る。
+    private var captureRotationObservation: NSKeyValueObservation?
+
     // MARK: - Lifecycle
 
     public override init() {
@@ -110,6 +122,7 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         NotificationCenter.default.removeObserver(self)
         // KVO は invalidate() がどのスレッドからでも安全なので deinit で解除してよい。
         rotationObservation?.invalidate()
+        captureRotationObservation?.invalidate()
     }
 
     // MARK: - Configuration
@@ -174,16 +187,21 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         //    先に呼ぶと一覧が空になり、輝度の Range 判定を取り違える。
         // ⚠️ Deferred Start には**あえて乗せない**。測光を後回しにすると
         //    「開いた直後の 1 枚」が白飛びから守られないため。
-        let meter = SkyExposureMeter(clipThreshold: exposureTuning.clipThreshold) { [weak self] fraction, peak in
+        let meter = SkyExposureMeter(
+            clipThreshold: exposureTuning.clipThreshold,
+            skyRegionFraction: exposureTuning.skyRegionFraction
+        ) { [weak self] reading in
             guard let self else { return }
             self.sessionQueue.async {
                 // 適用の可否に関わらず「測れた」ことは記録する（壊れていない証拠になる）。
                 self.hasMeasuredClipping = true
-                self.lastClippedFraction = fraction
-                self.lastPeakLuma = peak
-                self.maxClippedFraction = max(self.maxClippedFraction, fraction)
-                self.maxPeakLuma = max(self.maxPeakLuma, peak)
-                self.applyMeasuredClippingOnSessionQueue(fraction)
+                self.lastClippedFraction = reading.clippedFraction
+                self.lastPeakLuma = reading.peakLuma
+                self.maxClippedFraction = max(self.maxClippedFraction, reading.clippedFraction)
+                self.maxPeakLuma = max(self.maxPeakLuma, reading.peakLuma)
+                self.lastLumaFullRange = reading.isFullRange
+                self.lastMeterRegion = reading.region
+                self.applyMeasuredClippingOnSessionQueue(reading.clippedFraction)
             }
         }
         if session.canAddOutput(meter.output) {
@@ -238,6 +256,22 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         let view = previewView
         let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: view?.previewLayer)
         rotationCoordinatorStorage = coordinator
+
+        // 空優先 AE の測光へ「撮影を正立させる角度」を流す。
+        // ⚠️ プレビュー層の有無に関係なく張る（下の guard より前に置く）。
+        //    測光用のバッファはセンサー本来の向きのまま届くので、この角度が無いと
+        //    どちらが空か分からず、画面全体を測ることになる。
+        captureRotationObservation?.invalidate()
+        captureRotationObservation = coordinator.observe(
+            \.videoRotationAngleForHorizonLevelCapture,
+            options: [.initial, .new]
+        ) { [weak self] _, change in
+            guard let angle = change.newValue else { return }
+            // 測光器は sessionQueue 上でのみ触る（他のプロパティと同じ規則）。
+            self?.sessionQueue.async {
+                self?.exposureMeter?.setCaptureRotation(Double(angle))
+            }
+        }
 
         // ⚠️ 回転角は端末を回すたびに変わる。一度読むだけでは追従しないので必ず KVO で監視する。
         rotationObservation?.invalidate()
@@ -436,6 +470,14 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         }
     }
 
+    /// 真上（または真下）を向いているかを空優先 AE の測光へ伝える。
+    /// 真上を向くと画面ほぼ全部が空になるので、測光は画面全体へ切り替わる。
+    public func setMeteringLooksStraightUp(_ looksUp: Bool) {
+        sessionQueue.async {
+            self.exposureMeter?.setLooksStraightUp(looksUp)
+        }
+    }
+
     /// 空優先 AE の現況（計装用）。
     /// - Returns: `bias` = いまかかっている露出補正値（EV。EXIF が取れないときの保険）、
     ///   `hasMeasured` = 測光が一度でも成立したか、
@@ -449,7 +491,9 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
                     clippedFraction: self.lastClippedFraction,
                     peakLuma: self.lastPeakLuma,
                     maxClippedFraction: self.maxClippedFraction,
-                    maxPeakLuma: self.maxPeakLuma
+                    maxPeakLuma: self.maxPeakLuma,
+                    lumaFullRange: self.lastLumaFullRange,
+                    meterRegion: self.lastMeterRegion
                 ))
             }
         }

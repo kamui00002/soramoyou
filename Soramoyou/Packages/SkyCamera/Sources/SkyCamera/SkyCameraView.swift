@@ -104,10 +104,17 @@ public struct SkyCameraView: View {
                 onEvent(.failed(reason: failure))
             }
             horizonMonitor.start()
+            model.controller.setMeteringLooksStraightUp(!horizonMonitor.reading.isReliable)
         }
         .onDisappear {
             horizonMonitor.stop()
             model.controller.stop()
+        }
+        // 空優先 AE の測光は「画面の上側＝空」を前提にするが、真上を見上げると
+        // 画面ほぼ全部が空になり上側に意味が無い。傾きが求まらない（真上／真下を向いた）
+        // ときは測光を画面全体へ切り替える。
+        .onChange(of: horizonMonitor.reading.isReliable) { isReliable in
+            model.controller.setMeteringLooksStraightUp(!isReliable)
         }
         .alert(model.isPermissionError ? "カメラを使えません" : "カメラエラー", isPresented: $model.isShowingError) {
             // 権限はアプリ側からは戻せないので、設定アプリへ送る導線を必ず出す
@@ -386,7 +393,9 @@ final class SkyCameraViewModel: ObservableObject {
                 skyPeakLuma: Int(status.peakLuma),
                 skyMaxClippedFraction: status.maxClippedFraction,
                 skyMaxPeakLuma: Int(status.maxPeakLuma),
-                shutterDate: shutterDate
+                shutterDate: shutterDate,
+                lumaFullRange: status.lumaFullRange,
+                skyMeterRegion: status.meterRegion?.rawValue
             ))
             return nil
         } catch {

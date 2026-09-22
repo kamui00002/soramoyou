@@ -39,6 +39,12 @@ public enum SkyPriorityExposure {
         public var recoveryRatio: Double
         /// 下げてよい下限（EV）。これ以上は暗くしない安全弁。
         public var minBiasEV: Float
+        /// 測光する「空の側」の広さ（正立させた画面の上から何割か・0〜1）。
+        /// ⭐️ 空優先 AE なのに画面全体を測ると、白い壁・雪・明るい窓でも露出が下がる。
+        ///    空は画面の上側にあるので、上側だけを数える。
+        ///    空が上 3 割しかない写真では地上が少し混ざるが、地上は通常暗いので
+        ///    白飛び率を押し上げない（分母が薄まるだけ）。
+        public var skyRegionFraction: Double
 
         public init(
             clipThreshold: UInt8 = 250,
@@ -48,7 +54,8 @@ public enum SkyPriorityExposure {
             maxAttackStep: Float = 1.0,
             recoveryStep: Float = 0.15,
             recoveryRatio: Double = 0.5,
-            minBiasEV: Float = -2.0
+            minBiasEV: Float = -2.0,
+            skyRegionFraction: Double = 0.5
         ) {
             self.clipThreshold = clipThreshold
             self.allowedClippedFraction = allowedClippedFraction
@@ -58,6 +65,7 @@ public enum SkyPriorityExposure {
             self.recoveryStep = recoveryStep
             self.recoveryRatio = recoveryRatio
             self.minBiasEV = minBiasEV
+            self.skyRegionFraction = skyRegionFraction
         }
 
         public static let `default` = Tuning()
@@ -66,6 +74,82 @@ public enum SkyPriorityExposure {
     /// これ未満の変化は「動かす価値なし」として捨てる（EV）。
     /// 端末へ毎回 setExposureTargetBias を投げると無駄に電力を使うし、微小な揺れが目に見える。
     public static let negligibleChangeEV: Float = 0.02
+
+    // MARK: - 測光領域
+
+    /// 測光した領域の種類（計装用の文字列を持つ）。
+    public enum MeterRegion: String, Sendable {
+        /// 正立させた画面の上側だけを測った。
+        case upper
+        /// 画面全体を測った（回転角が分からない・真上を見上げている、など）。
+        case wholeFrame = "whole_frame"
+    }
+
+    /// 輝度バッファ上の測光範囲。バッファの大きさに依存しないよう 0〜1 の割合で持つ。
+    public struct SampleRegion: Equatable, Sendable {
+        /// 横方向の範囲（0 = 左端、1 = 右端）。
+        public let x: ClosedRange<Double>
+        /// 縦方向の範囲（0 = 上端、1 = 下端）。
+        public let y: ClosedRange<Double>
+
+        public init(x: ClosedRange<Double>, y: ClosedRange<Double>) {
+            self.x = x
+            self.y = y
+        }
+
+        /// 画面全体。
+        public static let wholeFrame = SampleRegion(x: 0...1, y: 0...1)
+
+        /// 実際の画素の範囲へ直す。
+        /// 端の画素を取りこぼさないよう外側へ丸め、最低 1 画素は残す。
+        public func pixelRanges(width: Int, height: Int) -> (x: Range<Int>, y: Range<Int>) {
+            (Self.pixels(x, length: width), Self.pixels(y, length: height))
+        }
+
+        private static func pixels(_ range: ClosedRange<Double>, length: Int) -> Range<Int> {
+            guard length > 0 else { return 0..<0 }
+            let lower = min(length - 1, max(0, Int((range.lowerBound * Double(length)).rounded(.down))))
+            let upper = min(length, max(lower + 1, Int((range.upperBound * Double(length)).rounded(.up))))
+            return lower..<upper
+        }
+    }
+
+    /// 「正立させたときの上側 `fraction`」が、回転前のバッファのどこに当たるかを返す。
+    ///
+    /// ⚠️ 測光用のバッファには回転をかけていない（センサー本来の向きのまま届く）。
+    ///    縦持ちでは「バッファの上辺 = 空」**ではない**。撮影を正立させる角度
+    ///    （`RotationCoordinator.videoRotationAngleForHorizonLevelCapture`）から逆算する。
+    ///
+    /// 角度は「バッファを時計回りに何度回せば正立するか」。時計回りに回すと、
+    /// - 0°: 上辺がそのまま上
+    /// - 90°: **左辺**が上に来る
+    /// - 180°: 下辺が上に来る
+    /// - 270°: **右辺**が上に来る
+    ///
+    /// - Parameters:
+    ///   - rotationDegrees: 撮影を正立させる時計回りの角度（最寄りの 90° 刻みへ丸める）
+    ///   - fraction: 上から何割を測るか（0〜1 に丸める）
+    public static func upperRegion(rotationDegrees: Double, fraction: Double) -> SampleRegion {
+        let f = min(1, max(0, fraction))
+        // 0...359 へ正規化してから最寄りの 90° 刻みへ丸める（-90 → 270、450 → 90）。
+        let normalized = (rotationDegrees.truncatingRemainder(dividingBy: 360) + 360)
+            .truncatingRemainder(dividingBy: 360)
+        let quarter = Int((normalized / 90).rounded()) % 4
+        switch quarter {
+        case 1:
+            // 90°: 左辺が上に来る → 左側が空。
+            return SampleRegion(x: 0...f, y: 0...1)
+        case 2:
+            // 180°: 下辺が上に来る → 下側が空。
+            return SampleRegion(x: 0...1, y: (1 - f)...1)
+        case 3:
+            // 270°: 右辺が上に来る → 右側が空。
+            return SampleRegion(x: (1 - f)...1, y: 0...1)
+        default:
+            // 0°: 上辺がそのまま上。
+            return SampleRegion(x: 0...1, y: 0...f)
+        }
+    }
 
     // MARK: - 測光
 

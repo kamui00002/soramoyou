@@ -37,7 +37,40 @@ final class SkyExposureMeterTests: XCTestCase {
     }
 
     private func makeMeter() -> SkyExposureMeter {
-        SkyExposureMeter(clipThreshold: 250) { _, _ in }
+        SkyExposureMeter(clipThreshold: 250) { _ in }
+    }
+
+    // MARK: - 空の側だけを読む
+
+    /// 左半分が真っ白・右半分が真っ暗のバッファで、読む範囲が向きどおりに切り替わるか。
+    /// ⭐️ 縦持ち（90°）では左側が空。ここがずれると地面を測って空を守れない。
+    func testSampleRegionFollowsCaptureRotation() throws {
+        let buffer = try XCTUnwrap(makeBuffer(width: 200, height: 100) { x, _ in x < 100 ? 255 : 0 })
+        let meter = makeMeter()
+
+        let sky90 = try XCTUnwrap(meter.sampleLumaPlane(
+            buffer, region: SkyPriorityExposure.upperRegion(rotationDegrees: 90, fraction: 0.5)))
+        XCTAssertEqual(SkyPriorityExposure.clippedFraction(luma: sky90, threshold: 250), 1,
+                       "90°（縦持ち）で左側＝空を読めていない")
+
+        let sky270 = try XCTUnwrap(meter.sampleLumaPlane(
+            buffer, region: SkyPriorityExposure.upperRegion(rotationDegrees: 270, fraction: 0.5)))
+        XCTAssertEqual(SkyPriorityExposure.clippedFraction(luma: sky270, threshold: 250), 0,
+                       "270° で右側＝空を読めていない")
+
+        let whole = try XCTUnwrap(meter.sampleLumaPlane(buffer))
+        XCTAssertEqual(SkyPriorityExposure.clippedFraction(luma: whole, threshold: 250), 0.5, accuracy: 0.02,
+                       "範囲を指定しなければ今までどおり画面全体")
+    }
+
+    /// 空の側だけを読んでも、間引きの目標点数は画面全体と同程度に保つ（負荷が増えない・精度も落ちない）。
+    func testSampleRegionKeepsSampleCountBounded() throws {
+        let buffer = try XCTUnwrap(makeBuffer(width: 1920, height: 1440) { _, _ in 128 })
+        let samples = try XCTUnwrap(makeMeter().sampleLumaPlane(
+            buffer, region: SkyPriorityExposure.upperRegion(rotationDegrees: 0, fraction: 0.5)))
+        // 基準は画面全体の間引きテスト（testLargeFrameIsThinnedOut）と同じにする。
+        XCTAssertLessThan(samples.count, 20_000, "範囲を絞ったのに点数が増えている（毎フレーム重くなる）")
+        XCTAssertGreaterThan(samples.count, 5_000, "範囲を絞ったぶん点数が減りすぎると率がぶれる")
     }
 
     // MARK: - 行の読み出し
