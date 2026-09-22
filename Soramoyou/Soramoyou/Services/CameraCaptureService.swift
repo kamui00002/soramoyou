@@ -110,7 +110,7 @@ enum CameraCaptureService {
 
     /// 撮影 1 回分の計装属性（PII なし・Bool と数値のみ）。
     static func captureParameters(capture: SkyCameraCapture, savedToLibrary: Bool) -> [String: Any] {
-        [
+        var parameters: [String: Any] = [
             "grid_enabled": capture.gridEnabled,
             "horizon_enabled": capture.horizonEnabled,
             "ae_af_locked": capture.aeAfLocked,
@@ -158,6 +158,19 @@ enum CameraCaptureService {
             // 補正量は 0.1 EV 刻みに丸める（小数をそのまま送ると値の種類だけ増えて集計できない）。
             "exposure_bias_ev": Double((capture.exposureBiasEV * 10).rounded()) / 10,
         ]
+        // ⭐️ 最大輝度（sky_peak_luma / sky_max_peak_luma）を読むための物差し。
+        //    Video Range なら最大 235 なので、これが無いと「235 = 真っ白」なのか
+        //    「まだ余裕がある」のかを集計で区別できない。測れていなければ送らない
+        //    （false を送ると「Video Range だった」と区別できなくなる）。
+        if let lumaFullRange = capture.lumaFullRange {
+            parameters["luma_full_range"] = lumaFullRange
+        }
+        // ⭐️ 空の側だけを測ったか、画面全体を測ったか（"upper" / "whole_frame"）。
+        //    白い壁や雪で露出が下がった撮影を、測り方の違いで切り分けるために残す。
+        if let region = capture.skyMeterRegion {
+            parameters["sky_meter_region"] = region
+        }
+        return parameters
     }
 
     /// パッケージから届いたイベントをそのまま計装へ流す。

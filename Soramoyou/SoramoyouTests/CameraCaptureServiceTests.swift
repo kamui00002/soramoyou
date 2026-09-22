@@ -57,7 +57,9 @@ final class CameraCaptureServiceTests: XCTestCase {
         skyClippedFraction: Double = 0,
         skyPeakLuma: Int = 0,
         skyMaxClippedFraction: Double = 0,
-        skyMaxPeakLuma: Int = 0
+        skyMaxPeakLuma: Int = 0,
+        lumaFullRange: Bool? = nil,
+        skyMeterRegion: String? = nil
     ) -> SkyCameraCapture {
         SkyCameraCapture(
             photoData: Data(),
@@ -83,7 +85,9 @@ final class CameraCaptureServiceTests: XCTestCase {
             skyPeakLuma: skyPeakLuma,
             skyMaxClippedFraction: skyMaxClippedFraction,
             skyMaxPeakLuma: skyMaxPeakLuma,
-            shutterDate: shutterDate
+            shutterDate: shutterDate,
+            lumaFullRange: lumaFullRange,
+            skyMeterRegion: skyMeterRegion
         )
     }
 
@@ -262,6 +266,28 @@ final class CameraCaptureServiceTests: XCTestCase {
         XCTAssertEqual(idle["sky_priority_enabled"] as? Bool, true)
         XCTAssertEqual(idle["sky_priority_engaged"] as? Bool, false, "出番が無かった撮影を効いた扱いにしている")
         XCTAssertEqual(idle["exposure_bias_ev"] as? Double, 0)
+    }
+
+    /// ⭐️ 最大輝度の物差し（Full / Video Range）と、測った範囲（空の側／画面全体）を送る。
+    ///    最大輝度は生値なので、物差しが無いと「235 = 真っ白」か「まだ余裕がある」かを区別できない。
+    func testCaptureParametersCarriesLumaRangeAndMeterRegion() {
+        let parameters = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPeakLuma: 235, lumaFullRange: false, skyMeterRegion: "upper"),
+            savedToLibrary: true
+        )
+        XCTAssertEqual(parameters["luma_full_range"] as? Bool, false)
+        XCTAssertEqual(parameters["sky_meter_region"] as? String, "upper")
+    }
+
+    /// 測光が一度も成立していない（nil）なら送らない。
+    /// ⚠️ false を送ると「Video Range だった」と区別できなくなるため、既定値で埋めない。
+    func testCaptureParametersOmitsUnmeasuredLumaRangeAndRegion() {
+        let parameters = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPriorityMeasured: false),
+            savedToLibrary: true
+        )
+        XCTAssertNil(parameters["luma_full_range"])
+        XCTAssertNil(parameters["sky_meter_region"])
     }
 
     /// 真上を向いていて傾きが取れなかった場合（nil）も属性は落とさず 0 にする。

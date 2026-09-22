@@ -12,6 +12,19 @@ import Foundation
 /// 1. 時間で間引く（既定 4 回／秒）。露出は人の目より速く動く必要が無い。
 /// 2. 空間で間引く（縦横それぞれ約 100 点）。1920×1440 を全部読むと 276 万画素だが、
 ///    100×100 に間引けば 1 万点で済む。白飛び「率」を見るだけなので精度は十分。
+/// 1 フレーム分の測光結果。
+struct SkyMeterReading: Sendable {
+    /// 白飛びしている画素の割合（0〜1）。
+    let clippedFraction: Double
+    /// そのフレームの最大輝度（**届いたバッファの流儀のまま**。Video Range なら最大 235）。
+    let peakLuma: UInt8
+    /// 届いたバッファが Full Range（0〜255）だったか。
+    /// ⭐️ `peakLuma` をどちらの物差しで読むかを後から区別するために要る。
+    let isFullRange: Bool
+    /// どの範囲を測ったか（空の側だけ／画面全体）。
+    let region: SkyPriorityExposure.MeterRegion
+}
+
 final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
 
     // MARK: - Properties
@@ -23,9 +36,7 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     private let queue = DispatchQueue(label: "app.soramoyou.skycamera.meter", qos: .userInitiated)
 
     /// 測定結果の通知先。`queue` 上で呼ばれる。
-    /// - `clipped`: 白飛びしている画素の割合（0〜1）
-    /// - `peakLuma`: そのフレームの最大輝度（0〜255。較正用）
-    private let onMeasure: (_ clipped: Double, _ peakLuma: UInt8) -> Void
+    private let onMeasure: (SkyMeterReading) -> Void
 
     /// 有効化フラグ。`queue` 上でのみ読み書きしてデータ競合を避ける。
     private var isEnabled = false
@@ -48,10 +59,27 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     /// Full Range 基準の白飛び閾値。
     private let clipThreshold: UInt8
 
+    /// 測光する「空の側」の広さ（正立させた画面の上から何割か）。
+    private let skyRegionFraction: Double
+
+    /// 撮影を正立させる時計回りの角度（度）。`queue` 上でのみ読み書きする。
+    /// ⚠️ 測光用のバッファはセンサー本来の向きのまま届くので、どちらが空かはこの角度で決まる。
+    ///    nil（まだ分からない・iOS 16）のあいだは画面全体を測る（今までと同じ・安全側）。
+    private var captureRotationDegrees: Double?
+
+    /// 真上（または真下）を向いているか。`queue` 上でのみ読み書きする。
+    /// 真上を向くと画面ほぼ全部が空になり「上側」に意味が無いので、画面全体を測る。
+    private var looksStraightUp = false
+
     // MARK: - Init
 
-    init(clipThreshold: UInt8, onMeasure: @escaping (_ clipped: Double, _ peakLuma: UInt8) -> Void) {
+    init(
+        clipThreshold: UInt8,
+        skyRegionFraction: Double = SkyPriorityExposure.Tuning.default.skyRegionFraction,
+        onMeasure: @escaping (SkyMeterReading) -> Void
+    ) {
         self.clipThreshold = clipThreshold
+        self.skyRegionFraction = skyRegionFraction
         self.onMeasure = onMeasure
         super.init()
     }
@@ -89,6 +117,21 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         }
     }
 
+    /// 撮影を正立させる角度を伝える（端末を回すたびに呼ばれる）。
+    /// - Parameter degrees: 時計回りの角度（度）。nil なら画面全体を測る
+    func setCaptureRotation(_ degrees: Double?) {
+        queue.async {
+            self.captureRotationDegrees = degrees
+        }
+    }
+
+    /// 真上（または真下）を向いているかを伝える。
+    func setLooksStraightUp(_ looksUp: Bool) {
+        queue.async {
+            self.looksStraightUp = looksUp
+        }
+    }
+
     /// 露出補正を書き込んだあと、それが実際に効くまで測定を見送る。
     /// - Parameter interval: いまから何秒間測らないか
     ///
@@ -115,13 +158,29 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         lastProcessedAt = now
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        guard let luma = sampleLumaPlane(pixelBuffer) else { return }
 
+        // 空の側だけを測る。向きが分からない／真上を見上げているときは画面全体（安全側）。
+        let region: SkyPriorityExposure.SampleRegion
+        let regionKind: SkyPriorityExposure.MeterRegion
+        if let rotation = captureRotationDegrees, !looksStraightUp {
+            region = SkyPriorityExposure.upperRegion(rotationDegrees: rotation, fraction: skyRegionFraction)
+            regionKind = .upper
+        } else {
+            region = .wholeFrame
+            regionKind = .wholeFrame
+        }
+
+        guard let luma = sampleLumaPlane(pixelBuffer, region: region) else { return }
+
+        let isFullRange = Self.isFullRange(pixelBuffer)
         let threshold = SkyPriorityExposure.effectiveThreshold(
             fullRangeThreshold: clipThreshold,
-            isFullRange: Self.isFullRange(pixelBuffer))
-        let fraction = SkyPriorityExposure.clippedFraction(luma: luma, threshold: threshold)
-        onMeasure(fraction, SkyPriorityExposure.peakLuma(luma: luma))
+            isFullRange: isFullRange)
+        onMeasure(SkyMeterReading(
+            clippedFraction: SkyPriorityExposure.clippedFraction(luma: luma, threshold: threshold),
+            peakLuma: SkyPriorityExposure.peakLuma(luma: luma),
+            isFullRange: isFullRange,
+            region: regionKind))
     }
 
     // MARK: - Private
@@ -142,8 +201,12 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
 
     /// 輝度プレーン（plane 0）を間引いて読む。
     /// 合成バッファでの検証ができるよう internal にしてある（`@testable import` から呼ぶ）。
+    /// - Parameter region: 読む範囲（既定は画面全体）。間引きの間隔はこの範囲の大きさから決める
     /// - Returns: 間引いた輝度サンプル。読めなければ nil
-    func sampleLumaPlane(_ pixelBuffer: CVPixelBuffer) -> [UInt8]? {
+    func sampleLumaPlane(
+        _ pixelBuffer: CVPixelBuffer,
+        region: SkyPriorityExposure.SampleRegion = .wholeFrame
+    ) -> [UInt8]? {
         // 読み取り中にバッファが書き換わらないようロックする。
         // defer で必ず解除する（途中 return でも取りこぼさない）。
         guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
@@ -160,21 +223,22 @@ final class SkyExposureMeter: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
         guard width > 0, height > 0, bytesPerRow >= width else { return nil }
 
-        // 縦横それぞれ目標サンプル数まで間引く。
-        let strideX = max(1, width / targetSamplesPerAxis)
-        let strideY = max(1, height / targetSamplesPerAxis)
+        // 読む範囲を画素へ直し、その範囲の中で縦横それぞれ目標サンプル数まで間引く。
+        let ranges = region.pixelRanges(width: width, height: height)
+        let strideX = max(1, ranges.x.count / targetSamplesPerAxis)
+        let strideY = max(1, ranges.y.count / targetSamplesPerAxis)
 
         let pointer = base.assumingMemoryBound(to: UInt8.self)
         var samples: [UInt8] = []
-        samples.reserveCapacity((width / strideX + 1) * (height / strideY + 1))
+        samples.reserveCapacity((ranges.x.count / strideX + 1) * (ranges.y.count / strideY + 1))
 
         // ⚠️ 行の先頭間隔は width ではなく bytesPerRow を使う。
         //    ハードウェアは行末にパディングを入れることがあり、width で進むと行がずれていく。
-        var y = 0
-        while y < height {
+        var y = ranges.y.lowerBound
+        while y < ranges.y.upperBound {
             let rowStart = y * bytesPerRow
-            var x = 0
-            while x < width {
+            var x = ranges.x.lowerBound
+            while x < ranges.x.upperBound {
                 samples.append(pointer[rowStart + x])
                 x += strideX
             }

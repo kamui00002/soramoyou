@@ -1,5 +1,6 @@
 // ⭐️ 空カメラの全画面 UI（撮る → 本体へ返すところまで）
 import AVFoundation
+import Combine
 import SwiftUI
 import UIKit
 
@@ -163,6 +164,7 @@ public struct SkyCameraView: View {
             model.horizonMonitor.stop()
             model.controller.stop()
         }
+
         .alert(model.isPermissionError ? "カメラを使えません" : "カメラエラー", isPresented: $model.isShowingError) {
             // 権限はアプリ側からは戻せないので、設定アプリへ送る導線を必ず出す
             //（本体の「撮る」ボタン側 `PostView.startCamera` と同じ作法に揃える）。
@@ -392,6 +394,11 @@ final class SkyCameraViewModel: ObservableObject {
     /// この ViewModel を観測している画面全体へ伝播し、ボタンのタップを潰す）。
     let horizonMonitor = HorizonMonitor()
 
+    /// 「真上を見上げたか」の変化だけを測光へ伝える購読。
+    /// ⚠️ `horizonMonitor` は 30Hz で更新されるが、ここは `removeDuplicates` で
+    ///    変わった瞬間だけに絞る（画面の再描画とは無関係に動く）。
+    private var looksUpSubscription: AnyCancellable?
+
     /// 空優先 AE（白飛び防止）が ON か。切り替えは `setSkyPriorityEnabled(_:)` を通す。
     @Published private(set) var skyPriorityEnabled: Bool
 
@@ -461,6 +468,16 @@ final class SkyCameraViewModel: ObservableObject {
         self.skyPriorityEnabled = skyPriorityEnabled
         self.flashMode = flashMode
         self.photoFormat = photoFormat
+
+        // 空優先 AE の測光は「画面の上側＝空」を前提にするが、真上を見上げると
+        // 画面ほぼ全部が空になり上側に意味が無い。傾きが求まらない（真上／真下を向いた）
+        // ときは測光を画面全体へ切り替える。購読した瞬間に現在値も 1 回流れる。
+        looksUpSubscription = horizonMonitor.$reading
+            .map(\.isReliable)
+            .removeDuplicates()
+            .sink { [weak self] isReliable in
+                self?.controller.setMeteringLooksStraightUp(!isReliable)
+            }
     }
 
     /// フラッシュの動作を変える。
@@ -655,7 +672,9 @@ final class SkyCameraViewModel: ObservableObject {
                 skyPeakLuma: Int(status.peakLuma),
                 skyMaxClippedFraction: status.maxClippedFraction,
                 skyMaxPeakLuma: Int(status.maxPeakLuma),
-                shutterDate: shutterDate
+                shutterDate: shutterDate,
+                lumaFullRange: status.lumaFullRange,
+                skyMeterRegion: status.meterRegion?.rawValue
             ))
             return nil
         } catch {

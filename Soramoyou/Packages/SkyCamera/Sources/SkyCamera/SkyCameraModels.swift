@@ -123,6 +123,15 @@ public struct SkyCameraCapture {
     /// シャッターを切った時刻。EXIF に撮影日時が無い場合の代替として本体が使う。
     public let shutterDate: Date
 
+    /// 測光で届いたバッファが Full Range（0〜255）だったか（較正用・測れていなければ nil）。
+    /// ⭐️ `skyPeakLuma` / `skyMaxPeakLuma` は届いたバッファの流儀のままの生値。
+    ///    Video Range なら最大 235 なので、これが無いと「235 = 真っ白」なのか
+    ///    「まだ余裕がある」のかを集計で区別できない。
+    public let lumaFullRange: Bool?
+
+    /// 空優先 AE の測光がどの範囲を測ったか（`"upper"` / `"whole_frame"`・測れていなければ nil）。
+    public let skyMeterRegion: String?
+
     public init(
         photoData: Data,
         rawPhotoData: Data?,
@@ -147,7 +156,9 @@ public struct SkyCameraCapture {
         skyPeakLuma: Int,
         skyMaxClippedFraction: Double,
         skyMaxPeakLuma: Int,
-        shutterDate: Date
+        shutterDate: Date,
+        lumaFullRange: Bool? = nil,
+        skyMeterRegion: String? = nil
     ) {
         self.photoData = photoData
         self.rawPhotoData = rawPhotoData
@@ -173,6 +184,8 @@ public struct SkyCameraCapture {
         self.skyMaxClippedFraction = skyMaxClippedFraction
         self.skyMaxPeakLuma = skyMaxPeakLuma
         self.shutterDate = shutterDate
+        self.lumaFullRange = lumaFullRange
+        self.skyMeterRegion = skyMeterRegion
     }
 }
 
@@ -190,6 +203,10 @@ public struct SkyPriorityStatus: Sendable {
     public let maxClippedFraction: Double
     /// 画面を開いてからの最大輝度（0〜255）。
     public let maxPeakLuma: UInt8
+    /// 直近の測光で届いたバッファが Full Range だったか（まだ測れていなければ nil）。
+    public let lumaFullRange: Bool?
+    /// 直近の測光がどの範囲を測ったか（まだ測れていなければ nil）。
+    public let meterRegion: SkyPriorityExposure.MeterRegion?
 }
 
 /// 記録形式。
