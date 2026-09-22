@@ -195,6 +195,17 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             self.sessionQueue.async {
                 // 適用の可否に関わらず「測れた」ことは記録する（壊れていない証拠になる）。
                 self.hasMeasuredClipping = true
+                // 測り方（空の側／画面全体・Full／Video Range）が変わったら、
+                // これまでの最大値は別の物差しの数字なので混ぜずに積み直す。
+                if SkyPriorityExposure.measurementBasisChanged(
+                    previousRegion: self.lastMeterRegion,
+                    previousFullRange: self.lastLumaFullRange,
+                    region: reading.region,
+                    isFullRange: reading.isFullRange
+                ) {
+                    self.maxClippedFraction = 0
+                    self.maxPeakLuma = 0
+                }
                 self.lastClippedFraction = reading.clippedFraction
                 self.lastPeakLuma = reading.peakLuma
                 self.maxClippedFraction = max(self.maxClippedFraction, reading.clippedFraction)
