@@ -247,6 +247,90 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.user?.displayName, "Updated Name")
     }
 
+    /// 回帰テスト ⭐️: 大きい写真を選んでも、長辺 1024px 以下に縮小してから送ること
+    ///
+    /// 以前は元の解像度のまま送っていたため、JPEG にすると 5MB を超えて
+    /// 「画像サイズが大きすぎます」で保存できないことがあった（1.11.0 で 5 人）。
+    func testUpdateProfileResizesLargeImageBeforeUpload() async throws {
+        // Given: 3000×2000px の写真（scale 1 ＝ size がそのままピクセル数）
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let largeImage = UIGraphicsImageRenderer(size: CGSize(width: 3000, height: 2000), format: format).image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 3000, height: 2000))
+        }
+        viewModel.editingProfileImage = largeImage
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then: 送られた画像の長辺が上限（1024px）まで縮んでいる
+        let uploaded = try XCTUnwrap(mockStorageService.uploadedImage)
+        let longSidePixels = max(uploaded.size.width, uploaded.size.height) * uploaded.scale
+        XCTAssertEqual(longSidePixels, ProfileViewModel.profileImageMaxDimension, accuracy: 1)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    /// 回帰テスト ⭐️: 「画像が大きすぎる」は何度送っても必ず失敗するので、再試行せず 1 回で諦めること
+    ///
+    /// 以前は systemError 扱いで 3 回再試行し、そのあいだ待たされたうえでエラーになっていた。
+    func testUpdateProfileDoesNotRetryImageTooLarge() async {
+        // Given
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        mockStorageService.uploadError = StorageServiceError.imageTooLarge
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+        viewModel.editingProfileImage = UIImage(systemName: "photo")!
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then
+        XCTAssertEqual(mockStorageService.uploadCallCount, 1)
+        XCTAssertNotNil(viewModel.errorMessage)
+    }
+
+    /// 上のテストの対照: 通信などで起きる他の保存エラーは、今まで通り再試行すること
+    /// （分類の変更が「画像が大きすぎる」以外に広がっていないことの確認）
+    func testUpdateProfileStillRetriesOtherStorageErrors() async {
+        // Given
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        mockStorageService.uploadError = StorageServiceError.uploadFailed(
+            NSError(domain: "test", code: -1)
+        )
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+        viewModel.editingProfileImage = UIImage(systemName: "photo")!
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then: 初回 1 回＋再試行 3 回で合計 4 回
+        // （RetryableOperation.executeIfRetryable がまず 1 回試し、失敗すると ErrorHandler.retry が
+        //   maxAttempts=3 回試す。この回数は今回の変更前から同じ）
+        XCTAssertEqual(mockStorageService.uploadCallCount, 4)
+        XCTAssertNotNil(viewModel.errorMessage)
+    }
+
     /// 回帰テスト ⭐️: プロフィール更新が publicProfiles のフォローカウンタを書き換えないこと
     ///
     /// PublicProfile 全体書き込みは、クライアントが持つ古い followersCount /
@@ -603,8 +687,16 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
 
 class MockStorageServiceForProfile: StorageServiceProtocol {
     var uploadedImage: UIImage?
+    /// uploadImage で投げるエラー（nil なら成功）
+    var uploadError: Error?
+    /// uploadImage が呼ばれた回数（再試行の有無の確認用）
+    var uploadCallCount = 0
     
     func uploadImage(_ image: UIImage, path: String) async throws -> URL {
+        uploadCallCount += 1
+        if let uploadError {
+            throw uploadError
+        }
         uploadedImage = image
         return URL(string: "https://example.com/uploaded.jpg")!
     }
