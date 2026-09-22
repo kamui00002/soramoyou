@@ -32,6 +32,10 @@ struct EditView: View {
     @State private var postInfoPayload: PostInfoPayload?
     /// 最終画像の生成中フラグ（「次へ」連打による多重生成を防ぐ）
     @State private var isGeneratingFinal = false
+    /// 押せない状態の「次へ」が押されたことを記録済みの理由（理由ごとに画面につき 1 回だけ送る）
+    @State private var loggedNextBlockReasons: Set<String> = []
+    /// 編集画面を開いた時刻（`edit_next_blocked` の経過秒数の起点）
+    @State private var screenOpenedAt = Date()
     /// 編集ツール設定画面の表示フラグ
     @State private var showEditToolsSettings = false
     /// 「AIで自動編集」候補選択シート（柱1 v2）の表示フラグ。
@@ -144,6 +148,12 @@ struct EditView: View {
                     editControlsView
                 }
             }
+            // 「次へ」を押してから投稿用の画像ができるまでの表示（理由は `finalImageProgressOverlay` 参照）
+            .overlay {
+                if isGeneratingFinal {
+                    finalImageProgressOverlay
+                }
+            }
             .navigationTitle("編集")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Color.black, for: .navigationBar)
@@ -158,6 +168,11 @@ struct EditView: View {
 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
+                        // ⚠️ 書き出し中（isGeneratingFinal）は Undo / Redo / 編集ツール設定を止める。
+                        //    書き出し中の表示（finalImageProgressOverlay）はナビバーを覆わないため、ここで個別に止める。
+                        //    Undo / Redo で編集内容が変わると、書き出した画像と一緒に渡すレシピが食い違う。
+                        //    設定シートを開くと、書き出し完了時の fullScreenCover と表示がぶつかる。
+                        //    キャンセルは、書き出しが終わらないときの逃げ道として押せるまま残す。
                         // Undo ボタン
                         Button(action: {
                             viewModel.undo()
@@ -165,8 +180,8 @@ struct EditView: View {
                             Image(systemName: "arrow.uturn.backward")
                                 .font(.body)
                         }
-                        .disabled(!viewModel.canUndo)
-                        .foregroundColor(viewModel.canUndo ? .white : .gray)
+                        .disabled(!viewModel.canUndo || isGeneratingFinal)
+                        .foregroundColor(viewModel.canUndo && !isGeneratingFinal ? .white : .gray)
 
                         // Redo ボタン
                         Button(action: {
@@ -175,8 +190,8 @@ struct EditView: View {
                             Image(systemName: "arrow.uturn.forward")
                                 .font(.body)
                         }
-                        .disabled(!viewModel.canRedo)
-                        .foregroundColor(viewModel.canRedo ? .white : .gray)
+                        .disabled(!viewModel.canRedo || isGeneratingFinal)
+                        .foregroundColor(viewModel.canRedo && !isGeneratingFinal ? .white : .gray)
 
                         // 編集ツール設定ボタン
                         Button(action: {
@@ -185,19 +200,38 @@ struct EditView: View {
                             Image(systemName: "slider.horizontal.3")
                                 .font(.body)
                         }
-                        .foregroundColor(.white)
+                        .disabled(isGeneratingFinal)
+                        .foregroundColor(isGeneratingFinal ? .gray : .white)
 
                         // 次へボタン
-                        Button("次へ") {
-                            // 生成中の連打を防ぐ。generateFinalImages は isLoading を立てないため、
+                        Button {
+                            // 押せない間（生成中・プレビュー読み込み中・空マスク生成中）は進まない。
+                            // 生成中の連打を防ぐ意味もある。generateFinalImages は isLoading を立てないため、
                             // 専用フラグでガードしないと重い画像生成が多重起動し、postInfoPayload が
                             // 複数回差し替わって PostInfoView が再構築される恐れがある。
-                            guard !isGeneratingFinal else { return }
+                            // ⚠️ `.disabled` は使わない。`.disabled` だと押せない間はこのクロージャ自体が
+                            //    呼ばれず、「押したのに進まない」を計測できない（2026-09-22 iPhone 11 Pro で
+                            //    記録ゼロのまま投稿できない報告があった）。見た目は下の foregroundColor で示す。
+                            if let reason = nextBlockReason {
+                                logNextBlocked(reason: reason)
+                                return
+                            }
                             isGeneratingFinal = true
+                            // 端末ごとの書き出し時間を測る（遅い端末で待ちきれずに離脱していないかの判断材料）
+                            let startedAt = Date()
+                            let imageCount = originalImages.count
+                            LoggingService.shared.logEvent("edit_next_started", parameters: [
+                                "image_count": imageCount,
+                            ])
                             Task { @MainActor in
                                 defer { isGeneratingFinal = false }
                                 do {
                                     let finalImages = try await viewModel.generateFinalImages()
+                                    LoggingService.shared.logEvent("edit_next_finished", parameters: [
+                                        "result": "success",
+                                        "duration_ms": Int(Date().timeIntervalSince(startedAt) * 1000),
+                                        "image_count": imageCount,
+                                    ])
                                     // generateFinalImages() 完了後に呼ぶ（＝ imageStates が最新化済み）。
                                     // currentEditRecipes() は内部で saveCurrentImageState() を呼ぶ
                                     // 冪等な関数なので、ここで呼んでも既存状態を壊さない。
@@ -213,15 +247,28 @@ struct EditView: View {
                                         editRecipes: finalRecipes
                                     )
                                 } catch {
+                                    // 失敗は画面に出すだけでなく記録する（以前は記録が無く、原因を追えなかった）
+                                    ErrorHandler.logError(error, context: "EditView.next.generateFinalImages", userId: userId)
+                                    LoggingService.shared.logEvent("edit_next_finished", parameters: [
+                                        "result": "failure",
+                                        "duration_ms": Int(Date().timeIntervalSince(startedAt) * 1000),
+                                        "image_count": imageCount,
+                                    ])
                                     viewModel.errorMessage = error.userFriendlyMessage
                                 }
                             }
+                        } label: {
+                            if isGeneratingFinal {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            } else {
+                                Text("次へ")
+                            }
                         }
-                        // ⭐️ レビュー指摘3対応: 空マスク生成中（isGeneratingSkyMask）も
-                        // 無効化する。生成中に「次へ」を押すと、まだ確定していないマスクの
-                        // 状態で書き出しが走ってしまう恐れがあるため。
-                        .disabled(viewModel.isLoading || isGeneratingFinal || viewModel.isGeneratingSkyMask)
-                        .foregroundColor(.white)
+                        // 押せない間はグレーにする（以前は白のままで、押せないことが見えなかった）
+                        .foregroundColor(nextBlockReason == nil ? .white : .gray)
+                        .accessibilityLabel("次へ")
+                        .accessibilityHint(nextBlockReason == nil ? "" : "準備中のため、まだ進めません")
                     }
                 }
             }
@@ -525,6 +572,59 @@ struct EditView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Next Button Helpers
+
+    /// 「次へ」を今は押せない理由（nil なら押せる）。見た目（グレー表示）と計測の単一ソース。
+    ///
+    /// ⭐️ レビュー指摘3対応: 空マスク生成中（isGeneratingSkyMask）も押せなくする。
+    /// 生成中に「次へ」を押すと、まだ確定していないマスクの状態で書き出しが走ってしまう恐れがあるため。
+    private var nextBlockReason: String? {
+        if isGeneratingFinal { return "generating_final" }
+        if viewModel.isGeneratingSkyMask { return "generating_sky_mask" }
+        if viewModel.isLoading { return "preview_loading" }
+        return nil
+    }
+
+    /// 押せない状態で「次へ」が押されたことを記録する（理由ごとに画面につき 1 回まで）。
+    ///
+    /// `seconds_since_open` は「画面を開いてから、押せない『次へ』を初めて押すまでの秒数」で、
+    /// 押せない状態が続いた秒数ではない（何度も押されたかは PostHog の `$rageclick` で見る）。
+    /// 書き出しが「遅いだけ」か「終わらない」かは、`edit_next_started` と `edit_next_finished`（`duration_ms`）の
+    /// 組で見分ける（started だけで finished が無ければ、終わらずに離脱している）。
+    /// ⚠️ キャンセルで画面を閉じても書き出しの Task は続くので、`edit_next_finished` は画面を離れたあとにも届く。
+    ///    「投稿情報画面に進めた」の意味では読まないこと（そちらは `post_completed` で数える）。
+    private func logNextBlocked(reason: String) {
+        guard !loggedNextBlockReasons.contains(reason) else { return }
+        loggedNextBlockReasons.insert(reason)
+        LoggingService.shared.logEvent("edit_next_blocked", parameters: [
+            "reason": reason,
+            "seconds_since_open": Int(Date().timeIntervalSince(screenOpenedAt)),
+            "preview_ready": viewModel.previewImage != nil,
+        ])
+    }
+
+    /// 「次へ」を押してから投稿用の画像ができるまでの表示。
+    ///
+    /// ⚠️ 書き出しは端末によって数秒以上かかる。以前は何も表示しなかったため「押しても反応しない」ように見え、
+    ///    iPhone 11 Pro のユーザーが「次へ」を連打した末に離脱していた（2026-09-22 のフィードバック「投稿ができない」）。
+    ///    画面の中身（プレビュー・編集コントロール）の操作は受け付けない。ナビバーは覆わないので、
+    ///    Undo / Redo / 編集ツール設定はツールバー側で個別に止めている（キャンセルは押せるまま残す）。
+    private var finalImageProgressOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+                .ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.3)
+                Text("投稿用の画像を準備しています…")
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Preview Content Helpers
