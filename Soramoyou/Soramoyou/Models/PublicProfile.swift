@@ -20,6 +20,12 @@ struct PublicProfile: Identifiable, Codable {
     var followersCount: Int
     var followingCount: Int
     var postsCount: Int
+    /// 私のおすすめの空 ⭐️（表示順の postId 配列・最大 `RecommendedSkies.maxCount` 件）
+    ///
+    /// 自分・他の人どちらの公開投稿も入れられる。旧データ（フィールド無し）は空配列として読む。
+    /// ⚠️ 書き込みは `addRecommendedPost` / `updateRecommendedPostIds` だけで行う
+    ///    （PublicProfile 全体を書く経路で古い値に巻き戻さないため）。
+    var recommendedPostIds: [String]
     let createdAt: Date
     var updatedAt: Date
 
@@ -33,6 +39,7 @@ struct PublicProfile: Identifiable, Codable {
         followersCount: Int = 0,
         followingCount: Int = 0,
         postsCount: Int = 0,
+        recommendedPostIds: [String] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -45,6 +52,7 @@ struct PublicProfile: Identifiable, Codable {
         self.followersCount = followersCount
         self.followingCount = followingCount
         self.postsCount = postsCount
+        self.recommendedPostIds = recommendedPostIds
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -60,6 +68,8 @@ struct PublicProfile: Identifiable, Codable {
         self.followersCount = user.followersCount
         self.followingCount = user.followingCount
         self.postsCount = user.postsCount
+        // おすすめの空は publicProfiles にしか無い（users には持たない）
+        self.recommendedPostIds = []
         self.createdAt = user.createdAt
         self.updatedAt = user.updatedAt
     }
@@ -98,6 +108,11 @@ struct PublicProfile: Identifiable, Codable {
         data["followingCount"] = followingCount
         data["postsCount"] = postsCount
 
+        // 空のときはキーごと書かない（旧データと同じ形を保つ）
+        if !recommendedPostIds.isEmpty {
+            data["recommendedPostIds"] = recommendedPostIds
+        }
+
         return data
     }
 
@@ -116,6 +131,8 @@ struct PublicProfile: Identifiable, Codable {
         self.followersCount = documentData["followersCount"] as? Int ?? 0
         self.followingCount = documentData["followingCount"] as? Int ?? 0
         self.postsCount = documentData["postsCount"] as? Int ?? 0
+        // 旧データ（フィールド無し）・型違いは空配列として扱う
+        self.recommendedPostIds = RecommendedSkies.normalized(documentData["recommendedPostIds"] as? [String] ?? [])
 
         // TimestampからDateに変換
         if let createdAtTimestamp = documentData["createdAt"] as? Timestamp {

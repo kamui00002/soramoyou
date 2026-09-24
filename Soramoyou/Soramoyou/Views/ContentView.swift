@@ -73,6 +73,8 @@ struct ContentView: View {
         .onChange(of: authViewModel.isAuthenticated) { isAuthenticated in
             if !isAuthenticated {
                 favoriteManager.clearOnSignOut()
+                // おすすめの空（自分の一覧）も同じ理由で消す。アカウント削除でもここを通る ⭐️
+                RecommendationManager.shared.clearOnSignOut()
             }
         }
         .alert("エラー", isPresented: Binding(errorMessage: $authViewModel.errorMessage)) {

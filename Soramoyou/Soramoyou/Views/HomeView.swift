@@ -733,6 +733,8 @@ struct PostDetailView: View {
     @State private var isPreparingShareCard = false
     /// 元画像ダウンロード中フラグ（編集準備中の二重起動防止＋表示用）。
     @State private var isPreparingReEdit = false
+    /// おすすめの空の追加 / 外すの結果（non-nil でアラートを出す）⭐️
+    @State private var recommendationOutcome: RecommendationManager.Outcome?
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
@@ -766,6 +768,8 @@ struct PostDetailView: View {
                     // ⚠️ この詳細は GalleryView など checkLikeStatus を呼ばない画面からも開かれる。
                     //    1 read だけ足して、🔖 の表示が常にサーバー値と一致するようにする。⭐️
                     Task { await favoriteManager.checkFavoriteStatus(for: [post]) }
+                    // 「…」メニューの「おすすめの空に追加 / から外す」の表示用（読み込み済みなら何もしない）⭐️
+                    Task { await RecommendationManager.shared.load() }
                 }
                 .alert("投稿を削除", isPresented: $showingDeleteConfirmation) {
                     Button("削除", role: .destructive) {
@@ -949,6 +953,9 @@ struct PostDetailView: View {
                 postInfoSection
             }
         }
+        // おすすめの空の結果アラート ⭐️
+        // ⚠️ body の修飾子チェーンに足すと Xcode 27 の型チェックが重くなる（#123）ため、ここに付ける
+        .recommendationOutcomeAlert($recommendationOutcome)
     }
 
     // MARK: - Multi Image Carousel ⭐️
@@ -1102,6 +1109,10 @@ struct PostDetailView: View {
                     Label("共有カードを書き出す", systemImage: "square.and.arrow.up.on.square")
                 }
                 .disabled(isPreparingShareCard || isPreparingReEdit)
+                // 私のおすすめの空に追加 / から外す（公開投稿のみ表示）⭐️
+                RecommendMenuButton(post: post, source: "post_detail") { outcome in
+                    recommendationOutcome = outcome
+                }
                 Divider()
                 if viewModel.isOwnPost(post) {
                     // 再編集: 元画像(originalImages)を持つ投稿のみ。

@@ -37,6 +37,8 @@ struct GalleryDetailView: View {
     @State private var isPreparingEdit = false
     /// タップされたハッシュタグ。non-nil でタグ詳細画面を全画面提示する ⭐️
     @State private var selectedTag: String?
+    /// おすすめの空の追加 / 外すの結果（non-nil でアラートを出す）⭐️
+    @State private var recommendationOutcome: RecommendationManager.Outcome?
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
@@ -52,6 +54,8 @@ struct GalleryDetailView: View {
     var body: some View {
         NavigationView {
             withDialogs(contentWithToolbar)
+                // おすすめの空の結果アラート ⭐️（withDialogs のチェーンを伸ばさないよう、ここで 1 つだけ足す）
+                .recommendationOutcomeAlert($recommendationOutcome)
         }
         .navigationViewStyle(.stack)
     }
@@ -147,6 +151,11 @@ struct GalleryDetailView: View {
                         Label("共有", systemImage: "square.and.arrow.up")
                     }
 
+                    // 私のおすすめの空に追加 / から外す（公開投稿のみ表示）⭐️
+                    RecommendMenuButton(post: post, source: "gallery_detail") { outcome in
+                        recommendationOutcome = outcome
+                    }
+
                     Divider()
 
                     // 自分の投稿の場合のみ編集・削除を表示
@@ -193,6 +202,8 @@ struct GalleryDetailView: View {
             // ⚠️ ギャラリーは一覧側で checkLikeStatus を呼んでいないため、
             //    詳細で 1 read だけ足して 🔖 の表示をサーバー値に合わせる。⭐️
             Task { await favoriteManager.checkFavoriteStatus(for: [post]) }
+            // 「…」メニューの「おすすめの空に追加 / から外す」の表示用（読み込み済みなら何もしない）⭐️
+            Task { await RecommendationManager.shared.load() }
         }
         // 再編集: 元画像＋レシピをエディタへ。保存時は既存投稿を上書き更新する。
         // item: 方式で「画像が確実に揃ってから」EditView を構築する（stale-state 回避）。

@@ -73,6 +73,15 @@ protocol FirestoreServiceProtocol {
     func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws
     func createPublicProfile(from user: User) async throws
 
+    // Recommended Skies（私のおすすめの空）⭐️
+    /// おすすめの空に投稿を追加する（トランザクションで上限と重複を守る）
+    /// - Returns: 追加結果（追加後／現在の一覧を含む）
+    /// - Throws: 公開プロフィールが無ければ `FirestoreServiceError.notFound`
+    ///   （呼び出し側が `createPublicProfile` してから再試行できるようにするため）
+    func addRecommendedPost(postId: String, userId: String) async throws -> RecommendedSkies.AddResult
+    /// おすすめの空の一覧を丸ごと保存する（外す・並べ替え）
+    func updateRecommendedPostIds(_ postIds: [String], userId: String) async throws
+
     // Account
     func deleteUserData(userId: String) async throws
 
@@ -1099,6 +1108,82 @@ class FirestoreService: FirestoreServiceProtocol {
             }
             // 存在する場合、および存在確認そのものが失敗した場合（snapshot が nil）は
             // 「不在」と断定できないので、元のエラーを updateFailed として伝える。
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    // MARK: - Recommended Skies（私のおすすめの空）⭐️
+
+    /// 公開プロフィールが無いことをトランザクションの外へ伝えるためのエラードメイン
+    private static let recommendedSkiesProfileMissingDomain = "FirestoreService.recommendedSkies.profileMissing"
+
+    /// おすすめの空に投稿を追加する ⭐️
+    ///
+    /// ⚠️ トランザクションにしているのは「上限 3 枚」と「重複なし」を守るため。
+    ///    別の端末で同時に追加されても、読み取った最新の一覧に対して判定する。
+    ///    （`FieldValue.arrayUnion` だと上限を知らないので 4 枚目が入りうる。
+    ///      rules でも size() <= 3 を検査しているが、そちらは拒否されるだけで理由が伝わらない。）
+    func addRecommendedPost(postId: String, userId: String) async throws -> RecommendedSkies.AddResult {
+        let profileRef = publicProfilesCollection.document(userId)
+
+        do {
+            let result = try await db.runTransaction { transaction, errorPointer in
+                let snapshot: DocumentSnapshot
+                do {
+                    snapshot = try transaction.getDocument(profileRef)
+                } catch let fetchError as NSError {
+                    errorPointer?.pointee = fetchError
+                    return nil
+                }
+
+                guard snapshot.exists else {
+                    // 公開プロフィール未作成（移行未実施の旧アカウント）→ 呼び出し側で作ってから再試行する
+                    errorPointer?.pointee = NSError(
+                        domain: Self.recommendedSkiesProfileMissingDomain,
+                        code: 404,
+                        userInfo: [NSLocalizedDescriptionKey: "公開プロフィールがありません"]
+                    )
+                    return nil
+                }
+
+                let current = snapshot.data()?["recommendedPostIds"] as? [String] ?? []
+                let addResult = RecommendedSkies.adding(postId, to: current)
+                // 追加できたときだけ書く（既に入っている・満杯のときは何も書かない）
+                if case let .added(postIds) = addResult {
+                    transaction.updateData([
+                        "recommendedPostIds": postIds,
+                        "updatedAt": Timestamp(date: Date())
+                    ], forDocument: profileRef)
+                }
+                return addResult
+            }
+
+            guard let addResult = result as? RecommendedSkies.AddResult else {
+                throw FirestoreServiceError.updateFailed(NSError(domain: "FirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "トランザクション結果の取得に失敗"]))
+            }
+            return addResult
+        } catch let error as FirestoreServiceError {
+            throw error
+        } catch {
+            if (error as NSError).domain == Self.recommendedSkiesProfileMissingDomain {
+                throw FirestoreServiceError.notFound
+            }
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// おすすめの空の一覧を丸ごと保存する（外す・並べ替え）⭐️
+    ///
+    /// updateData で recommendedPostIds（と updatedAt）だけを書く。
+    /// PublicProfile 全体を書かないのは、followersCount 等を古い値で巻き戻さないため
+    /// （`updatePublicProfileFields` と同じ理由）。
+    func updateRecommendedPostIds(_ postIds: [String], userId: String) async throws {
+        do {
+            try await publicProfilesCollection.document(userId).updateData([
+                "recommendedPostIds": RecommendedSkies.normalized(postIds),
+                "updatedAt": Timestamp(date: Date())
+            ])
+        } catch {
             throw FirestoreServiceError.updateFailed(error)
         }
     }

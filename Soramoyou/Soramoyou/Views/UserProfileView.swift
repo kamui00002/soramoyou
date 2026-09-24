@@ -11,6 +11,8 @@ import SwiftUI
 
 struct UserProfileView: View {
     @StateObject private var viewModel: UserProfileViewModel
+    /// おすすめの空（この人がプロフィールに飾っている最大3枚）⭐️
+    @StateObject private var recommendedSkiesViewModel = RecommendedSkiesViewModel()
     @Environment(\.dismiss) private var dismiss
 
     /// フォロー一覧への遷移に使う（ViewModel 内の同名プロパティは private のため保持）⭐️ PR-5
@@ -36,6 +38,10 @@ struct UserProfileView: View {
                     followButton
                 }
                 statsRow
+                // おすすめの空（1枚も出せないときは欄ごと出さない）⭐️
+                if !recommendedSkiesViewModel.items.isEmpty {
+                    PublicRecommendedSkiesSection(viewModel: recommendedSkiesViewModel)
+                }
                 postsGrid
             }
             .padding(DesignTokens.Spacing.screenMargin)
@@ -45,6 +51,11 @@ struct UserProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await viewModel.load()
+            // おすすめの空は公開プロフィール（load で取得済み）の一覧から解決する ⭐️
+            await recommendedSkiesViewModel.load(
+                postIds: viewModel.publicProfile?.recommendedPostIds ?? [],
+                ownerId: targetUserId
+            )
         }
         .alert("エラー", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
