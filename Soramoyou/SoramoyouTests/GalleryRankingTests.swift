@@ -164,6 +164,25 @@ final class GalleryRankingTests: XCTestCase {
         XCTAssertEqual(rankingService.requestedPeriods, [.weekly, .weekly])
     }
 
+    func testOlderRequestForSamePeriodDoesNotOverwriteNewerResult() async {
+        // 週間の取得中に引っ張って更新 → 後の取得が先に終わり、先の古い取得が後から返ってくる
+        rankingService.entriesByPeriod[.weekly] = [entry(rank: 1, postId: "OLD", likes: 1)]
+        rankingService.suspendFirstCall = true
+        let firstLoad = Task { await viewModel.setSortOrder(.weeklyRanking) }
+        while !rankingService.isFirstCallSuspended {
+            await Task.yield()
+        }
+
+        rankingService.entriesByPeriod[.weekly] = [entry(rank: 1, postId: "NEW", likes: 5)]
+        await viewModel.refresh()
+        rankingService.resumeFirstCall()
+        await firstLoad.value
+
+        // 一覧も順位バッジも新しい結果のまま（古い結果でバッジの元データを上書きしない）
+        XCTAssertEqual(viewModel.posts.map(\.id), ["NEW"])
+        XCTAssertEqual(viewModel.rankedEntry(for: "NEW")?.likeCount, 5)
+    }
+
     // MARK: - エラー
 
     func testRankingErrorIsSurfaced() async {
@@ -208,13 +227,31 @@ final class MockRankingService: RankingServiceProtocol {
     var entriesByPeriod: [RankingPeriod: [RankedPost]] = [:]
     var error: Error?
     private(set) var requestedPeriods: [RankingPeriod] = []
+    /// true なら 1 回目の取得を resumeFirstCall() まで止める（取得が重なる状況の再現用）
+    var suspendFirstCall = false
+    private var firstCallContinuation: CheckedContinuation<Void, Never>?
+
+    /// 1 回目の取得が止まっているか
+    var isFirstCallSuspended: Bool { firstCallContinuation != nil }
+
+    /// 止めていた 1 回目の取得を再開する
+    func resumeFirstCall() {
+        firstCallContinuation?.resume()
+        firstCallContinuation = nil
+    }
 
     func fetchRanking(period: RankingPeriod, blockedUserIds: Set<String>, now: Date) async throws -> RankingResult {
         requestedPeriods.append(period)
+        // 呼ばれた時点の結果を返す（止めている間に entriesByPeriod を変えても、この取得は古いまま）
+        let entries = entriesByPeriod[period] ?? []
+        if suspendFirstCall && requestedPeriods.count == 1 {
+            await withCheckedContinuation { continuation in
+                firstCallContinuation = continuation
+            }
+        }
         if let error {
             throw error
         }
-        let entries = entriesByPeriod[period] ?? []
         return RankingResult(
             period: period,
             entries: entries,

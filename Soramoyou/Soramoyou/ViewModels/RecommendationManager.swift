@@ -242,12 +242,15 @@ final class RecommendationManager: ObservableObject {
     }
 
     /// 追加する。公開プロフィールが無い旧アカウントなら作ってから 1 回だけ再試行する
+    ///
+    /// ⚠️ 作成は「無いときだけ作る」（createPublicProfileIfMissing）。丸ごと上書きの createPublicProfile だと、
+    ///    別の端末が同時に作成・追加した recommendedPostIds を消してしまう。
     private func addWithProfileFallback(postId: String, userId: String) async throws -> RecommendedSkies.AddResult {
         do {
             return try await firestoreService.addRecommendedPost(postId: postId, userId: userId)
         } catch FirestoreServiceError.notFound {
             let user = try await firestoreService.fetchUser(userId: userId)
-            try await firestoreService.createPublicProfile(from: user)
+            try await firestoreService.createPublicProfileIfMissing(from: user)
             return try await firestoreService.addRecommendedPost(postId: postId, userId: userId)
         }
     }

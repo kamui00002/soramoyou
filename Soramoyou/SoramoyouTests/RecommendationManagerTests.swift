@@ -125,6 +125,21 @@ final class RecommendationManagerTests: XCTestCase {
         XCTAssertEqual(mock.serverPostIds, ["A"])
     }
 
+    func testProfileFallbackKeepsPostAddedByAnotherDevice() async {
+        // 旧アカウントで 2 台が同時に最初のおすすめを追加 → こちらが作成する前に、
+        // 別の端末がプロフィールを作って X を追加していた。作成で上書きして X を消さない。
+        let mock = MockFirestoreServiceForRecommendations()
+        mock.profileExists = false
+        mock.otherDeviceCreatesProfileWith = ["X"]
+        let (manager, _) = makeManager(firestore: mock)
+
+        let outcome = await manager.add(post: makePost(id: "A"), source: "post_detail")
+
+        XCTAssertEqual(outcome, .added)
+        XCTAssertEqual(mock.serverPostIds, ["X", "A"])
+        XCTAssertEqual(mock.createPublicProfileCount, 0, "既にあるので作成しない")
+    }
+
     func testAddFailureReturnsFailed() async {
         let mock = MockFirestoreServiceForRecommendations()
         mock.addError = FirestoreServiceError.updateFailed(NSError(domain: "test", code: 1))
@@ -273,6 +288,8 @@ final class MockFirestoreServiceForRecommendations: FirestoreServiceProtocol {
     var writeError: Error?
     /// fetchPublicProfile の「通信中」に割り込ませる処理（読み込み中の変更を再現する）
     var onFetchPublicProfile: (() async -> Void)?
+    /// 最初の追加が notFound で失敗した直後に、別の端末がプロフィールを作ってこの一覧を書いた、を再現する
+    var otherDeviceCreatesProfileWith: [String]?
 
     private(set) var fetchPublicProfileCalls: [String] = []
     private(set) var addCalls: [String] = []
@@ -295,7 +312,14 @@ final class MockFirestoreServiceForRecommendations: FirestoreServiceProtocol {
     func addRecommendedPost(postId: String, userId _: String) async throws -> RecommendedSkies.AddResult {
         addCalls.append(postId)
         if let addError { throw addError }
-        guard profileExists else { throw FirestoreServiceError.notFound }
+        guard profileExists else {
+            if let otherList = otherDeviceCreatesProfileWith {
+                otherDeviceCreatesProfileWith = nil
+                profileExists = true
+                serverPostIds = otherList
+            }
+            throw FirestoreServiceError.notFound
+        }
         let result = RecommendedSkies.adding(postId, to: serverPostIds)
         serverPostIds = result.postIds
         return result
@@ -319,8 +343,11 @@ final class MockFirestoreServiceForRecommendations: FirestoreServiceProtocol {
         User(id: userId)
     }
 
-    func createPublicProfile(from _: User) async throws {
+    /// 本物と同じく「無いときだけ作る」
+    func createPublicProfileIfMissing(from _: User) async throws {
+        guard !profileExists else { return }
         createPublicProfileCount += 1
         profileExists = true
+        serverPostIds = []
     }
 }

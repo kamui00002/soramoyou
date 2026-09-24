@@ -118,6 +118,14 @@ class GalleryViewModel: PaginatedPostsViewModel {
     ///    バッジの元データは守られない）。
     @Published private(set) var rankingResults: [RankingPeriod: RankingResult] = [:]
 
+    /// 期間ごとのランキング取得の世代（最新の取得だけがキャッシュへ書けるようにする）
+    ///
+    /// ⚠️ 同じ期間の取得が重なる（取得中に引っ張って更新・同じチップの再選択）と、
+    ///    先に始まった古い取得が後から返ってきて `rankingResults` を上書きしうる。
+    ///    posts 側は基底クラスの世代トークンで古い結果が捨てられるので、
+    ///    一覧は新しいのに順位バッジだけ古い（欠ける・別の順位になる）状態になる。
+    private var rankingRequestGenerations: [RankingPeriod: Int] = [:]
+
     /// ランキング取得サービス
     private let rankingService: RankingServiceProtocol
     /// 現在時刻の取得元（テストでキャッシュ期限を検証できるよう差し替え可能）
@@ -350,11 +358,19 @@ class GalleryViewModel: PaginatedPostsViewModel {
             return cached
         }
 
+        let requestGeneration = (rankingRequestGenerations[period] ?? 0) + 1
+        rankingRequestGenerations[period] = requestGeneration
+
         let result = try await rankingService.fetchRanking(
             period: period,
             blockedUserIds: Set(blockedUserIds),
             now: currentTime
         )
+        // より新しい同じ期間の取得が始まっていたら、キャッシュ（順位バッジの元データ）へは書かない。
+        // 呼び出し元の fetchPosts も世代違いで posts を捨てるので、ここでは結果を返すだけでよい。
+        guard rankingRequestGenerations[period] == requestGeneration else {
+            return result
+        }
         rankingResults[period] = result
 
         // いいねの読み取り量が上限に近づいていないかを運用側で見るための計測

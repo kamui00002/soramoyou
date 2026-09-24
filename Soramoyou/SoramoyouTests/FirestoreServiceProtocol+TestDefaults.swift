@@ -240,6 +240,10 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.moveRecommendedPost は未実装です")
     }
 
+    func createPublicProfileIfMissing(from _: User) async throws {
+        fatalError("MockFirestoreService.createPublicProfileIfMissing は未実装です")
+    }
+
     // MARK: - Favorites（私のお気に入りの空）⭐️
 
     func setFavorite(postId _: String, userId _: String, isFavorited _: Bool) async throws {

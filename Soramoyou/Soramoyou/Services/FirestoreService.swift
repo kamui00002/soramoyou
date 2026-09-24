@@ -85,6 +85,8 @@ protocol FirestoreServiceProtocol {
     /// おすすめの空の中で投稿を前後に動かす（トランザクションで最新の一覧に対して動かす）
     /// - Returns: 動かした後の一覧（公開プロフィールが無ければ空配列）
     func moveRecommendedPost(_ postId: String, by offset: Int, userId: String) async throws -> [String]
+    /// 公開プロフィールが無いときだけ作成する（既にあれば何もしない・トランザクション）
+    func createPublicProfileIfMissing(from user: User) async throws
 
     // Account
     func deleteUserData(userId: String) async throws
@@ -1236,6 +1238,30 @@ class FirestoreService: FirestoreServiceProtocol {
             throw error
         } catch {
             throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// 公開プロフィールが無いときだけ作成する ⭐️
+    ///
+    /// ⚠️ `createPublicProfile` は setData の丸ごと上書きなので、公開プロフィール未作成の旧アカウントで
+    ///    2 台が同時に最初のおすすめを追加すると、先に作成・追加した端末の recommendedPostIds を
+    ///    後の端末の作成処理が消してしまう。「無ければ作る」をトランザクションで原子的に行う。
+    func createPublicProfileIfMissing(from user: User) async throws {
+        let docRef = publicProfilesCollection.document(user.id)
+        do {
+            _ = try await db.runTransaction { transaction, errorPointer in
+                do {
+                    let snapshot = try transaction.getDocument(docRef)
+                    if !snapshot.exists {
+                        transaction.setData(PublicProfile(from: user).toFirestoreData(), forDocument: docRef)
+                    }
+                } catch let fetchError as NSError {
+                    errorPointer?.pointee = fetchError
+                }
+                return nil
+            }
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
         }
     }
 
