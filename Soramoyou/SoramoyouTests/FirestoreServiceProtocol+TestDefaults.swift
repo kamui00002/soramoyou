@@ -175,6 +175,10 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.fetchLikes は未実装です")
     }
 
+    func fetchLikes(from _: Date, to _: Date, limit _: Int) async throws -> [Like] {
+        fatalError("MockFirestoreService.fetchLikes(from:to:limit:) は未実装です")
+    }
+
     func fetchBlockedUserIds(userId _: String) async throws -> [String] {
         fatalError("MockFirestoreService.fetchBlockedUserIds は未実装です")
     }

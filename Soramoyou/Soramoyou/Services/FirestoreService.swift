@@ -89,6 +89,15 @@ protocol FirestoreServiceProtocol {
     /// - Returns: いいね（新しい順への並べ替えは呼び出し側の責任）
     func fetchLikes(forPostIds postIds: [String]) async throws -> [Like]
 
+    /// 指定期間に押された「いいね」を新しい順に取得する（いいねランキングの集計用）⭐️
+    ///
+    /// - Parameters:
+    ///   - start: 期間の開始（含む）
+    ///   - end: 期間の終了（含む）
+    ///   - limit: 読み取り上限（新しい順に読むので、超えた分は期間の古い側が切り捨てられる）
+    /// - Returns: いいね（createdAt の新しい順）
+    func fetchLikes(from start: Date, to end: Date, limit: Int) async throws -> [Like]
+
     // Search
     func searchByHashtag(_ hashtag: String) async throws -> [Post]
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post]
@@ -960,6 +969,35 @@ class FirestoreService: FirestoreServiceProtocol {
             if snapshot.documents.count >= Self.likesFetchLimit {
                 print("⚠️ fetchLikes が上限 \(Self.likesFetchLimit) 件に到達。いいね件数の集計が過小になります postIds=\(targetIds.count)件")
             }
+
+            // ⚠️ compactMap { try? } は壊れたドキュメントを無言で落とすため使わない。
+            //    パスをログに残したうえで 1 件だけスキップする（tech-spec.md の方針）。
+            return snapshot.documents.compactMap { document -> Like? in
+                do {
+                    return try Like(from: document.data(), documentId: document.documentID)
+                } catch {
+                    print("❌ いいねのデコード失敗 path=\(document.reference.path) error=\(error.localizedDescription)")
+                    return nil
+                }
+            }
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
+    /// 指定期間に押された「いいね」を新しい順に取得する（いいねランキングの集計用）⭐️
+    ///
+    /// ⚠️ インデックス: createdAt 単一フィールドの範囲＋同じフィールドの並び替えなので、
+    ///    単一フィールドの自動インデックスで足りる（firestore.indexes.json の追加は不要）。
+    ///    ここに `whereField("postId", ...)` などの等値フィルタを足すと複合インデックスが要るので注意。
+    func fetchLikes(from start: Date, to end: Date, limit: Int) async throws -> [Like] {
+        do {
+            let snapshot = try await likesCollection
+                .whereField("createdAt", isGreaterThanOrEqualTo: Timestamp(date: start))
+                .whereField("createdAt", isLessThanOrEqualTo: Timestamp(date: end))
+                .order(by: "createdAt", descending: true)
+                .limit(to: limit)
+                .getDocuments()
 
             // ⚠️ compactMap { try? } は壊れたドキュメントを無言で落とすため使わない。
             //    パスをログに残したうえで 1 件だけスキップする（tech-spec.md の方針）。

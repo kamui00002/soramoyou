@@ -4,7 +4,7 @@
 //
 //  ギャラリータブ上部の「探索ヘッダー」。
 //  - 絞り込み（時間帯 / 空の種類）
-//  - 並び替え（新着 / 人気）
+//  - 並び替え（新着 / 人気 / 週間 / 月間）※週間・月間は「期間中に押されたいいね」のランキング ⭐️
 //  - 色で探す（横スワイプのカラースウォッチ）
 //  - シャッフル / レイアウト切替（グリッド⇔モザイク）
 //
@@ -38,20 +38,37 @@ struct GalleryExploreHeader: View {
 
     private var controlsRow: some View {
         HStack(spacing: DesignTokens.Spacing.sm) {
-            // 新着 / 人気（絞り込み中は人気を無効化＝新着固定）
-            sortChip(title: "新着", order: .newest)
-            sortChip(title: "人気", order: .popular)
+            // 新着 / 人気 / 週間 / 月間（絞り込み中は新着以外を無効化＝新着固定）
+            // ⚠️ チップが 4 つになり、幅 375pt の端末（iPhone SE / mini）では右のボタンと合わせて
+            //    はみ出すため、チップだけ横スクロールにして「続きがある」手がかりを重ねる。
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    sortChip(title: "新着", order: .newest)
+                    sortChip(title: "人気", order: .popular)
+                    sortChip(title: RankingPeriod.weekly.displayName, order: .weeklyRanking)
+                    sortChip(title: RankingPeriod.monthly.displayName, order: .monthlyRanking)
 
-            Spacer()
+                    // 内容の右端を計測して「まだ続きがあるか」を判定するための幅0マーカー
+                    HorizontalScrollEndMarker()
+                }
+                .padding(.vertical, 2)
+            }
+            // 空色背景に黒フェードは浮くので、選択色（青）の下地＋白矢印にする
+            .horizontalScrollEdgeFade(
+                fadeColor: DesignTokens.Colors.selectionAccent,
+                chevronColor: .white
+            )
 
-            // シャッフル
+            // シャッフル（ランキングは順位そのものが内容なので無効化）
             iconToggleButton(
                 systemName: "shuffle",
-                isOn: viewModel.isShuffled,
+                isOn: viewModel.isShuffled && !viewModel.isRankingMode,
                 accessibilityLabel: "シャッフル"
             ) {
                 Task { await viewModel.toggleShuffle() }
             }
+            .opacity(viewModel.isRankingMode ? 0.35 : 1.0)
+            .disabled(viewModel.isRankingMode)
 
             // レイアウト切替（グリッド⇔モザイク）
             iconToggleButton(
@@ -64,12 +81,12 @@ struct GalleryExploreHeader: View {
         }
     }
 
-    /// 新着/人気の並び替えチップ
+    /// 並び替えチップ（新着 / 人気 / 週間 / 月間）
     private func sortChip(title: String, order: GallerySortOrder) -> some View {
-        // 「人気」は絞り込み中は選択不可（新着固定）
-        let isDisabled = (order == .popular) && viewModel.hasActiveFilter
+        // 新着以外は絞り込み中は選択不可（新着固定）
+        let isDisabled = (order != .newest) && viewModel.hasActiveFilter
         let isSelected = !viewModel.isColorMode
-            && viewModel.effectiveSortOrder.sortField == order.sortField
+            && viewModel.effectiveSortOrder == order
             && !isDisabled
 
         return FilterChip(

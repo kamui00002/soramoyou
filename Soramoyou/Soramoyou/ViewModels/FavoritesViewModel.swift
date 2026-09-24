@@ -370,20 +370,9 @@ final class FavoritesViewModel: ObservableObject {
 
     /// 「もう出せない投稿」かどうかを判定する
     ///
-    /// 削除済み（notFound）と、非公開化・フォロー解除で読めなくなったもの（permissionDenied）が該当。
-    /// これ以外（ネットワーク断など）は一時的な失敗として扱い、再試行の余地を残す。
+    /// 判定基準はランキング・おすすめの空と共通（`PostAvailability`）。
     private static func isUnavailable(_ error: Error) -> Bool {
-        guard let serviceError = error as? FirestoreServiceError else { return false }
-
-        switch serviceError {
-        case .notFound:
-            return true
-        case let .fetchFailed(underlying):
-            let nsError = underlying as NSError
-            return nsError.code == FirestoreErrorCode.permissionDenied.rawValue
-        default:
-            return false
-        }
+        PostAvailability.isUnavailable(error)
     }
 
     // MARK: - Types
