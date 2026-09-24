@@ -252,6 +252,48 @@
 - クライアントからプロフィールを更新するときは `updatePublicProfileFields`（`displayName` / `photoURL` / `bio` のみを `updateData`）を使う。`PublicProfile` 全体を書くとクライアントが持つ古いカウンタでサーバーの真値を潰す。
 - 更新失敗時は `publicProfiles/{userId}` の存在を `get` で確認して分岐する（不在＝新規作成、存在＝更新失敗）。`update` ルールが `resource.data.id` を参照するため、ドキュメント不在でも `NOT_FOUND` ではなく `PERMISSION_DENIED` が返りうるので、**エラーコードで不在判定してはいけない**。
 
+### publicProfiles.recommendedPostIds（私のおすすめの空）⭐️（2026-09-24）
+
+```json
+{
+  "recommendedPostIds": ["string"]   // 表示順の postId。最大 3 件。自分・他の人どちらの公開投稿も可。未選択・旧データはフィールド無し
+}
+```
+
+- **publicProfiles に置く理由**: 他の人がプロフィールを見たときにも読める必要がある（`users` は所有者のみ read）。
+  🔖 お気に入り（`users/{uid}/favorites`・自分だけ）とは公開範囲が逆なので混同しないこと。
+- 書き込みは `addRecommendedPost`（**トランザクション**で上限 3 件と重複なしを守る）と
+  `updateRecommendedPostIds`（外す・並べ替えで配列を丸ごと `updateData`）だけ。`PublicProfile` 全体は書かない。
+  - `arrayUnion` にしないのは上限を知らないため（rules の `size() <= 3` で拒否されても理由がクライアントに伝わらない）。
+  - 公開プロフィール未作成の旧アカウントは `notFound` → `createPublicProfile` してから 1 回だけ再試行する（`RecommendationManager`）。
+- rules: `recommendedPostIds` は「フィールド無し」または「配列かつ 3 件以下」のみ許可（create / update とも）。
+  ⚠️ 上限は iOS `RecommendedSkies.maxCount` / Functions `recommendationCore.MAX_RECOMMENDATIONS` と一致させること。
+- 表示時は **1 件ずつ `fetchPost`** で解決する（お気に入りと同じ理由: posts の read rule は visibility 依存で、
+  `documentID in [...]` だと 1 件でも読めない投稿が混ざるとクエリ全体が denied になる）。
+  公開（`public`）以外・削除済みは出さず、持ち主には「表示できない空が N 枚」と整理を促す。
+- アプリは公開投稿しか追加させないが、rules は配列の中身（postId が実在・公開か）までは検査できない。
+  読む側（アプリの表示・Functions の通知）で必ず visibility を確認すること。
+
+## recommendationNotices コレクション（「おすすめの空に選ばれました」通知の既読マーカー）⭐️（2026-09-24）
+
+```json
+{
+  "noticeId": "string (ドキュメントID = {recommenderId}_{postId})",
+  "recommenderId": "string",   // おすすめした人
+  "postId": "string",          // おすすめされた投稿
+  "ownerId": "string",         // 投稿者（通知の宛先）
+  "createdAt": "timestamp"     // serverTimestamp
+}
+```
+
+- **Cloud Functions（`onPublicProfileUpdated`）だけが Admin SDK で書く**。rules はクライアントの read / write をすべて拒否。
+- `create()` は既に存在すると失敗する＝「同じ人が同じ投稿を外して入れ直しても通知は最初の 1 回だけ」を原子的に守る
+  （外す→入れるの繰り返しで相手に通知を連打できないようにするため）。
+- 通知の条件: 他の人の**公開**投稿が新しく入ったとき／自分の投稿は通知しない／投稿者の `notifyReactions` が ON／
+  投稿者がおすすめした人をブロックしていない。配信プレフはいいね・コメントと同じ `notifyReactions` に相乗り。
+- 並べ替え・外しただけ・他フィールド（表示名・フォロー数など）の更新では、何も読まずに抜ける。
+- アカウント削除時の掃除はしていない（通知済みかどうかの記録だけで、表示には使わないため）。
+
 ---
 
 ## Firebase使用時の重要事項
@@ -321,6 +363,31 @@ rules の followers 枝（`isFollowing(resource.data.userId)`）は `userId in [
   予算が効いている可能性が高い
 - ただし文書化された上限は 10 のままなので、**出荷値は余裕を持って 8**
   （上限ちょうどで設計しない）。現データはフォロー中12人が上限のため N>12 は未測定
+
+---
+
+## いいねランキング（週間 / 月間）のクエリ形状（2026-09-24）⭐️
+
+ギャラリーの並び替えチップ「週間」「月間」（`ViewModels/GalleryViewModel.swift` / `Services/RankingService.swift`）。
+**期間中に押されたいいね**（`likes.createdAt` が直近 7 日 / 30 日）をアプリ内で数えて上位 30 件を出す。
+全期間の累計である `posts.likesCount`（「人気」チップ）は使わない（期間で区切れず、クライアントの ±1 でずれうるため）。
+
+| 手順 | クエリ形状 | 上限 | インデックス |
+|---|---|---|---|
+| 1 | `likes`: `createdAt >= 期間の開始` + `createdAt <= 今` + `order(by: createdAt DESC)` | **3000 件**（`RankingService.likeReadLimit`） | **不要**（同じフィールドの範囲＋並び替え＝単一フィールドの自動インデックス） |
+| 2 | `posts/{postId}` を 1 件ずつ `get`（暫定いいね数の多い順に 30 件ずつ） | 合計 **90 件**（`maxPostFetches`） | 不要 |
+
+- 集計ルール（`Services/RankingAggregator.swift`・純関数でテスト済み）:
+  - 投稿者本人のいいねは数えない／公開投稿だけ／閲覧者がブロックしている人の投稿は除いて順位を詰める
+  - 同数は同順位（1, 2, 2, 4）。並びは同数なら「最新のいいねが新しい順」→ postId
+- 上限を `今` にしているのは、端末時計で `createdAt` を未来にしたいいね（likes の createdAt はクライアント時刻）が
+  ずっと窓に居座るのを防ぐため。
+- ⚠️ 手順 1 に `postId` などの等値フィルタを足すと複合インデックスが要る（deploy が必要になる）。
+- ⚠️ 読み取り量はいいねの件数に比例する。`ranking_loaded` イベントの `like_count` / `is_truncated` を見て、
+  `is_truncated=true` が出始めたら（＝期間の古い側を数え漏らしている）Cloud Functions の定期集計へ切り替える。
+  切り替えは `RankingServiceProtocol` の実装を差し替えるだけで済むようにしてある。
+- チップを行き来するたびに読み直さないよう、`GalleryViewModel` で期間ごとに 5 分キャッシュ（引っ張って更新で破棄）。
+- 時間帯／空の種類で絞り込み中は「人気」と同じくランキングを選べない（新着に固定）。
 
 ---
 
