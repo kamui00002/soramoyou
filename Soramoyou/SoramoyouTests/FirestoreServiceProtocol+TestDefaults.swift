@@ -232,8 +232,12 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.addRecommendedPost は未実装です")
     }
 
-    func updateRecommendedPostIds(_: [String], userId _: String) async throws {
-        fatalError("MockFirestoreService.updateRecommendedPostIds は未実装です")
+    func removeRecommendedPosts(_: Set<String>, userId _: String) async throws -> [String] {
+        fatalError("MockFirestoreService.removeRecommendedPosts は未実装です")
+    }
+
+    func moveRecommendedPost(_: String, by _: Int, userId _: String) async throws -> [String] {
+        fatalError("MockFirestoreService.moveRecommendedPost は未実装です")
     }
 
     // MARK: - Favorites（私のお気に入りの空）⭐️

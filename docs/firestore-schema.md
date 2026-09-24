@@ -262,8 +262,9 @@
 
 - **publicProfiles に置く理由**: 他の人がプロフィールを見たときにも読める必要がある（`users` は所有者のみ read）。
   🔖 お気に入り（`users/{uid}/favorites`・自分だけ）とは公開範囲が逆なので混同しないこと。
-- 書き込みは `addRecommendedPost`（**トランザクション**で上限 3 件と重複なしを守る）と
-  `updateRecommendedPostIds`（外す・並べ替えで配列を丸ごと `updateData`）だけ。`PublicProfile` 全体は書かない。
+- 書き込みは `addRecommendedPost` / `removeRecommendedPosts` / `moveRecommendedPost` だけ。
+  **どれもトランザクションでサーバーの最新一覧を読んでから書く**（上限 3 件・重複なしを守り、
+  手元の古い一覧で丸ごと上書きして別端末で足した空を消す lost update を防ぐ）。`PublicProfile` 全体は書かない。
   - `arrayUnion` にしないのは上限を知らないため（rules の `size() <= 3` で拒否されても理由がクライアントに伝わらない）。
   - 公開プロフィール未作成の旧アカウントは `notFound` → `createPublicProfile` してから 1 回だけ再試行する（`RecommendationManager`）。
 - rules: `recommendedPostIds` は「フィールド無し」または「配列かつ 3 件以下」のみ許可（create / update とも）。
@@ -282,7 +283,8 @@
   "recommenderId": "string",   // おすすめした人
   "postId": "string",          // おすすめされた投稿
   "ownerId": "string",         // 投稿者（通知の宛先）
-  "createdAt": "timestamp"     // serverTimestamp
+  "createdAt": "timestamp",    // serverTimestamp
+  "expireAt": "timestamp"      // TTL ポリシー用の期限（作成から 365 日）
 }
 ```
 
@@ -292,7 +294,10 @@
 - 通知の条件: 他の人の**公開**投稿が新しく入ったとき／自分の投稿は通知しない／投稿者の `notifyReactions` が ON／
   投稿者がおすすめした人をブロックしていない。配信プレフはいいね・コメントと同じ `notifyReactions` に相乗り。
 - 並べ替え・外しただけ・他フィールド（表示名・フォロー数など）の更新では、何も読まずに抜ける。
-- アカウント削除時の掃除はしていない（通知済みかどうかの記録だけで、表示には使わないため）。
+- アカウント削除時にクライアントからは消せない（rules で全拒否）。誰が誰の空を選んだかの記録を残し続けないよう、
+  `expireAt` に **TTL ポリシー**を設定して自動削除する（未設定だと消えない）:
+  `gcloud firestore fields ttls update expireAt --collection-group=recommendationNotices --enable-ttl --project=soramoyou-ios`
+  期限後は同じ組でも再び通知されうる（1 年に 1 回までなら連打にはならない）。
 
 ---
 

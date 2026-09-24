@@ -48,6 +48,11 @@ final class RecommendationManager: ObservableObject {
 
     /// どのユーザーの一覧を読み込み済みか（アカウント切替の検知用）
     private var loadedUserId: String?
+    /// 追加・外す・並べ替えのたびに +1 する変更カウンタ
+    ///
+    /// ⚠️ `load()` の通信中に追加・外すが終わると、後から返ってきた古い一覧で
+    ///    新しい状態を書き戻してしまう。読み込み開始時の値と違っていたら結果を捨てる。
+    private var changeCount = 0
 
     private let firestoreService: FirestoreServiceProtocol
     private let authService: AuthServiceProtocol
@@ -83,15 +88,16 @@ final class RecommendationManager: ObservableObject {
         // 投稿詳細を開くたびに読み直さない（同じユーザーで読み込み済みなら何もしない）
         if !force, loadedUserId == userId { return }
 
+        let changeCountAtStart = changeCount
         do {
             let profile = try await firestoreService.fetchPublicProfile(userId: userId)
-            // ⚠️ await 中にサインアウト／アカウント切替が挟まっていたら反映しない
-            guard authService.currentUser()?.id == userId else { return }
+            // ⚠️ await 中にサインアウト／アカウント切替・追加や外すが挟まっていたら反映しない
+            guard isStillCurrent(userId: userId, changeCountAtStart: changeCountAtStart) else { return }
             recommendedPostIds = profile.recommendedPostIds
             loadedUserId = userId
         } catch FirestoreServiceError.notFound {
             // 公開プロフィール未作成の旧アカウント＝まだ何も選んでいない
-            guard authService.currentUser()?.id == userId else { return }
+            guard isStillCurrent(userId: userId, changeCountAtStart: changeCountAtStart) else { return }
             recommendedPostIds = []
             loadedUserId = userId
         } catch {
@@ -128,8 +134,8 @@ final class RecommendationManager: ObservableObject {
         do {
             let result = try await addWithProfileFallback(postId: post.id, userId: userId)
             guard authService.currentUser()?.id == userId else { return .failed }
-            recommendedPostIds = result.postIds
-            loadedUserId = userId
+            // サーバーの最新一覧に揃える（別端末での変更もここで取り込まれる）
+            applyServerList(result.postIds, userId: userId)
 
             let outcome: Outcome
             switch result {
@@ -156,24 +162,27 @@ final class RecommendationManager: ObservableObject {
         guard !isUpdating else { return .failed }
 
         let previous = recommendedPostIds
-        let updated = RecommendedSkies.removing(postIds, from: previous)
-        guard updated != previous else { return .removed }
 
         isUpdating = true
         defer { isUpdating = false }
 
         // オプティミスティック更新（プロフィールの欄から即座に消す）
-        recommendedPostIds = updated
+        changeCount += 1
+        recommendedPostIds = RecommendedSkies.removing(postIds, from: previous)
         do {
-            try await firestoreService.updateRecommendedPostIds(updated, userId: userId)
+            // ⚠️ 手元の一覧で上書きせず、サーバーの最新一覧から外す（別端末で足した空を消さない）
+            let serverList = try await firestoreService.removeRecommendedPosts(postIds, userId: userId)
+            guard authService.currentUser()?.id == userId else { return .failed }
+            applyServerList(serverList, userId: userId)
             LoggingService.shared.logEvent("recommended_sky_removed", parameters: [
                 "source": source,
-                "removed_count": previous.count - updated.count
+                "removed_count": postIds.count
             ])
             return .removed
         } catch {
             // 失敗時は元に戻す（UIが嘘をつかないように）。切替後なら前ユーザーの値を書き戻さない
             if authService.currentUser()?.id == userId {
+                changeCount += 1
                 recommendedPostIds = previous
             }
             ErrorHandler.logError(error, context: "RecommendationManager.remove", userId: userId)
@@ -192,11 +201,17 @@ final class RecommendationManager: ObservableObject {
         isUpdating = true
         defer { isUpdating = false }
 
+        // オプティミスティック更新（並びを即座に変える）
+        changeCount += 1
         recommendedPostIds = updated
         do {
-            try await firestoreService.updateRecommendedPostIds(updated, userId: userId)
+            // ⚠️ 手元の並びで上書きせず、サーバーの最新一覧の中で動かす
+            let serverList = try await firestoreService.moveRecommendedPost(postId, by: offset, userId: userId)
+            guard authService.currentUser()?.id == userId else { return }
+            applyServerList(serverList, userId: userId)
         } catch {
             if authService.currentUser()?.id == userId {
+                changeCount += 1
                 recommendedPostIds = previous
             }
             ErrorHandler.logError(error, context: "RecommendationManager.move", userId: userId)
@@ -207,11 +222,24 @@ final class RecommendationManager: ObservableObject {
 
     /// サインアウト時にローカル状態を捨てる（共有端末で前のユーザーの一覧を見せない）
     func clearOnSignOut() {
+        changeCount += 1
         recommendedPostIds = []
         loadedUserId = nil
     }
 
     // MARK: - Private
+
+    /// サーバーから返ってきた最新一覧を反映する（変更として数える）
+    private func applyServerList(_ postIds: [String], userId: String) {
+        changeCount += 1
+        recommendedPostIds = postIds
+        loadedUserId = userId
+    }
+
+    /// 読み込み結果を反映してよいか（同じユーザーのままで、読み込み中に変更が入っていない）
+    private func isStillCurrent(userId: String, changeCountAtStart: Int) -> Bool {
+        authService.currentUser()?.id == userId && changeCount == changeCountAtStart
+    }
 
     /// 追加する。公開プロフィールが無い旧アカウントなら作ってから 1 回だけ再試行する
     private func addWithProfileFallback(postId: String, userId: String) async throws -> RecommendedSkies.AddResult {

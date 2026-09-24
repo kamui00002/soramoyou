@@ -59,6 +59,23 @@ final class RankingServiceTests: XCTestCase {
         XCTAssertEqual(result.entries.map(\.post.id), ["A"])
     }
 
+    func testCorruptedPostIsSkippedWithoutFailing() async throws {
+        // デコードできない壊れた投稿が 1 件あっても、ランキング全体をエラーにしない
+        let mock = MockFirestoreServiceForRanking()
+        mock.likes = [
+            Like(userId: "u1", postId: "broken", createdAt: now),
+            Like(userId: "u2", postId: "broken", createdAt: now),
+            Like(userId: "u1", postId: "A", createdAt: now)
+        ]
+        mock.posts = ["A": Post(id: "A", userId: "o1", images: [])]
+        mock.corruptedPostIds = ["broken"]
+        let service = RankingService(firestoreService: mock)
+
+        let result = try await service.fetchRanking(period: .weekly, blockedUserIds: [], now: now)
+
+        XCTAssertEqual(result.entries.map(\.post.id), ["A"])
+    }
+
     func testTransientPostFetchFailureIsThrown() async {
         // 一時的な失敗で 1 件だけ黙って落とすと、嘘の順位になる → 投げてエラー表示（再試行）に回す
         let mock = MockFirestoreServiceForRanking()
@@ -130,6 +147,8 @@ final class MockFirestoreServiceForRanking: FirestoreServiceProtocol, @unchecked
     var posts: [String: Post] = [:]
     /// 一時的な失敗（ネットワーク断相当）を返す postId
     var transientFailurePostIds: Set<String> = []
+    /// 中身が壊れていてデコードできない postId（本物の fetchPost は fetchFailed(PostModelError) で包む）
+    var corruptedPostIds: Set<String> = []
 
     private let lock = NSLock()
     private(set) var lastLikesQuery: LikesQuery?
@@ -147,16 +166,25 @@ final class MockFirestoreServiceForRanking: FirestoreServiceProtocol, @unchecked
     }
 
     func fetchPost(postId: String) async throws -> Post {
-        lock.lock()
-        fetchedPostIdsStorage.append(postId)
-        lock.unlock()
+        recordFetchedPost(postId)
 
         if transientFailurePostIds.contains(postId) {
             throw FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet))
+        }
+        if corruptedPostIds.contains(postId) {
+            throw FirestoreServiceError.fetchFailed(PostModelError.missingRequiredFields)
         }
         guard let post = posts[postId] else {
             throw FirestoreServiceError.notFound
         }
         return post
+    }
+
+    /// lock/unlock は async コンテキストから直接呼べない（noasync）ため、
+    /// 同期メソッドに切り出してから呼ぶ（FollowListViewModelTests と同じ流儀）
+    private func recordFetchedPost(_ postId: String) {
+        lock.lock()
+        fetchedPostIdsStorage.append(postId)
+        lock.unlock()
     }
 }

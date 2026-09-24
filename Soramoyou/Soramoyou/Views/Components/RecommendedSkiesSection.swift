@@ -30,6 +30,11 @@ struct OwnRecommendedSkiesSection: View {
     @State private var isEditing = false
     /// 保存失敗のアラート表示
     @State private var showingSaveError = false
+    /// 最後に取り直しを済ませた refreshToken（値が変わったときだけキャッシュを捨てる）
+    ///
+    /// ⚠️ `force: refreshToken > 0` にすると、1 回でも引っ張って更新した後は
+    ///    プロフィールを開くたびに全件を取り直してしまう（.task は表示のたびに走る）。
+    @State private var handledRefreshToken = 0
 
     init(ownerId: String, refreshToken: Int, onSelect: @escaping (Post) -> Void) {
         self.ownerId = ownerId
@@ -64,9 +69,12 @@ struct OwnRecommendedSkiesSection: View {
                 .fill(.ultraThinMaterial)
         )
         .task(id: refreshToken) {
-            // プロフィールを開いた／引っ張って更新したときは、別端末での変更も拾うため読み直す
+            // プロフィールを開いた／引っ張って更新したときは、別端末での変更も拾うため一覧は読み直す
             await manager.load(force: true)
-            await viewModel.load(postIds: manager.recommendedPostIds, ownerId: ownerId, force: refreshToken > 0)
+            // 投稿の中身まで取り直すのは、引っ張って更新したときだけ
+            let isRefresh = refreshToken != handledRefreshToken
+            handledRefreshToken = refreshToken
+            await viewModel.load(postIds: manager.recommendedPostIds, ownerId: ownerId, force: isRefresh)
         }
         .onChange(of: manager.recommendedPostIds) { postIds in
             // 投稿詳細から追加した・ここで外した／並べ替えたときに追従する（解決済みの投稿は取り直さない）

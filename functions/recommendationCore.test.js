@@ -71,6 +71,12 @@ test("noticeBody: 表示名を入れた本文", () => {
   assert.equal(core.noticeBody("そら"), "そらさんがあなたの空を「おすすめの空」に選びました");
 });
 
+test("noticeExpireAt: 保持日数ぶん先の日時", () => {
+  const now = new Date("2026-09-24T00:00:00Z");
+  assert.equal(core.NOTICE_RETENTION_DAYS, 365);
+  assert.equal(core.noticeExpireAt(now).toISOString(), "2027-09-24T00:00:00.000Z");
+});
+
 test("isAlreadyExistsError: Admin SDK の ALREADY_EXISTS（コード 6）を判定できる", () => {
   assert.equal(core.isAlreadyExistsError({ code: 6 }), true);
   assert.equal(core.isAlreadyExistsError({ code: "already-exists" }), true);

@@ -23,7 +23,7 @@ struct PublicProfile: Identifiable, Codable {
     /// 私のおすすめの空 ⭐️（表示順の postId 配列・最大 `RecommendedSkies.maxCount` 件）
     ///
     /// 自分・他の人どちらの公開投稿も入れられる。旧データ（フィールド無し）は空配列として読む。
-    /// ⚠️ 書き込みは `addRecommendedPost` / `updateRecommendedPostIds` だけで行う
+    /// ⚠️ 書き込みは `addRecommendedPost` / `removeRecommendedPosts` / `moveRecommendedPost` だけで行う
     ///    （PublicProfile 全体を書く経路で古い値に巻き戻さないため）。
     var recommendedPostIds: [String]
     let createdAt: Date

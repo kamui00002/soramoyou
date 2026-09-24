@@ -9,6 +9,7 @@
 //     1 件でも読めない投稿が混ざるとクエリ全体が permission denied になるため（お気に入りと同じ理由）。
 //
 //  - 表示するのは「公開」投稿だけ（誰が見ても同じ欄にするため）。
+//  - 他の人のプロフィールでは、閲覧者がブロックしている人の投稿を出さない（ランキングと同じ扱い）。
 //  - 削除済み・非公開化などで出せない投稿は `unavailablePostIds` に集め、持ち主には整理を促す。
 //  - 他の人の投稿には投稿者名を添える（おすすめした空のクレジット表示）。
 //
@@ -37,6 +38,8 @@ final class RecommendedSkiesViewModel: ObservableObject {
     private var resolved: [String: Resolution] = [:]
     /// 読み込みの世代（古い読み込み結果で新しい表示を上書きしないため）
     private var generation = 0
+    /// 閲覧者がブロックしている人（この人たちの投稿は欄に出さない）
+    private var blockedUserIds: Set<String> = []
 
     private let firestoreService: FirestoreServiceProtocol
 
@@ -54,12 +57,20 @@ final class RecommendedSkiesViewModel: ObservableObject {
     /// - Parameters:
     ///   - postIds: おすすめの空の postId（表示順）
     ///   - ownerId: プロフィールの持ち主（この人の投稿には投稿者名を付けない）
+    ///   - viewerId: 閲覧者（他の人のプロフィールを見るとき。この人のブロック相手の投稿を出さない）
     ///   - force: true ならキャッシュを捨てて取り直す（引っ張って更新）
-    func load(postIds: [String], ownerId: String, force: Bool = false) async {
+    func load(postIds: [String], ownerId: String, viewerId: String? = nil, force: Bool = false) async {
         generation += 1
         let currentGeneration = generation
         if force {
             resolved = [:]
+        }
+
+        if let viewerId, viewerId != ownerId {
+            // 取れなくても欄は出す（ブロック一覧の取得失敗で、おすすめの空まで消さない）
+            let blocked = (try? await firestoreService.fetchBlockedUserIds(userId: viewerId)) ?? []
+            guard currentGeneration == generation else { return }
+            blockedUserIds = Set(blocked)
         }
 
         let ids = RecommendedSkies.normalized(postIds)
@@ -88,6 +99,8 @@ final class RecommendedSkiesViewModel: ObservableObject {
         for id in ids {
             switch resolved[id] {
             case let .item(item):
+                // 閲覧者がブロックしている人の投稿は出さない（「表示できない空」にも数えない）
+                guard !blockedUserIds.contains(item.post.userId) else { continue }
                 newItems.append(item)
             case .unavailable:
                 newUnavailable.append(id)

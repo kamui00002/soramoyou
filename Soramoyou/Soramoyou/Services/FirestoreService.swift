@@ -79,8 +79,12 @@ protocol FirestoreServiceProtocol {
     /// - Throws: 公開プロフィールが無ければ `FirestoreServiceError.notFound`
     ///   （呼び出し側が `createPublicProfile` してから再試行できるようにするため）
     func addRecommendedPost(postId: String, userId: String) async throws -> RecommendedSkies.AddResult
-    /// おすすめの空の一覧を丸ごと保存する（外す・並べ替え）
-    func updateRecommendedPostIds(_ postIds: [String], userId: String) async throws
+    /// おすすめの空から投稿を外す（トランザクションで最新の一覧から外す）
+    /// - Returns: 外した後の一覧（公開プロフィールが無ければ空配列）
+    func removeRecommendedPosts(_ postIds: Set<String>, userId: String) async throws -> [String]
+    /// おすすめの空の中で投稿を前後に動かす（トランザクションで最新の一覧に対して動かす）
+    /// - Returns: 動かした後の一覧（公開プロフィールが無ければ空配列）
+    func moveRecommendedPost(_ postId: String, by offset: Int, userId: String) async throws -> [String]
 
     // Account
     func deleteUserData(userId: String) async throws
@@ -1172,17 +1176,64 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
 
-    /// おすすめの空の一覧を丸ごと保存する（外す・並べ替え）⭐️
+    /// おすすめの空から投稿を外す ⭐️
+    func removeRecommendedPosts(_ postIds: Set<String>, userId: String) async throws -> [String] {
+        try await updateRecommendedPostIdsInTransaction(userId: userId) { current in
+            RecommendedSkies.removing(postIds, from: current)
+        }
+    }
+
+    /// おすすめの空の中で投稿を前後に動かす ⭐️
+    func moveRecommendedPost(_ postId: String, by offset: Int, userId: String) async throws -> [String] {
+        try await updateRecommendedPostIdsInTransaction(userId: userId) { current in
+            RecommendedSkies.moving(postId, by: offset, in: current)
+        }
+    }
+
+    /// おすすめの空の一覧を「サーバーの最新値に対して」書き換える共通処理 ⭐️
     ///
-    /// updateData で recommendedPostIds（と updatedAt）だけを書く。
-    /// PublicProfile 全体を書かないのは、followersCount 等を古い値で巻き戻さないため
-    /// （`updatePublicProfileFields` と同じ理由）。
-    func updateRecommendedPostIds(_ postIds: [String], userId: String) async throws {
+    /// ⚠️ 手元の一覧から配列を作って丸ごと上書きすると、別の端末で追加された空を消してしまう
+    ///    （lost update）。追加（addRecommendedPost）と同じくトランザクションで最新値を読んでから書く。
+    /// - updateData で recommendedPostIds（と updatedAt）だけを書く。PublicProfile 全体を書かないのは、
+    ///   followersCount 等を古い値で巻き戻さないため（`updatePublicProfileFields` と同じ理由）。
+    /// - 公開プロフィールが無い（旧アカウント）なら、外す／動かす対象も無いので何も書かず空配列を返す。
+    /// - Returns: 書き換え後の一覧
+    private func updateRecommendedPostIdsInTransaction(
+        userId: String,
+        transform: @escaping ([String]) -> [String]
+    ) async throws -> [String] {
+        let profileRef = publicProfilesCollection.document(userId)
+
         do {
-            try await publicProfilesCollection.document(userId).updateData([
-                "recommendedPostIds": RecommendedSkies.normalized(postIds),
-                "updatedAt": Timestamp(date: Date())
-            ])
+            let result = try await db.runTransaction { transaction, errorPointer in
+                let snapshot: DocumentSnapshot
+                do {
+                    snapshot = try transaction.getDocument(profileRef)
+                } catch let fetchError as NSError {
+                    errorPointer?.pointee = fetchError
+                    return nil
+                }
+
+                guard snapshot.exists else { return [String]() }
+
+                let current = RecommendedSkies.normalized(snapshot.data()?["recommendedPostIds"] as? [String] ?? [])
+                let updated = transform(current)
+                // 変化が無ければ書かない（updatedAt だけ進めて無駄な更新トリガーを起こさない）
+                if updated != current {
+                    transaction.updateData([
+                        "recommendedPostIds": updated,
+                        "updatedAt": Timestamp(date: Date())
+                    ], forDocument: profileRef)
+                }
+                return updated
+            }
+
+            guard let postIds = result as? [String] else {
+                throw FirestoreServiceError.updateFailed(NSError(domain: "FirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "トランザクション結果の取得に失敗"]))
+            }
+            return postIds
+        } catch let error as FirestoreServiceError {
+            throw error
         } catch {
             throw FirestoreServiceError.updateFailed(error)
         }

@@ -67,6 +67,18 @@ function noticeBody(recommenderName) {
   return `${recommenderName}さんがあなたの空を「おすすめの空」に選びました`;
 }
 
+/** 通知済みマーカーを残しておく日数（これを過ぎたら同じ組でも再び通知しうる）。 */
+const NOTICE_RETENTION_DAYS = 365;
+
+/**
+ * 通知済みマーカーの期限（TTL ポリシーで自動削除する日時）。
+ * @param {Date} now
+ * @returns {Date}
+ */
+function noticeExpireAt(now) {
+  return new Date(now.getTime() + NOTICE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+}
+
 /**
  * Firestore の create() が「既に存在する」で失敗したか（Admin SDK は gRPC コード 6）。
  * @param {unknown} err
@@ -83,5 +95,7 @@ module.exports = {
   addedRecommendationIds,
   noticeId,
   noticeBody,
+  NOTICE_RETENTION_DAYS,
+  noticeExpireAt,
   isAlreadyExistsError,
 };

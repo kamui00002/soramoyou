@@ -406,6 +406,9 @@ async function notifyRecommended(recommenderId, recommender, postId) {
       postId,
       ownerId,
       createdAt: FieldValue.serverTimestamp(),
+      // TTL ポリシー用の期限。誰が誰の空を選んだかの記録を、アカウント削除後も残し続けないため。
+      // ⚠️ 自動削除には Firestore 側で TTL ポリシーの設定が必要（docs/firestore-schema.md 参照）。
+      expireAt: recommendationCore.noticeExpireAt(new Date()),
     });
   } catch (err) {
     if (recommendationCore.isAlreadyExistsError(err)) return;

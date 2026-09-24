@@ -168,7 +168,7 @@ final class RecommendationManagerTests: XCTestCase {
         mock.serverPostIds = ["A", "B"]
         let (manager, _) = makeManager(firestore: mock)
         await manager.load()
-        mock.updateError = FirestoreServiceError.updateFailed(NSError(domain: "test", code: 1))
+        mock.writeError = FirestoreServiceError.updateFailed(NSError(domain: "test", code: 1))
 
         let outcome = await manager.remove(postIds: ["A"], source: "profile")
 
@@ -198,7 +198,52 @@ final class RecommendationManagerTests: XCTestCase {
 
         await manager.move(postId: "A", by: -1)
 
-        XCTAssertEqual(mock.updateCalls.count, 0)
+        XCTAssertEqual(mock.moveCalls.count, 0)
+    }
+
+    // MARK: - 別端末・読み込み中の変更
+
+    func testRemoveKeepsPostAddedOnAnotherDevice() async {
+        // 端末1で読み込んだ後に、端末2で C が追加された
+        let mock = MockFirestoreServiceForRecommendations()
+        mock.serverPostIds = ["A", "B"]
+        let (manager, _) = makeManager(firestore: mock)
+        await manager.load()
+        mock.serverPostIds = ["A", "B", "C"]
+
+        // 端末1で A を外しても、C は消えない（手元の古い一覧で上書きしない）
+        _ = await manager.remove(postIds: ["A"], source: "profile")
+
+        XCTAssertEqual(mock.serverPostIds, ["B", "C"])
+        XCTAssertEqual(manager.recommendedPostIds, ["B", "C"], "サーバーの最新一覧に揃う")
+    }
+
+    func testMoveUsesLatestServerList() async {
+        let mock = MockFirestoreServiceForRecommendations()
+        mock.serverPostIds = ["A", "B"]
+        let (manager, _) = makeManager(firestore: mock)
+        await manager.load()
+        mock.serverPostIds = ["A", "B", "C"]
+
+        await manager.move(postId: "B", by: -1)
+
+        XCTAssertEqual(mock.serverPostIds, ["B", "A", "C"])
+        XCTAssertEqual(manager.recommendedPostIds, ["B", "A", "C"])
+    }
+
+    func testLoadResultIsDiscardedWhenChangedDuringLoad() async {
+        // 読み込みの通信中に追加が終わった → 後から返ってきた古い一覧で書き戻さない
+        let mock = MockFirestoreServiceForRecommendations()
+        mock.serverPostIds = ["A"]
+        let (manager, _) = makeManager(firestore: mock)
+        let postB = makePost(id: "B")
+        mock.onFetchPublicProfile = {
+            _ = await manager.add(post: postB, source: "post_detail")
+        }
+
+        await manager.load(force: true)
+
+        XCTAssertEqual(manager.recommendedPostIds, ["A", "B"])
     }
 
     // MARK: - サインアウト
@@ -224,17 +269,27 @@ final class MockFirestoreServiceForRecommendations: FirestoreServiceProtocol {
     var serverPostIds: [String] = []
     var profileExists = true
     var addError: Error?
-    var updateError: Error?
+    /// 外す・並べ替えで投げるエラー（nil なら成功）
+    var writeError: Error?
+    /// fetchPublicProfile の「通信中」に割り込ませる処理（読み込み中の変更を再現する）
+    var onFetchPublicProfile: (() async -> Void)?
 
     private(set) var fetchPublicProfileCalls: [String] = []
     private(set) var addCalls: [String] = []
-    private(set) var updateCalls: [[String]] = []
+    private(set) var removeCalls: [Set<String>] = []
+    private(set) var moveCalls: [(postId: String, offset: Int)] = []
     private(set) var createPublicProfileCount = 0
 
     func fetchPublicProfile(userId: String) async throws -> PublicProfile {
         fetchPublicProfileCalls.append(userId)
         guard profileExists else { throw FirestoreServiceError.notFound }
-        return PublicProfile(id: userId, recommendedPostIds: serverPostIds)
+        // 読み取った時点の一覧を返す（割り込んだ変更は反映されない＝古い結果）
+        let snapshot = serverPostIds
+        if let onFetchPublicProfile {
+            self.onFetchPublicProfile = nil
+            await onFetchPublicProfile()
+        }
+        return PublicProfile(id: userId, recommendedPostIds: snapshot)
     }
 
     func addRecommendedPost(postId: String, userId _: String) async throws -> RecommendedSkies.AddResult {
@@ -246,10 +301,18 @@ final class MockFirestoreServiceForRecommendations: FirestoreServiceProtocol {
         return result
     }
 
-    func updateRecommendedPostIds(_ postIds: [String], userId _: String) async throws {
-        updateCalls.append(postIds)
-        if let updateError { throw updateError }
-        serverPostIds = postIds
+    func removeRecommendedPosts(_ postIds: Set<String>, userId _: String) async throws -> [String] {
+        removeCalls.append(postIds)
+        if let writeError { throw writeError }
+        serverPostIds = RecommendedSkies.removing(postIds, from: serverPostIds)
+        return serverPostIds
+    }
+
+    func moveRecommendedPost(_ postId: String, by offset: Int, userId _: String) async throws -> [String] {
+        moveCalls.append((postId: postId, offset: offset))
+        if let writeError { throw writeError }
+        serverPostIds = RecommendedSkies.moving(postId, by: offset, in: serverPostIds)
+        return serverPostIds
     }
 
     func fetchUser(userId: String) async throws -> User {

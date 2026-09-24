@@ -54,7 +54,8 @@ struct UserProfileView: View {
             // おすすめの空は公開プロフィール（load で取得済み）の一覧から解決する ⭐️
             await recommendedSkiesViewModel.load(
                 postIds: viewModel.publicProfile?.recommendedPostIds ?? [],
-                ownerId: targetUserId
+                ownerId: targetUserId,
+                viewerId: ownUserId
             )
         }
         .alert("エラー", isPresented: Binding(
