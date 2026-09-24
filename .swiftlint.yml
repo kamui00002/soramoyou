@@ -1,0 +1,43 @@
+# SwiftLint 設定（初学者向け・重要な違反に絞る / 2026-05-27 自動生成・調整版）
+# 自動修正は post_write_dispatcher が swiftlint --fix で処理。
+# ここでは「学習に効く・バグ予防」ルールを残し、ノイズや誤検出は緩和。
+
+disabled_rules:
+  - todo                   # TODO/FIXME は警告しない
+  - trailing_whitespace    # 自動修正されるので警告不要
+  - type_name              # @main App 構造体名(EscapeNine_endless_App 等)が誤検出されるため無効
+
+opt_in_rules:
+  - force_unwrapping       # 強制アンラップ ! を警告（global swift.md の方針・バグの温床）
+  - empty_count
+  - closure_spacing
+  - first_where
+
+force_cast: warning        # as! は警告（クラッシュ予防）
+force_try: warning         # try! は警告
+
+line_length:
+  warning: 150
+  error: 250
+
+function_body_length:
+  warning: 60
+  error: 120
+
+type_body_length:
+  warning: 400
+  error: 600
+
+file_length:
+  warning: 500
+  error: 1000
+
+identifier_name:
+  min_length: 1            # i, x など短い変数名を許可（初学のうちは緩めに）
+
+excluded:
+  - Pods
+  - .build
+  - DerivedData
+  - build
+  - "**/*.generated.swift"
