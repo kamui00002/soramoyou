@@ -202,6 +202,15 @@ service cloud.firestore {
     }
 
     // ============================================
+    // recommendationNotices（「おすすめの空に選ばれました」通知の既読マーカー）⭐️
+    // Cloud Functions（onPublicProfileUpdated）だけが Admin SDK で書く。
+    // クライアントには一切見せない・書かせない（誰が誰の空を選んだかの記録のため）。
+    // ============================================
+    match /recommendationNotices/{noticeId} {
+      allow read, write: if false;
+    }
+
+    // ============================================
     // Follows collection (フォロー関係)
     // ドキュメントID: {followerId}_{followeeId}
     // ============================================
