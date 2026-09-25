@@ -171,6 +171,17 @@ class FirestoreService: FirestoreServiceProtocol {
         db.collection("publicProfiles")
     }
 
+    /// フォロー関係コレクション（ドキュメントID: {followerId}_{followeeId}）⭐️
+    /// 退会時に自分が絡む関係を両方向とも消すために参照する。
+    /// ⚠️ rules は list に `request.query.limit <= 50` を課しているため、
+    ///    このコレクションへのクエリは必ず `limit(to:)` を付けること。
+    private var followsCollection: CollectionReference {
+        db.collection("follows")
+    }
+
+    /// `follows` の list 上限（firestore.rules の `request.query.limit <= 50` に合わせる）
+    private static let followsPageSize = 50
+
     private var likesCollection: CollectionReference {
         db.collection("likes")
     }
@@ -855,31 +866,79 @@ class FirestoreService: FirestoreServiceProtocol {
 
     /// ユーザーの全データを削除（投稿、下書き、お気に入り、ユーザードキュメント）
     func deleteUserData(userId: String) async throws {
+        // ⭐️ 削除の順番は「人から見えなくなるもの」を先にする。
+        //    途中で失敗すると以降の手順は実行されないため（catch で throw する）、
+        //    どこで止まっても「見えたまま残る」より「見えなくなる」ほうへ倒す。
+        //    投稿の一括削除は件数が多く最も失敗しやすいので、これを先頭に置くと
+        //    失敗時に公開プロフィールが残る＝まさに直したかった不具合が再発する。
+        //    ⚠️ 全手順が Auth アカウント削除より前に実行される前提（rules が本人にしか
+        //       delete を許さないため）。SettingsViewModel の呼び出し順を変えないこと。
         do {
-            // 1. ユーザーの投稿を全てバッチ削除
+            // 1. 公開プロフィールを削除 ⭐️
+            //    ここを消し忘れると、Auth アカウントも users も無いのに publicProfiles だけが残り、
+            //    退会者が検索結果やフォロー一覧に出続ける（プライバシー事故）。
+            try await publicProfilesCollection.document(userId).delete()
+
+            // 2. フォロー関係を両方向とも削除 ⭐️
+            //    「自分がフォローした」側（followerId）と「自分がフォローされた」側（followeeId）の
+            //    2 本を別々に消す。片方だけだと、退会者が他人のフォロワー一覧に残り続ける。
+            //    削除のたびに Cloud Functions の onFollowDeleted が発火し、
+            //    相手（残るユーザー）の followersCount / followingCount が数え直される。
+            //    退会者自身の publicProfiles は手順 1 で消えているが、Functions 側は
+            //    存在確認してから書くため「カウンタだけの幽霊プロフィール」は作られない。
+            try await deleteFollows(field: "followerId", userId: userId)
+            try await deleteFollows(field: "followeeId", userId: userId)
+
+            // 3. ユーザーの投稿を全てバッチ削除
             let postsSnapshot = try await postsCollection
                 .whereField("userId", isEqualTo: userId)
                 .getDocuments()
 
             try await batchDelete(documents: postsSnapshot.documents)
 
-            // 2. ユーザーの下書きを全てバッチ削除
+            // 4. ユーザーの下書きを全てバッチ削除
             let draftsSnapshot = try await draftsCollection
                 .whereField("userId", isEqualTo: userId)
                 .getDocuments()
 
             try await batchDelete(documents: draftsSnapshot.documents)
 
-            // 3. お気に入りサブコレクションを全件バッチ削除 ⭐️
+            // 5. お気に入りサブコレクションを全件バッチ削除 ⭐️
             //    favorites は本機能で新設した自分のコレクションなので、退会時に確実に消す。
             let favoritesSnapshot = try await favoritesCollection(userId: userId).getDocuments()
             try await batchDelete(documents: favoritesSnapshot.documents)
 
-            // 4. ユーザードキュメントを削除
+            // 6. ユーザードキュメントを削除
             try await usersCollection.document(userId).delete()
         } catch {
             throw FirestoreServiceError.deleteFailed(error)
         }
+    }
+
+    /// 指定フィールドが `userId` に一致する `follows` を、空になるまで削除する ⭐️
+    ///
+    /// - Important: `follows` の rules は list に `request.query.limit <= 50` を課しているため、
+    ///   上限なしの `getDocuments()` は permission-denied になる。必ず `limit(to:)` を付けて
+    ///   「50 件取って消す」を繰り返す。`order(by:)` は付けない（付けると複合インデックスが
+    ///   必要になり、index の deploy 漏れで退会処理が丸ごと失敗する経路が増える）。
+    ///
+    /// - Parameters:
+    ///   - field: `"followerId"`（自分がフォローした）または `"followeeId"`（自分がフォローされた）
+    ///   - userId: 退会するユーザーの ID
+    private func deleteFollows(field: String, userId: String) async throws {
+        try await BatchDrainer.drain(
+            pageSize: Self.followsPageSize,
+            fetch: { pageSize in
+                try await self.followsCollection
+                    .whereField(field, isEqualTo: userId)
+                    .limit(to: pageSize)
+                    .getDocuments()
+                    .documents
+            },
+            delete: { documents in
+                try await self.batchDelete(documents: documents)
+            }
+        )
     }
 
     /// ドキュメントをバッチ削除（最大500件/バッチ）

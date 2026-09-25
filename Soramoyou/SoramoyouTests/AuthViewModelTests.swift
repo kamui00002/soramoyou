@@ -152,7 +152,24 @@ class MockAuthService: AuthServiceProtocol {
         return user
     }
 
-    func deleteAccount() async throws {}
+    /// 退会テスト用: 呼ばれたかどうかを記録する。
+    /// 「Firestore のデータ削除に失敗したら Auth アカウントは消さない」を検証するために必要。
+    private(set) var deleteAccountCalled = false
+    /// 退会テスト用: 呼ばれた回数（再認証後の 2 回目まで通ったかの確認用）
+    private(set) var deleteAccountCallCount = 0
+    /// 退会テスト用: 設定すると deleteAccount が **1 回だけ** このエラーを投げる。
+    /// 「最近ログインしていないので 1 回目は失敗 → 再認証して 2 回目は成功」という
+    /// 実際の流れをそのまま再現するため（毎回投げると再認証後も失敗してしまう）。
+    var deleteAccountErrorOnce: Error?
+
+    func deleteAccount() async throws {
+        deleteAccountCalled = true
+        deleteAccountCallCount += 1
+        if let error = deleteAccountErrorOnce {
+            deleteAccountErrorOnce = nil
+            throw error
+        }
+    }
 
     func reauthenticate(email: String, password: String) async throws {}
 }
