@@ -42,10 +42,28 @@ final class CameraCaptureServiceTests: XCTestCase {
         aeAfLocked: Bool = false,
         isLevel: Bool = true,
         rollDegrees: Double? = 0.4,
-        usedDeferredStart: Bool = true
+        usedDeferredStart: Bool = true,
+        skyPriorityEnabled: Bool = true,
+        exposureBiasEV: Float = 0,
+        zoomDisplayed: Double = 1,
+        photoMegapixels: Int = 12,
+        availableMegapixels: String = "12",
+        photoFormat: SkyCameraPhotoFormat = .heic,
+        flashMode: SkyCameraFlashMode = .off,
+        deviceMaxMegapixels: Int = 12,
+        lensMaxMegapixels: String = "ultra:12,wide:12,tele:12",
+        rawPhotoData: Data? = nil,
+        skyPriorityMeasured: Bool = true,
+        skyClippedFraction: Double = 0,
+        skyPeakLuma: Int = 0,
+        skyMaxClippedFraction: Double = 0,
+        skyMaxPeakLuma: Int = 0,
+        lumaFullRange: Bool? = nil,
+        skyMeterRegion: String? = nil
     ) -> SkyCameraCapture {
         SkyCameraCapture(
             photoData: Data(),
+            rawPhotoData: rawPhotoData,
             metadata: metadata,
             gridEnabled: gridEnabled,
             horizonEnabled: horizonEnabled,
@@ -53,7 +71,23 @@ final class CameraCaptureServiceTests: XCTestCase {
             isLevel: isLevel,
             rollDegrees: rollDegrees,
             usedDeferredStart: usedDeferredStart,
-            shutterDate: shutterDate
+            skyPriorityEnabled: skyPriorityEnabled,
+            exposureBiasEV: exposureBiasEV,
+            zoomDisplayed: zoomDisplayed,
+            photoMegapixels: photoMegapixels,
+            availableMegapixels: availableMegapixels,
+            photoFormat: photoFormat,
+            flashMode: flashMode,
+            deviceMaxMegapixels: deviceMaxMegapixels,
+            lensMaxMegapixels: lensMaxMegapixels,
+            skyPriorityMeasured: skyPriorityMeasured,
+            skyClippedFraction: skyClippedFraction,
+            skyPeakLuma: skyPeakLuma,
+            skyMaxClippedFraction: skyMaxClippedFraction,
+            skyMaxPeakLuma: skyMaxPeakLuma,
+            shutterDate: shutterDate,
+            lumaFullRange: lumaFullRange,
+            skyMeterRegion: skyMeterRegion
         )
     }
 
@@ -180,6 +214,80 @@ final class CameraCaptureServiceTests: XCTestCase {
         XCTAssertEqual(parameters["roll_deg"] as? Int, 5, "傾きは整数の度数へ丸める")
         XCTAssertEqual(parameters["saved_to_library"] as? Bool, false)
         XCTAssertEqual(parameters["deferred_start"] as? Bool, true)
+    }
+
+    /// ⭐️ カメラ設定まわりの計装キーを固定する。
+    ///
+    /// ⚠️ キー名は PostHog 側のダッシュボードとの**契約**。改名や削除に気づけるよう、
+    ///    値の丸め方まで含めてここで止める。レンズ切替・記録形式・解像度・フラッシュを
+    ///    足したとき、テストを更新せず素通りさせていた。
+    func testCaptureParametersCarriesCameraSettings() {
+        let capture = makeCapture(
+            zoomDisplayed: 2.96,
+            photoMegapixels: 48,
+            availableMegapixels: "12,48",
+            photoFormat: .raw,
+            flashMode: .auto,
+            deviceMaxMegapixels: 24,
+            lensMaxMegapixels: "ultra:48,wide:48,tele:48"
+        )
+
+        let parameters = CameraCaptureService.captureParameters(capture: capture, savedToLibrary: true)
+
+        // 倍率は 0.1 刻みへ丸める（生値だと値の種類だけ増えて集計できない）。
+        XCTAssertEqual(parameters["zoom"] as? Double, 3.0, "倍率は 0.1 刻みへ丸める")
+        XCTAssertEqual(parameters["photo_mp"] as? Int, 48)
+        XCTAssertEqual(parameters["available_mp"] as? String, "12,48")
+        XCTAssertEqual(parameters["photo_format"] as? String, "raw")
+        XCTAssertEqual(parameters["flash_mode"] as? String, "auto")
+        XCTAssertEqual(parameters["device_max_mp"] as? Int, 24)
+        XCTAssertEqual(parameters["lens_max_mp"] as? String, "ultra:48,wide:48,tele:48")
+        // ⚠️ `wide_max_mp` は lens_max_mp の `wide:` と重複するので廃止した。
+        //    同じ数字を 2 経路で送ると片方だけ直す事故が起きる。
+        XCTAssertNil(parameters["wide_max_mp"], "重複した診断値は送らない")
+    }
+
+    /// ⭐️ 空優先 AE は「ON だったか」と「実際に効いたか」を別々に残す。
+    ///    ON でも空が明るくなければ補正は 0 のまま＝出番が無かっただけで、壊れてはいない。
+    ///    片方しか送らないと、この 2 つを本番データで区別できなくなる。
+    func testCaptureParametersSeparatesSkyPriorityEnabledFromEngaged() {
+        let engaged = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPriorityEnabled: true, exposureBiasEV: -0.75),
+            savedToLibrary: true
+        )
+        XCTAssertEqual(engaged["sky_priority_enabled"] as? Bool, true)
+        XCTAssertEqual(engaged["sky_priority_engaged"] as? Bool, true, "露出を下げたのに効いていない扱い")
+        XCTAssertEqual(engaged["exposure_bias_ev"] as? Double, -0.8, "0.1 EV 刻みへ丸める")
+
+        let idle = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPriorityEnabled: true, exposureBiasEV: 0),
+            savedToLibrary: true
+        )
+        XCTAssertEqual(idle["sky_priority_enabled"] as? Bool, true)
+        XCTAssertEqual(idle["sky_priority_engaged"] as? Bool, false, "出番が無かった撮影を効いた扱いにしている")
+        XCTAssertEqual(idle["exposure_bias_ev"] as? Double, 0)
+    }
+
+    /// ⭐️ 最大輝度の物差し（Full / Video Range）と、測った範囲（空の側／画面全体）を送る。
+    ///    最大輝度は生値なので、物差しが無いと「235 = 真っ白」か「まだ余裕がある」かを区別できない。
+    func testCaptureParametersCarriesLumaRangeAndMeterRegion() {
+        let parameters = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPeakLuma: 235, lumaFullRange: false, skyMeterRegion: "upper"),
+            savedToLibrary: true
+        )
+        XCTAssertEqual(parameters["luma_full_range"] as? Bool, false)
+        XCTAssertEqual(parameters["sky_meter_region"] as? String, "upper")
+    }
+
+    /// 測光が一度も成立していない（nil）なら送らない。
+    /// ⚠️ false を送ると「Video Range だった」と区別できなくなるため、既定値で埋めない。
+    func testCaptureParametersOmitsUnmeasuredLumaRangeAndRegion() {
+        let parameters = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPriorityMeasured: false),
+            savedToLibrary: true
+        )
+        XCTAssertNil(parameters["luma_full_range"])
+        XCTAssertNil(parameters["sky_meter_region"])
     }
 
     /// 真上を向いていて傾きが取れなかった場合（nil）も属性は落とさず 0 にする。
