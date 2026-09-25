@@ -123,7 +123,10 @@ enum CameraCaptureService {
             "sky_priority_enabled": capture.skyPriorityEnabled,
             // ⭐️ 実際に露出を下げたか。ON でもこれが false なら「出番が無かった」だけで、
             //    機能が壊れているのとは意味が違う。両方を残さないと切り分けられない。
-            "sky_priority_engaged": capture.exposureBiasEV < 0,
+            // ⚠️ 長押しロック中に明るさを手動で動かした撮影は false にする。
+            //    その撮影の exposure_bias_ev は**手動の値**なので、下げただけで
+            //    「空優先 AE が効いた」と数えると較正データが汚れる。
+            "sky_priority_engaged": capture.exposureBiasEV < 0 && capture.manualExposureBiasEV == nil,
             // ⭐️ どのレンズで空を撮ったか。0.1 刻みへ丸める。
             "zoom": Double((capture.zoomDisplayed * 10).rounded()) / 10,
             // ⭐️ 撮影解像度。指定を忘れると端末の最小で撮られるので、本番で効いているか見る。
@@ -169,6 +172,11 @@ enum CameraCaptureService {
         //    白い壁や雪で露出が下がった撮影を、測り方の違いで切り分けるために残す。
         if let region = capture.skyMeterRegion {
             parameters["sky_meter_region"] = region
+        }
+        // ⭐️ 長押しロック中に明るさを手動で動かした撮影だけ、その値を送る（0.1 EV 刻み）。
+        //    動かしていない撮影では送らない（0 を送ると「動かして 0 に戻した」と区別できない）。
+        if let manualBias = capture.manualExposureBiasEV {
+            parameters["manual_exposure_bias_ev"] = Double((manualBias * 10).rounded()) / 10
         }
         return parameters
     }

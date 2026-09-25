@@ -59,7 +59,8 @@ final class CameraCaptureServiceTests: XCTestCase {
         skyMaxClippedFraction: Double = 0,
         skyMaxPeakLuma: Int = 0,
         lumaFullRange: Bool? = nil,
-        skyMeterRegion: String? = nil
+        skyMeterRegion: String? = nil,
+        manualExposureBiasEV: Float? = nil
     ) -> SkyCameraCapture {
         SkyCameraCapture(
             photoData: Data(),
@@ -87,7 +88,8 @@ final class CameraCaptureServiceTests: XCTestCase {
             skyMaxPeakLuma: skyMaxPeakLuma,
             shutterDate: shutterDate,
             lumaFullRange: lumaFullRange,
-            skyMeterRegion: skyMeterRegion
+            skyMeterRegion: skyMeterRegion,
+            manualExposureBiasEV: manualExposureBiasEV
         )
     }
 
@@ -266,6 +268,42 @@ final class CameraCaptureServiceTests: XCTestCase {
         XCTAssertEqual(idle["sky_priority_enabled"] as? Bool, true)
         XCTAssertEqual(idle["sky_priority_engaged"] as? Bool, false, "出番が無かった撮影を効いた扱いにしている")
         XCTAssertEqual(idle["exposure_bias_ev"] as? Double, 0)
+    }
+
+    /// ⭐️ 長押しロック中に明るさを手動で動かした撮影は、手動の値を送り、
+    ///    空優先 AE が効いた撮影としては数えない（EXIF の補正値は手動の値なので較正データが汚れる）。
+    func testCaptureParametersWithManualExposureIsNotSkyPriorityEngaged() {
+        let parameters = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPriorityEnabled: true, exposureBiasEV: -1.3,
+                                 manualExposureBiasEV: -1.3),
+            savedToLibrary: true
+        )
+        XCTAssertEqual(parameters["manual_exposure_bias_ev"] as? Double, -1.3)
+        XCTAssertEqual(parameters["sky_priority_engaged"] as? Bool, false,
+                       "手動で下げた撮影を空優先 AE が効いた扱いにしている")
+        XCTAssertEqual(parameters["sky_priority_enabled"] as? Bool, true)
+        XCTAssertEqual(parameters["exposure_bias_ev"] as? Double, -1.3)
+    }
+
+    /// 手動で動かしていない撮影は従来どおり（manual_exposure_bias_ev を送らず、engaged は補正値で決まる）。
+    func testCaptureParametersWithoutManualExposureKeepsExistingBehavior() {
+        let parameters = CameraCaptureService.captureParameters(
+            capture: makeCapture(skyPriorityEnabled: true, exposureBiasEV: -0.75),
+            savedToLibrary: true
+        )
+        XCTAssertNil(parameters["manual_exposure_bias_ev"])
+        XCTAssertEqual(parameters["sky_priority_engaged"] as? Bool, true)
+        XCTAssertEqual(parameters["exposure_bias_ev"] as? Double, -0.8)
+    }
+
+    /// 手動で動かして 0 に戻した撮影も「動かした」として 0.0 を送る（nil と区別する）。
+    func testCaptureParametersSendsManualExposureZero() {
+        let parameters = CameraCaptureService.captureParameters(
+            capture: makeCapture(exposureBiasEV: 0, manualExposureBiasEV: 0),
+            savedToLibrary: true
+        )
+        XCTAssertEqual(parameters["manual_exposure_bias_ev"] as? Double, 0)
+        XCTAssertEqual(parameters["sky_priority_engaged"] as? Bool, false)
     }
 
     /// ⭐️ 最大輝度の物差し（Full / Video Range）と、測った範囲（空の側／画面全体）を送る。
