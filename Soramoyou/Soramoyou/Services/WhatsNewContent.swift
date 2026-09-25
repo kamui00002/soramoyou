@@ -72,7 +72,7 @@ enum WhatsNewContent {
             icon: "cloud.sun",
             badge: "新機能",
             title: "空が白く飛ばない",
-            description: "明るい空も白くつぶれにくくなりました\n上の ☁️ ボタンで切り替えられます",
+            description: "明るい空も白くつぶれにくくなりました\n長押しで固定して、明るさも調整できます",
             gradientColors: [
                 Color(red: 0.99, green: 0.80, blue: 0.45),
                 Color(red: 0.36, green: 0.58, blue: 0.90),

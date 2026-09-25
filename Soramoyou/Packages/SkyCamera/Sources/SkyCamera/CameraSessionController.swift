@@ -99,6 +99,25 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// AE/AF を明示的にロック中か（長押し）。被写体変化で自動へ戻してよいかの判断に使う。
     private var isFocusLocked = false
 
+    /// ロックの世代番号（sessionQueue 上でのみ読み書きする）。
+    /// ⚠️ ロック指定の `focus(at:locked:)` は 0.5 秒後に `.locked` を書く予約を入れるが、
+    ///    予約した時点では「その 0.5 秒の間に解除・掛け直し・レンズ付け替えが起きるか」は分からない。
+    ///    ロックの状態が変わるたびに世代を進め、発火時に「予約した世代のままか」を確かめて
+    ///    古い予約を捨てる。これが無いと、ロック直後にタップで解除しても 0.5 秒後に固定され直す。
+    private var lockGeneration: UInt64 = 0
+
+    /// このロック中に、ユーザーが明るさ（露出補正）を手動で動かしたか（sessionQueue 上でのみ読み書きする）。
+    /// 解除時に補正を 0 へ戻すかどうかの判断に使う（`ManualExposure.shouldResetOnUnlock`）。
+    private var hasManualExposureAdjustment = false
+
+    /// 手動の露出補正のうち「まだ端末へ書いていない最新値」。
+    /// ⚠️ ドラッグ中は 60Hz で届くので、1 件ずつ sessionQueue へ積むと書き込みが追いつかず、
+    ///    指を止めた後もしばらく古い値を順に書き続ける。最新値だけを預かり、
+    ///    書き込みの予約は常に 1 本だけにする（溜まった古い値は上書きで捨てる）。
+    ///    呼び手（メイン）と書き手（sessionQueue）がまたがるので、ここだけはロックで守る。
+    private var pendingManualExposureBias: Float?
+    private let pendingManualExposureLock = NSLock()
+
     /// 空優先 AE（白飛び防止）の測光器。プレビュー映像から白飛び率を実測する。
     private var exposureMeter: SkyExposureMeter?
 
@@ -392,6 +411,10 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
         //    (b) 空優先 AE が「ロック中だから触らない」と誤認して測光を止め続ける。
         //    露出補正だけリセットして、こちらを忘れていた。
         isFocusLocked = false
+        // 手動の明るさ調整も同じ理由で捨てる。新しいデバイスには手動値を書いていないので、
+        // 0 へ戻す書き込みは要らない（フラグだけ落とす）。0.5 秒後のロック予約も古い世代にする。
+        hasManualExposureAdjustment = false
+        lockGeneration &+= 1
 
         // ⚠️ 仮想デバイスは videoZoomFactor = 1.0 で始まるが、それは**いちばん広いレンズ**。
         //    3 眼端末だと超広角なので、何もしないとカメラが 0.5x で開いてしまう。
@@ -1107,7 +1130,13 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     public func focus(at devicePoint: CGPoint, locked: Bool) {
         sessionQueue.async {
             guard let device = self.videoDevice else { return }
+            // 前のロックで明るさを手動で動かしていたら、ここで 0 へ戻す。
+            // ⚠️ タップでの解除は `unlockFocusAndExposure` を通らずここへ来るので、ここにも要る。
+            //    書き込みは lockForConfiguration の内側で呼ぶと入れ子になるので、その前に済ませる。
+            self.endManualExposureOnSessionQueue(device: device)
             self.isFocusLocked = locked
+            // 合わせ直した時点で、前のロックの 0.5 秒後の予約は無効にする（`lockGeneration` 参照）。
+            self.lockGeneration &+= 1
             do {
                 try device.lockForConfiguration()
                 defer { device.unlockForConfiguration() }
@@ -1179,7 +1208,9 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
                     maxClippedFraction: self.maxClippedFraction,
                     maxPeakLuma: self.maxPeakLuma,
                     lumaFullRange: self.lastLumaFullRange,
-                    meterRegion: self.lastMeterRegion
+                    meterRegion: self.lastMeterRegion,
+                    // 手動で動かしていなければ nil（「動かして 0 に戻した」と区別するため）。
+                    manualBias: self.hasManualExposureAdjustment ? self.appliedExposureBias : nil
                 ))
             }
         }
@@ -1243,6 +1274,12 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     public func unlockFocusAndExposure() {
         sessionQueue.async {
             self.isFocusLocked = false
+            // ロック直後（0.5 秒以内）の解除でも、固定の予約が後から刺さらないようにする。
+            self.lockGeneration &+= 1
+            // そのロック中に明るさを手動で動かしていたら 0 へ戻す（動かしていなければ何もしない）。
+            if let device = self.videoDevice {
+                self.endManualExposureOnSessionQueue(device: device)
+            }
             self.returnToContinuousOnSessionQueue(resetPointToCenter: false)
         }
     }
@@ -1288,7 +1325,12 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
     /// 合焦・測光が落ち着いた頃合いで `.locked` に落とす。
     /// KVO を張るほどの価値は無いので、実用的な待ち時間（0.5 秒）で十分とする。
     private func lockAfterConverging(device: AVCaptureDevice) {
+        // 予約した時点の世代を覚えておく（理由は `lockGeneration` のコメント）。
+        let generation = lockGeneration
         sessionQueue.asyncAfter(deadline: .now() + 0.5) {
+            // ⚠️ 0.5 秒の間に解除・掛け直し・レンズ付け替えがあれば、この予約はもう古い。
+            //    確かめずに書くと、解除したのに固定される（取り消せないロック）。
+            guard generation == self.lockGeneration, self.isFocusLocked else { return }
             do {
                 try device.lockForConfiguration()
                 defer { device.unlockForConfiguration() }
@@ -1303,6 +1345,83 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
                 // ロックできない状態（別アプリがカメラを掴んだ等）は諦めて自動のままにする。
             }
         }
+    }
+
+    // MARK: - 手動の明るさ調整（長押しロック中の ☀︎ ドラッグ）
+
+    /// ロック中に動かせる明るさの「いまの値」と「動かせる範囲」を返す。
+    ///
+    /// ⭐️ ロックした直後に 1 回呼べば、それがそのままドラッグの開始値になる。
+    ///    ロック中は空優先 AE が補正を書かない（`applyMeasuredClippingOnSessionQueue` の guard）
+    ///    ので、ロック後に値を動かすのは手動だけ。ロック前に空優先 AE が掛けていた値
+    ///    （例 -1.0）から始まるので、触った瞬間に明るさが跳ばない。
+    /// ⚠️ 値は `appliedExposureBias`（このクラスが書いた記録）を返す。
+    ///    `resetExposureBiasOnSessionQueue` などの判断もこの記録を正としているので、
+    ///    端末の値を別に読むと記録とずれて「戻したつもりで戻っていない」が起きうる。
+    /// - Returns: `bias` = いまかかっている補正値（EV）、
+    ///   `range` = 動かせる範囲（端末と ±2 EV の狭い方）。デバイスが無い・範囲が壊れているなら nil
+    public func manualExposureContext() async -> (bias: Float, range: ClosedRange<Float>?) {
+        await withCheckedContinuation { (continuation: CheckedContinuation<(bias: Float, range: ClosedRange<Float>?), Never>) in
+            sessionQueue.async {
+                let range = self.videoDevice.flatMap { device in
+                    ManualExposure.range(deviceMin: device.minExposureTargetBias,
+                                         deviceMax: device.maxExposureTargetBias)
+                }
+                continuation.resume(returning: (bias: self.appliedExposureBias, range: range))
+            }
+        }
+    }
+
+    /// ロック中の明るさ（露出補正）を手動で設定する。ドラッグ中に 60Hz で呼んでよい。
+    ///
+    /// ⚠️ 空優先 AE の補正に**足し合わせない**。ロック中は手動が補正値を丸ごと持つ
+    ///    （呼び手は `manualExposureContext()` の値を開始値にして、絶対値で渡す）。
+    /// ロックしていないときは何もしない（解除と入れ違いに届いた古い値を書かないため）。
+    /// - Parameter bias: 設定したい補正値（EV）。範囲外なら範囲に収めてから書く
+    public func setManualExposureBias(_ bias: Float) {
+        pendingManualExposureLock.lock()
+        let needsSchedule = pendingManualExposureBias == nil
+        pendingManualExposureBias = bias
+        pendingManualExposureLock.unlock()
+        // 書き込みの予約がまだ残っていれば、その予約が最新値を拾うので積み増さない。
+        guard needsSchedule else { return }
+        sessionQueue.async { self.applyPendingManualExposureBiasOnSessionQueue() }
+    }
+
+    /// 預かっている最新の手動補正値を端末へ書く（sessionQueue 上で呼ぶこと）。
+    private func applyPendingManualExposureBiasOnSessionQueue() {
+        pendingManualExposureLock.lock()
+        let pending = pendingManualExposureBias
+        pendingManualExposureBias = nil
+        pendingManualExposureLock.unlock()
+
+        guard let pending, isFocusLocked, let device = videoDevice,
+              let range = ManualExposure.range(deviceMin: device.minExposureTargetBias,
+                                               deviceMax: device.maxExposureTargetBias) else { return }
+        let bias = ManualExposure.clamp(pending, to: range)
+        guard bias != appliedExposureBias else { return }
+        // 記録と測光の一時停止は空優先 AE と同じ書き込み口を通す（道を 2 本にしない）。
+        // ロック中は空優先 AE が止まっているので、測光の一時停止は無害。
+        // ⚠️ `exposureMode == .locked` のままでも補正値は実際の露出に効く
+        //    （AVCaptureDevice.h の setExposureTargetBias の説明）。モードは変えない。
+        setExposureBiasOnSessionQueue(bias, device: device)
+        // 書き込みに成功した（＝記録が更新された）ときだけ手動扱いにする。
+        if appliedExposureBias == bias {
+            hasManualExposureAdjustment = true
+        }
+    }
+
+    /// ロックの終わりに、手動で動かした明るさを片付ける
+    /// （sessionQueue 上、かつ lockForConfiguration の**外**で呼ぶこと）。
+    ///
+    /// ⭐️ **そのロック中に手動で動かしたときだけ** 0 へ戻す（理由は `ManualExposure.shouldResetOnUnlock`）。
+    ///    0 へ戻した後は、空優先 AE が有効なら次の測光から通常どおり決め直す。
+    private func endManualExposureOnSessionQueue(device: AVCaptureDevice) {
+        defer { hasManualExposureAdjustment = false }
+        guard ManualExposure.shouldResetOnUnlock(hasManualAdjustment: hasManualExposureAdjustment) else {
+            return
+        }
+        setExposureBiasOnSessionQueue(0, device: device)
     }
 
     // MARK: - Interruption / Background

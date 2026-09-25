@@ -95,7 +95,13 @@ public struct SkyCameraView: View {
             CameraPreviewView(
                 session: model.controller.session,
                 onTap: { devicePoint in model.focus(at: devicePoint) },
-                onLongPress: { devicePoint in model.toggleLock(at: devicePoint) },
+                onLongPress: { devicePoint, layerPoint in
+                    model.toggleLock(at: devicePoint, layerPoint: layerPoint)
+                },
+                // 明るさ調整（1 本指の縦ドラッグ）は AE/AF ロック中だけ受け付ける。
+                // ロックしていないときの縦ドラッグは今までどおり何もしない。
+                isExposureDragEnabled: model.isLocked,
+                onExposureDrag: { phase in model.exposureDrag(phase) },
                 // 横持ちでプレビュー映像が回らないのを防ぐため、層をコントローラへ結びつける。
                 onPreviewReady: { view in model.controller.attachPreview(view) }
             )
@@ -128,6 +134,15 @@ public struct SkyCameraView: View {
                 HorizonGuideContainer(monitor: model.horizonMonitor)
                     .ignoresSafeArea()
             }
+
+            // 長押しロック中の黄色い四角と ☀︎（明るさ）。
+            // ⚠️ プレビューと同じく `.ignoresSafeArea()` を付ける。ロック点はプレビュー View の
+            //    座標で届くので、原点を揃えないと四角が指の位置からずれる。
+            // ⚠️ 観測はこの子ビューの中だけ（ドラッグ中の細かい更新で画面全体を作り直さないため）。
+            ManualExposureOverlay(model: model.exposureOverlay) { direction in
+                model.adjustManualExposure(direction: direction)
+            }
+            .ignoresSafeArea()
 
             VStack {
                 topBar
@@ -444,7 +459,18 @@ final class SkyCameraViewModel: ObservableObject {
     /// バッジと計装はこちらを使う。
     @Published private(set) var effectiveResolution: SkyCameraPhotoResolution?
     /// AE/AF ロック中か。
-    @Published private(set) var isLocked = false
+    @Published private(set) var isLocked = false {
+        didSet {
+            // 解除（タップ・ロック中の長押し・レンズの付け替え）のどの経路でも四角と ☀︎ を消す。
+            // 経路ごとに書くと必ずどれかを書き忘れるので、ロック状態の変化 1 箇所に寄せる。
+            if !isLocked { exposureOverlay.endLock() }
+        }
+    }
+
+    /// 長押しロック中の明るさ調整（四角と ☀︎）の表示状態。
+    /// ⚠️ `@Published` にしない（素の `let`）。ドラッグ中は値が細かく変わるので、
+    ///    ここを観測させると画面全体が作り直されてタップを取りこぼす（`horizonMonitor` と同じ理由）。
+    let exposureOverlay = ManualExposureOverlayModel()
     /// 撮影処理中か（シャッターの二度押し防止）。
     @Published private(set) var isCapturing = false
     /// セッション構成が完了して撮れる状態か。
@@ -602,15 +628,44 @@ final class SkyCameraViewModel: ObservableObject {
     }
 
     /// 長押し = AE/AF ロック。ロック中に長押しすると解除する（標準カメラと同じ操作）。
-    func toggleLock(at devicePoint: CGPoint) {
+    /// - Parameters:
+    ///   - devicePoint: ロック点（デバイス座標 0...1。AF/AE に使う）
+    ///   - layerPoint: ロック点（プレビュー View 上の座標。四角と ☀︎ を描く位置）
+    func toggleLock(at devicePoint: CGPoint, layerPoint: CGPoint) {
         if isLocked {
             controller.unlockFocusAndExposure()
             isLocked = false
         } else {
             controller.focus(at: devicePoint, locked: true)
             isLocked = true
+            // ロック点に四角と ☀︎ を出し、明るさの開始値（いまかかっている補正値）を取りに行く。
+            exposureOverlay.beginLock(at: layerPoint, controller: controller)
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         }
+    }
+
+    /// 明るさ調整ドラッグ（ロック中の 1 本指の縦ドラッグ）。上へ動かすと明るくなる。
+    func exposureDrag(_ phase: ExposureDragPhase) {
+        // プレビュー側でロック中しか有効にしていないが、解除と入れ違いに届いた分は捨てる。
+        guard isLocked else {
+            exposureOverlay.dragEnded()
+            return
+        }
+        switch phase {
+        case .began:
+            exposureOverlay.dragBegan()
+        case .changed(let translationY):
+            exposureOverlay.dragChanged(translationY: translationY, controller: controller)
+        case .ended:
+            exposureOverlay.dragEnded()
+        }
+    }
+
+    /// VoiceOver の「増やす／減らす」で明るさを 1/3 EV 動かす。
+    /// - Parameter direction: 増やすなら +1、減らすなら -1
+    func adjustManualExposure(direction: Int) {
+        guard isLocked else { return }
+        exposureOverlay.adjust(direction: direction, controller: controller)
     }
 
     /// 撮影して、その場で本体へ受け渡すところまでを 1 本にする。
@@ -674,7 +729,10 @@ final class SkyCameraViewModel: ObservableObject {
                 skyMaxPeakLuma: Int(status.maxPeakLuma),
                 shutterDate: shutterDate,
                 lumaFullRange: status.lumaFullRange,
-                skyMeterRegion: status.meterRegion?.rawValue
+                skyMeterRegion: status.meterRegion?.rawValue,
+                // ⭐️ 手動で明るさを動かした撮影だけ値が入る（コントローラの記録を正とする。
+                //    画面の表示値を使うと、書き込みに失敗したときに嘘になる）。
+                manualExposureBiasEV: status.manualBias
             ))
             return nil
         } catch {

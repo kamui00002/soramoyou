@@ -132,6 +132,12 @@ public struct SkyCameraCapture {
     /// 空優先 AE の測光がどの範囲を測ったか（`"upper"` / `"whole_frame"`・測れていなければ nil）。
     public let skyMeterRegion: String?
 
+    /// 長押しロック中にユーザーが手動で動かした明るさ（露出補正値・EV）。
+    /// 手動で動かしていない撮影では nil（0 にすると「動かして 0 に戻した」と区別できない）。
+    /// ⭐️ これが入っている撮影の `exposureBiasEV` は**手動の値**なので、
+    ///    空優先 AE が効いた撮影として数えてはいけない（較正データが汚れる）。
+    public let manualExposureBiasEV: Float?
+
     public init(
         photoData: Data,
         rawPhotoData: Data?,
@@ -158,7 +164,8 @@ public struct SkyCameraCapture {
         skyMaxPeakLuma: Int,
         shutterDate: Date,
         lumaFullRange: Bool? = nil,
-        skyMeterRegion: String? = nil
+        skyMeterRegion: String? = nil,
+        manualExposureBiasEV: Float? = nil
     ) {
         self.photoData = photoData
         self.rawPhotoData = rawPhotoData
@@ -186,6 +193,7 @@ public struct SkyCameraCapture {
         self.shutterDate = shutterDate
         self.lumaFullRange = lumaFullRange
         self.skyMeterRegion = skyMeterRegion
+        self.manualExposureBiasEV = manualExposureBiasEV
     }
 }
 
@@ -207,6 +215,8 @@ public struct SkyPriorityStatus: Sendable {
     public let lumaFullRange: Bool?
     /// 直近の測光がどの範囲を測ったか（まだ測れていなければ nil）。
     public let meterRegion: SkyPriorityExposure.MeterRegion?
+    /// 長押しロック中に手動で動かした補正値（EV）。そのロック中に動かしていなければ nil。
+    public let manualBias: Float?
 }
 
 /// 記録形式。
