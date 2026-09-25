@@ -66,6 +66,26 @@ final class ManualExposureOverlayModel: ObservableObject {
         }
     }
 
+    /// ロック中に、手動以外の理由で補正値が変わった（空優先 AE を OFF にして 0 に戻った等）ときに、
+    /// 表示とドラッグの基準を実際の値へ取り直す。
+    ///
+    /// ⚠️ 取り直さないと、太陽マークは古い値（例 -1.0）のまま、実際は 0 になっている。
+    ///    その状態で上へドラッグすると -1.0 を起点に計算するので、「明るくしたのに暗くなる」。
+    ///    コントローラの処理は直列キューなので、ここで取る値は 0 に戻した後の値になる。
+    func resync(controller: CameraSessionController) {
+        guard lockPoint != nil else { return }
+        let current = generation
+        Task { [weak self] in
+            let context = await controller.manualExposureContext()
+            guard let self, generation == current, lockPoint != nil else { return }
+            bias = context.bias
+            range = context.range
+            // ドラッグの途中なら、次の指の動きから「いまの位置」を基準に計算し直す
+            // （範囲の取得がドラッグ開始に間に合わなかったときと同じ経路に乗せる）。
+            if dragStartBias != nil { dragStartBias = nil }
+        }
+    }
+
     /// ロックが解けた（タップ・ロック中の長押し・レンズの付け替え）。四角と太陽マークを消す。
     func endLock() {
         generation &+= 1

@@ -313,8 +313,15 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
                 }
                 self.lastClippedFraction = reading.clippedFraction
                 self.lastPeakLuma = reading.peakLuma
-                self.maxClippedFraction = max(self.maxClippedFraction, reading.clippedFraction)
-                self.maxPeakLuma = max(self.maxPeakLuma, reading.peakLuma)
+                // ⭐️ ロック中に手動で明るさを動かしている間は、最大値（空優先 AE の較正用）に積まない。
+                //    手動で +2 EV にして白飛びさせた値が残ると、解除後にふつうに撮った 1 枚の
+                //    sky_max_clipped_pct / sky_max_peak_luma まで汚れてしまう（手動の撮影自体は
+                //    manual_exposure_bias_ev で除外できるが、その後の撮影は除外できない）。
+                //    ⚠️ 解除時に最大値をリセットする方式にしないのは、ロック前の正当な最大値まで消えるため。
+                if !(self.isFocusLocked && self.hasManualExposureAdjustment) {
+                    self.maxClippedFraction = max(self.maxClippedFraction, reading.clippedFraction)
+                    self.maxPeakLuma = max(self.maxPeakLuma, reading.peakLuma)
+                }
                 self.lastLumaFullRange = reading.isFullRange
                 self.lastMeterRegion = reading.region
                 self.applyMeasuredClippingOnSessionQueue(reading.clippedFraction)
@@ -931,6 +938,11 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             return
         }
 
+        // ⭐️ 外す前に、いまのレンズの露出補正を 0 に戻しておく。
+        //    付け替え後は記録（appliedExposureBias）だけ 0 になるが、外したレンズ（同じ AVCaptureDevice の
+        //    インスタンス）には手動や空優先 AE の補正が残りうる。そのレンズへ戻ったとき、
+        //    記録は 0 なのに実際は明るすぎ／暗すぎ、というずれを防ぐ（補正が 0 なら何もしない）。
+        resetExposureBiasOnSessionQueue()
         session.beginConfiguration()
         session.removeInput(previousInput)
         guard let input = try? AVCaptureDeviceInput(device: targetDevice),

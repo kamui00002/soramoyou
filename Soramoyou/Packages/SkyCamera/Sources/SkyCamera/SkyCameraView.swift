@@ -549,6 +549,11 @@ final class SkyCameraViewModel: ObservableObject {
     func setSkyPriorityEnabled(_ enabled: Bool) {
         skyPriorityEnabled = enabled
         controller.setSkyPriorityExposureEnabled(enabled)
+        // ⭐️ ロック中に OFF にすると、まだ手動で動かしていなければ補正が 0 に戻る。
+        //    太陽マークの表示とドラッグの基準を実際の値へ取り直す（ON 方向はロック中に何も書かれないので不要）。
+        if isLocked && !enabled {
+            exposureOverlay.resync(controller: controller)
+        }
     }
 
     /// 復元したい解像度の幅（View から渡す。UserDefaults はパッケージ側で持たない）。
@@ -689,19 +694,23 @@ final class SkyCameraViewModel: ObservableObject {
         //    撮影後に読むと「撮った写真とは違う瞬間の設定」を記録してしまう。
         let skyPriorityAtShutter = skyPriorityEnabled
         let zoomAtShutter = displayedZoom
+        let lockedAtShutter = isLocked
         let shutterDate = Date()
         do {
+            // ⭐️ 測光・手動補正の状態もシャッターの前に読む（上の skyPriorityAtShutter と同じ理由）。
+            //    撮影後に読むと、保存中（48MP 等）にタップで解除されたとき手動補正が消えた状態を読み、
+            //    手動で暗くした 1 枚が「空優先 AE が効いた撮影」として記録されてしまう。
+            let status = await controller.skyPriorityStatus()
             let result = try await controller.capturePhoto(
                 fallbackOrientation: Self.fallbackOrientation(for: reading)
             )
-            let status = await controller.skyPriorityStatus()
             await handOff(SkyCameraCapture(
                 photoData: result.data,
                 rawPhotoData: result.rawData,
                 metadata: result.metadata,
                 gridEnabled: gridEnabled,
                 horizonEnabled: horizonEnabled,
-                aeAfLocked: isLocked,
+                aeAfLocked: lockedAtShutter,
                 isLevel: reading.isLevel,
                 rollDegrees: reading.isReliable ? reading.rollDegrees : nil,
                 usedDeferredStart: usedDeferredStart,
