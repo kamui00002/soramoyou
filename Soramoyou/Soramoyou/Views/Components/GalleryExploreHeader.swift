@@ -71,13 +71,16 @@ struct GalleryExploreHeader: View {
             .disabled(viewModel.isRankingMode)
 
             // レイアウト切替（グリッド⇔モザイク）
+            // ランキングは専用レイアウト（表彰台＋縦リスト）で表示し切替が効かないため、シャッフルと同じく無効化する
             iconToggleButton(
                 systemName: viewModel.layoutMode == .mosaic ? "rectangle.grid.1x2" : "square.grid.2x2",
-                isOn: viewModel.layoutMode == .mosaic,
+                isOn: viewModel.layoutMode == .mosaic && !viewModel.isRankingMode,
                 accessibilityLabel: "表示レイアウト切替"
             ) {
                 viewModel.toggleLayoutMode()
             }
+            .opacity(viewModel.isRankingMode ? 0.35 : 1.0)
+            .disabled(viewModel.isRankingMode)
         }
     }
 

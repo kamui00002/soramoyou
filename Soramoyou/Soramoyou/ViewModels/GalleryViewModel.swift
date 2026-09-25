@@ -131,6 +131,16 @@ class GalleryViewModel: PaginatedPostsViewModel {
     /// 現在時刻の取得元（テストでキャッシュ期限を検証できるよう差し替え可能）
     private let now: () -> Date
 
+    /// ランキングに並ぶ投稿の投稿者（userId → 公開プロフィール）⭐️
+    ///
+    /// ランキング表示（`RankingListView`）で投稿者のアバターと名前を出すために使う。
+    /// `Post` には表示名が無いため、HomeViewModel / TagDetailViewModel と同じく
+    /// `publicProfiles` から一括取得してメモリに持つ（`users` は isOwner 制限で他人のものは読めない）。
+    ///
+    /// ⚠️ 取得するのはランキング表示中だけ。通常の新着・人気のグリッドは投稿者名を出さないので、
+    ///    そこで読み取りを増やさない。
+    @Published private(set) var authorsByUserId: [String: PublicProfile] = [:]
+
     // MARK: - Initialization
 
     /// 初期化
@@ -185,6 +195,22 @@ class GalleryViewModel: PaginatedPostsViewModel {
         currentRankingResult?.entries.first { $0.post.id == postId }
     }
 
+    /// ランキング表示に並べる順位付き投稿（`RankingListView` に渡す）⭐️
+    ///
+    /// 「いま `posts` に残っている投稿だけ」を「`posts` の並び順」で返す。
+    /// - ランキング時の `posts` は `executeQuery` が `result.entries.map(\.post)` をそのまま入れたもの
+    ///   （＝順位の昇順）で、シャッフルもされない（`fetchPosts` / `toggleShuffle` がランキング時は並べ替えない）。
+    /// - ブロック除外（`filterBlockedUsers`）や削除（`removePost`）で `posts` から消えた投稿は、
+    ///   ここを `posts` 起点にしておくことで自動的に表示からも消える。
+    ///   順位（`rank`）は詰め直さない＝集計時の順位をそのまま出す（旧 RankingBadge と同じ扱い）。
+    ///
+    /// ⚠️ 順位表に対応する項目が無い投稿は並べない。通常は起きない
+    ///    （posts と順位表は同じ取得の結果で、世代トークンで食い違いを防いでいる）。
+    ///    body の評価のたびに呼ばれるため、ここでログは出さない。
+    var rankingDisplayEntries: [RankedPost] {
+        posts.compactMap { rankedEntry(for: $0.id) }
+    }
+
     // MARK: - Fetch Overrides
 
     /// 投稿を取得（ブロックユーザーのフィルタリング付き）
@@ -199,6 +225,12 @@ class GalleryViewModel: PaginatedPostsViewModel {
         // シャッフルON時は初回ページを並べ替える（ランキングは順位が意味なので並べ替えない）
         if isShuffled && !isRankingMode {
             posts.shuffle()
+        }
+        // ランキング表示中だけ、投稿者の名前・アバターを一括取得する ⭐️
+        // （通常のグリッドは投稿者名を出さないので、余計な読み取りを増やさない）
+        // loadMorePosts はランキング時に即 return するため、ここ 1 か所で足りる。
+        if isRankingMode {
+            await fetchAuthorsForCurrentPosts()
         }
     }
 
@@ -382,6 +414,44 @@ class GalleryViewModel: PaginatedPostsViewModel {
             "is_truncated": result.isTruncated
         ])
         return result
+    }
+
+    // MARK: - 投稿者の取得（ランキング表示用）⭐️
+
+    // ⚠️ HomeViewModel / TagDetailViewModel の `fetchAuthorsForCurrentPosts` と同じ形
+    //    （userId の重複排除 → 未取得分だけ並列取得 → 辞書に貯める）。
+    //    ただし失敗を `try?` で黙って落とさず、どの userId が取れなかったかをログに残す。
+
+    /// 現在 posts に含まれる userId のうち、未取得の PublicProfile を並列で取得する
+    ///
+    /// - 同じ人が複数枚ランクインしていても 1 回だけ読む（`Set` で重複排除）。
+    /// - 一度取れた人は `authorsByUserId` に残るので、週間 ⇄ 月間の行き来で読み直さない。
+    /// - 取得に失敗した人（プロフィール未作成・通信失敗など）は辞書に入れない。
+    ///   表示側は「ユーザー」＋既定アバターに落とし、次にランキングを開いたときに取り直す。
+    private func fetchAuthorsForCurrentPosts() async {
+        let missingUserIds = Set(posts.map(\.userId))
+            .subtracting(authorsByUserId.keys)
+        guard !missingUserIds.isEmpty else { return }
+
+        await withTaskGroup(of: PublicProfile?.self) { group in
+            for userId in missingUserIds {
+                group.addTask { [firestoreService] in
+                    do {
+                        return try await firestoreService.fetchPublicProfile(userId: userId)
+                    } catch {
+                        // 1 人取れなくてもランキング全体は表示を続ける（名前は「ユーザー」表示になる）。
+                        // 取れなかった事実は運用で気づけるようログに残す。
+                        print("⚠️ GalleryViewModel: ランキングの投稿者取得失敗 userId=\(userId) error=\(error.localizedDescription)")
+                        return nil
+                    }
+                }
+            }
+            for await profile in group {
+                if let profile {
+                    authorsByUserId[profile.id] = profile
+                }
+            }
+        }
     }
 
     // MARK: - ブロックユーザー処理

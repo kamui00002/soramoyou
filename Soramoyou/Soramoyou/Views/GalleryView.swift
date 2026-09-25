@@ -204,11 +204,16 @@ struct GalleryView: View {
                 rankingCaption(period: period)
             }
 
-            switch viewModel.layoutMode {
-            case .grid:
-                gridLayout
-            case .mosaic:
-                mosaicLayout
+            // ランキング中は表彰台＋縦リストの専用レイアウト（グリッド/モザイク切替は使わない）⭐️
+            if viewModel.isRankingMode {
+                rankingList
+            } else {
+                switch viewModel.layoutMode {
+                case .grid:
+                    gridLayout
+                case .mosaic:
+                    mosaicLayout
+                }
             }
 
             // 追加読み込み中のインジケーター
@@ -240,6 +245,25 @@ struct GalleryView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, DesignTokens.Spacing.md)
         .padding(.vertical, DesignTokens.Spacing.xs)
+    }
+
+    /// ランキング表示（1〜3 件目の表彰台 ＋ 4 件目以降の縦リスト）⭐️
+    ///
+    /// `selectedPost` と `savePostImage` はこの View の private なので、
+    /// 部品にはクロージャで渡す（RecommendedSkiesSection の onSelect と同じ形）。
+    /// ページネーション用の onAppear は付けない。ランキングは上位 30 件の一括取得で
+    /// `hasMorePosts == false`・`loadMorePosts` も即 return するため、付けても何も起きない。
+    private var rankingList: some View {
+        RankingListView(
+            entries: viewModel.rankingDisplayEntries,
+            authorsByUserId: viewModel.authorsByUserId,
+            onSelect: { post in
+                selectedPost = post
+            },
+            onSave: { post in
+                Task { await savePostImage(post: post) }
+            }
+        )
     }
 
     /// 正方形グリッド表示（従来）
@@ -277,12 +301,6 @@ struct GalleryView: View {
             selectedPost = post
         } label: {
             label()
-                // ランキング表示中は順位バッジ（順位・期間中のいいね数）を重ねる ⭐️
-                .overlay {
-                    if let entry = viewModel.rankedEntry(for: post.id) {
-                        RankingBadge(entry: entry)
-                    }
-                }
         }
         .buttonStyle(CardButtonStyle())
         .contextMenu {
