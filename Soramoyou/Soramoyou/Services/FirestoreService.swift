@@ -73,6 +73,21 @@ protocol FirestoreServiceProtocol {
     func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws
     func createPublicProfile(from user: User) async throws
 
+    // Recommended Skies（私のおすすめの空）⭐️
+    /// おすすめの空に投稿を追加する（トランザクションで上限と重複を守る）
+    /// - Returns: 追加結果（追加後／現在の一覧を含む）
+    /// - Throws: 公開プロフィールが無ければ `FirestoreServiceError.notFound`
+    ///   （呼び出し側が `createPublicProfile` してから再試行できるようにするため）
+    func addRecommendedPost(postId: String, userId: String) async throws -> RecommendedSkies.AddResult
+    /// おすすめの空から投稿を外す（トランザクションで最新の一覧から外す）
+    /// - Returns: 外した後の一覧（公開プロフィールが無ければ空配列）
+    func removeRecommendedPosts(_ postIds: Set<String>, userId: String) async throws -> [String]
+    /// おすすめの空の中で投稿を前後に動かす（トランザクションで最新の一覧に対して動かす）
+    /// - Returns: 動かした後の一覧（公開プロフィールが無ければ空配列）
+    func moveRecommendedPost(_ postId: String, by offset: Int, userId: String) async throws -> [String]
+    /// 公開プロフィールが無いときだけ作成する（既にあれば何もしない・トランザクション）
+    func createPublicProfileIfMissing(from user: User) async throws
+
     // Account
     func deleteUserData(userId: String) async throws
 
@@ -88,6 +103,15 @@ protocol FirestoreServiceProtocol {
     /// - Parameter postIds: 対象の投稿 ID（Firestore の `in` 上限により最大 30 件）
     /// - Returns: いいね（新しい順への並べ替えは呼び出し側の責任）
     func fetchLikes(forPostIds postIds: [String]) async throws -> [Like]
+
+    /// 指定期間に押された「いいね」を新しい順に取得する（いいねランキングの集計用）⭐️
+    ///
+    /// - Parameters:
+    ///   - start: 期間の開始（含む）
+    ///   - end: 期間の終了（含む）
+    ///   - limit: 読み取り上限（新しい順に読むので、超えた分は期間の古い側が切り捨てられる）
+    /// - Returns: いいね（createdAt の新しい順）
+    func fetchLikes(from start: Date, to end: Date, limit: Int) async throws -> [Like]
 
     // Search
     func searchByHashtag(_ hashtag: String) async throws -> [Post]
@@ -976,6 +1000,35 @@ class FirestoreService: FirestoreServiceProtocol {
         }
     }
 
+    /// 指定期間に押された「いいね」を新しい順に取得する（いいねランキングの集計用）⭐️
+    ///
+    /// ⚠️ インデックス: createdAt 単一フィールドの範囲＋同じフィールドの並び替えなので、
+    ///    単一フィールドの自動インデックスで足りる（firestore.indexes.json の追加は不要）。
+    ///    ここに `whereField("postId", ...)` などの等値フィルタを足すと複合インデックスが要るので注意。
+    func fetchLikes(from start: Date, to end: Date, limit: Int) async throws -> [Like] {
+        do {
+            let snapshot = try await likesCollection
+                .whereField("createdAt", isGreaterThanOrEqualTo: Timestamp(date: start))
+                .whereField("createdAt", isLessThanOrEqualTo: Timestamp(date: end))
+                .order(by: "createdAt", descending: true)
+                .limit(to: limit)
+                .getDocuments()
+
+            // ⚠️ compactMap { try? } は壊れたドキュメントを無言で落とすため使わない。
+            //    パスをログに残したうえで 1 件だけスキップする（tech-spec.md の方針）。
+            return snapshot.documents.compactMap { document -> Like? in
+                do {
+                    return try Like(from: document.data(), documentId: document.documentID)
+                } catch {
+                    print("❌ いいねのデコード失敗 path=\(document.reference.path) error=\(error.localizedDescription)")
+                    return nil
+                }
+            }
+        } catch {
+            throw FirestoreServiceError.fetchFailed(error)
+        }
+    }
+
     /// ブロックしているユーザーIDのリストを取得
     func fetchBlockedUserIds(userId: String) async throws -> [String] {
         do {
@@ -1062,6 +1115,153 @@ class FirestoreService: FirestoreServiceProtocol {
             // 存在する場合、および存在確認そのものが失敗した場合（snapshot が nil）は
             // 「不在」と断定できないので、元のエラーを updateFailed として伝える。
             throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    // MARK: - Recommended Skies（私のおすすめの空）⭐️
+
+    /// 公開プロフィールが無いことをトランザクションの外へ伝えるためのエラードメイン
+    private static let recommendedSkiesProfileMissingDomain = "FirestoreService.recommendedSkies.profileMissing"
+
+    /// おすすめの空に投稿を追加する ⭐️
+    ///
+    /// ⚠️ トランザクションにしているのは「上限 3 枚」と「重複なし」を守るため。
+    ///    別の端末で同時に追加されても、読み取った最新の一覧に対して判定する。
+    ///    （`FieldValue.arrayUnion` だと上限を知らないので 4 枚目が入りうる。
+    ///      rules でも size() <= 3 を検査しているが、そちらは拒否されるだけで理由が伝わらない。）
+    func addRecommendedPost(postId: String, userId: String) async throws -> RecommendedSkies.AddResult {
+        let profileRef = publicProfilesCollection.document(userId)
+
+        do {
+            let result = try await db.runTransaction { transaction, errorPointer in
+                let snapshot: DocumentSnapshot
+                do {
+                    snapshot = try transaction.getDocument(profileRef)
+                } catch let fetchError as NSError {
+                    errorPointer?.pointee = fetchError
+                    return nil
+                }
+
+                guard snapshot.exists else {
+                    // 公開プロフィール未作成（移行未実施の旧アカウント）→ 呼び出し側で作ってから再試行する
+                    errorPointer?.pointee = NSError(
+                        domain: Self.recommendedSkiesProfileMissingDomain,
+                        code: 404,
+                        userInfo: [NSLocalizedDescriptionKey: "公開プロフィールがありません"]
+                    )
+                    return nil
+                }
+
+                let current = snapshot.data()?["recommendedPostIds"] as? [String] ?? []
+                let addResult = RecommendedSkies.adding(postId, to: current)
+                // 追加できたときだけ書く（既に入っている・満杯のときは何も書かない）
+                if case let .added(postIds) = addResult {
+                    transaction.updateData([
+                        "recommendedPostIds": postIds,
+                        "updatedAt": Timestamp(date: Date())
+                    ], forDocument: profileRef)
+                }
+                return addResult
+            }
+
+            guard let addResult = result as? RecommendedSkies.AddResult else {
+                throw FirestoreServiceError.updateFailed(NSError(domain: "FirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "トランザクション結果の取得に失敗"]))
+            }
+            return addResult
+        } catch let error as FirestoreServiceError {
+            throw error
+        } catch {
+            if (error as NSError).domain == Self.recommendedSkiesProfileMissingDomain {
+                throw FirestoreServiceError.notFound
+            }
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// おすすめの空から投稿を外す ⭐️
+    func removeRecommendedPosts(_ postIds: Set<String>, userId: String) async throws -> [String] {
+        try await updateRecommendedPostIdsInTransaction(userId: userId) { current in
+            RecommendedSkies.removing(postIds, from: current)
+        }
+    }
+
+    /// おすすめの空の中で投稿を前後に動かす ⭐️
+    func moveRecommendedPost(_ postId: String, by offset: Int, userId: String) async throws -> [String] {
+        try await updateRecommendedPostIdsInTransaction(userId: userId) { current in
+            RecommendedSkies.moving(postId, by: offset, in: current)
+        }
+    }
+
+    /// おすすめの空の一覧を「サーバーの最新値に対して」書き換える共通処理 ⭐️
+    ///
+    /// ⚠️ 手元の一覧から配列を作って丸ごと上書きすると、別の端末で追加された空を消してしまう
+    ///    （lost update）。追加（addRecommendedPost）と同じくトランザクションで最新値を読んでから書く。
+    /// - updateData で recommendedPostIds（と updatedAt）だけを書く。PublicProfile 全体を書かないのは、
+    ///   followersCount 等を古い値で巻き戻さないため（`updatePublicProfileFields` と同じ理由）。
+    /// - 公開プロフィールが無い（旧アカウント）なら、外す／動かす対象も無いので何も書かず空配列を返す。
+    /// - Returns: 書き換え後の一覧
+    private func updateRecommendedPostIdsInTransaction(
+        userId: String,
+        transform: @escaping ([String]) -> [String]
+    ) async throws -> [String] {
+        let profileRef = publicProfilesCollection.document(userId)
+
+        do {
+            let result = try await db.runTransaction { transaction, errorPointer in
+                let snapshot: DocumentSnapshot
+                do {
+                    snapshot = try transaction.getDocument(profileRef)
+                } catch let fetchError as NSError {
+                    errorPointer?.pointee = fetchError
+                    return nil
+                }
+
+                guard snapshot.exists else { return [String]() }
+
+                let current = RecommendedSkies.normalized(snapshot.data()?["recommendedPostIds"] as? [String] ?? [])
+                let updated = transform(current)
+                // 変化が無ければ書かない（updatedAt だけ進めて無駄な更新トリガーを起こさない）
+                if updated != current {
+                    transaction.updateData([
+                        "recommendedPostIds": updated,
+                        "updatedAt": Timestamp(date: Date())
+                    ], forDocument: profileRef)
+                }
+                return updated
+            }
+
+            guard let postIds = result as? [String] else {
+                throw FirestoreServiceError.updateFailed(NSError(domain: "FirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "トランザクション結果の取得に失敗"]))
+            }
+            return postIds
+        } catch let error as FirestoreServiceError {
+            throw error
+        } catch {
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// 公開プロフィールが無いときだけ作成する ⭐️
+    ///
+    /// ⚠️ `createPublicProfile` は setData の丸ごと上書きなので、公開プロフィール未作成の旧アカウントで
+    ///    2 台が同時に最初のおすすめを追加すると、先に作成・追加した端末の recommendedPostIds を
+    ///    後の端末の作成処理が消してしまう。「無ければ作る」をトランザクションで原子的に行う。
+    func createPublicProfileIfMissing(from user: User) async throws {
+        let docRef = publicProfilesCollection.document(user.id)
+        do {
+            _ = try await db.runTransaction { transaction, errorPointer in
+                do {
+                    let snapshot = try transaction.getDocument(docRef)
+                    if !snapshot.exists {
+                        transaction.setData(PublicProfile(from: user).toFirestoreData(), forDocument: docRef)
+                    }
+                } catch let fetchError as NSError {
+                    errorPointer?.pointee = fetchError
+                }
+                return nil
+            }
+        } catch {
+            throw FirestoreServiceError.createFailed(error)
         }
     }
 

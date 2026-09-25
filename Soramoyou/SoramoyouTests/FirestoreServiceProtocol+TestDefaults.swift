@@ -175,6 +175,10 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.fetchLikes は未実装です")
     }
 
+    func fetchLikes(from _: Date, to _: Date, limit _: Int) async throws -> [Like] {
+        fatalError("MockFirestoreService.fetchLikes(from:to:limit:) は未実装です")
+    }
+
     func fetchBlockedUserIds(userId _: String) async throws -> [String] {
         fatalError("MockFirestoreService.fetchBlockedUserIds は未実装です")
     }
@@ -220,6 +224,24 @@ extension FirestoreServiceProtocol {
 
     func batchCheckLikeStatus(postIds _: [String], userId _: String) async throws -> Set<String> {
         fatalError("MockFirestoreService.batchCheckLikeStatus は未実装です")
+    }
+
+    // MARK: - Recommended Skies（私のおすすめの空）⭐️
+
+    func addRecommendedPost(postId _: String, userId _: String) async throws -> RecommendedSkies.AddResult {
+        fatalError("MockFirestoreService.addRecommendedPost は未実装です")
+    }
+
+    func removeRecommendedPosts(_: Set<String>, userId _: String) async throws -> [String] {
+        fatalError("MockFirestoreService.removeRecommendedPosts は未実装です")
+    }
+
+    func moveRecommendedPost(_: String, by _: Int, userId _: String) async throws -> [String] {
+        fatalError("MockFirestoreService.moveRecommendedPost は未実装です")
+    }
+
+    func createPublicProfileIfMissing(from _: User) async throws {
+        fatalError("MockFirestoreService.createPublicProfileIfMissing は未実装です")
     }
 
     // MARK: - Favorites（私のお気に入りの空）⭐️

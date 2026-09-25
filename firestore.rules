@@ -181,14 +181,33 @@ service cloud.firestore {
       allow get: if isAuthenticated();
       allow list: if isAuthenticated() && request.query.limit <= 20;
 
+      // 私のおすすめの空 ⭐️（表示順の postId 配列・最大 3 件）
+      // ⚠️ 上限は iOS の RecommendedSkies.maxCount と一致させること。
+      //    フィールド無し（旧データ・まだ選んでいない）は許可する。
+      function isValidRecommendedPostIds(data) {
+        return !('recommendedPostIds' in data)
+               || (data.recommendedPostIds is list && data.recommendedPostIds.size() <= 3);
+      }
+
       // 所有者のみ作成・更新・削除可能
       allow create: if isOwner(userId)
-                    && request.resource.data.keys().hasAll(['id', 'createdAt']);
+                    && request.resource.data.keys().hasAll(['id', 'createdAt'])
+                    && isValidRecommendedPostIds(request.resource.data);
 
       allow update: if isOwner(userId)
-                    && request.resource.data.id == resource.data.id;
+                    && request.resource.data.id == resource.data.id
+                    && isValidRecommendedPostIds(request.resource.data);
 
       allow delete: if isOwner(userId);
+    }
+
+    // ============================================
+    // recommendationNotices（「おすすめの空に選ばれました」通知の既読マーカー）⭐️
+    // Cloud Functions（onPublicProfileUpdated）だけが Admin SDK で書く。
+    // クライアントには一切見せない・書かせない（誰が誰の空を選んだかの記録のため）。
+    // ============================================
+    match /recommendationNotices/{noticeId} {
+      allow read, write: if false;
     }
 
     // ============================================

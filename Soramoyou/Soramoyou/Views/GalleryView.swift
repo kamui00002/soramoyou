@@ -38,8 +38,17 @@ struct GalleryView: View {
         Array(repeating: GridItem(.flexible(), spacing: 2), count: columnCount)
     }
 
-    /// 絞り込み・色モードの有無に応じた空状態の文言
+    /// 絞り込み・色モード・ランキングの有無に応じた空状態の文言
     private var emptyStateType: EmptyStateType {
+        // ランキング: 期間中にいいねが1件も無い（または公開投稿へのいいねが無い）
+        if let period = viewModel.effectiveSortOrder.rankingPeriod {
+            return .custom(
+                icon: "trophy",
+                title: "\(period.windowDescription)のランキングはまだありません",
+                description: "空の写真にいいねが集まると、ここに人気の空が並びます",
+                actionTitle: nil
+            )
+        }
         if viewModel.hasActiveFilter || viewModel.isColorMode {
             return .custom(
                 icon: "line.3.horizontal.decrease.circle",
@@ -190,6 +199,11 @@ struct GalleryView: View {
     @ViewBuilder
     private var galleryContent: some View {
         ScrollView {
+            // ランキング表示中は「何で順位を付けているか」を先頭で伝える
+            if let period = viewModel.effectiveSortOrder.rankingPeriod {
+                rankingCaption(period: period)
+            }
+
             switch viewModel.layoutMode {
             case .grid:
                 gridLayout
@@ -206,12 +220,26 @@ struct GalleryView: View {
 
             // これ以上投稿がない場合
             if !viewModel.hasMorePosts && !viewModel.posts.isEmpty {
-                Text("すべての投稿を表示しました")
+                Text(viewModel.isRankingMode ? "ランキングは上位\(RankingService.rankingLimit)件までです" : "すべての投稿を表示しました")
                     .font(.caption)
                     .foregroundColor(DesignTokens.Colors.textTertiary)
                     .padding()
             }
         }
+    }
+
+    /// ランキングの集計方法の説明（一覧の先頭に出す）
+    private func rankingCaption(period: RankingPeriod) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "trophy.fill")
+                .font(.caption)
+            Text("\(period.windowDescription)に集まったいいねの数で順位を付けています")
+                .font(.caption)
+        }
+        .foregroundColor(DesignTokens.Colors.textSecondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.vertical, DesignTokens.Spacing.xs)
     }
 
     /// 正方形グリッド表示（従来）
@@ -249,6 +277,12 @@ struct GalleryView: View {
             selectedPost = post
         } label: {
             label()
+                // ランキング表示中は順位バッジ（順位・期間中のいいね数）を重ねる ⭐️
+                .overlay {
+                    if let entry = viewModel.rankedEntry(for: post.id) {
+                        RankingBadge(entry: entry)
+                    }
+                }
         }
         .buttonStyle(CardButtonStyle())
         .contextMenu {
