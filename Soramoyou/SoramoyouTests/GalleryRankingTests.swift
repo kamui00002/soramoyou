@@ -68,7 +68,7 @@ final class GalleryRankingTests: XCTestCase {
         await viewModel.setSortOrder(.newest)
 
         XCTAssertFalse(viewModel.isRankingMode)
-        XCTAssertNil(viewModel.rankedEntry(for: "A"), "新着に戻したら順位バッジは出さない")
+        XCTAssertNil(viewModel.rankedEntry(for: "A"), "新着に戻したら順位は出さない")
     }
 
     func testBadgesFollowTheDisplayedPeriod() async {
@@ -178,7 +178,7 @@ final class GalleryRankingTests: XCTestCase {
         rankingService.resumeFirstCall()
         await firstLoad.value
 
-        // 一覧も順位バッジも新しい結果のまま（古い結果でバッジの元データを上書きしない）
+        // 一覧も順位表示も新しい結果のまま（古い結果で順位表示の元データを上書きしない）
         XCTAssertEqual(viewModel.posts.map(\.id), ["NEW"])
         XCTAssertEqual(viewModel.rankedEntry(for: "NEW")?.likeCount, 5)
     }
@@ -196,6 +196,110 @@ final class GalleryRankingTests: XCTestCase {
         XCTAssertNotNil(viewModel.lastError)
     }
 
+    // MARK: - 表示用の並び（rankingDisplayEntries）
+
+    func testRankingDisplayEntriesFollowPostsOrder() async {
+        rankingService.entriesByPeriod[.weekly] = [
+            entry(rank: 1, postId: "A", likes: 5),
+            entry(rank: 2, postId: "B", likes: 4),
+            entry(rank: 2, postId: "C", likes: 4)
+        ]
+
+        await viewModel.setSortOrder(.weeklyRanking)
+
+        XCTAssertEqual(viewModel.rankingDisplayEntries.map(\.post.id), ["A", "B", "C"])
+        XCTAssertEqual(viewModel.rankingDisplayEntries.map(\.rank), [1, 2, 2])
+    }
+
+    func testRemovePostDropsEntryWithoutRenumbering() async {
+        rankingService.entriesByPeriod[.weekly] = [
+            entry(rank: 1, postId: "A", likes: 5),
+            entry(rank: 2, postId: "B", likes: 4),
+            entry(rank: 3, postId: "C", likes: 3)
+        ]
+        await viewModel.setSortOrder(.weeklyRanking)
+
+        viewModel.removePost(postId: "B")
+
+        // 消えた投稿だけ表示から外し、順位は集計時のまま（詰め直さない）
+        XCTAssertEqual(viewModel.rankingDisplayEntries.map(\.post.id), ["A", "C"])
+        XCTAssertEqual(viewModel.rankingDisplayEntries.map(\.rank), [1, 3])
+    }
+
+    func testRankingDisplayEntriesAreEmptyWhenNotRanking() async {
+        rankingService.entriesByPeriod[.weekly] = [entry(rank: 1, postId: "A", likes: 5)]
+        await viewModel.setSortOrder(.weeklyRanking)
+
+        await viewModel.setSortOrder(.newest)
+
+        XCTAssertTrue(viewModel.rankingDisplayEntries.isEmpty)
+    }
+
+    // MARK: - 投稿者の取得（authorsByUserId）
+
+    func testAuthorsAreFetchedOncePerUser() async {
+        // 同じ人が 2 枚ランクインしても、プロフィールの読み取りは 1 回
+        rankingService.entriesByPeriod[.weekly] = [
+            entry(rank: 1, postId: "A", likes: 5, userId: "u1"),
+            entry(rank: 2, postId: "B", likes: 4, userId: "u1"),
+            entry(rank: 3, postId: "C", likes: 3, userId: "u2")
+        ]
+        firestoreService.publicProfiles = [
+            "u1": PublicProfile(id: "u1", displayName: "そら"),
+            "u2": PublicProfile(id: "u2", displayName: "くも")
+        ]
+
+        await viewModel.setSortOrder(.weeklyRanking)
+
+        XCTAssertEqual(firestoreService.requestedProfileUserIds.sorted(), ["u1", "u2"])
+        XCTAssertEqual(viewModel.authorsByUserId["u1"]?.displayName, "そら")
+        XCTAssertEqual(viewModel.authorsByUserId["u2"]?.displayName, "くも")
+    }
+
+    func testAuthorFetchFailureDoesNotAffectOthers() async {
+        // 1 人だけプロフィールが無くても、他の人は辞書に入る（取れなかった人は入れない）
+        rankingService.entriesByPeriod[.weekly] = [
+            entry(rank: 1, postId: "A", likes: 5, userId: "u1"),
+            entry(rank: 2, postId: "B", likes: 4, userId: "missing")
+        ]
+        firestoreService.publicProfiles = ["u1": PublicProfile(id: "u1", displayName: "そら")]
+
+        await viewModel.setSortOrder(.weeklyRanking)
+
+        XCTAssertEqual(viewModel.authorsByUserId["u1"]?.displayName, "そら")
+        XCTAssertNil(viewModel.authorsByUserId["missing"])
+        XCTAssertEqual(viewModel.posts.map(\.id), ["A", "B"], "取得失敗でもランキング自体は表示を続ける")
+    }
+
+    func testAuthorsAreNotRefetchedWhenSwitchingPeriods() async {
+        // 週間 → 月間の行き来で、取得済みの人は読み直さない（新しく出てきた人だけ読む）
+        rankingService.entriesByPeriod[.weekly] = [entry(rank: 1, postId: "A", likes: 5, userId: "u1")]
+        rankingService.entriesByPeriod[.monthly] = [
+            entry(rank: 1, postId: "A", likes: 9, userId: "u1"),
+            entry(rank: 2, postId: "B", likes: 7, userId: "u2")
+        ]
+        firestoreService.publicProfiles = [
+            "u1": PublicProfile(id: "u1", displayName: "そら"),
+            "u2": PublicProfile(id: "u2", displayName: "くも")
+        ]
+
+        await viewModel.setSortOrder(.weeklyRanking)
+        await viewModel.setSortOrder(.monthlyRanking)
+        await viewModel.setSortOrder(.weeklyRanking)
+
+        XCTAssertEqual(firestoreService.requestedProfileUserIds, ["u1", "u2"])
+    }
+
+    func testAuthorsAreNotFetchedOutsideRanking() async {
+        // 通常のグリッドは投稿者名を出さないので、プロフィールを読まない
+        firestoreService.posts = [post(id: "A")]
+        firestoreService.publicProfiles = ["owner-A": PublicProfile(id: "owner-A", displayName: "そら")]
+
+        await viewModel.setSortOrder(.newest)
+
+        XCTAssertTrue(firestoreService.requestedProfileUserIds.isEmpty)
+    }
+
     // MARK: - 並び替えの値
 
     func testSortOrderProperties() {
@@ -211,12 +315,12 @@ final class GalleryRankingTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func post(id: String) -> Post {
-        Post(id: id, userId: "owner-\(id)", images: [], visibility: .public)
+    private func post(id: String, userId: String? = nil) -> Post {
+        Post(id: id, userId: userId ?? "owner-\(id)", images: [], visibility: .public)
     }
 
-    private func entry(rank: Int, postId: String, likes: Int) -> RankedPost {
-        RankedPost(rank: rank, post: post(id: postId), likeCount: likes)
+    private func entry(rank: Int, postId: String, likes: Int, userId: String? = nil) -> RankedPost {
+        RankedPost(rank: rank, post: post(id: postId, userId: userId), likeCount: likes)
     }
 }
 

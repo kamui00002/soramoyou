@@ -110,12 +110,12 @@ class GalleryViewModel: PaginatedPostsViewModel {
     /// 引っ張って更新（refresh）したときはキャッシュを捨てて取り直す。
     static let rankingCacheLifetime: TimeInterval = 5 * 60
 
-    /// 集計済みのランキング（期間ごと）。順位バッジの表示にも使う
+    /// 集計済みのランキング（期間ごと）。順位表示（RankingListView）の元データにも使う
     ///
     /// ⚠️ 「表示中の期間」ごとに分けて持つ。1 つの変数に上書きすると、
     ///    週間 → 月間 とチップを連打したときに、遅れて返ってきた週間の結果が
-    ///    月間の一覧に週間の順位バッジを付けてしまう（posts 側は世代トークンで守られているが、
-    ///    バッジの元データは守られない）。
+    ///    月間の一覧に週間の順位を付けてしまう（posts 側は世代トークンで守られているが、
+    ///    順位表示の元データは守られない）。
     @Published private(set) var rankingResults: [RankingPeriod: RankingResult] = [:]
 
     /// 期間ごとのランキング取得の世代（最新の取得だけがキャッシュへ書けるようにする）
@@ -123,7 +123,7 @@ class GalleryViewModel: PaginatedPostsViewModel {
     /// ⚠️ 同じ期間の取得が重なる（取得中に引っ張って更新・同じチップの再選択）と、
     ///    先に始まった古い取得が後から返ってきて `rankingResults` を上書きしうる。
     ///    posts 側は基底クラスの世代トークンで古い結果が捨てられるので、
-    ///    一覧は新しいのに順位バッジだけ古い（欠ける・別の順位になる）状態になる。
+    ///    一覧は新しいのに順位表示だけ古い（欠ける・別の順位になる）状態になる。
     private var rankingRequestGenerations: [RankingPeriod: Int] = [:]
 
     /// ランキング取得サービス
@@ -215,7 +215,11 @@ class GalleryViewModel: PaginatedPostsViewModel {
 
     /// 投稿を取得（ブロックユーザーのフィルタリング付き）
     override func fetchPosts() async {
-        await loadBlockedUsers()
+        // ⚠️ ブロックリストの読み込みはここでなく `executeQuery`（1 ページ目）で行う。
+        //    ここで先に await すると、並び替え（sortOrder）だけ新しくなった状態で `posts` が前の一覧のまま残り、
+        //    ランキング表示が「前の一覧 × 新しい期間の順位表」で一瞬空白・誤った順位になるため。
+        //    super.fetchPosts は最初の await より前に `isLoading = true` / `posts = []` を行うので、
+        //    タップ直後から読み込み中表示になる。
         await super.fetchPosts()
         filterBlockedUsers()
         // 色で探すモード・ランキングは単発取得のため、追加読み込みを無効化する
@@ -350,6 +354,12 @@ class GalleryViewModel: PaginatedPostsViewModel {
     /// - 色モード: `searchByColor` で一括取得（ページング無効）
     /// - 通常: 時間帯／空の種類フィルタ ＋ 並び替え ＋ ページング
     override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+        // 1 ページ目の取得時だけブロックリストを読み直す（従来 fetchPosts の先頭で行っていたのと同じ頻度）。
+        // ランキング集計（loadRanking）と、取得後の filterBlockedUsers の両方がこの結果を使う。
+        if lastDocument == nil {
+            await loadBlockedUsers()
+        }
+
         // ランキング: 2 ページ目以降は無い（空を返してページング終了）
         if let period = effectiveSortOrder.rankingPeriod {
             if lastDocument != nil {
@@ -398,7 +408,7 @@ class GalleryViewModel: PaginatedPostsViewModel {
             blockedUserIds: Set(blockedUserIds),
             now: currentTime
         )
-        // より新しい同じ期間の取得が始まっていたら、キャッシュ（順位バッジの元データ）へは書かない。
+        // より新しい同じ期間の取得が始まっていたら、キャッシュ（順位表示の元データ）へは書かない。
         // 呼び出し元の fetchPosts も世代違いで posts を捨てるので、ここでは結果を返すだけでよい。
         guard rankingRequestGenerations[period] == requestGeneration else {
             return result
@@ -440,8 +450,10 @@ class GalleryViewModel: PaginatedPostsViewModel {
                         return try await firestoreService.fetchPublicProfile(userId: userId)
                     } catch {
                         // 1 人取れなくてもランキング全体は表示を続ける（名前は「ユーザー」表示になる）。
-                        // 取れなかった事実は運用で気づけるようログに残す。
-                        print("⚠️ GalleryViewModel: ランキングの投稿者取得失敗 userId=\(userId) error=\(error.localizedDescription)")
+                        // 取れなかった事実は運用で気づけるようログに残す（print はリリースビルドで運用に届かないため
+                        // ErrorHandler 経由にする。notFound＝プロフィール未作成は userError 扱いで Crashlytics へは送られない）。
+                        // ⚠️ logError の `userId:` 引数は Crashlytics の利用者 ID を設定するので、投稿者の ID は渡さず context に含める。
+                        ErrorHandler.logError(error, context: "GalleryViewModel.fetchAuthorsForCurrentPosts authorId=\(userId)")
                         return nil
                     }
                 }
