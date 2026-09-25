@@ -1181,6 +1181,10 @@ public final class CameraSessionController: NSObject, @unchecked Sendable {
             // 停止中に ON にされても測り始めない（start() で復帰させる）。
             self.exposureMeter?.setEnabled(enabled && self.isRunningDesired)
             guard !enabled else { return }
+            // ⭐️ ロック中に手動で明るさを調整している間は、補正値の持ち主は手動側。
+            //    ここで 0 に戻すと、太陽マークの表示と実際の明るさがずれるうえ、ユーザーが決めた明るさを勝手に消してしまう。
+            //    手動の補正はロック解除（endManualExposureOnSessionQueue）で 0 に戻るので、ここでは触らない。
+            guard !(self.isFocusLocked && self.hasManualExposureAdjustment) else { return }
             self.resetExposureBiasOnSessionQueue()
         }
     }
