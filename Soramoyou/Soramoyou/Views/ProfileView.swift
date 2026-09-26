@@ -26,6 +26,8 @@ struct ProfileView: View {
     @State private var isSaving = false
     @State private var saveResultMessage: String?
     @State private var showingSaveResult = false
+    /// 引っ張って更新のたびに +1 する。おすすめの空の欄はこれが変わると取り直す ⭐️
+    @State private var recommendationRefreshToken = 0
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
@@ -170,6 +172,7 @@ struct ProfileView: View {
                 await favoriteManager.checkFavoriteStatus(for: viewModel.userPosts)
             }
             .refreshable {
+                recommendationRefreshToken += 1
                 await viewModel.loadProfile()
                 await viewModel.loadUserPosts()
                 await likeManager.checkLikeStatus(for: viewModel.userPosts)
@@ -343,6 +346,17 @@ struct ProfileView: View {
 
             // 統計情報
             statsSection(user: user)
+
+            // 私のおすすめの空（最大3枚・他の人にも表示される）⭐️
+            // 読み込み・追従は部品の中で行う（このビューの修飾子チェーンを伸ばさないため）
+            if viewModel.isOwnProfile {
+                OwnRecommendedSkiesSection(
+                    ownerId: user.id,
+                    refreshToken: recommendationRefreshToken
+                ) { post in
+                    selectedPost = post
+                }
+            }
 
             // 空コレクション図鑑への導線（柱2）⭐️
             Button {

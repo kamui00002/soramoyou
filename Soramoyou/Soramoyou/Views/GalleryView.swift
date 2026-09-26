@@ -38,8 +38,17 @@ struct GalleryView: View {
         Array(repeating: GridItem(.flexible(), spacing: 2), count: columnCount)
     }
 
-    /// 絞り込み・色モードの有無に応じた空状態の文言
+    /// 絞り込み・色モード・ランキングの有無に応じた空状態の文言
     private var emptyStateType: EmptyStateType {
+        // ランキング: 期間中にいいねが1件も無い（または公開投稿へのいいねが無い）
+        if let period = viewModel.effectiveSortOrder.rankingPeriod {
+            return .custom(
+                icon: "trophy",
+                title: "\(period.windowDescription)のランキングはまだありません",
+                description: "空の写真にいいねが集まると、ここに人気の空が並びます",
+                actionTitle: nil
+            )
+        }
         if viewModel.hasActiveFilter || viewModel.isColorMode {
             return .custom(
                 icon: "line.3.horizontal.decrease.circle",
@@ -190,11 +199,21 @@ struct GalleryView: View {
     @ViewBuilder
     private var galleryContent: some View {
         ScrollView {
-            switch viewModel.layoutMode {
-            case .grid:
-                gridLayout
-            case .mosaic:
-                mosaicLayout
+            // ランキング表示中は「何で順位を付けているか」を先頭で伝える
+            if let period = viewModel.effectiveSortOrder.rankingPeriod {
+                rankingCaption(period: period)
+            }
+
+            // ランキング中は表彰台＋縦リストの専用レイアウト（グリッド/モザイク切替は使わない）⭐️
+            if viewModel.isRankingMode {
+                rankingList
+            } else {
+                switch viewModel.layoutMode {
+                case .grid:
+                    gridLayout
+                case .mosaic:
+                    mosaicLayout
+                }
             }
 
             // 追加読み込み中のインジケーター
@@ -206,12 +225,45 @@ struct GalleryView: View {
 
             // これ以上投稿がない場合
             if !viewModel.hasMorePosts && !viewModel.posts.isEmpty {
-                Text("すべての投稿を表示しました")
+                Text(viewModel.isRankingMode ? "ランキングは上位\(RankingService.rankingLimit)件までです" : "すべての投稿を表示しました")
                     .font(.caption)
                     .foregroundColor(DesignTokens.Colors.textTertiary)
                     .padding()
             }
         }
+    }
+
+    /// ランキングの集計方法の説明（一覧の先頭に出す）
+    private func rankingCaption(period: RankingPeriod) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "trophy.fill")
+                .font(.caption)
+            Text("\(period.windowDescription)に集まったいいねの数で順位を付けています")
+                .font(.caption)
+        }
+        .foregroundColor(DesignTokens.Colors.textSecondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.vertical, DesignTokens.Spacing.xs)
+    }
+
+    /// ランキング表示（1〜3 件目の表彰台 ＋ 4 件目以降の縦リスト）⭐️
+    ///
+    /// `selectedPost` と `savePostImage` はこの View の private なので、
+    /// 部品にはクロージャで渡す（RecommendedSkiesSection の onSelect と同じ形）。
+    /// ページネーション用の onAppear は付けない。ランキングは上位 30 件の一括取得で
+    /// `hasMorePosts == false`・`loadMorePosts` も即 return するため、付けても何も起きない。
+    private var rankingList: some View {
+        RankingListView(
+            entries: viewModel.rankingDisplayEntries,
+            authorsByUserId: viewModel.authorsByUserId,
+            onSelect: { post in
+                selectedPost = post
+            },
+            onSave: { post in
+                Task { await savePostImage(post: post) }
+            }
+        )
     }
 
     /// 正方形グリッド表示（従来）

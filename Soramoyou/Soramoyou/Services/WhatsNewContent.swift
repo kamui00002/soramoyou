@@ -18,11 +18,12 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
-    // 2026-09-16: 空カメラ（グリッド・水平線ガイド付きのアプリ内カメラ）。
-    // 2026-09-19: 編集の適用範囲「空だけ」を同じリリースに追加（空カメラは未出荷のため識別子は据え置き）。
-    // ⚠️ 前回の "2026-09-favorites" は 1.10.0/1.10.1 で既に消費済み（＝全ユーザーが既読）。
-    //    同じ識別子のまま機能を足しても誰にも表示されないため、必ず新しい値にする。
-    static let currentID = "2026-09-sky-camera"
+    // 2026-09-26: 1.12.0 = いいねランキング（週間 / 月間）＋「私のおすすめの空」＋空優先AE（白飛び防止）。
+    // ⚠️ 過去の値はすべて使えない（同じ ID のままページを足しても、既読の人には表示されない）:
+    //    - "2026-09-sky-camera"（空カメラ段階A＋空だけ編集）: 1.11.0 / 1.11.1 で全ユーザーが既読
+    //    - "2026-09-sky-ae"（空優先AE 単独）: 検証用 build 102 のテスターが既読
+    //    - "2026-09-ranking-recommended"（ランキング＋おすすめの空）: 未リリースだが、ページ構成が変わったので新しい値にそろえる
+    static let currentID = "2026-09-ranking-sky-ae"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -39,31 +40,42 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（2026-09 空カメラ＋適用範囲「空だけ」）の新機能紹介ページ。
-    /// アイコンは実UIと揃えている（camera.fill = 投稿画面「撮る」ボタン、
-    /// slider.horizontal.3 = 編集画面の「編集ツール」タブ）。
+    /// 今回（1.12.0: いいねランキング＋私のおすすめの空＋空優先AE）の新機能紹介ページ。
+    /// アイコンは実UIと揃えている（trophy.fill = ギャラリーのランキング見出し、
+    /// star.fill = プロフィールの「私のおすすめの空」欄、cloud.sun = 空カメラ上部の空優先AE 切替ボタン）。
+    /// ⚠️ 空カメラ段階A・空だけ編集のページは 1.11.0 で出し切った（既読）ので載せない。
+    /// ⚠️ レンズ切替・48MP はカメラを開けば見えるので、ページ数を抑えるため載せない（2026-09-26 ユーザー決定）。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "camera.fill",
+            icon: "trophy.fill",
             badge: "新機能",
-            title: "空カメラ",
-            description: "投稿の「撮る」から、グリッドと水平線ガイド付きで\n空を撮れるようになりました",
+            title: "いいねランキング",
+            description: "ギャラリーの「週間」「月間」で、\nいいねが集まった人気の空を見られます",
             gradientColors: [
-                Color(red: 0.45, green: 0.72, blue: 0.98),
-                Color(red: 0.20, green: 0.35, blue: 0.75),
+                Color(red: 0.98, green: 0.78, blue: 0.40),
+                Color(red: 0.90, green: 0.45, blue: 0.35),
             ]
         ),
-        // ⚠️ 文言は控えめにしている: 空の判定はヒューリスティックで、夕焼けなどでは
-        //    空の一部にしか効かないことがある（SkyColorGate の縦方向フェード由来・2026-09-19 実写で確認）。
-        //    「空だけを正確に」とは約束せず「空のあたりに絞って」と書く。
+        // ⚠️ 「他の人の投稿も選べる」「3枚まで」は実装の仕様どおり（RecommendedSkies.maxCount）。
+        //    公開投稿だけが対象だが、1ページに収めるため説明はプロフィール側の案内文に任せる。
         WhatsNewPage(
-            icon: "slider.horizontal.3",
+            icon: "star.fill",
             badge: "新機能",
-            title: "空だけ編集",
-            description: "編集画面の「適用範囲」を「空だけ」にすると、\n明るさや色の調整を空のあたりに絞れます",
+            title: "私のおすすめの空",
+            description: "投稿の「…」メニューから好きな空を3枚まで選んで、\nプロフィールに飾れます",
             gradientColors: [
                 Color(red: 0.55, green: 0.80, blue: 0.98),
                 Color(red: 0.25, green: 0.50, blue: 0.85),
+            ]
+        ),
+        WhatsNewPage(
+            icon: "cloud.sun",
+            badge: "新機能",
+            title: "空が白く飛ばない",
+            description: "明るい空も白くつぶれにくくなりました\n長押しで固定して、明るさも調整できます",
+            gradientColors: [
+                Color(red: 0.99, green: 0.80, blue: 0.45),
+                Color(red: 0.36, green: 0.58, blue: 0.90),
             ]
         ),
     ]

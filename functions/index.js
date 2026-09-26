@@ -7,6 +7,7 @@
 //   - onPostCreated           posts/{postId}      → フォロワー / 全員（オプトイン）へ「新しい空」
 //   - onFollowCreated         follows/{followId}  → フォローカウンタを整合 ＋ 相手へ「フォローされました」
 //   - onFollowDeleted         follows/{followId}  → フォローカウンタを整合（通知はしない）
+//   - onPublicProfileUpdated  publicProfiles/{uid}→ 「おすすめの空」に新しく入った投稿の投稿者へ「選ばれました」
 //   - notifyFeedbackToDiscord feedback/{id}       → 開発者の Discord へ「ご意見・ご要望が届いた」（Webhook）
 //
 // 設計メモ:
@@ -28,7 +29,7 @@
 //
 
 const { setGlobalOptions } = require("firebase-functions/v2");
-const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentDeleted, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
@@ -364,6 +365,86 @@ exports.onFollowDeleted = onDocumentDeleted("follows/{followId}", async (event) 
 
   // フォロー解除は通知しない（される側にとって嬉しい知らせではない）。カウンタだけ直す。
   await reconcileFollowCounters([followerId, followeeId]);
+});
+
+// MARK: - リアクション通知（おすすめの空に選ばれた）⭐️
+//
+// publicProfiles/{uid}.recommendedPostIds（プロフィールに飾る「私のおすすめの空」・最大3件）に
+// 他の人の投稿が新しく入ったら、その投稿者へ知らせる。
+//   - 配信プレフは いいね / コメント と同じ notifyReactions に相乗りする（新しい設定項目は増やさない）。
+//   - 自分の投稿を自分で選んだときは通知しない。公開投稿以外は通知しない（アプリも公開投稿しか選ばせない）。
+//   - 同じ人が同じ投稿を外して入れ直しても、通知は最初の1回だけ（recommendationNotices に既読マーカー）。
+//     外す→入れるを繰り返して相手に通知を連打できないようにするため。
+//   - publicProfiles は表示名の編集・フォロー数の整合などでも更新されるが、
+//     おすすめ欄に新しい投稿が入っていなければ何も読まずに抜ける。
+
+const recommendationCore = require("./recommendationCore");
+
+/** おすすめの空に選ばれた投稿の投稿者へ 1 件通知する（best-effort）。 */
+async function notifyRecommended(recommenderId, recommender, postId) {
+  const postSnap = await db.collection("posts").doc(postId).get();
+  if (!postSnap.exists) return;
+  const post = postSnap.data();
+  if (post.visibility !== "public") return;
+  const ownerId = post.userId;
+  // 自分の投稿を自分で選んだときは通知しない。
+  if (!ownerId || ownerId === recommenderId) return;
+
+  const owner = await getUser(ownerId);
+  if (!owner || !owner.fcmToken || !prefEnabled(owner, "notifyReactions")) return;
+  // 投稿者が おすすめした人 をブロックしているなら通知しない。
+  if (isBlocked(owner, recommenderId)) return;
+
+  // 通知済みマーカー。create() は既に存在すると失敗する＝「最初の1回だけ」を原子的に守れる。
+  // （クライアントからは読み書きできない。firestore.rules で明示的に拒否している）
+  const noticeRef = db
+    .collection("recommendationNotices")
+    .doc(recommendationCore.noticeId(recommenderId, postId));
+  try {
+    await noticeRef.create({
+      recommenderId,
+      postId,
+      ownerId,
+      createdAt: FieldValue.serverTimestamp(),
+      // TTL ポリシー用の期限。誰が誰の空を選んだかの記録を、アカウント削除後も残し続けないため。
+      // ⚠️ 自動削除には Firestore 側で TTL ポリシーの設定が必要（docs/firestore-schema.md 参照）。
+      expireAt: recommendationCore.noticeExpireAt(new Date()),
+    });
+  } catch (err) {
+    if (recommendationCore.isAlreadyExistsError(err)) return;
+    throw err;
+  }
+
+  await sendToUser(
+    ownerId,
+    owner,
+    { title: "そらもよう", body: recommendationCore.noticeBody(displayNameOf(recommender)) },
+    { type: "recommend", postId }
+  );
+}
+
+exports.onPublicProfileUpdated = onDocumentUpdated("publicProfiles/{userId}", async (event) => {
+  const before = event.data && event.data.before && event.data.before.data();
+  const after = event.data && event.data.after && event.data.after.data();
+  if (!after) return;
+
+  const addedIds = recommendationCore.addedRecommendationIds(
+    before && before.recommendedPostIds,
+    after.recommendedPostIds
+  );
+  // 並べ替え・外しただけ・他フィールドの更新はここで抜ける（ほとんどの更新はこちら）。
+  if (addedIds.length === 0) return;
+
+  const recommenderId = event.params.userId;
+  const recommender = await getUser(recommenderId);
+  for (const postId of addedIds) {
+    try {
+      await notifyRecommended(recommenderId, recommender, postId);
+    } catch (err) {
+      // 1件の失敗で残りの通知を止めない。
+      logger.warn("おすすめの空の通知に失敗", { recommenderId, postId, error: String(err && err.message) });
+    }
+  }
 });
 
 // MARK: - フィードバック → Discord 通知（開発者向け）

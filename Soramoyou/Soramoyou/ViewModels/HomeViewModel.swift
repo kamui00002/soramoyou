@@ -77,9 +77,9 @@ class HomeViewModel: PaginatedPostsViewModel {
         await fetchAuthorsForCurrentPosts()
     }
 
-    // ⚠️ この著者取得・ブロック除外ロジックは HomeViewModel / TagDetailViewModel
-    //    （一部は GalleryViewModel）に重複がある。仕様を変えるときは全箇所を同時に
-    //    更新すること。基底 PaginatedPostsViewModel への引き上げは別リファクタ PR で検討。
+    // ⚠️ この著者取得・ブロック除外ロジックは HomeViewModel / TagDetailViewModel / GalleryViewModel
+    //    （Gallery はランキング表示中のみ著者を取得し、失敗を ErrorHandler でログに残す）に重複がある。
+    //    仕様を変えるときは全箇所を同時に更新すること。基底 PaginatedPostsViewModel への引き上げは別リファクタ PR で検討。
 
     /// 現在 posts に含まれる userId のうち、未取得の PublicProfile を並列で fetch する。⭐️ Issue #2
     /// `users` コレクションは isOwner 制限があるため、`publicProfiles` を使う。

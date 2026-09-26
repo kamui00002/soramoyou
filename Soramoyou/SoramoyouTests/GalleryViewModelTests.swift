@@ -486,7 +486,29 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
     func fetchUser(userId: String) async throws -> User { return User(id: userId, email: "test@example.com") }
     func updateUser(_ user: User) async throws -> User { return user }
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws {}
-    func fetchPublicProfile(userId: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
+    /// 公開プロフィールの返却値（userId → プロフィール）。無い userId は notFound を投げる（従来どおり）
+    var publicProfiles: [String: PublicProfile] = [:]
+    /// fetchPublicProfile が呼ばれた userId（TaskGroup から並列に呼ばれるためロックで守る）
+    private let profileRequestLock = NSLock()
+    private var _requestedProfileUserIds: [String] = []
+    var requestedProfileUserIds: [String] {
+        profileRequestLock.lock()
+        defer { profileRequestLock.unlock() }
+        return _requestedProfileUserIds
+    }
+
+    func fetchPublicProfile(userId: String) async throws -> PublicProfile {
+        guard let profile = recordProfileRequest(userId: userId) else { throw FirestoreServiceError.notFound }
+        return profile
+    }
+
+    /// 呼ばれた userId を記録して返却値を引く（ロック操作は async 関数の外＝同期関数で行う）
+    private func recordProfileRequest(userId: String) -> PublicProfile? {
+        profileRequestLock.lock()
+        defer { profileRequestLock.unlock() }
+        _requestedProfileUserIds.append(userId)
+        return publicProfiles[userId]
+    }
     func createPublicProfile(from user: User) async throws {}
     func deleteUserData(userId: String) async throws {}
     func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {}

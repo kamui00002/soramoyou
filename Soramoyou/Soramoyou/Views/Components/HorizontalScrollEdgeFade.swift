@@ -101,6 +101,18 @@ struct HorizontalScrollEdgeFade: ViewModifier {
     /// 手がかりの幅（pt）。チップ1個ぶんより狭くして内容を隠しすぎないようにする。
     private let fadeWidth: CGFloat = 32
 
+    /// フェードの下地色（既定は編集画面の黒背景に合わせた黒）
+    private let fadeColor: Color
+    /// 矢印の色
+    private let chevronColor: Color
+
+    /// ⚠️ private な stored property（@State 含む）があると自動のメンバーワイズ init が
+    ///    private 扱いになり外から色を渡せないため、明示的に用意する。
+    init(fadeColor: Color = .black, chevronColor: Color = .white.opacity(0.55)) {
+        self.fadeColor = fadeColor
+        self.chevronColor = chevronColor
+    }
+
     /// 内容の右端の X 座標（マーカーから届く・ウィンドウ座標系）
     @State private var contentTrailingEdgeX: CGFloat = 0
 
@@ -138,10 +150,10 @@ struct HorizontalScrollEdgeFade: ViewModifier {
     /// 右端に重ねる「続きがある」手がかり本体
     private var hintOverlay: some View {
         ZStack(alignment: .trailing) {
-            // ⚠️ 編集画面の背景が黒（`EditView` の `.background(Color.black)`）である前提の色。
-            //    背景色が違う画面で使うときは色を引数化すること。
+            // ⚠️ 既定色は編集画面の背景が黒（`EditView` の `.background(Color.black)`）である前提。
+            //    背景色が違う画面（ギャラリーの空色背景など）では `fadeColor` / `chevronColor` を渡す。
             LinearGradient(
-                colors: [Color.black.opacity(0), Color.black.opacity(0.85)],
+                colors: [fadeColor.opacity(0), fadeColor.opacity(0.85)],
                 startPoint: .leading,
                 endPoint: .trailing
             )
@@ -149,7 +161,7 @@ struct HorizontalScrollEdgeFade: ViewModifier {
 
             Image(systemName: "chevron.right")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundColor(.white.opacity(0.55))
+                .foregroundColor(chevronColor)
                 .padding(.trailing, 4)
         }
         .transition(.opacity)
@@ -159,7 +171,13 @@ struct HorizontalScrollEdgeFade: ViewModifier {
 extension View {
     /// 横スクロールビューの右端に「続きがある」手がかりを重ねる。
     /// 内容（HStack）の末尾に `HorizontalScrollEndMarker()` を置くこととセットで使う。
-    func horizontalScrollEdgeFade() -> some View {
-        modifier(HorizontalScrollEdgeFade())
+    /// - Parameters:
+    ///   - fadeColor: フェードの下地色（背景に馴染む色を渡す。既定は黒背景用）
+    ///   - chevronColor: 矢印の色
+    func horizontalScrollEdgeFade(
+        fadeColor: Color = .black,
+        chevronColor: Color = .white.opacity(0.55)
+    ) -> some View {
+        modifier(HorizontalScrollEdgeFade(fadeColor: fadeColor, chevronColor: chevronColor))
     }
 }

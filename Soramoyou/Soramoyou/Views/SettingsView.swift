@@ -311,7 +311,8 @@ struct SettingsView: View {
                     notificationToggleRow(
                         icon: "heart.fill", iconColor: .pink,
                         title: "リアクション通知",
-                        description: "自分の投稿への いいね・コメント をお知らせします",
+                        // ⭐️ おすすめの空に選ばれた通知も同じプレフに相乗りしている（functions/index.js onPublicProfileUpdated）
+                        description: "自分の投稿への いいね・コメント・おすすめ をお知らせします",
                         isOn: pushReactionsBinding
                     )
                     Divider().padding(.leading, 60)
