@@ -849,6 +849,9 @@ class FirestoreService: FirestoreServiceProtocol {
         //    失敗時に公開プロフィールが残る＝まさに直したかった不具合が再発する。
         //    ⚠️ 全手順が Auth アカウント削除より前に実行される前提（rules が本人にしか
         //       delete を許さないため）。SettingsViewModel の呼び出し順を変えないこと。
+        // 失敗時に「6 手順のどこで止まったか」を catch のログに残すための段階名 ⭐️
+        // （FirestoreServiceError.deleteFailed は元エラーを保持するが、手順名までは持たない）
+        var stage = "publicProfiles"
         do {
             // 1. 公開プロフィールを削除 ⭐️
             //    ここを消し忘れると、Auth アカウントも users も無いのに publicProfiles だけが残り、
@@ -860,33 +863,47 @@ class FirestoreService: FirestoreServiceProtocol {
             //    2 本を別々に消す。片方だけだと、退会者が他人のフォロワー一覧に残り続ける。
             //    削除のたびに Cloud Functions の onFollowDeleted が発火し、
             //    相手（残るユーザー）の followersCount / followingCount が数え直される。
-            //    退会者自身の publicProfiles は手順 1 で消えているが、Functions 側は
-            //    存在確認してから書くため「カウンタだけの幽霊プロフィール」は作られない。
+            //    退会者自身の publicProfiles は手順 1 で消えているので、Functions 側の存在確認
+            //    （reconcileFollowCounters の exists ガード）は false を読み、作り直されない。
+            //    ⚠️ ただし users 側は別。Functions の存在確認は get → set(merge) の 2 手で**非原子的**なので、
+            //       手順 6 の users 削除が N 回の発火のどれかの get と set の間に落ちると、
+            //       カウンタだけの users/{uid} が復活しうる（誰にも見えず PII なし・Admin SDK 掃除で回収可）。
+            //       根治（set(merge) → update()）は Functions 側の別 issue #129 で行う。
+            stage = "follows.follower"
             try await deleteFollows(field: "followerId", userId: userId)
+            stage = "follows.followee"
             try await deleteFollows(field: "followeeId", userId: userId)
 
             // 3. ユーザーの投稿を全てバッチ削除
+            //    `.server` は deleteFollows の Note と同じ理由（キャッシュの部分集合を「全件」と誤認しない）。
+            //    投稿は退会後も公開のまま見え続けるため、follows より取りこぼしの実害が大きい。
+            stage = "posts"
             let postsSnapshot = try await postsCollection
                 .whereField("userId", isEqualTo: userId)
-                .getDocuments()
+                .getDocuments(source: .server)
 
             try await batchDelete(documents: postsSnapshot.documents)
 
             // 4. ユーザーの下書きを全てバッチ削除
+            stage = "drafts"
             let draftsSnapshot = try await draftsCollection
                 .whereField("userId", isEqualTo: userId)
-                .getDocuments()
+                .getDocuments(source: .server)
 
             try await batchDelete(documents: draftsSnapshot.documents)
 
             // 5. お気に入りサブコレクションを全件バッチ削除 ⭐️
             //    favorites は本機能で新設した自分のコレクションなので、退会時に確実に消す。
-            let favoritesSnapshot = try await favoritesCollection(userId: userId).getDocuments()
+            stage = "favorites"
+            let favoritesSnapshot = try await favoritesCollection(userId: userId).getDocuments(source: .server)
             try await batchDelete(documents: favoritesSnapshot.documents)
 
             // 6. ユーザードキュメントを削除
+            stage = "users"
             try await usersCollection.document(userId).delete()
         } catch {
+            // どの手順で止まったかを 1 行残す（userId を出すのは postsCount 更新失敗ログと同じ扱い）。
+            print("❌ 退会データ削除失敗 stage=\(stage) userId=\(userId) error=\(error.localizedDescription)")
             throw FirestoreServiceError.deleteFailed(error)
         }
     }
@@ -898,6 +915,13 @@ class FirestoreService: FirestoreServiceProtocol {
     ///   「50 件取って消す」を繰り返す。`order(by:)` は付けない（付けると複合インデックスが
     ///   必要になり、index の deploy 漏れで退会処理が丸ごと失敗する経路が増える）。
     ///
+    /// - Note: 取得は `source: .server` を明示する ⭐️。既定の `.default` は通信断だと
+    ///   **ローカルキャッシュへフォールバック**し、キャッシュにあるのは `fetchFollows`（limit 30）で
+    ///   過去に見た分だけなので、0 件や部分集合を「全部消えた」と誤認して終わってしまう。
+    ///   その後 Auth アカウントが消えると rules を満たせず、残った follows はクライアントから
+    ///   二度と消せない。`.server` なら通信断で失敗して退会が止まり、再試行できる
+    ///   （安全側にしか働かない）。手順 3〜5 の getDocuments も同じ理由で揃えている。
+    ///
     /// - Parameters:
     ///   - field: `"followerId"`（自分がフォローした）または `"followeeId"`（自分がフォローされた）
     ///   - userId: 退会するユーザーの ID
@@ -908,7 +932,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 try await self.followsCollection
                     .whereField(field, isEqualTo: userId)
                     .limit(to: pageSize)
-                    .getDocuments()
+                    .getDocuments(source: .server)
                     .documents
             },
             delete: { documents in

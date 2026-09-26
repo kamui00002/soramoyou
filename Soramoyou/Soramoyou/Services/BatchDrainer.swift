@@ -49,7 +49,9 @@ enum BatchDrainer {
         delete: (_ items: [Item]) async throws -> Void
     ) async throws {
         // pageSize が 0 以下だと fetch が永久に空を返し続けるか、進捗ゼロで回り続ける。
-        // 呼び出し側のミスを黙って飲み込まず、何もせず抜ける（削除対象なし扱い）。
+        // 呼び出し側のミスだが、ここで例外にすると退会処理全体が止まる。回り続けるよりは
+        // 「削除対象なし」として何もせず抜けるほうを選ぶ
+        // （テスト testDrainWithNonPositivePageSizeDoesNothing でこの振る舞いを固定している）。
         guard pageSize > 0 else { return }
 
         for _ in 0 ..< max(maxPages, 0) {
