@@ -107,7 +107,7 @@
 {
   "followId": "string (ドキュメントID)",
   "followerId": "string",
-  "followingId": "string",
+  "followeeId": "string",
   "createdAt": "timestamp"
 }
 ```
