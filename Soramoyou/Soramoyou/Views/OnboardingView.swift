@@ -35,7 +35,8 @@ struct OnboardingView: View {
         OnboardingPage(
             icon: "camera.viewfinder",
             title: "空カメラ",
-            description: "投稿の「撮る」から\nガイド付きで空を撮れます",
+            // 1.12.0: 空優先AE（明るい空の白飛び防止）も新規ユーザーにはここで伝える（What's New は出ないため）
+            description: "投稿の「撮る」から、ガイド付きで\n明るい空も白く飛ばさずに撮れます",
             gradientColors: [
                 Color(red: 0.45, green: 0.72, blue: 0.98),
                 Color(red: 0.20, green: 0.35, blue: 0.75)
@@ -87,6 +88,18 @@ struct OnboardingView: View {
             gradientColors: [
                 Color(red: 0.98, green: 0.70, blue: 0.75),
                 Color(red: 0.93, green: 0.49, blue: 0.62)
+            ]
+        ),
+        // ⚠️ 1.12.0: いいねランキングと「私のおすすめの空」も新規ユーザーには What's New が出ないため、
+        //    ここで 1 ページにまとめて案内する（2026-09-26 ユーザー決定: 1 ページ追加）。
+        //    アイコン・配色は What's New の「いいねランキング」ページと揃えている。
+        OnboardingPage(
+            icon: "trophy.fill",
+            title: "人気の空を見つける",
+            description: "「週間」「月間」ランキングで人気の空を\n好きな空はプロフィールに飾れます",
+            gradientColors: [
+                Color(red: 0.98, green: 0.78, blue: 0.40),
+                Color(red: 0.90, green: 0.45, blue: 0.35)
             ]
         ),
         OnboardingPage(
