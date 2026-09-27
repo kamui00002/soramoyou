@@ -148,6 +148,19 @@ struct PublicProfile: Identifiable, Codable {
         }
     }
 
+    /// Firestore ドキュメントデータから初期化し、中の `id` がドキュメント ID（＝持ち主の uid）と一致するか確かめる ⭐️
+    ///
+    /// ⚠️ 中の `id` だけを信じると、自分のドキュメントに他人の uid を書いた人が、
+    ///    他人の投稿に自分の名前・アバターを付けて見せられる（呼び出し側は `profile.id` を辞書のキーにするため・issue #133）。
+    ///    rules でも作成時に一致を強制しているが、独自クライアントや rules 以前のデータに備えて読み込みでも弾く。
+    /// - Parameter documentId: 読み込んだドキュメントの ID（`publicProfiles/{userId}` の userId）
+    init(from documentData: [String: Any], documentId: String) throws {
+        try self.init(from: documentData)
+        guard id == documentId else {
+            throw PublicProfileError.idMismatch
+        }
+    }
+
     /// Firestore DocumentSnapshotから初期化
     init?(from document: DocumentSnapshot) {
         guard let data = document.data() else {
@@ -167,4 +180,6 @@ struct PublicProfile: Identifiable, Codable {
 enum PublicProfileError: Error {
     case missingUserId
     case invalidData
+    /// 中の `id` がドキュメント ID と一致しない（なりすましの疑い）
+    case idMismatch
 }

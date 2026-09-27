@@ -1135,7 +1135,11 @@ class FirestoreService: FirestoreServiceProtocol {
                 throw FirestoreServiceError.notFound
             }
 
-            return try PublicProfile(from: data)
+            // ⭐️ 中の id がドキュメント ID と一致するかも確かめる（issue #133・なりすまし表示の防止）。
+            //    呼び出し側は profile.id を辞書のキーにするので、ここで弾けば全画面に効く。
+            //    不一致は id 欠落と同じ「壊れたデータ」扱い（下の catch で fetchFailed）にする。
+            //    notFound は呼び出し側で「未作成の旧アカウント」として扱われる（users へのフォールバック等）ので使わない。
+            return try PublicProfile(from: data, documentId: userId)
         } catch let error as FirestoreServiceError {
             // FirestoreServiceError（notFound 等）はそのまま re-throw（fetchFailed でラップしない）
             throw error
