@@ -190,8 +190,13 @@ service cloud.firestore {
       }
 
       // 所有者のみ作成・更新・削除可能
+      // ⭐️ 中の id はドキュメント ID（＝持ち主の uid）と一致させる（issue #133）。
+      //    アプリは取得した profile.id をキーに投稿者名を引くので、他人の uid を書けると
+      //    他人の投稿に自分の名前・アバターを付けて見せられてしまう。
+      //    update は下の「id 不変」で守られるので、作成時に一致させれば常に一致する。
       allow create: if isOwner(userId)
                     && request.resource.data.keys().hasAll(['id', 'createdAt'])
+                    && request.resource.data.id == userId
                     && isValidRecommendedPostIds(request.resource.data);
 
       allow update: if isOwner(userId)
