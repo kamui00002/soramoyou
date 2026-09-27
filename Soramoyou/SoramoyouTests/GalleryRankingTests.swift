@@ -235,6 +235,31 @@ final class GalleryRankingTests: XCTestCase {
         XCTAssertTrue(viewModel.rankingDisplayEntries.isEmpty)
     }
 
+    func testRemovedPostDoesNotComeBackFromRankingCache() async {
+        // #134: 削除した投稿が、5 分以内の期間の往復（週間 → 月間 → 週間）でキャッシュから戻ってこない
+        rankingService.entriesByPeriod[.weekly] = [
+            entry(rank: 1, postId: "A", likes: 5),
+            entry(rank: 2, postId: "B", likes: 4)
+        ]
+        rankingService.entriesByPeriod[.monthly] = [
+            entry(rank: 1, postId: "B", likes: 9),
+            entry(rank: 2, postId: "C", likes: 7)
+        ]
+        await viewModel.setSortOrder(.weeklyRanking)
+        await viewModel.setSortOrder(.monthlyRanking)
+        await viewModel.setSortOrder(.weeklyRanking)
+
+        viewModel.removePost(postId: "B")
+        await viewModel.setSortOrder(.monthlyRanking)
+        XCTAssertEqual(viewModel.posts.map(\.id), ["C"], "月間のキャッシュからも消えている")
+        await viewModel.setSortOrder(.weeklyRanking)
+        XCTAssertEqual(viewModel.posts.map(\.id), ["A"], "週間のキャッシュからも消えている")
+        // 順位は集計時のまま（詰め直さない。表示中の削除と同じ扱い）
+        XCTAssertEqual(viewModel.rankingDisplayEntries.map(\.rank), [1])
+        // キャッシュを使っている（削除のために集計し直していない）
+        XCTAssertEqual(rankingService.requestedPeriods, [.weekly, .monthly])
+    }
+
     // MARK: - 投稿者の取得（authorsByUserId）
 
     func testAuthorsAreFetchedOncePerUser() async {
