@@ -487,7 +487,23 @@ class GalleryViewModel: PaginatedPostsViewModel {
     }
 
     /// 投稿をローカル一覧から削除する（削除完了後のUI更新用）
+    ///
+    /// ⭐️ ランキングのキャッシュ（`rankingResults`・期間ごとに 5 分有効）からも取り除く（#134）。
+    ///    `posts` からだけ消すと、5 分以内に 週間 → 月間 → 週間 と切り替えたとき、
+    ///    キャッシュに残った削除済みの投稿が一覧に戻ってきてしまう。
+    ///    - `rankingResults = [:]` で丸ごと捨てると、次に開いたときに集計（いいねの読み取り）が走り直すので避ける。
+    ///    - 順位は詰め直さない（表示中の一覧から消したときと同じ扱い。集計時の順位をそのまま出す）。
+    ///    - `fetchedAt` は元のまま（削除でキャッシュの寿命を延ばさない）。
     func removePost(postId: String) {
         posts.removeAll { $0.id == postId }
+        for (period, result) in rankingResults where result.entries.contains(where: { $0.post.id == postId }) {
+            rankingResults[period] = RankingResult(
+                period: result.period,
+                entries: result.entries.filter { $0.post.id != postId },
+                likeCount: result.likeCount,
+                isTruncated: result.isTruncated,
+                fetchedAt: result.fetchedAt
+            )
+        }
     }
 }
