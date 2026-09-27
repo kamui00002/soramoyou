@@ -218,7 +218,10 @@ service cloud.firestore {
       // フォロー関係は認証済みユーザーが確認可能
       allow get: if isAuthenticated();
       // 一覧取得はページサイズ上限付き（publicProfiles の limit<=20 と同じ流儀。
-      // クライアントの list は FollowRepository.fetchFollows（limit=30）のみ）
+      // クライアントの list は FollowRepository.fetchFollows（limit=30）と、
+      // 退会時の FirestoreService.deleteFollows（limit=followsPageSize=50）の 2 本）
+      // ⚠️ この上限を下げるなら FirestoreService.followsPageSize も同時に下げること。
+      //    ズレると退会処理の follows 削除が permission-denied で止まる。
       allow list: if isAuthenticated() && request.query.limit <= 50;
 
       // フォロー作成: 自分がフォロワーの場合のみ

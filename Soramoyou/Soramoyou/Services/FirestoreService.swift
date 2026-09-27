@@ -171,6 +171,17 @@ class FirestoreService: FirestoreServiceProtocol {
         db.collection("publicProfiles")
     }
 
+    /// フォロー関係コレクション（ドキュメントID: {followerId}_{followeeId}）⭐️
+    /// 退会時に自分が絡む関係を両方向とも消すために参照する。
+    /// ⚠️ rules は list に `request.query.limit <= 50` を課しているため、
+    ///    このコレクションへのクエリは必ず `limit(to:)` を付けること。
+    private var followsCollection: CollectionReference {
+        db.collection("follows")
+    }
+
+    /// `follows` の list 上限（firestore.rules の `request.query.limit <= 50` に合わせる）
+    private static let followsPageSize = 50
+
     private var likesCollection: CollectionReference {
         db.collection("likes")
     }
@@ -855,31 +866,103 @@ class FirestoreService: FirestoreServiceProtocol {
 
     /// ユーザーの全データを削除（投稿、下書き、お気に入り、ユーザードキュメント）
     func deleteUserData(userId: String) async throws {
+        // ⭐️ 削除の順番は「人から見えなくなるもの」を先にする。
+        //    途中で失敗すると以降の手順は実行されないため（catch で throw する）、
+        //    どこで止まっても「見えたまま残る」より「見えなくなる」ほうへ倒す。
+        //    投稿の一括削除は件数が多く最も失敗しやすいので、これを先頭に置くと
+        //    失敗時に公開プロフィールが残る＝まさに直したかった不具合が再発する。
+        //    ⚠️ 全手順が Auth アカウント削除より前に実行される前提（rules が本人にしか
+        //       delete を許さないため）。SettingsViewModel の呼び出し順を変えないこと。
+        // 失敗時に「6 手順のどこで止まったか」を catch のログに残すための段階名 ⭐️
+        // （FirestoreServiceError.deleteFailed は元エラーを保持するが、手順名までは持たない）
+        var stage = "publicProfiles"
         do {
-            // 1. ユーザーの投稿を全てバッチ削除
+            // 1. 公開プロフィールを削除 ⭐️
+            //    ここを消し忘れると、Auth アカウントも users も無いのに publicProfiles だけが残り、
+            //    退会者が検索結果やフォロー一覧に出続ける（プライバシー事故）。
+            try await publicProfilesCollection.document(userId).delete()
+
+            // 2. フォロー関係を両方向とも削除 ⭐️
+            //    「自分がフォローした」側（followerId）と「自分がフォローされた」側（followeeId）の
+            //    2 本を別々に消す。片方だけだと、退会者が他人のフォロワー一覧に残り続ける。
+            //    削除のたびに Cloud Functions の onFollowDeleted が発火し、
+            //    相手（残るユーザー）の followersCount / followingCount が数え直される。
+            //    退会者自身の publicProfiles は手順 1 で消えているので、Functions 側の存在確認
+            //    （reconcileFollowCounters の exists ガード）は false を読み、作り直されない。
+            //    ⚠️ ただし users 側は別。Functions の存在確認は get → set(merge) の 2 手で**非原子的**なので、
+            //       手順 6 の users 削除が N 回の発火のどれかの get と set の間に落ちると、
+            //       カウンタだけの users/{uid} が復活しうる（誰にも見えず PII なし・Admin SDK 掃除で回収可）。
+            //       根治（set(merge) → update()）は Functions 側の別 issue #129 で行う。
+            stage = "follows.follower"
+            try await deleteFollows(field: "followerId", userId: userId)
+            stage = "follows.followee"
+            try await deleteFollows(field: "followeeId", userId: userId)
+
+            // 3. ユーザーの投稿を全てバッチ削除
+            //    `.server` は deleteFollows の Note と同じ理由（キャッシュの部分集合を「全件」と誤認しない）。
+            //    投稿は退会後も公開のまま見え続けるため、follows より取りこぼしの実害が大きい。
+            stage = "posts"
             let postsSnapshot = try await postsCollection
                 .whereField("userId", isEqualTo: userId)
-                .getDocuments()
+                .getDocuments(source: .server)
 
             try await batchDelete(documents: postsSnapshot.documents)
 
-            // 2. ユーザーの下書きを全てバッチ削除
+            // 4. ユーザーの下書きを全てバッチ削除
+            stage = "drafts"
             let draftsSnapshot = try await draftsCollection
                 .whereField("userId", isEqualTo: userId)
-                .getDocuments()
+                .getDocuments(source: .server)
 
             try await batchDelete(documents: draftsSnapshot.documents)
 
-            // 3. お気に入りサブコレクションを全件バッチ削除 ⭐️
+            // 5. お気に入りサブコレクションを全件バッチ削除 ⭐️
             //    favorites は本機能で新設した自分のコレクションなので、退会時に確実に消す。
-            let favoritesSnapshot = try await favoritesCollection(userId: userId).getDocuments()
+            stage = "favorites"
+            let favoritesSnapshot = try await favoritesCollection(userId: userId).getDocuments(source: .server)
             try await batchDelete(documents: favoritesSnapshot.documents)
 
-            // 4. ユーザードキュメントを削除
+            // 6. ユーザードキュメントを削除
+            stage = "users"
             try await usersCollection.document(userId).delete()
         } catch {
+            // どの手順で止まったかを 1 行残す（userId を出すのは postsCount 更新失敗ログと同じ扱い）。
+            print("❌ 退会データ削除失敗 stage=\(stage) userId=\(userId) error=\(error.localizedDescription)")
             throw FirestoreServiceError.deleteFailed(error)
         }
+    }
+
+    /// 指定フィールドが `userId` に一致する `follows` を、空になるまで削除する ⭐️
+    ///
+    /// - Important: `follows` の rules は list に `request.query.limit <= 50` を課しているため、
+    ///   上限なしの `getDocuments()` は permission-denied になる。必ず `limit(to:)` を付けて
+    ///   「50 件取って消す」を繰り返す。`order(by:)` は付けない（付けると複合インデックスが
+    ///   必要になり、index の deploy 漏れで退会処理が丸ごと失敗する経路が増える）。
+    ///
+    /// - Note: 取得は `source: .server` を明示する ⭐️。既定の `.default` は通信断だと
+    ///   **ローカルキャッシュへフォールバック**し、キャッシュにあるのは `fetchFollows`（limit 30）で
+    ///   過去に見た分だけなので、0 件や部分集合を「全部消えた」と誤認して終わってしまう。
+    ///   その後 Auth アカウントが消えると rules を満たせず、残った follows はクライアントから
+    ///   二度と消せない。`.server` なら通信断で失敗して退会が止まり、再試行できる
+    ///   （安全側にしか働かない）。手順 3〜5 の getDocuments も同じ理由で揃えている。
+    ///
+    /// - Parameters:
+    ///   - field: `"followerId"`（自分がフォローした）または `"followeeId"`（自分がフォローされた）
+    ///   - userId: 退会するユーザーの ID
+    private func deleteFollows(field: String, userId: String) async throws {
+        try await BatchDrainer.drain(
+            pageSize: Self.followsPageSize,
+            fetch: { pageSize in
+                try await self.followsCollection
+                    .whereField(field, isEqualTo: userId)
+                    .limit(to: pageSize)
+                    .getDocuments(source: .server)
+                    .documents
+            },
+            delete: { documents in
+                try await self.batchDelete(documents: documents)
+            }
+        )
     }
 
     /// ドキュメントをバッチ削除（最大500件/バッチ）
