@@ -186,6 +186,11 @@ class FirestoreService: FirestoreServiceProtocol {
         db.collection("likes")
     }
 
+    /// 退会時に likes / comments を取りに行く 1 ページの件数 ⭐️
+    /// rules の list は `isAuthenticated()` のみで上限は無いが、follows と同じ
+    /// 「上限つきで取って消す」を繰り返す形に揃える（1 回の取得が肥大しないように）。
+    private static let reactionsPageSize = 50
+
     /// お気に入りサブコレクション参照（users/{userId}/favorites）⭐️
     /// サブコレクションにすることで、一覧クエリが `order(by: createdAt)` 1本になり
     /// 複合インデックスが不要になる（index 欠落による「件数だけ増えて中身が出ない」事故の構造的な予防）。
@@ -864,7 +869,7 @@ class FirestoreService: FirestoreServiceProtocol {
 
     // MARK: - Account Deletion
 
-    /// ユーザーの全データを削除（投稿、下書き、お気に入り、ユーザードキュメント）
+    /// ユーザーの全データを削除（公開プロフィール、フォロー、いいね、コメント、投稿、下書き、お気に入り、ユーザードキュメント）
     func deleteUserData(userId: String) async throws {
         // ⭐️ 削除の順番は「人から見えなくなるもの」を先にする。
         //    途中で失敗すると以降の手順は実行されないため（catch で throw する）、
@@ -873,7 +878,7 @@ class FirestoreService: FirestoreServiceProtocol {
         //    失敗時に公開プロフィールが残る＝まさに直したかった不具合が再発する。
         //    ⚠️ 全手順が Auth アカウント削除より前に実行される前提（rules が本人にしか
         //       delete を許さないため）。SettingsViewModel の呼び出し順を変えないこと。
-        // 失敗時に「6 手順のどこで止まったか」を catch のログに残すための段階名 ⭐️
+        // 失敗時に「8 手順のどこで止まったか」を catch のログに残すための段階名 ⭐️
         // （FirestoreServiceError.deleteFailed は元エラーを保持するが、手順名までは持たない）
         var stage = "publicProfiles"
         do {
@@ -890,7 +895,7 @@ class FirestoreService: FirestoreServiceProtocol {
             //    退会者自身の publicProfiles は手順 1 で消えているので、Functions 側の存在確認
             //    （reconcileFollowCounters の exists ガード）は false を読み、作り直されない。
             //    ⚠️ ただし users 側は別。Functions の存在確認は get → set(merge) の 2 手で**非原子的**なので、
-            //       手順 6 の users 削除が N 回の発火のどれかの get と set の間に落ちると、
+            //       手順 8 の users 削除が N 回の発火のどれかの get と set の間に落ちると、
             //       カウンタだけの users/{uid} が復活しうる（誰にも見えず PII なし・Admin SDK 掃除で回収可）。
             //       根治（set(merge) → update()）は Functions 側の別 issue #129 で行う。
             stage = "follows.follower"
@@ -898,7 +903,19 @@ class FirestoreService: FirestoreServiceProtocol {
             stage = "follows.followee"
             try await deleteFollows(field: "followeeId", userId: userId)
 
-            // 3. ユーザーの投稿を全てバッチ削除
+            // 3. 自分が付けたいいねを削除し、相手の投稿の likesCount を 1 つ減らす ⭐️（issue #130）
+            //    消し忘れると、退会者の uid が「反応してくれた人」一覧（ReactedUsersViewModel）に
+            //    publicProfiles の無い「ユーザー」として出続け、フォローボタンまで出てしまう。
+            //    1 件ずつ処理する理由・投稿が読めないときの扱いは deleteReactions / deleteReaction 参照。
+            stage = "likes"
+            try await deleteReactions(collection: likesCollection, counterField: "likesCount", userId: userId)
+
+            // 4. 自分が書いたコメントを削除し、投稿の commentsCount を 1 つ減らす ⭐️（issue #130）
+            //    同じ投稿に複数コメントがありうるので、ここは 1 件ずつでないと rules に拒否される。
+            stage = "comments"
+            try await deleteReactions(collection: commentsCollection, counterField: "commentsCount", userId: userId)
+
+            // 5. ユーザーの投稿を全てバッチ削除
             //    `.server` は deleteFollows の Note と同じ理由（キャッシュの部分集合を「全件」と誤認しない）。
             //    投稿は退会後も公開のまま見え続けるため、follows より取りこぼしの実害が大きい。
             stage = "posts"
@@ -908,7 +925,7 @@ class FirestoreService: FirestoreServiceProtocol {
 
             try await batchDelete(documents: postsSnapshot.documents)
 
-            // 4. ユーザーの下書きを全てバッチ削除
+            // 6. ユーザーの下書きを全てバッチ削除
             stage = "drafts"
             let draftsSnapshot = try await draftsCollection
                 .whereField("userId", isEqualTo: userId)
@@ -916,13 +933,13 @@ class FirestoreService: FirestoreServiceProtocol {
 
             try await batchDelete(documents: draftsSnapshot.documents)
 
-            // 5. お気に入りサブコレクションを全件バッチ削除 ⭐️
+            // 7. お気に入りサブコレクションを全件バッチ削除 ⭐️
             //    favorites は本機能で新設した自分のコレクションなので、退会時に確実に消す。
             stage = "favorites"
             let favoritesSnapshot = try await favoritesCollection(userId: userId).getDocuments(source: .server)
             try await batchDelete(documents: favoritesSnapshot.documents)
 
-            // 6. ユーザードキュメントを削除
+            // 8. ユーザードキュメントを削除
             stage = "users"
             try await usersCollection.document(userId).delete()
         } catch {
@@ -944,7 +961,7 @@ class FirestoreService: FirestoreServiceProtocol {
     ///   過去に見た分だけなので、0 件や部分集合を「全部消えた」と誤認して終わってしまう。
     ///   その後 Auth アカウントが消えると rules を満たせず、残った follows はクライアントから
     ///   二度と消せない。`.server` なら通信断で失敗して退会が止まり、再試行できる
-    ///   （安全側にしか働かない）。手順 3〜5 の getDocuments も同じ理由で揃えている。
+    ///   （安全側にしか働かない）。手順 3〜7 の getDocuments も同じ理由で揃えている。
     ///
     /// - Parameters:
     ///   - field: `"followerId"`（自分がフォローした）または `"followeeId"`（自分がフォローされた）
@@ -963,6 +980,141 @@ class FirestoreService: FirestoreServiceProtocol {
                 try await self.batchDelete(documents: documents)
             }
         )
+    }
+
+    /// 退会者の `likes` / `comments` を空になるまで 1 件ずつ削除し、投稿側のカウンタを 1 つずつ減らす ⭐️
+    ///
+    /// - Important: 1 件ずつ処理する理由 — rules の `isCountOnlyUpdate` は他人の投稿の
+    ///   `likesCount` / `commentsCount` を「変化なし or ±1」しか許さない。同じ投稿へのコメントが
+    ///   2 件あるときに 1 回の batch でまとめて消すと -2 になって拒否され、退会が止まる。
+    ///   いいねは (userId, postId) で一意なので本来まとめても通るが、コメントと同じ形に揃える。
+    ///
+    /// - Note: 取得は deleteFollows と同じく `limit(to:)` ＋ `source: .server`（キャッシュの部分集合を
+    ///   「全件消えた」と誤認しないため）。`order(by:)` は付けない（複合インデックスを要求しないため）。
+    ///
+    /// - Parameters:
+    ///   - collection: `likes` または `comments`
+    ///   - counterField: 減らす投稿側のカウンタ（`"likesCount"` / `"commentsCount"`）
+    ///   - userId: 退会するユーザーの ID
+    private func deleteReactions(
+        collection: CollectionReference,
+        counterField: String,
+        userId: String
+    ) async throws {
+        try await BatchDrainer.drain(
+            pageSize: Self.reactionsPageSize,
+            fetch: { pageSize in
+                try await collection
+                    .whereField("userId", isEqualTo: userId)
+                    .limit(to: pageSize)
+                    .getDocuments(source: .server)
+                    .documents
+            },
+            delete: { documents in
+                // 1 件ずつ順番に（並列にすると同じ投稿への書き込みが競合してリトライが増えるだけ）
+                for document in documents {
+                    try await self.deleteReaction(document, counterField: counterField)
+                }
+            }
+        )
+    }
+
+    /// いいね / コメント 1 件を削除し、投稿のカウンタを 1 つ減らす ⭐️
+    ///
+    /// 投稿が「読めない」ことがあるので 3 段構えにする:
+    /// - 段 A（通常）: トランザクションで投稿を get し、存在してカウンタが 1 以上のときだけ -1。
+    ///   いいね/コメント自体はどちらでも消す。
+    /// - 段 B: 段 A が permission-denied / not-found で失敗したら、get せずに
+    ///   「削除 ＋ カウンタ -1」を batch で書く。
+    /// - 段 C: 段 B も permission-denied / not-found なら、いいね/コメントだけを消す。
+    ///
+    /// ⚠️ 段 A の get が拒否されるのは次の 3 つ。posts の read rule は 3 つの条件すべてが
+    ///    `resource.data` を参照するため、投稿が無い（`resource == null`）と評価エラー＝拒否になり、
+    ///    `exists == false` はまず返らない（rules の評価規則からの推論・未実測。返っても段 A で正しく扱う）。
+    ///    ① 投稿が既に削除されている ② 他人の非公開（private）投稿
+    ///    ③ フォロワー限定投稿（手順 2 で自分の follows を消した後なので、もう読めない）
+    ///    ②③ は投稿が存在し、posts の update rule（`isCountOnlyUpdate`）は公開範囲を見ないので
+    ///    段 B の -1 が通る。① は段 B が失敗して段 C に落ちる（消えた投稿のカウンタは直す対象が無い）。
+    ///    段 B では 0 以下かどうかを確かめられないが、いいね/コメントが残っている以上カウンタは
+    ///    1 以上のはずなので、減らさずにズレを残すより減らす側を選んでいる。
+    ///
+    /// ⚠️ ネットワーク断など上記以外の失敗はそのまま throw する（退会を止めて再試行させる）。
+    ///    段 C の削除自体が失敗したときも throw する（ここを消せないと退会者の痕跡が残るため）。
+    private func deleteReaction(_ document: QueryDocumentSnapshot, counterField: String) async throws {
+        let reactionRef = document.reference
+
+        // postId が無い・壊れているドキュメントは、減らす先が分からないので削除だけする
+        // （1 件の壊れたデータで退会全体を止めない）。
+        guard let postId = document.data()["postId"] as? String, !postId.isEmpty else {
+            print("⚠️ 退会時の削除: postId の無いドキュメントをカウンタ更新なしで削除 path=\(reactionRef.path)")
+            try await reactionRef.delete()
+            return
+        }
+        let postRef = postsCollection.document(postId)
+
+        // 段 A: トランザクションで投稿を読み、減らしてよいときだけ -1
+        do {
+            _ = try await db.runTransaction { transaction, errorPointer in
+                let postDoc: DocumentSnapshot
+                do {
+                    postDoc = try transaction.getDocument(postRef)
+                } catch let fetchError as NSError {
+                    errorPointer?.pointee = fetchError
+                    return nil
+                }
+
+                let currentCount = postDoc.data()?[counterField] as? Int
+                if FirestoreService.shouldDecrementCounter(postExists: postDoc.exists, currentCount: currentCount) {
+                    transaction.updateData([counterField: FieldValue.increment(Int64(-1))], forDocument: postRef)
+                }
+                transaction.deleteDocument(reactionRef)
+                return nil
+            }
+            return
+        } catch {
+            guard FirestoreService.isPostUnreachableError(error) else { throw error }
+        }
+
+        // 段 B: 投稿を読めない。get せずに「削除 ＋ -1」を書く（非公開・フォロワー限定の投稿はここで直る）
+        do {
+            let batch = db.batch()
+            batch.deleteDocument(reactionRef)
+            batch.updateData([counterField: FieldValue.increment(Int64(-1))], forDocument: postRef)
+            try await batch.commit()
+            return
+        } catch {
+            guard FirestoreService.isPostUnreachableError(error) else { throw error }
+        }
+
+        // 段 C: 投稿が消えている（またはカウンタを書けない）。いいね/コメントだけを消す
+        // 「カウンタを書けない」場合はカウンタのズレを黙って残すので、気づけるようにログを残す
+        // （postId が無い経路と同じ形。段 A→B は非公開投稿で通常起きるのでログしない）。
+        print("⚠️ 退会時の削除: 投稿のカウンタを更新できずリアクションのみ削除 postId=\(postId) path=\(reactionRef.path)")
+        try await reactionRef.delete()
+    }
+
+    /// 退会時のいいね/コメント削除で、投稿のカウンタを減らしてよいかを判定する ⭐️
+    ///
+    /// 投稿が存在し、カウンタが 1 以上のときだけ true。0 以下で減らすとマイナスになるため減らさない
+    /// （フィールドが無い旧データも 0 扱い＝減らさない）。
+    ///
+    /// - Parameters:
+    ///   - postExists: 投稿ドキュメントが存在するか
+    ///   - currentCount: 投稿の現在のカウンタ値（フィールドが無ければ nil）
+    static func shouldDecrementCounter(postExists: Bool, currentCount: Int?) -> Bool {
+        guard postExists, let currentCount else { return false }
+        return currentCount >= 1
+    }
+
+    /// 投稿が「読めない / 書けない」ことによる失敗か（permission-denied または not-found）⭐️
+    ///
+    /// true なら deleteReaction は次の段へ進む。false（ネットワーク断など）は呼び出し側へ throw し、
+    /// 退会を止めて再試行させる（カウンタを直さないまま削除だけ進めるのを防ぐ）。
+    static func isPostUnreachableError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == FirestoreErrorDomain else { return false }
+        return nsError.code == FirestoreErrorCode.permissionDenied.rawValue
+            || nsError.code == FirestoreErrorCode.notFound.rawValue
     }
 
     /// ドキュメントをバッチ削除（最大500件/バッチ）
