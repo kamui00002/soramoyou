@@ -32,8 +32,11 @@ service firebase.storage {
       // Only authenticated users can read profile images
       allow read: if isAuthenticated();
 
-      // Only the owner can upload/delete their profile images
-      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+      // Only the owner can upload their profile images
+      allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
+
+      // Only the owner can delete (no file validation: request.resource is null on delete)
+      allow delete: if isOwner(userId);
     }
 
     // Post images - public
@@ -43,9 +46,12 @@ service firebase.storage {
 
       // Only authenticated owner can upload public images
       // NOTE: テスト中は条件を緩和（本番前に戻すこと）
-      allow write: if isOwner(userId)
+      allow create, update: if isOwner(userId)
                    && isImageFile()
                    && isValidSize();
+
+      // Only the owner can delete (no file validation: request.resource is null on delete)
+      allow delete: if isOwner(userId);
     }
 
     // Post images - followers only
@@ -60,7 +66,10 @@ service firebase.storage {
       allow read: if isAuthenticated();
 
       // Only the owner can upload followers-only images
-      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+      allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
+
+      // Only the owner can delete (no file validation: request.resource is null on delete)
+      allow delete: if isOwner(userId);
     }
 
     // Post images - private
@@ -69,7 +78,10 @@ service firebase.storage {
       allow read: if isOwner(userId);
 
       // Only the owner can upload private images
-      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+      allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
+
+      // Only the owner can delete (no file validation: request.resource is null on delete)
+      allow delete: if isOwner(userId);
     }
 
     // Draft images
@@ -91,9 +103,12 @@ service firebase.storage {
 
       // Only authenticated owner can upload public thumbnails
       // NOTE: テスト中は条件を緩和（本番前に戻すこと）
-      allow write: if isOwner(userId)
+      allow create, update: if isOwner(userId)
                    && isImageFile()
                    && isValidSize();
+
+      // Only the owner can delete (no file validation: request.resource is null on delete)
+      allow delete: if isOwner(userId);
     }
 
     // Thumbnail images - followers only
@@ -105,7 +120,10 @@ service firebase.storage {
       allow read: if isAuthenticated();
 
       // Only the owner can upload followers-only thumbnails
-      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+      allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
+
+      // Only the owner can delete (no file validation: request.resource is null on delete)
+      allow delete: if isOwner(userId);
     }
 
     // Thumbnail images - private
@@ -114,7 +132,10 @@ service firebase.storage {
       allow read: if isOwner(userId);
 
       // Only the owner can upload private thumbnails
-      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+      allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
+
+      // Only the owner can delete (no file validation: request.resource is null on delete)
+      allow delete: if isOwner(userId);
     }
 
     // Original images (unedited) - public
@@ -124,9 +145,12 @@ service firebase.storage {
 
       // Only authenticated owner can upload public original images
       // NOTE: テスト中は条件を緩和（本番前に戻すこと）
-      allow write: if isOwner(userId)
+      allow create, update: if isOwner(userId)
                    && isImageFile()
                    && isValidSize();
+
+      // Only the owner can delete (no file validation: request.resource is null on delete)
+      allow delete: if isOwner(userId);
     }
 
     // Original images (unedited) - followers only
@@ -138,7 +162,10 @@ service firebase.storage {
       allow read: if isAuthenticated();
 
       // Only the owner can upload followers-only original images
-      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+      allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
+
+      // Only the owner can delete (no file validation: request.resource is null on delete)
+      allow delete: if isOwner(userId);
     }
 
     // Original images (unedited) - private
@@ -147,7 +174,10 @@ service firebase.storage {
       allow read: if isOwner(userId);
 
       // Only the owner can upload private original images
-      allow write: if isOwner(userId) && isImageFile() && isValidSize();
+      allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
+
+      // Only the owner can delete (no file validation: request.resource is null on delete)
+      allow delete: if isOwner(userId);
     }
 
     // Living Sky job assets (source photo + masks uploaded by client,
