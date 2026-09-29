@@ -76,6 +76,9 @@ CASES = [
     ("正規 他人のコメント +1", "ALLOW", OTHER, BASE_POST, changed(BASE_POST, commentsCount=3)),
     ("正規 他人のコメント削除 -1", "ALLOW", OTHER, BASE_POST, changed(BASE_POST, commentsCount=1)),
     ("正規 持ち主が自分の投稿にいいね +1", "ALLOW", OWNER, BASE_POST, changed(BASE_POST, likesCount=4)),
+    # 退会処理の段 B（FirestoreService.deleteUserData）は「カウント更新は公開範囲を見ない」ことに依存している
+    ("正規 他人が非公開投稿のいいねを -1（退会処理の段 B）", "ALLOW", OTHER, changed(BASE_POST, visibility="private"),
+     changed(BASE_POST, visibility="private", likesCount=2)),
     # 対照: 修正前から拒否されていたもの（変わらないことの確認）
     ("対照 他人が caption を書き換え", "DENY", OTHER, BASE_POST, changed(BASE_POST, caption="x")),
     ("対照 他人がいいねを +2", "DENY", OTHER, BASE_POST, changed(BASE_POST, likesCount=5)),
