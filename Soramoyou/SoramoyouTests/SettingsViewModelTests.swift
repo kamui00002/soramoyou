@@ -183,6 +183,10 @@ final class SettingsViewModelTests: XCTestCase {
     /// Firestore の delete は存在しない文書に対しても成功し、rules の `isOwner` は
     /// `resource` を見ないため、2 回目も許可される。follows のドレインは取得が空になれば
     /// 即座に終わる。この前提が崩れると退会が「再認証してもずっと失敗する」状態になる。
+    ///
+    /// ※ #142 以降、1 回目で Firestore まで消えるこの経路を通るのは email を持たない匿名ユーザーだけ
+    ///   （このテストの `User(id:)` も email なし）。メール/パスワードのユーザーは退会ボタンの時点では
+    ///   データに触らず、先に再認証を求める（下の「本人確認を先に済ませる」のテスト群を参照）。
     func testReauthAndDeleteRerunsDeletionIdempotently() async {
         let firestore = MockFirestoreServiceForSettings()
         let auth = MockAuthService()
@@ -216,5 +220,85 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertFalse(succeeded)
         XCTAssertTrue(firestore.deletedUserIds.isEmpty)
         XCTAssertFalse(auth.deleteAccountCalled)
+    }
+
+    // MARK: - 退会: 本人確認を先に済ませる（#142）
+
+    /// ⭐️ メール/パスワードのユーザーは、退会ボタンの時点ではデータに一切触らず、
+    /// まずパスワード入力（再認証）を求める。
+    ///
+    /// なぜ: 以前は「データを全部消す → Auth を消す」の順で、Auth 削除だけが
+    /// requiresRecentLogin で弾かれることがあった。その後の再認証をキャンセル・失敗すると
+    /// 「データは消えたのに Auth だけ残る」状態になる（本番で 4 件）。
+    func testAccountDeletionForEmailUserAsksForPasswordWithoutTouchingData() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let auth = MockAuthService()
+        auth.currentUserValue = User(id: "u1", email: "a@example.com")
+        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+
+        let succeeded = await sut.performAccountDeletion()
+
+        XCTAssertFalse(succeeded)
+        XCTAssertTrue(sut.showingReauthentication, "先にパスワード入力を求める")
+        XCTAssertTrue(firestore.deletedUserIds.isEmpty, "本人確認が済むまでデータは消さない")
+        XCTAssertFalse(auth.deleteAccountCalled, "本人確認が済むまで Auth も消さない")
+        XCTAssertNil(sut.deleteAccountError, "エラーではなく、パスワード入力の案内を出す")
+    }
+
+    /// ⭐️ メールユーザーの退会の全体: 退会ボタン → パスワード入力 → 再認証 → データ → Auth。
+    /// データ削除は再認証が通ったあとの 1 回だけで、「データ → Auth」の順も変えない。
+    func testEmailUserDeletesDataOnlyAfterReauthentication() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let auth = MockAuthService()
+        auth.currentUserValue = User(id: "u1", email: "a@example.com")
+        firestore.authForOrderCheck = auth
+        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+
+        let first = await sut.performAccountDeletion()
+        XCTAssertFalse(first)
+        XCTAssertTrue(sut.showingReauthentication)
+
+        let second = await sut.performReauthAndDelete(email: "a@example.com", password: "pw")
+
+        XCTAssertTrue(second)
+        XCTAssertEqual(firestore.deletedUserIds, ["u1"], "データ削除は再認証後の 1 回だけ")
+        XCTAssertEqual(auth.deleteAccountCallCount, 1)
+        XCTAssertEqual(firestore.authWasDeletedBeforeFirestore, false, "データ → Auth の順は変えない")
+        XCTAssertNil(sut.deleteAccountError)
+    }
+
+    /// ⭐️ 匿名ユーザー（email なし）は従来どおり、退会ボタンでそのままデータ → Auth の順に消す。
+    /// 匿名はパスワードを持たず再認証できないので、先にパスワードを求めても先へ進めないため。
+    func testAccountDeletionForAnonymousUserDeletesDirectly() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let auth = MockAuthService()
+        auth.currentUserValue = User(id: "anon", email: nil)
+        firestore.authForOrderCheck = auth
+        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+
+        let succeeded = await sut.performAccountDeletion()
+
+        XCTAssertTrue(succeeded)
+        XCTAssertFalse(sut.showingReauthentication, "匿名にはパスワード入力を出さない")
+        XCTAssertEqual(firestore.deletedUserIds, ["anon"])
+        XCTAssertTrue(auth.deleteAccountCalled)
+        XCTAssertEqual(firestore.authWasDeletedBeforeFirestore, false)
+    }
+
+    /// ⭐️ 再認証に失敗したら、データにも Auth にも触らない（既存の挙動を固定する）。
+    /// パスワード間違いのあとに諦めても「データだけ消えた」状態を作らないため。
+    func testReauthAndDeleteDoesNotTouchDataWhenReauthenticationFails() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let auth = MockAuthService()
+        auth.currentUserValue = User(id: "u1", email: "a@example.com")
+        auth.reauthenticateError = AuthError.wrongPassword
+        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+
+        let succeeded = await sut.performReauthAndDelete(email: "a@example.com", password: "wrong")
+
+        XCTAssertFalse(succeeded)
+        XCTAssertTrue(firestore.deletedUserIds.isEmpty, "再認証に失敗したらデータは消さない")
+        XCTAssertFalse(auth.deleteAccountCalled, "再認証に失敗したら Auth も消さない")
+        XCTAssertNotNil(sut.deleteAccountError, "失敗はユーザーに伝える")
     }
 }

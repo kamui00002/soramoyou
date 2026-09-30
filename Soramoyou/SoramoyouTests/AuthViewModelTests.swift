@@ -171,7 +171,15 @@ class MockAuthService: AuthServiceProtocol {
         }
     }
 
-    func reauthenticate(email: String, password: String) async throws {}
+    /// 退会テスト用: 設定すると reauthenticate がこのエラーを投げる。⭐️
+    /// 「再認証に失敗・キャンセルしたら、データには一切触らない」ことを検証するため（#142）。
+    var reauthenticateError: Error?
+
+    func reauthenticate(email: String, password: String) async throws {
+        if let reauthenticateError {
+            throw reauthenticateError
+        }
+    }
 }
 
 

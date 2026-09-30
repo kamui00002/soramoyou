@@ -1,5 +1,5 @@
 //
-//  SettingsViewModel.swift
+//  SettingsViewModel.swift ⭐️
 //  Soramoyou
 //
 //  設定画面のViewModel
@@ -191,6 +191,18 @@ class SettingsViewModel: ObservableObject {
 
         guard let userId = authService.currentUser()?.id else {
             deleteAccountError = "ユーザー情報を取得できません"
+            return false
+        }
+
+        // ⭐️ メール/パスワードのユーザーは、データに一切触る前に本人確認（パスワード再入力）を求める（#142）。
+        // 以前はここで「データを全部消す → Auth を消す」を始めていたため、最終ログインが古いと
+        // Auth 削除だけが requiresRecentLogin で弾かれ、その後の再認証をキャンセル・失敗した時点で
+        // 「データは消えたのに Auth だけ残る」状態になった（本番で 4 件）。
+        // そこでメールユーザーの削除は performReauthAndDelete（再認証 → データ → Auth の順）でだけ行う。
+        // 判定は email の有無で行う: この app のサインイン方式はメール/パスワードと匿名の 2 つだけで、
+        // 匿名ユーザーは email が必ず nil。匿名はパスワードを持たず再認証できないので、従来どおり下で直接消す。
+        if authService.currentUser()?.email != nil {
+            showingReauthentication = true
             return false
         }
 
