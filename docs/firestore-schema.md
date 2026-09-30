@@ -80,6 +80,12 @@
 }
 ```
 
+### posts — 書き込み契約 ⭐️（2026-09-29）
+
+- **他人の update は `likesCount` / `commentsCount` の ±1 だけ**（`FieldValue.increment` 単独）。`isCountOnlyUpdate` が `affectedKeys().hasOnly` で強制するので、`updatedAt` など別のフィールドを同時に書くと permission-denied になる。いいね・コメントの処理にフィールドを足すときは rules も一緒に直すこと。
+- 持ち主の update は `isValidPostUpdate`（カウント 2 つは据え置き）。
+- 他人のカウント更新は公開範囲を見ない。退会処理の段 B（`FirestoreService.deleteUserData`）がこれに依存している。
+
 ## drafts コレクション
 ```json
 {

@@ -76,10 +76,17 @@ service cloud.firestore {
     // カウントフィールド以外の変更を禁止する
     // 各カウントは独立して検証され、いずれも変更なし or ±1 のみ許可
     // フィールド数が同一であることを検証（余分なフィールド追加を防ぐ）
+    // ⚠️ 変わったキーが likesCount / commentsCount だけであることを affectedKeys で強制する。
+    //    キーの数と一部のフィールドを比べるだけでは、固定していない originalImages / postId などを
+    //    他人が書き換えられた（持ち主が投稿を消したとき、書き込まれた storagePath の画像や
+    //    書き換えた postId の別の投稿まで本人の権限で消えてしまう）。
+    //    affectedKeys().hasOnly の仕組みは isFollowCounterUpdate と同じ。
+    //    下の keys().size() と等価チェック群は hasOnly で論理的に冗長だが、多層防御として残す。
     function isCountOnlyUpdate() {
       let data = request.resource.data;
       let existing = resource.data;
-      return data.keys().size() == existing.keys().size()
+      return data.diff(existing).affectedKeys().hasOnly(['likesCount', 'commentsCount'])
+             && data.keys().size() == existing.keys().size()
              && data.userId == existing.userId
              && data.images == existing.images
              && data.visibility == existing.visibility
