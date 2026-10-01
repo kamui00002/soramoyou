@@ -93,6 +93,8 @@ iOSInjectionProject/
 
 # Firebase
 GoogleService-Info.plist
+# Android 版の Firebase 設定（API キーを含むため git 管理から外す。要件 1.6）
+google-services.json
 firebase-debug.log
 .firebaserc
 serviceAccountKey.json
