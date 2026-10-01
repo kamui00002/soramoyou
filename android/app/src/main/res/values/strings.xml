@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⭐️ 画面の文言（日本語）。iOS 版と同じ表示名に揃える -->
+<resources>
+    <string name="app_name">そらもよう</string>
+</resources>

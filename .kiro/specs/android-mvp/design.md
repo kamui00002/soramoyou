@@ -210,7 +210,7 @@ graph TB
 | 層 | 選定／バージョン | 役割 | 備考 |
 |---|---|---|---|
 | ビルド | Android Gradle Plugin 9.4.0／Gradle 9.6.0／JDK 17 | `android/`のマルチモジュールビルド | 2026-10-01に公式のリリースノートで確認 |
-| 言語 | Kotlin（AGPに組み込まれたKotlinサポートを使用） | 全コード | Kotlinの確定した版数は着手時に決めます |
+| 言語 | Kotlin 2.4.20（AGPに組み込まれたKotlinサポートを使用） | 全コード | タスク1.1で確定（2026-10-02）。AGP 9.4が同梱する2.2.10から、ルートで読み込んだ2.4.20へ引き上げられることを`buildEnvironment`で確認。AGP・Gradleは同じ互換の組の修正版（9.4.1／9.6.1）を使用 |
 | UI | Jetpack Compose（Compose BOM 2026.09.00、Material 3 1.4.0） | 全画面、ダークテーマへの追従 | BOMの対応表で確認 |
 | ナビゲーション | Navigation Compose（型安全なルート） | 画面遷移 | 版数は着手時に確定（未確認） |
 | DI | 手動DI（`AppContainer`） | 依存の組み立て | Hiltは採用しません（`research.md`） |

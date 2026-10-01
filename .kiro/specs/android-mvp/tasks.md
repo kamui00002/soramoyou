@@ -14,7 +14,7 @@
 ## M1：ログインして本番フィードが読める（読み取り専用）
 
 - [ ] 1. Androidプロジェクトの土台を作る
-- [ ] 1.1 秘密情報をGitの管理から外し、2つのモジュールからなるAndroidプロジェクトの骨組みを作る
+- [x] 1.1 秘密情報をGitの管理から外し、2つのモジュールからなるAndroidプロジェクトの骨組みを作る
   - `google-services.json`を置くより前に、リポジトリ直下の`.gitignore`へ、Firebaseの設定ファイル・ローカル設定・署名鍵とそのパスワードの設定・Gradleの生成物を追記する
   - 同一リポジトリの`android/`に、画面とFirebaseへの接続を持つアプリのモジュールと、Firebaseに依存しない純Kotlinの契約モジュールの2つを置く
   - applicationIdは`com.yoshidometoru.soramoyou`（決定済み。Playでは変更できない）、minSdk 26／targetSdk 36／compileSdk 36、JDK 17とする

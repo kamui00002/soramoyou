@@ -1,0 +1,15 @@
+# ⭐️ 版数の一元管理（バージョンカタログ）
+# 版数はここにだけ書き、各モジュールの build.gradle.kts からは別名（libs.xxx）で参照する。
+# ライブラリの登録はタスク 1.2 で行う。
+
+[versions]
+# AGP 9.4 は Gradle 9.6.0 以上・JDK 17 以上が必要（公式リリースノートで 2026-10-01 に確認）。
+# 設計書の 9.4.0 / 9.6.0 と同じ組み合わせの、不具合修正だけの版（9.4.1 / 9.6.1）を使う。
+agp = "9.4.1"
+# AGP 9.4 が同梱する Kotlin は 2.2.10。ライブラリが新しい Kotlin でコンパイルされていても
+# 読めるように、2026-10-01 時点の最新の安定版に上げる（Gradle 9.6 は対応範囲 7.6.3〜9.7.0 に入る）。
+kotlin = "2.4.20"
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

@@ -99,6 +99,19 @@ firebase-debug.log
 .firebaserc
 serviceAccountKey.json
 
+# Android 版（android/）の秘密情報・ローカル設定・生成物（要件 1.6）
+# local.properties は SDK の場所、keystore.properties は署名鍵のパスワードを持つ端末ごとの設定
+android/local.properties
+android/keystore.properties
+# アプリの署名鍵（Play のアップロード鍵。漏れると第三者が更新版を署名できる）
+*.jks
+*.keystore
+# Gradle・Kotlin・Android Studio が作る生成物とキャッシュ
+android/.gradle/
+android/**/build/
+android/.kotlin/
+android/.idea/
+
 # API Keys
 *.plist
 !Info.plist
