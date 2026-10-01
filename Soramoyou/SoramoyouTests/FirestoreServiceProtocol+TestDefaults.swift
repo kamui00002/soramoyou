@@ -264,7 +264,7 @@ extension FirestoreServiceProtocol {
         postId _: String,
         limit _: Int,
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?) {
+    ) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?, hasMore: Bool) {
         fatalError("MockFirestoreService.fetchComments は未実装です")
     }
 
