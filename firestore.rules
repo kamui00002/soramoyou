@@ -562,8 +562,7 @@ service cloud.firestore {
     //   Admin SDK はルールを通らないので、ここではクライアントからの書き込みをすべて拒否する。
     //   アプリが書けるのは投稿（skies）の作成と削除だけ。
     // collectionGroup のクエリと {path=**} のルールは使わない（既存のインデックスとルールに干渉させない。要件 13.1）。
-    // ⚠️ skies の作成・削除の条件は途中（tasks.md 2.2 で完成させる）。それまで deploy しない。
-    //    機能フラグ（soratomoBeta）を本番で持つ人はまだいないため、誤って出ても誰も読み書きできない。
+    // テスト: scripts/rules_test_soratomo.py（許可と拒否の両方・--mutants で陽性対照）。ルールを変えたら両方を流す。
     // ============================================
 
     // そらともの機能フラグ（カスタムクレーム soratomoBeta）を持つログイン利用者か（要件 1.6）
@@ -597,6 +596,27 @@ service cloud.firestore {
                  && data.caption.matches('[^\\r\\n\\x{85}\\x{2028}\\x{2029}]{1,100}'));
     }
 
+    // そらとも投稿の画像の幅・高さ（ピクセル）。1〜2048 の整数
+    // （表示用の画像は長辺 2048px 以下に縮小してから送る。要件 6.1・design.md の SoratomoImageEncoder）
+    function isValidSoratomoDimension(value) {
+      return value is int && value >= 1 && value <= 2048;
+    }
+
+    // そらとも投稿の作成時の項目の検証（要件 11.3・11.4・11.11・11.12・11.13）
+    // - 項目は 5 つだけ。画像のパスや URL の項目は持てない（画像の場所は groupId・authorId・skyId から導く）
+    // - キャプション以外の 4 つは必須
+    // - 投稿者は要求した本人。作成日時はサーバーの時刻だけ（アプリは FieldValue.serverTimestamp() で書く。
+    //   端末の時計で並び順を操作させない）
+    function isValidSoratomoSky(data) {
+      return data.keys().hasOnly(['authorId', 'caption', 'width', 'height', 'createdAt'])
+             && data.keys().hasAll(['authorId', 'width', 'height', 'createdAt'])
+             && data.authorId == request.auth.uid
+             && data.createdAt == request.time
+             && isValidSoratomoDimension(data.width)
+             && isValidSoratomoDimension(data.height)
+             && isValidSoratomoCaption(data);
+    }
+
     // グループ（名前・オーナー・招待コード・メンバー数）
     match /soratomoGroups/{groupId} {
       // 1 件ずつの取得（get）だけをメンバーに許す。招待コードもここから読む（要件 11.9）
@@ -614,10 +634,17 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // 投稿（tasks.md 2.2 で読み取り・作成・削除の条件を完成させる）
+      // 投稿（アプリは作成と削除だけを行い、更新はしない）
       match /skies/{skyId} {
+        // 読み取り（タイムラインの一覧を含む）はメンバーだけ（要件 11.1・11.2）
+        allow read: if isSoratomoUser() && isSoratomoMember(groupId);
         allow create: if isSoratomoUser()
-                      && isValidSoratomoCaption(request.resource.data);
+                      && isSoratomoMember(groupId)
+                      && isValidSoratomoSky(request.resource.data);
+        allow update: if false;
+        // 削除は投稿者本人だけ。オーナーを含むほかのメンバーには許さない（要件 11.6・11.15）。
+        // 作成と同じ allow write にまとめない（削除の要求には内容が無く、作成の条件で必ず拒否される。PR #141 と同じ型）
+        allow delete: if isSoratomoUser() && resource.data.authorId == request.auth.uid;
       }
 
       // 通知の間引きの状態（文書 ID は受信者の uid）。Functions の内部の記録なので、誰にも読ませない
