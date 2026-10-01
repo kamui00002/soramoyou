@@ -1525,6 +1525,9 @@ class FirestoreService: FirestoreServiceProtocol {
     ///    ギャラリー系の画面ではいいね済みの投稿が空のハートで出ることがあり、
     ///    トグルだとそこで押した「いいねする」がサーバーでは「外す」になってしまう。
     ///    `setFavorite` と同じく、押した結果こうなってほしい状態へ収束させる（冪等）。
+    /// ⚠️ 戻り値の likesCount のためにトランザクションで投稿も読むので、posts の読み取り権限（公開範囲）が要る。
+    ///    読めない投稿（フォローを外した後のフォロワー限定投稿・非公開にされた投稿）では失敗し、LikeManager が元に戻す。
+    ///    投稿を読まずに書いていた旧 toggleLike とは、この点だけ挙動が違う（docs/firestore-schema.md の書き込み契約）。
     /// - Parameters:
     ///   - postId: 対象の投稿ID
     ///   - userId: 操作するユーザーID

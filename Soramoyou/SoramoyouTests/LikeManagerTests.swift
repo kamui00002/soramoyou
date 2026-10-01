@@ -160,6 +160,7 @@ final class LikeManagerTests: XCTestCase {
         // 1 回目が書き込みの途中で「実際に止まった」ところまで待つ。
         // ⚠️ 回数（writeCallCount）で待つと、止める準備の前に次へ進んでしまう。
         await waitUntil { mock.isHoldingWrite }
+        XCTAssertTrue(manager.isLiked("p1"), "書き込み中も押した直後の状態（いいね）が出ている")
         await manager.toggleLike(post: post) // 1 回目が終わる前の 2 回目
         mock.releaseHeldWrite()
         await firstTap.value
@@ -194,6 +195,47 @@ final class LikeManagerTests: XCTestCase {
         XCTAssertTrue(manager.showLoginPrompt)
         XCTAssertEqual(mock.writeCallCount, 0)
         XCTAssertFalse(manager.isLiked("p1"))
+    }
+
+    /// 10. 別端末で外した後に読み直すと、押した結果の数字を捨ててサーバーの数を出す（レビュー D1）
+    ///     「押した時の likesCount」が偶然また届く（5→6→5）と、数字の一致だけでは古い結果と区別できない。
+    ///     サーバーのいいね状態が押した向きと食い違ったら、その数字はもう古い。
+    func testCheckLikeStatusDiscardsOverrideWhenServerStateDiffers() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikesCounts["p1"] = 5
+        let manager = makeManager(firestore: mock)
+        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5))
+        XCTAssertEqual(manager.likeCount(for: makePost(id: "p1", likesCount: 5)), 6, "前提: 押した結果が出ている")
+
+        // 同じアカウントの別端末でいいねを外した（サーバーは 5 に戻る）
+        mock.serverLikedPostIds.remove("p1")
+        mock.serverLikesCounts["p1"] = 5
+        let reloaded = makePost(id: "p1", likesCount: 5)
+        await manager.checkLikeStatus(for: [reloaded])
+
+        XCTAssertFalse(manager.isLiked("p1"))
+        XCTAssertEqual(manager.likeCount(for: reloaded), 5, "空のハートなのに 6 を出してはいけない")
+    }
+
+    /// 11. 書き込み中に状態の読み直しが割り込んでも、成功した時点で押した状態とサーバーの数にそろう（レビュー D7）
+    ///     詳細画面は開いた時に状態を読むので、開いてすぐ押すと、書き込み前の値で一度上書きされうる。
+    func testSuccessReassertsStateAfterInterleavedCheck() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikesCounts["p1"] = 5
+        let manager = makeManager(firestore: mock)
+        let post = makePost(id: "p1", likesCount: 5)
+        mock.holdNextWrite = true
+
+        let tap = Task { await manager.toggleLike(post: post) }
+        await waitUntil { mock.isHoldingWrite }
+        // 書き込み前のサーバー（いいね無し）を読んだ結果が、書き込み中に届く
+        await manager.checkLikeStatus(for: [post])
+        mock.releaseHeldWrite()
+        await tap.value
+
+        XCTAssertTrue(mock.serverLikedPostIds.contains("p1"))
+        XCTAssertTrue(manager.isLiked("p1"), "成功後は押した状態（いいね）にそろう")
+        XCTAssertEqual(manager.likeCount(for: post), 6, "数字もサーバーの値にそろう")
     }
 }
 

@@ -85,6 +85,7 @@
 - **他人の update は `likesCount` / `commentsCount` の ±1 だけ**（`FieldValue.increment` 単独）。`isCountOnlyUpdate` が `affectedKeys().hasOnly` で強制するので、`updatedAt` など別のフィールドを同時に書くと permission-denied になる。いいね・コメントの処理にフィールドを足すときは rules も一緒に直すこと。
 - 持ち主の update は `isValidPostUpdate`（カウント 2 つは据え置き）。
 - 他人のカウント更新は公開範囲を見ない。退会処理の段 B（`FirestoreService.deleteUserData`）がこれに依存している。
+- ただし**いいね**（`FirestoreService.setLike`・#145 から）は、書き込み後の likesCount を返すためにトランザクションの中で投稿も読む。そのため posts の**読み取り権限（公開範囲）も要る**。読めない投稿（フォローを外した後のフォロワー限定投稿など）へのいいね・取り消しは permission-denied になる。
 
 ## drafts コレクション
 ```json

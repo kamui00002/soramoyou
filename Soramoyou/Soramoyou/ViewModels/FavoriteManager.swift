@@ -86,8 +86,8 @@ final class FavoriteManager: ObservableObject {
 
     /// 表示中の投稿についてお気に入り状態をバッチチェック
     ///
-    /// ⚠️ LikeManager の `formUnion` だけの実装と違い、**問い合わせた postId の範囲だけ**
-    ///    サーバー値で上書きする（subtract → formUnion）。
+    /// ⚠️ **問い合わせた postId の範囲だけ**サーバー値で上書きする
+    ///    （subtract → formUnion。LikeManager も #145 から同じ）。
     ///    こうしないと「別端末で外した」「サインアウト前の残骸」がローカルに残り続ける。
     ///    問い合わせていない postId は触らないので、ページング追加読み込みでも既存状態は壊れない。
     func checkFavoriteStatus(for posts: [Post]) async {

@@ -21,11 +21,18 @@ class LikeManager: ObservableObject {
     /// 投稿の likesCount が基準のままなら押した結果を、変わっていれば（＝読み直して最新値が届いた）
     /// 投稿の値をそのまま出す。画面ごとに「読み直したら消す」場所を用意しなくてよく、
     /// 自分の +1 を二重に数えることもない（ultrareview bug_001）。
+    ///
+    /// ⚠️ 限界: 「基準と同じ数が届いた＝まだ読み直していない」とは限らない。数が一度動いて元に戻ると
+    ///    （5→6→5）基準と一致して、押した結果が出続ける。自分のいいね状態が変わった場合（別端末で外した等）は
+    ///    `checkLikeStatus` が `isLiked` の食い違いで捨てる。他の人の操作でちょうど基準に戻った場合までは
+    ///    見分けられない（投稿ごとの数を画面をまたいで共有する仕組みが要る）。
     struct LikeCountOverride: Equatable {
         /// 押したときに画面が持っていた Post.likesCount
         let baseCount: Int
         /// 表示する数字（押した直後は楽観的な値、書き込み成功後はサーバー値）
         let count: Int
+        /// 押した結果のいいね状態。サーバーの状態と食い違ったら、この数字はもう古い
+        let isLiked: Bool
     }
 
     /// いいね済みの投稿IDセット
@@ -92,7 +99,8 @@ class LikeManager: ObservableObject {
         }
         likeCountOverrides[postId] = LikeCountOverride(
             baseCount: post.likesCount,
-            count: displayedCount + (willLike ? 1 : -1)
+            count: displayedCount + (willLike ? 1 : -1),
+            isLiked: willLike
         )
 
         // Firestore に反映
@@ -106,7 +114,7 @@ class LikeManager: ObservableObject {
             }
             // 楽観的な ±1 をサーバーの数字で置き換える。
             // 既にその状態だった（サーバーは書かなかった）場合も、ここで正しい数字にそろう。
-            likeCountOverrides[postId] = LikeCountOverride(baseCount: post.likesCount, count: serverCount)
+            likeCountOverrides[postId] = LikeCountOverride(baseCount: post.likesCount, count: serverCount, isLiked: willLike)
         } catch {
             // エラー時にリバート
             if willLike {
@@ -132,9 +140,16 @@ class LikeManager: ObservableObject {
             //    問い合わせていない postId は触らないので、ページング追加読み込みでも既存状態は壊れない。
             likedPostIds.subtract(postIds)
             likedPostIds.formUnion(likedIds)
-            // ⚠️ 数字（likeCountOverrides）はここで消さない。
-            //    詳細画面は一覧を読んだ時点の古い Post で呼ぶので、消すと押した結果が古い数字に戻る（issue #145 ①）。
-            //    読み直した Post は likesCount が変わっているので、likeCount(for:) が自動で最新値に切り替える。
+            // ⚠️ 数字（likeCountOverrides）は、サーバーの状態と食い違うものだけ捨てる。
+            //    全部消すと、詳細画面（一覧を読んだ時点の古い Post で呼ぶ）で押した結果が古い数字に戻る（issue #145 ①）。
+            //    一方、押した向きとサーバーのいいね状態が食い違う投稿（別端末で外した等）の数字はもう古い。
+            //    数の一致だけでは見分けられない（5→6→5 で基準と同じ数が届く）ので、状態で見分けて捨てる。
+            //    書き込み中の投稿は、読んだ値が書き込み前のことがあるので触らない（成功時にそろえる）。
+            for postId in postIds where !inFlightPostIds.contains(postId) {
+                if let override = likeCountOverrides[postId], override.isLiked != likedIds.contains(postId) {
+                    likeCountOverrides.removeValue(forKey: postId)
+                }
+            }
         } catch {
             ErrorHandler.logError(error, context: "LikeManager.checkLikeStatus", userId: userId)
         }
