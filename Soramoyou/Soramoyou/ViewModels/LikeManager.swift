@@ -14,12 +14,36 @@ import Foundation
 /// `@EnvironmentObject` として全画面で共有する。
 @MainActor
 class LikeManager: ObservableObject {
+    /// 押した結果の数字を「どの likesCount の投稿で押したか」と組で覚えておく ⭐️
+    ///
+    /// 画面が持っている `Post.likesCount` は一覧を読んだ時点の値のまま更新されない（issue #145 ①）。
+    /// そこで押したときの `Post.likesCount`（基準）と押した結果の数字を組で持ち、
+    /// 投稿の likesCount が基準のままなら押した結果を、変わっていれば（＝読み直して最新値が届いた）
+    /// 投稿の値をそのまま出す。画面ごとに「読み直したら消す」場所を用意しなくてよく、
+    /// 自分の +1 を二重に数えることもない（ultrareview bug_001）。
+    ///
+    /// ⚠️ 限界: 「基準と同じ数が届いた＝まだ読み直していない」とは限らない。数が一度動いて元に戻ると
+    ///    （5→6→5）基準と一致して、押した結果が出続ける。自分のいいね状態が変わった場合（別端末で外した等）は
+    ///    `checkLikeStatus` が `isLiked` の食い違いで捨てる。他の人の操作でちょうど基準に戻った場合までは
+    ///    見分けられない（投稿ごとの数を画面をまたいで共有する仕組みが要る）。
+    struct LikeCountOverride: Equatable {
+        /// 押したときに画面が持っていた Post.likesCount
+        let baseCount: Int
+        /// 表示する数字（押した直後は楽観的な値、書き込み成功後はサーバー値）
+        let count: Int
+        /// 押した結果のいいね状態。サーバーの状態と食い違ったら、この数字はもう古い
+        let isLiked: Bool
+    }
+
     /// いいね済みの投稿IDセット
     @Published private(set) var likedPostIds: Set<String> = []
-    /// ローカルでのいいねカウント調整値（postId -> 差分）
-    @Published private(set) var likeCountAdjustments: [String: Int] = [:]
+    /// 押した結果の数字（postId -> 基準と数字）
+    @Published private(set) var likeCountOverrides: [String: LikeCountOverride] = [:]
     /// ログインプロンプト表示フラグ
     @Published var showLoginPrompt = false
+
+    /// 書き込み中の投稿ID（処理中の連打を受け付けないため）
+    private var inFlightPostIds: Set<String> = []
 
     private let firestoreService: FirestoreServiceProtocol
     private let authService: AuthServiceProtocol
@@ -35,10 +59,14 @@ class LikeManager: ObservableObject {
         likedPostIds.contains(postId)
     }
 
-    /// 投稿のいいね数を取得（ローカル調整値を含む）
+    /// 投稿のいいね数を取得（押した結果の数字を含む）
     func likeCount(for post: Post) -> Int {
-        let adjustment = likeCountAdjustments[post.id] ?? 0
-        return max(0, post.likesCount + adjustment)
+        // 投稿の likesCount が押したときのままなら、押した結果を出す。
+        // 変わっていれば読み直した最新値なので、そちらを信じる（自分の分も含まれている）。
+        if let override = likeCountOverrides[post.id], override.baseCount == post.likesCount {
+            return max(0, override.count)
+        }
+        return max(0, post.likesCount)
     }
 
     /// いいねをトグル（オプティミスティックUI）
@@ -49,33 +77,52 @@ class LikeManager: ObservableObject {
         }
 
         let postId = post.id
-        let wasLiked = likedPostIds.contains(postId)
+        // ⚠️ 書き込み中の投稿への連打は受け付けない。
+        //    「つける／外す」を指定して書く方式では、2 つの書き込みがサーバーで逆順に確定すると
+        //    画面（最後に押した状態）とサーバーが食い違う。1 投稿につき書き込みは 1 本ずつにする。
+        guard !inFlightPostIds.contains(postId) else { return }
+        inFlightPostIds.insert(postId)
+        defer { inFlightPostIds.remove(postId) }
 
-        // オプティミスティック更新
-        if wasLiked {
-            likedPostIds.remove(postId)
-            likeCountAdjustments[postId, default: 0] -= 1
-        } else {
+        // 「押した結果どうなってほしいか」を先に決める（FavoriteManager と同じ）。
+        // サーバー側トグルにしないので、手元の状態が古くても
+        // （ギャラリー系の画面でいいね済みが空のハートで出ていても）押した意図どおりに収束する（issue #145 ②）。
+        let willLike = !likedPostIds.contains(postId)
+        let previousOverride = likeCountOverrides[postId]
+        let displayedCount = likeCount(for: post)
+
+        // オプティミスティック更新（タップに即座に反応させる）
+        if willLike {
             likedPostIds.insert(postId)
-            likeCountAdjustments[postId, default: 0] += 1
+        } else {
+            likedPostIds.remove(postId)
         }
+        likeCountOverrides[postId] = LikeCountOverride(
+            baseCount: post.likesCount,
+            count: displayedCount + (willLike ? 1 : -1),
+            isLiked: willLike
+        )
 
         // Firestore に反映
         do {
-            _ = try await firestoreService.toggleLike(postId: postId, userId: userId)
-            // サーバー側で likesCount が更新済みのため、ローカル調整値は用済み。
-            // これを残すと次回 pull-to-refresh で Post.likesCount（サーバー最新値）+ adjustment となり
-            // 二重カウントされる（ultrareview bug_001）。
-            likeCountAdjustments.removeValue(forKey: postId)
-        } catch {
-            // エラー時にリバート
-            if wasLiked {
+            let serverCount = try await firestoreService.setLike(postId: postId, userId: userId, isLiked: willLike)
+            // 成功した時点でサーバーは「押した意図どおり」の状態。途中で状態の読み直しが挟まっても、ここでそろえる。
+            if willLike {
                 likedPostIds.insert(postId)
-                likeCountAdjustments[postId, default: 0] += 1
             } else {
                 likedPostIds.remove(postId)
-                likeCountAdjustments[postId, default: 0] -= 1
             }
+            // 楽観的な ±1 をサーバーの数字で置き換える。
+            // 既にその状態だった（サーバーは書かなかった）場合も、ここで正しい数字にそろう。
+            likeCountOverrides[postId] = LikeCountOverride(baseCount: post.likesCount, count: serverCount, isLiked: willLike)
+        } catch {
+            // エラー時にリバート
+            if willLike {
+                likedPostIds.remove(postId)
+            } else {
+                likedPostIds.insert(postId)
+            }
+            likeCountOverrides[postId] = previousOverride
             ErrorHandler.logError(error, context: "LikeManager.toggleLike", userId: userId)
         }
     }
@@ -88,12 +135,20 @@ class LikeManager: ObservableObject {
 
         do {
             let likedIds = try await firestoreService.batchCheckLikeStatus(postIds: postIds, userId: userId)
-            // 既存のセットにマージ（ページネーションで追加読み込み時に上書きしない）
+            // ⚠️ 問い合わせた範囲だけサーバー値で上書きする（FavoriteManager と同じ subtract → formUnion）。
+            //    formUnion だけだと、別端末で外したいいねがピンクのまま残る。
+            //    問い合わせていない postId は触らないので、ページング追加読み込みでも既存状態は壊れない。
+            likedPostIds.subtract(postIds)
             likedPostIds.formUnion(likedIds)
-            // サーバー最新値が Post.likesCount として渡ってくる前提のため、
-            // refresh 対象の postId に残っている調整値は古い（二重カウント源）。破棄する。
-            for postId in postIds {
-                likeCountAdjustments.removeValue(forKey: postId)
+            // ⚠️ 数字（likeCountOverrides）は、サーバーの状態と食い違うものだけ捨てる。
+            //    全部消すと、詳細画面（一覧を読んだ時点の古い Post で呼ぶ）で押した結果が古い数字に戻る（issue #145 ①）。
+            //    一方、押した向きとサーバーのいいね状態が食い違う投稿（別端末で外した等）の数字はもう古い。
+            //    数の一致だけでは見分けられない（5→6→5 で基準と同じ数が届く）ので、状態で見分けて捨てる。
+            //    書き込み中の投稿は、読んだ値が書き込み前のことがあるので触らない（成功時にそろえる）。
+            for postId in postIds where !inFlightPostIds.contains(postId) {
+                if let override = likeCountOverrides[postId], override.isLiked != likedIds.contains(postId) {
+                    likeCountOverrides.removeValue(forKey: postId)
+                }
             }
         } catch {
             ErrorHandler.logError(error, context: "LikeManager.checkLikeStatus", userId: userId)

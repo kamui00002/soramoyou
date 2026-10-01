@@ -766,7 +766,8 @@ struct PostDetailView: View {
                         await commentViewModel.fetchComments(postId: post.id)
                     }
                     // ⚠️ この詳細は GalleryView など checkLikeStatus を呼ばない画面からも開かれる。
-                    //    1 read だけ足して、🔖 の表示が常にサーバー値と一致するようにする。⭐️
+                    //    1 read ずつ足して、♥ と 🔖 の表示が常にサーバー値と一致するようにする（♥ は issue #145）。⭐️
+                    Task { await likeManager.checkLikeStatus(for: [post]) }
                     Task { await favoriteManager.checkFavoriteStatus(for: [post]) }
                     // 「…」メニューの「おすすめの空に追加 / から外す」の表示用（読み込み済みなら何もしない）⭐️
                     Task { await RecommendationManager.shared.load() }
