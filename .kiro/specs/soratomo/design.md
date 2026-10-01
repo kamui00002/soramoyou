@@ -71,6 +71,7 @@
 | 13.8 | 既存のアクセス条件を変えない | ルールは追加だけ | — | — |
 | 13.9, 13.10 | 退会処理を変えずに完了させる | 変更なし | `deleteUserData` | — |
 | 14.1, 14.2, 14.3, 14.4, 14.5 | 計測 | SoratomoAnalytics | `SoratomoEvent` | — |
+| 14.6 | 「そらとも通知」の切り替えの計測 | SettingsViewModel | `prefKey(.soratomo)`が`soratomo`を返す | — |
 | 15.1, 15.2, 15.3 | ログに個人情報を出さない | SoratomoAnalytics・soratomo.js | 内部IDだけのログ | — |
 | 16.1, 16.2, 16.3 | 性能 | SoratomoImageEncoder・SoratomoImageStore・SoratomoSkyService | — | 投稿と通知 |
 | 16.4, 16.5 | VoiceOver | そらともの各画面 | `accessibilityLabel` | — |
@@ -241,7 +242,7 @@ sequenceDiagram
 
 - 投稿データは、2枚の画像のアップロードが両方成功した後にだけ作る（6.6）。画像の無い投稿は構造上できない（6.11、12.4）。
 - 保存のトランザクションが「通信の失敗」で終わり、結果が確定しないときは、画像を消す前にサーバーで投稿の有無を確かめる。確かめられなければ画像を残す（画像の無い投稿よりも、取り残しの画像を選ぶ）。
-- バックグラウンドへ移ったときは、変換中とアップロード中なら中止して後始末し、失敗として扱う。保存のトランザクションを送った後は中止せず、結果を待つ（6.11）。
+- バックグラウンドへ移ったときは、`beginBackgroundTask`の中で変換・アップロード・保存を続ける。猶予が切れたとき（expiration handler）だけ、変換中とアップロード中なら中止して後始末し、失敗（`backgroundExpired`）として扱う。保存のトランザクションを送った後は中止せず、結果を待つ（6.11）。
 
 ### 通知のタップ
 
@@ -279,14 +280,15 @@ stateDiagram-v2
     Encoding --> Uploading
     Uploading --> Saving
     Saving --> Done
-    Encoding --> Failed
-    Uploading --> Failed
+    Encoding --> Failed: 失敗または猶予切れ
+    Uploading --> Failed: 失敗または猶予切れ
     Saving --> Failed
     Failed --> Prechecking: 再試行
     Done --> [*]
 ```
 
 - `Failed`と`Ready`は、選んだ写真とキャプションを保持する（6.10、6.12）。再試行は新しい投稿IDで行う（Storageの上書きを許さないため）。
+- バックグラウンドへ移っただけでは`Failed`にしない。`Encoding`と`Uploading`から`Failed`へ移るのは、処理の失敗か、`beginBackgroundTask`の猶予切れのときだけ（「投稿と通知」の箇条書きと同じ扱い）。
 
 ## Components and Interfaces
 
@@ -412,6 +414,7 @@ final class SoratomoRouter: ObservableObject {
 **Implementation Notes**
 - Integration: ルーターへの差し込みは`GoldenHourNotificationManager`の1行、`ContentView`の状態確定の通知、`MainTabView`のカバー、`HomeView`のツールバーの4か所。
 - Risks: タブの中で別のモーダルが表示中だと、カバーを出せない。保留の行き先を残し、次にタブの画面が表示されたときに再び試みる。実機で確かめる。
+- Risks: 逆の順番もある。通知のタップで起動し、そらともの画面が先に出たとする。その後でWhat's New（`MainTabView.maybeShowWhatsNew`、起動から1.5秒後）が外側の階層から出ようとすると、表示は失敗する。この起動では既読にならず、What's Newは次回の起動で出る。機能フラグの内側の話で影響は小さいので、設計では待ち合わせを足さず、実機で挙動を確かめる。
 
 #### SoratomoNotificationPrimer
 
@@ -677,7 +680,7 @@ final class SoratomoProfileStore: ObservableObject {
 
 #### SoratomoTextRules
 
-- 文字数はUnicodeのコードポイント数（`unicodeScalars.count`）で数える。Functionsも同じ数え方にする（`Array.from(s).length`）。
+- 文字数はUnicodeのコードポイント数（`unicodeScalars.count`）で数える。Functionsも同じ数え方にする（`Array.from(s).length`）。キャプションだけは、ルールの`size()`の単位が分かるまで確定しない。UTF-16の単位なら`utf16.count`に変える（「要確認」の1）。
 - グループ名は前後の空白を除いて1〜30文字、表示名は1〜20文字、キャプションは改行（`CharacterSet.newlines`）を除いて0〜100文字。
 - キャプションが100文字を超える間は、確定の操作を無効にして上限を示す（6.4）。
 
@@ -703,16 +706,24 @@ enum SoratomoTextRules {
 **Contracts**: Service
 
 ```swift
-enum SoratomoCreateFailReason: String { case userLimit = "user_limit", invalidName = "invalid_name", network, unknown }
+enum SoratomoCreateFailReason: String {
+    case userLimit = "user_limit", invalidName = "invalid_name", network, flagOff = "flag_off", unknown
+}
 enum SoratomoJoinFailReason: String {
     case invalidFormat = "invalid_format", notFound = "not_found", groupFull = "group_full"
-    case userLimit = "user_limit", network, unknown
+    case userLimit = "user_limit", network, flagOff = "flag_off", unknown
 }
-enum SoratomoPostFailStage: String { case image, upload, save }
+enum SoratomoPostFailStage: String { case precheck, image, upload, save }
 enum SoratomoPostFailReason: String {
+    case offline, dailyLimit = "daily_limit"
     case network, unreadable, tooLarge = "too_large", permission, timeout, background, unknown
 }
 enum SoratomoInviteShareMethod: String { case shareSheet = "share_sheet", copy }
+enum SoratomoRegenerateFailReason: String { case notOwner = "not_owner", network, unknown }
+enum SoratomoImageCleanup: String { case deleted, failed }
+enum SoratomoDeleteFailReason: String { case network, unknown }
+enum SoratomoDisplayNameTrigger: String { case create, join }
+enum SoratomoDisplayNameFailReason: String { case invalidLength = "invalid_length", network, unknown }
 
 enum SoratomoEvent {
     case opened(groupCount: Int)
@@ -725,6 +736,13 @@ enum SoratomoEvent {
     case postFailed(stage: SoratomoPostFailStage, reason: SoratomoPostFailReason)
     case notificationPromptResult(choice: SoratomoPrimerChoice, granted: Bool)
     case notificationOpened(SoratomoNotificationOpenResult)   // type は "post_created" に固定
+    case inviteCodeRegenerated
+    case inviteRegenerateFailed(SoratomoRegenerateFailReason)
+    case postDeleted(imageCleanup: SoratomoImageCleanup)
+    case postDeleteFailed(SoratomoDeleteFailReason)
+    case displayNameSaved(trigger: SoratomoDisplayNameTrigger)
+    case displayNameFailed(SoratomoDisplayNameFailReason)
+    case membersViewed(memberCount: Int)
 }
 
 enum SoratomoScreen: String {
@@ -732,6 +750,8 @@ enum SoratomoScreen: String {
     case timeline = "そらともタイムライン"
     case compose = "そらとも投稿"
     case invite = "そらとも招待"
+    case members = "そらともメンバー一覧"
+    case skyDetail = "そらとも投稿詳細"
 }
 
 enum SoratomoAnalytics {
@@ -740,7 +760,7 @@ enum SoratomoAnalytics {
 }
 ```
 - イベント名とパラメータ名は要件14の表のとおり。文字列のパラメータは列挙型の`rawValue`だけで、グループ名・表示名・キャプション・招待コード・トークンを渡す口が無い（14.4）。
-- 要件14の表に無かったイベントは「要件への追加の提案」に分けた。2026-10-01に承認され、要件14に反映した。
+- 要件14の表に無かったイベントは「要件への追加の提案」に分けた。2026-10-01に承認され、要件14に反映した。上の型にも反映済み（要件14の表と1対1で対応する）。
 
 ### iOS: 画面と状態（概要）
 
@@ -754,11 +774,11 @@ enum SoratomoAnalytics {
 | SoratomoInviteView・ViewModel | コードの表示・共有・コピー・再発行 | 3.4, 3.5, 3.6, 3.7, 3.8, 3.11, 3.12 | 再発行はオーナーだけ。共有文の4行は要件3の5のまま。App StoreのURLは定数 |
 | SoratomoTimelineView・ViewModel | 日付の区切り・20件ずつ・更新・空の案内・削除 | 8.1, 8.2, 8.3, 8.6, 8.10, 8.11, 8.12, 8.13, 8.15, 8.16, 8.19, 8.20, 12.1 | 先頭にオフラインの表示。削除は確認の後 |
 | SoratomoDaySection | `今日`・`昨日`・`M月d日`・`yyyy年M月d日`の見出し | 8.4, 8.5 | 端末のタイムゾーンと`Calendar.current`。純関数でテストする |
-| SoratomoComposeView・ViewModel | 写真1枚・プレビュー・キャプション・進捗・再試行 | 6.1, 6.2, 6.3, 6.4, 6.5, 6.7, 6.8, 6.9, 6.10, 6.11, 6.12, 7.5 | `beginBackgroundTask`で送信を守る |
+| SoratomoComposeView・ViewModel | 写真1枚・プレビュー・キャプション・進捗・再試行 | 6.1, 6.2, 6.3, 6.4, 6.5, 6.7, 6.8, 6.9, 6.10, 6.11, 6.12, 7.5 | `beginBackgroundTask`で送信を続け、猶予切れのときだけ中止して後始末し、失敗として扱う |
 | SoratomoPhotoPicker | 1枚だけ選ぶ | 6.1 | `PHPickerConfiguration()`（ライブラリへのアクセス権が不要な形）。元のバイト列を返す |
 | SoratomoSkyDetailView | 表示用画像の拡大とキャプションの全文 | 8.9 | サムネイルを先に出し、表示用画像に置き換える |
 | SoratomoMembersView・ViewModel | メンバー全員とオーナーの印 | 19.1, 19.2, 19.3 | オーナーを先頭、その後は参加順 |
-| SettingsView・SettingsViewModel（変更） | 「そらとも通知」の行 | 10.14, 10.15, 10.16, 10.17 | ゲートが有効のときだけ出す。`PushPreference`に`.soratomo`を足し、保存先だけを`setNotifySoratomo`へ分ける |
+| SettingsView・SettingsViewModel（変更） | 「そらとも通知」の行 | 10.14, 10.15, 10.16, 10.17, 14.6 | ゲートが有効のときだけ出す。`PushPreference`に`.soratomo`を足し、保存先だけを`setNotifySoratomo`へ分ける。`prefKey(.soratomo)`は`soratomo`を返し、既存の3つの値は変えない |
 | User（変更） | `notifySoratomo: Bool?`を足す | 9.14, 10.16 | 読み取りだけ。`toFirestoreData()`では書かない |
 
 - VoiceOver: すべてのボタンにラベルを付ける（16.4）。投稿画像のラベルはキャプション、無ければ「{表示名}さんの空」（16.5）。
@@ -929,6 +949,7 @@ function classifyRecipient({ hasFlag, userData, posterId }) {}
 
 - `scripts/set-soratomo-beta-claim.js <uid> [--revoke]`を新しく作る。Admin SDKで`getUser(uid).customClaims`を読み、`soratomoBeta`だけを足すか消して、合成した結果を`setCustomUserClaims`で書く。`setCustomUserClaims`は既存のクレームを上書きするため、合成しないと`skyMotionBeta`が消える。
 - 認証はApplication Default Credentials（`gcloud auth application-default login`）を使う。鍵ファイルはリポジトリに置かない。出力はuidと付与後のクレーム名だけにする。
+- ADCでAdmin SDKのAuthを呼ぶと、quota projectの設定を求められることがある。手順書には`gcloud auth application-default set-quota-project soramoyou-ios`を書き添える。
 - 付与されたテスターは、アプリの次の起動でトークンが更新されて入口が出る。
 
 ## Data Models
@@ -1022,12 +1043,20 @@ enum SoratomoError: Error, Equatable {
 | `notFound` | 「招待コードが見つかりません」 | `not_found` |
 | `groupFull` | 「このグループは満員です（20人）」 | `group_full` |
 | `userLimit` | 「参加できるグループは10個までです」 | `user_limit` |
-| `dailyLimit` | 「1日に投稿できるのは1つのグループにつき20件までです」 | 追加の提案を参照 |
+| `dailyLimit` | 「1日に投稿できるのは1つのグループにつき20件までです」 | `daily_limit` |
 | `notMember` | 「グループを開けませんでした」 | `not_member` |
 | `imageUnreadable` | 「この写真は使えません。別の写真を選んでください」 | `unreadable` |
 | `imageTooLarge` | 「この写真は大きすぎて送れません」 | `too_large` |
-| `displayNameInvalid` | 「表示名は1〜20文字で入力してください」 | 追加の提案を参照 |
-| `flagOff`・`notOwner`・`permissionDenied`・`unknown` | 「うまくいきませんでした。時間をおいてもう一度お試しください」 | `unknown` |
+| `displayNameInvalid` | 「表示名は1〜20文字で入力してください」 | `invalid_length` |
+| `flagOff` | 「うまくいきませんでした。時間をおいてもう一度お試しください」 | `flag_off`（作成・参加） |
+| `notOwner` | 同上 | `not_owner`（再発行） |
+| `permissionDenied` | 同上 | `permission`（投稿） |
+| `uploadTimeout` | 同上 | `timeout`（投稿） |
+| `backgroundExpired` | 同上 | `background`（投稿） |
+| `unknown` | 同上 | `unknown` |
+
+- 投稿の`soratomo_post_failed`では、事前確認で止めた失敗を`stage=precheck`にする。通信が無いときは`reason=offline`、日次件数の上限は`reason=daily_limit`（6.12、12.2）。事前確認を通った後の`network`は、失敗した段階（`image`・`upload`・`save`）の`stage`で`reason=network`とする。
+- 計測の理由は、イベントごとに要件14の表で定義された値だけを送る。表に無い組み合わせ（たとえば投稿の`flagOff`）は`unknown`にする。
 
 - 再発行の失敗は「招待コードを再発行できませんでした」、削除の失敗は「削除できませんでした」、表示名の保存の失敗は「表示名を保存できませんでした」を、操作に合わせて出す（3.12、8.19、18.5）。
 - **未確定の失敗**: トランザクションが`unavailable`や`deadlineExceeded`で終わったときは、`skyExistsOnServer`で確かめてから成否を決める。投稿の保存では、確かめられなければ画像を消さない。削除では、確かめられなければ投稿を残したまま失敗を出す。
@@ -1082,6 +1111,7 @@ enum SoratomoError: Error, Equatable {
 - 表示名が空のアカウントで、作成の前に表示名を求められ、保存後にタイムラインと通知に名前が出ること。
 - 機内モードで、作成・参加・投稿・削除・表示名の保存が始まらないか失敗として出ること。機内モードを解いても後から実行されないこと。
 - 既存の通知（いいね・コメント・フォロー・ゴールデンアワー）のタップの挙動が変わらないこと。
+- What's Newが未読の状態で、そらともの通知のタップからコールドスタートしたとき、What's Newがその起動か次回の起動に1回出て既読になること（SoratomoRouterのRisks）。
 - そらともに参加・投稿したアカウントで、既存の退会処理がエラーなく終わること（13.9）。
 
 ### Performance
@@ -1137,7 +1167,7 @@ flowchart LR
 
 | # | 事項 | 確かめ方 | 結果ごとの扱い |
 |---|------|----------|----------------|
-| 1 | ルールの`string.size()`の単位 | 絵文字と結合文字を含む100文字のキャプションをRules test APIで評価する | 拒否されたら、ルールの上限を200にする。長さの上限はアプリとFunctionsのコードポイント数で保つ |
+| 1 | ルールの`string.size()`の単位 | 絵文字と結合文字を含む100文字のキャプションをRules test APIで評価する | 拒否されたら（`size()`がUTF-16の単位で数えると分かったら）、ルールの上限は100のままにし、アプリのキャプションの数え方を`utf16.count`に変えて上限をそろえる（残り文字数の表示も同じ数え方）。絵文字を含むと、見た目の文字数が100未満でも上限に達する。`skies`はアプリが直接書き、Functionsはキャプションを見ないため、サーバー側の検証はルールの`size()`だけが担う（11.11）。11.11のテストの許可側は「UTF-16で100単位」に変える。この代替案も、100単位が通り101単位が拒否されることを先に確かめてから採用する（陽性対照） |
 | 2 | Storageのルールの`firestore.exists`をテストで評価できるか | Rules test APIの`functionMocks`で指定する | 使えなければ、エミュレーターでAdmin SDKから種データを入れる。どちらでも許可と拒否の両方を観測する |
 | 3 | アップロード時のダウンロードトークンの自動付与 | Admin SDKでオブジェクトのメタデータを読む | 付くなら残余リスクとして受け入れる（Security Considerations）。付かなければ対応しない |
 | 4 | Callableの公開呼び出しの許可 | 初回デプロイと未ログインの呼び出し | 組織のポリシーで失敗したら、呼び出し元の設定を見直す |
