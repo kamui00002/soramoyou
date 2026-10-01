@@ -212,11 +212,11 @@ graph TB
 | ビルド | Android Gradle Plugin 9.4.0／Gradle 9.6.0／JDK 17 | `android/`のマルチモジュールビルド | 2026-10-01に公式のリリースノートで確認 |
 | 言語 | Kotlin 2.4.20（AGPに組み込まれたKotlinサポートを使用） | 全コード | タスク1.1で確定（2026-10-02）。AGP 9.4が同梱する2.2.10から、ルートで読み込んだ2.4.20へ引き上げられることを`buildEnvironment`で確認。AGP・Gradleは同じ互換の組の修正版（9.4.1／9.6.1）を使用 |
 | UI | Jetpack Compose（Compose BOM 2026.09.00、Material 3 1.4.0） | 全画面、ダークテーマへの追従 | BOMの対応表で確認 |
-| ナビゲーション | Navigation Compose（型安全なルート） | 画面遷移 | 版数は着手時に確定（未確認） |
+| ナビゲーション | Navigation Compose（型安全なルート） | 画面遷移 | 2.10.2（タスク1.2で確定、2026-10-02。compileSdk 37以上が必要） |
 | DI | 手動DI（`AppContainer`） | 依存の組み立て | Hiltは採用しません（`research.md`） |
-| 画像表示 | Coil 3 | フィード・詳細の画像読み込み、ログアウト時のキャッシュ消去 | 版数は未確認 |
+| 画像表示 | Coil 3 | フィード・詳細の画像読み込み、ログアウト時のキャッシュ消去 | 3.6.3（`coil-compose`と`coil-network-okhttp`。タスク1.2で確定、2026-10-02。compileSdk 37以上が必要） |
 | Firebase | Firebase Android BoM 34.19.0（auth・firestore・storage・analytics・crashlytics） | バックエンドへの接続 | KTXモジュールはBoM 34.0.0で廃止済み。**firebase-messagingは入れません** |
-| 分析 | posthog-android 3.x | PostHogへの送信 | API 23以上 |
+| 分析 | posthog-android 3.71.4（タスク1.2で確定、2026-10-02） | PostHogへの送信 | API 23以上 |
 | 広告 | GMA Next-Gen SDK 1.5.0とUMP SDK | バナー広告・同意の取得 | Legacy SDK（25.5.0）は保守モード。Next-GenはminSdk 24・compileSdk 35以上が必要 |
 | 画像メタデータ | androidx.exifinterface | 撮影日時と向きの読み取り | — |
 | テスト | JUnit（`:contract`・`:app`のJVMテスト）、Firebase Local Emulator Suite（firebase-tools） | 単体テスト・ルールとの結合テスト | エミュレータはリポジトリの`firestore.rules`・`storage.rules`をそのまま読み込みます |

@@ -1,15 +1,75 @@
 # ⭐️ 版数の一元管理（バージョンカタログ）
 # 版数はここにだけ書き、各モジュールの build.gradle.kts からは別名（libs.xxx）で参照する。
-# ライブラリの登録はタスク 1.2 で行う。
+# 版数は `+` を使わず固定する。各版数は Google Maven / Maven Central の maven-metadata.xml で
+# 実在を確かめた、2026-10-02 時点の最新の安定版（alpha・beta・rc を除く）である（タスク 1.2）。
 
 [versions]
 # AGP 9.4 は Gradle 9.6.0 以上・JDK 17 以上が必要（公式リリースノートで 2026-10-01 に確認）。
 # 設計書の 9.4.0 / 9.6.0 と同じ組み合わせの、不具合修正だけの版（9.4.1 / 9.6.1）を使う。
+# AGP 9.4 が扱える API レベルの上限は 37（公式リリースノートで 2026-10-02 に確認）。
 agp = "9.4.1"
 # AGP 9.4 が同梱する Kotlin は 2.2.10。ライブラリが新しい Kotlin でコンパイルされていても
 # 読めるように、2026-10-01 時点の最新の安定版に上げる（Gradle 9.6 は対応範囲 7.6.3〜9.7.0 に入る）。
+# Compose コンパイラと kotlinx-serialization のプラグインも、この版にそろえる。
 kotlin = "2.4.20"
+
+# Firebase の各ライブラリの版は BoM で一括して決める（設計書で指定済み）。
+# KTX モジュールは BoM 34.0.0 で廃止済みなので使わない。
+firebaseBom = "34.19.0"
+# Firebase の Gradle プラグイン（google-services.json の読み込み・Crashlytics のビルド ID とマッピングファイル）。
+# 版数は Crashlytics の公式の導入手順（2026-10-02 取得）に書かれている版と同じ。
+googleServices = "4.5.0"
+firebaseCrashlyticsGradle = "3.0.8"
+
+# Compose の各ライブラリの版は BOM で一括して決める（設計書で指定済み。ui 1.12.1・material3 1.4.0）。
+# ⚠️ Compose 1.12 は compileSdk 37 以上が必要（:app の compileSdk の注記を参照）。
+composeBom = "2026.09.00"
+# Compose の BOM に入っていない AndroidX のライブラリ
+activityCompose = "1.13.0"
+lifecycle = "2.11.0"
+# 型安全なルート（@Serializable のクラスでルートを表す）を使う
+navigation = "2.10.2"
+
+# 画像の表示（Coil 3）。Coil 3 は既定ではネットワークの画像を読めないため、OkHttp の部品も同じ版で入れる
+coil = "3.6.3"
+# PostHog（iOS 版と同じプロジェクトへ送る）
+posthog = "3.71.4"
+
+[libraries]
+# Firebase（版数は BoM が決める。firebase-messaging は入れない：要件 2.10）
+firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
+firebase-auth = { group = "com.google.firebase", name = "firebase-auth" }
+firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore" }
+firebase-storage = { group = "com.google.firebase", name = "firebase-storage" }
+firebase-analytics = { group = "com.google.firebase", name = "firebase-analytics" }
+firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
+
+# Compose（版数は BOM が決める）
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+
+# Compose と組み合わせる AndroidX のライブラリ
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation" }
+
+# 画像の表示
+coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
+coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
+
+# 分析
+posthog-android = { group = "com.posthog", name = "posthog-android", version.ref = "posthog" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+# Kotlin 2.0 以降の Compose コンパイラ（版数は Kotlin と同じ）
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+# 型安全なルートの @Serializable に必要。登録だけしておき、:app への適用はルートを書くタスク 5 で行う
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+firebase-crashlytics = { id = "com.google.firebase.crashlytics", version.ref = "firebaseCrashlyticsGradle" }
