@@ -142,7 +142,8 @@ protocol FirestoreServiceProtocol {
     func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> [Favorite]
 
     // Comments
-    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?)
+    /// コメントを新しい順に 1 ページ返す。`hasMore` は読んだ件数で判定する（壊れた 1 件をスキップしても続きを見失わない）
+    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?, hasMore: Bool)
     func addComment(postId: String, userId: String, content: String, authorName: String?, authorPhotoURL: String?) async throws -> Comment
     func deleteComment(commentId: String, postId: String, userId: String) async throws
 
@@ -537,9 +538,8 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "updatedAt", descending: true)
                 .getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Draft(from: document.data())
-            }
+            // 壊れた下書きは 1 件だけスキップする（パスとエラーは FirestoreDocumentDecoder が記録する）
+            return FirestoreDocumentDecoder.decodeDrafts(snapshot.documents)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -1705,7 +1705,8 @@ class FirestoreService: FirestoreServiceProtocol {
     // MARK: - Comments
 
     /// コメント一覧を取得（ページネーション対応）
-    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?) {
+    /// - Returns: `hasMore` は「読んだドキュメントが 1 ページ分あったか」。変換できた件数ではない
+    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?, hasMore: Bool) {
         do {
             var query: Query = commentsCollection
                 .whereField("postId", isEqualTo: postId)
@@ -1718,11 +1719,17 @@ class FirestoreService: FirestoreServiceProtocol {
 
             let snapshot = try await query.getDocuments()
 
-            let comments: [Comment] = try snapshot.documents.map { document in
-                try Comment(from: document.data(), documentId: document.documentID)
-            }
+            // 壊れたコメントは 1 件だけスキップする（パスとエラーは FirestoreDocumentDecoder が記録する）
+            let comments = FirestoreDocumentDecoder.decodeComments(snapshot.documents)
 
-            return (comments: comments, lastDocument: snapshot.documents.last)
+            // カーソルと「続きがあるか」は、変換に失敗した分も含めた「実際に読んだ件数」で決める。
+            // 変換後の件数で決めると、壊れたコメントが 1 件あるだけで
+            // 「最後のページ」と誤判定し、それより古いコメントに辿り着けなくなる。
+            return (
+                comments: comments,
+                lastDocument: snapshot.documents.last,
+                hasMore: snapshot.documents.count >= limit
+            )
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
