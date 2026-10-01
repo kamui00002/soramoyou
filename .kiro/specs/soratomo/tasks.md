@@ -74,7 +74,7 @@
 
 - [ ] 3. Storageの要確認を先に片付ける
 
-- [ ] 3.1 Storageのルールの `firestore.exists` をテストで評価する方式を決める（要確認 #2）
+- [x] 3.1 Storageのルールの `firestore.exists` をテストで評価する方式を決める（要確認 #2）
   - まずRules test APIで、Storageのルールの `firestore.exists` をモック（functionMocks）できるかを、最小のルールで試す
   - モックできなければ、エミュレーター（Firestore・Storage・Auth）で評価する方式に切り替える。種データはAdmin SDKから同じプロジェクトID（soramoyou-ios）で入れる（rules-unit-testingで入れた種データがStorageのルールから見えない既知の事例を避けるため）
   - どちらの方式でも、「メンバーなら通り、非メンバーなら拒否される」の両方を観測できるまで「検証済み」としない

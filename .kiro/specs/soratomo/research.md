@@ -168,6 +168,15 @@
    - 最終版のルールでの結果: コードポイント100（絵文字・結合文字入り）・絵文字50＋aは許可。コードポイント101・e＋U+0301×60・空文字・数値・改行類8種（LF・LFが2つ・CR・CRLF・U+0085・U+2028・U+2029・末尾のLF）は拒否。キャプション無しとタブは許可。
    - 陽性対照: 条件を外したルールでは、101文字・空文字・改行類8種の計9件が許可に変わった。
 2. **Storageのルールの`firestore.exists`をテストで評価できるか**: Rules test APIの`functionMocks`で指定できるか。できなければ、エミュレーターでAdmin SDKから種データを入れる方式に切り替える（#6803の回避）。各項目で許可と拒否の両方を観測するまで「検証済み」としない。
+   - **結果（2026-10-02・検証済み）**: Rules test APIで評価できる。`service firebase.storage`のルールをそのまま渡せ、`firestore.exists`は`functionMocks`でモックできる。4.2はFirestoreと同じRules test APIの方式で書き、Storageのルールのテストにエミュレーターは使わない。評価だけで、本番のルールとデータには触れていない。
+   - モックの書き方: `function`は`firestore.exists`にする。`args`は`[{"exactValue": "/databases/(default)/documents/soratomoGroups/g1/members/<uid>"}]`にする。`result`は`{"value": true}`か`{"value": false}`。評価結果の`functionCalls`には`%28default%29`と表示されるが、モックは`(default)`のままで一致した（エンコードした形に直さない）。関数名を`exists`にしたモックは効かない。
+   - 観測（最小のルール`allow read: if request.auth != null && firestore.exists(メンバーの文書)`）: メンバー（モックがtrue）は許可、非メンバー（モックがfalse）は拒否。拒否はエラーではなく条件によるもの。
+   - 陽性対照: 読み取りのメンバー判定を外したルールでは、非メンバーが許可に変わった。モックが無いと`Function not found error`、引数のパスが違うモックだと`Service call error`になり、どちらもエラーで拒否される（本物のFirestoreは読みに行かない）。このため4.2でも、全ケースでモックを渡し、エラーで拒否されたケースは期待外れとして数える（`scripts/rules_test_soratomo.py`と同じ約束）。
+   - 要求の形: `path`は`/b/soramoyou-ios.firebasestorage.app/o/soratomo/{groupId}/{authorId}/{skyId}/{fileName}`、`method`は`get`・`create`・`delete`。保存は`request.resource`に`{"contentType": "image/jpeg", "size": 1572864}`の形で渡し、削除では渡さない。design.mdの案に近いルールで評価すると、上限ちょうど（1,572,864と204,800）は許可、1バイトの超過・PNG・他のファイル名・他人のパスは拒否、投稿者の削除（内容なし）は許可、ほかのメンバーの削除は拒否になった。
+   - 削除に内容の検査（`request.resource.size`）を混ぜた壊し方は、投稿者本人の削除が`Property resource is undefined`のエラーで拒否されて見つかった。見つけたのは許可を期待するケースで、拒否を期待するケース（ほかのメンバーの削除）は投稿者IDの判定で先に拒否されるため見つけられない。11.7の拒否側は、「エラーで拒否されたものは期待外れ」の約束で見る。
+   - クレームはStorageでも`request.auth.token.get('soratomoBeta', false)`で読む。直接読む（`token.soratomoBeta`）と、クレームの無い人の要求で`Property soratomoBeta is undefined`のエラーになる（Firestoreと同じ）。design.mdのセキュリティルールの節の`isSoratomoUser()`は直接読む形で書いてあるので、4.1ではFirestoreの実装と同じ`get`の形にする。
+   - 確かめられる範囲: ルールの判定の中身だけ。StorageからFirestoreを読む権限（IAMの付与）と、本物のメンバーの文書の読み取りは、この方式では確かめられない。4.3と15.1で確かめる。
+   - エミュレーター: tasks.mdのとおり、`firebase.json`に設定（Auth 9099・Firestore 8080・Storage 9199）を足した。起動の試しは7.3に回す。このMacにはJavaが無い（`/usr/libexec/java_home`が見つけられない）。FirestoreのエミュレーターはJavaで動くので、7.3では`JAVA_HOME`にAndroid Studio同梱のJDK（`/Applications/Android Studio.app/Contents/jbr/Contents/Home`）を指定する。起動には`--project soramoyou-ios`を付ける。
 3. **アップロード時のダウンロードトークンの自動付与**: クライアントSDKでアップロードした`soratomo/`のオブジェクトのメタデータに`firebaseStorageDownloadTokens`が付くかを、Admin SDKで読んで確かめる。
    - 付く場合: メンバーは読み取りの権限で`downloadURL()`を呼べるため、改造したアプリからトークン付きURLを作って外へ渡せる。これは、メンバーが画像を保存して渡すのと同じ程度の残余リスクで、v1では受け入れる。アプリは`downloadURL()`を呼ばず、URLを保存しない。投稿を削除すればURLも無効になる。公開前ゲートG2の検討時に、アップロード完了のトリガーでトークンを消す案を見直す。
    - 付かない場合: 追加の対応は要らない。
