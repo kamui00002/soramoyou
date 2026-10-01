@@ -200,7 +200,8 @@ struct GalleryDetailView: View {
                 await commentViewModel.fetchComments(postId: post.id)
             }
             // ⚠️ ギャラリーは一覧側で checkLikeStatus を呼んでいないため、
-            //    詳細で 1 read だけ足して 🔖 の表示をサーバー値に合わせる。⭐️
+            //    詳細で 1 read ずつ足して ♥ と 🔖 の表示をサーバー値に合わせる（♥ は issue #145）。⭐️
+            Task { await likeManager.checkLikeStatus(for: [post]) }
             Task { await favoriteManager.checkFavoriteStatus(for: [post]) }
             // 「…」メニューの「おすすめの空に追加 / から外す」の表示用（読み込み済みなら何もしない）⭐️
             Task { await RecommendationManager.shared.load() }

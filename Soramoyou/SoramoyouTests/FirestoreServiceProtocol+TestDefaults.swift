@@ -214,8 +214,8 @@ extension FirestoreServiceProtocol {
 
     // MARK: - Likes
 
-    func toggleLike(postId _: String, userId _: String) async throws -> Bool {
-        fatalError("MockFirestoreService.toggleLike は未実装です")
+    func setLike(postId _: String, userId _: String, isLiked _: Bool) async throws -> Int {
+        fatalError("MockFirestoreService.setLike は未実装です")
     }
 
     func checkLikeStatus(postId _: String, userId _: String) async throws -> Bool {

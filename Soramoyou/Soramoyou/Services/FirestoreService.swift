@@ -128,7 +128,8 @@ protocol FirestoreServiceProtocol {
     ) async throws -> [Post]
 
     // Likes
-    func toggleLike(postId: String, userId: String) async throws -> Bool
+    /// いいねの追加/解除を明示指定で書く（冪等。既にその状態なら書かない）。戻り値は書き込み後の likesCount
+    func setLike(postId: String, userId: String, isLiked: Bool) async throws -> Int
     func checkLikeStatus(postId: String, userId: String) async throws -> Bool
     func batchCheckLikeStatus(postIds: [String], userId: String) async throws -> Set<String>
 
@@ -1518,42 +1519,60 @@ class FirestoreService: FirestoreServiceProtocol {
 
     // MARK: - Likes
 
-    /// いいねをトグル（追加/削除）する
-    /// - Returns: トグル後のいいね状態（true = いいね済み）
-    func toggleLike(postId: String, userId: String) async throws -> Bool {
+    /// いいねの追加/解除を明示指定で書き込む ⭐️
+    ///
+    /// ⚠️ サーバー側トグル（あれば消す・なければ作る）にしないのは意図的（issue #145 ②）。
+    ///    ギャラリー系の画面ではいいね済みの投稿が空のハートで出ることがあり、
+    ///    トグルだとそこで押した「いいねする」がサーバーでは「外す」になってしまう。
+    ///    `setFavorite` と同じく、押した結果こうなってほしい状態へ収束させる（冪等）。
+    /// - Parameters:
+    ///   - postId: 対象の投稿ID
+    ///   - userId: 操作するユーザーID
+    ///   - isLiked: true で追加、false で解除
+    /// - Returns: 書き込み後の投稿の likesCount（サーバー値）。既にその状態なら書かずに今の値を返す
+    func setLike(postId: String, userId: String, isLiked: Bool) async throws -> Int {
         let likeDocId = Like.documentId(userId: userId, postId: postId)
         let likeRef = likesCollection.document(likeDocId)
         let postRef = postsCollection.document(postId)
 
         do {
             let result = try await db.runTransaction { transaction, errorPointer in
-                // いいねドキュメントの存在チェック
+                // ⚠️ トランザクションは「読み取りをすべて済ませてから書く」決まり。
+                //    いいねの有無と、戻り値に使う今の likesCount を先に読む。
                 let likeDoc: DocumentSnapshot
+                let postDoc: DocumentSnapshot
                 do {
                     likeDoc = try transaction.getDocument(likeRef)
+                    postDoc = try transaction.getDocument(postRef)
                 } catch let fetchError as NSError {
                     errorPointer?.pointee = fetchError
                     return nil
                 }
 
-                if likeDoc.exists {
-                    // いいね削除
-                    transaction.deleteDocument(likeRef)
-                    transaction.updateData(["likesCount": FieldValue.increment(Int64(-1))], forDocument: postRef)
-                    return NSNumber(value: false)
-                } else {
+                // Post の読み込み（`documentData["likesCount"] as? Int ?? 0`）と同じ解釈にそろえる
+                let currentCount = postDoc.data()?["likesCount"] as? Int ?? 0
+
+                if isLiked, !likeDoc.exists {
                     // いいね追加
                     let like = Like(userId: userId, postId: postId)
                     transaction.setData(like.toFirestoreData(), forDocument: likeRef)
                     transaction.updateData(["likesCount": FieldValue.increment(Int64(1))], forDocument: postRef)
-                    return NSNumber(value: true)
+                    return NSNumber(value: currentCount + 1)
+                } else if !isLiked, likeDoc.exists {
+                    // いいね削除
+                    transaction.deleteDocument(likeRef)
+                    transaction.updateData(["likesCount": FieldValue.increment(Int64(-1))], forDocument: postRef)
+                    return NSNumber(value: currentCount - 1)
+                } else {
+                    // 既に望む状態：何も書かない（数も動かさない）
+                    return NSNumber(value: currentCount)
                 }
             }
 
-            guard let isLiked = (result as? NSNumber)?.boolValue else {
+            guard let count = (result as? NSNumber)?.intValue else {
                 throw FirestoreServiceError.updateFailed(NSError(domain: "FirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "トランザクション結果の取得に失敗"]))
             }
-            return isLiked
+            return count
         } catch {
             throw FirestoreServiceError.updateFailed(error)
         }
@@ -1598,7 +1617,7 @@ class FirestoreService: FirestoreServiceProtocol {
 
     /// お気に入りの追加/解除を明示指定で書き込む
     ///
-    /// ⚠️ `toggleLike` のようなサーバー側トグルにしないのは意図的。
+    /// ⚠️ サーバー側トグルにしないのは意図的（いいねの `setLike` も同じ方式）。
     ///    ローカル状態が古くても「押した結果こうなってほしい」状態へ収束する（冪等）。
     /// - Parameters:
     ///   - postId: 対象の投稿ID（そのままドキュメントIDになる）

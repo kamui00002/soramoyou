@@ -6,7 +6,7 @@
 //  EnvironmentObjectとして注入し、PostCard・PostDetailView・GalleryDetailViewで使用
 //
 //  ⚠️ LikeManager と対になる存在だが、いいねとは別物のプライベート保存。
-//     通知を出さない・件数を公開しないため、カウント調整（likeCountAdjustments 相当）は持たない。
+//     通知を出さない・件数を公開しないため、カウント調整（LikeManager の likeCountOverrides 相当）は持たない。
 //
 
 import Foundation
