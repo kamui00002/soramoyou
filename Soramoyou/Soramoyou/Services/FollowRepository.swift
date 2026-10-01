@@ -40,20 +40,20 @@ protocol FollowRepositoryProtocol: Sendable {
     func isFollowing(_ targetUserId: String, by ownUserId: String) async throws -> Bool
 
     /// userId のフォロワー（userId をフォローしているユーザー）を新しい順にページング取得
-    /// - Returns: フォロー関係と、次ページ取得に使う最後のドキュメント
+    /// - Returns: フォロー関係・次ページ取得に使う最後のドキュメント・続きの有無
     func fetchFollowers(
         of userId: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?)
+    ) async throws -> FollowPage
 
     /// userId がフォロー中のユーザーを新しい順にページング取得
-    /// - Returns: フォロー関係と、次ページ取得に使う最後のドキュメント
+    /// - Returns: フォロー関係・次ページ取得に使う最後のドキュメント・続きの有無
     func fetchFollowing(
         of userId: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?)
+    ) async throws -> FollowPage
 
     /// 自分（ownUserId）のフォロワーから followerUserId を外す
     ///
@@ -158,7 +158,7 @@ final class FollowRepository: FollowRepositoryProtocol {
         of userId: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+    ) async throws -> FollowPage {
         try await fetchFollows(
             field: "followeeId",
             equalTo: userId,
@@ -171,7 +171,7 @@ final class FollowRepository: FollowRepositoryProtocol {
         of userId: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+    ) async throws -> FollowPage {
         try await fetchFollows(
             field: "followerId",
             equalTo: userId,
@@ -189,7 +189,7 @@ final class FollowRepository: FollowRepositoryProtocol {
         equalTo userId: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+    ) async throws -> FollowPage {
         var query: Query = followsCollection
             .whereField(field, isEqualTo: userId)
             .order(by: "createdAt", descending: true)
@@ -212,9 +212,10 @@ final class FollowRepository: FollowRepositoryProtocol {
             return nil
         }
 
-        // 次ページの起点は「デコード成否に関わらず実際に読んだ最後のドキュメント」。
-        // follows.last 由来にするとスキップした壊れたドキュメントで無限ループになる。
-        return (follows: follows, lastDocument: snapshot.documents.last)
+        // 次ページの起点と「続きがあるか」は、デコード成否に関わらず実際に読んだドキュメントで決める。
+        // follows.last 由来にするとスキップした壊れたドキュメントで無限ループになり、
+        // follows.count で決めると壊れた 1 件のせいで満杯のページを「続きなし」と誤判定する。
+        return FollowPage(follows: follows, snapshot: snapshot, limit: limit)
     }
 
     // MARK: - removeFollower
