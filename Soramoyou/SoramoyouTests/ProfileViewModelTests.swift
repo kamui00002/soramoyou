@@ -202,6 +202,40 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(mockFirestoreService.fetchUserPostsPageCallCount, 2)
     }
 
+    /// ⭐️ 壊れた投稿を飛ばしたページ: 件数が 1 ページ分を割っても、満杯まで読めていれば続きを読む
+    func testLoadMoreUserPosts_壊れた投稿を飛ばしたページでも満杯まで読めていれば続きを読む() async {
+        let testUser = createTestUser()
+        let imageInfo = ImageInfo(url: "https://example.com/image.jpg", width: 1024, height: 768, order: 0)
+        let makePost = { (id: String) in
+            Post(id: id, userId: testUser.id, images: [imageInfo], caption: nil, visibility: .public)
+        }
+        // 1 ページ目は 1 ページ分読んだうち 1 件が壊れていて、表示できるのは 1 件少ない
+        let firstPage = (0 ..< ProfileViewModel.postsPageSize - 1).map { makePost("post-\($0)") }
+        let secondPage = [makePost("post-a"), makePost("post-b")]
+        mockFirestoreService.userPostPages = [firstPage, secondPage]
+        mockFirestoreService.userPostPageReadCounts = [ProfileViewModel.postsPageSize, secondPage.count]
+        let authService = MockAuthService()
+        authService.currentUserValue = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService,
+            authService: authService
+        )
+
+        await viewModel.loadUserPosts()
+        XCTAssertEqual(viewModel.userPosts.count, ProfileViewModel.postsPageSize - 1)
+        XCTAssertTrue(viewModel.hasMorePosts, "読んだのは満杯の 1 ページ分なので、続きがある")
+
+        // When: 末尾まで来たので続きを読む
+        let added = await viewModel.loadMoreUserPosts()
+
+        // Then: 2 ページ目が読まれ、そこで終わる
+        XCTAssertEqual(added.map(\.id), ["post-a", "post-b"])
+        XCTAssertFalse(viewModel.hasMorePosts)
+        XCTAssertEqual(mockFirestoreService.fetchUserPostsPageCallCount, 2)
+    }
+
     func testUpdateProfile() async {
         // Given
         let testUser = createTestUser()
@@ -629,6 +663,9 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
 
     /// fetchUserPostsPage が返すページ（未設定なら userPosts を 1 ページで返す）⭐️
     var userPostPages: [[Post]]?
+    /// userPostPages の各ページで Firestore から実際に読んだドキュメント数（壊れた投稿も含む）。
+    /// 壊れた投稿を飛ばしたページの再現用。未設定ならページの投稿数と同じ（＝壊れた投稿なし）
+    var userPostPageReadCounts: [Int]?
     /// fetchUserPostsPage が呼ばれた回数
     var fetchUserPostsPageCallCount = 0
     /// recountPostsCount が返す「全投稿数」（nil なら userPosts.count）⭐️
@@ -638,13 +675,14 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
 
     func fetchUserPostsPage(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage {
         defer { fetchUserPostsPageCallCount += 1 }
-        // 壊れた投稿の無いモックなので「読んだ件数 = 返す件数」として続きの有無を決める
+        // 本番（PostPage(posts:snapshot:limit:)）と同じく、読んだ件数で続きの有無を決める
         guard let pages = userPostPages else {
             return PostPage(posts: userPosts, lastDocument: nil, isExhausted: userPosts.count < limit)
         }
         let index = fetchUserPostsPageCallCount
         let page = index < pages.count ? pages[index] : []
-        return PostPage(posts: page, lastDocument: nil, isExhausted: page.count < limit)
+        let readCount = userPostPageReadCounts.flatMap { index < $0.count ? $0[index] : nil } ?? page.count
+        return PostPage(posts: page, lastDocument: nil, isExhausted: readCount < limit)
     }
 
     func recountPostsCount(userId: String) async throws -> Int {
