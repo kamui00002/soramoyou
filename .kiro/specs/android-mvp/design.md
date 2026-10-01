@@ -1164,7 +1164,7 @@ iOSは`postKind`が`single`のときキーを書きません（`PostViewModel.sw
 | # | 作業 | 場所 | 時期 | 備考 |
 |---|---|---|---|---|
 | 1 | FirebaseプロジェクトへAndroidアプリを登録し（パッケージ名はQAのapplicationId）、`google-services.json`を取得 | Firebaseコンソール | M1の前 | ファイルは`android/app/`に置き、Git管理外 |
-| 2 | Authのメール／パスワードと匿名のプロバイダが有効であることの確認 | Firebaseコンソール | M1の前 | iOSで有効になっている想定で、確認のみ |
+| 2 | Authのメール／パスワードと匿名のプロバイダが有効であることの確認 | Firebaseコンソール | メール：M1の前／匿名：M2の前 | 2026-10-01にAuthの設定を読み取って確認した。メール／パスワードは有効である。**匿名は設定が返らず、無効の可能性が高い**（iOSの`signInAnonymously`はどの画面からも呼ばれていない）。匿名を有効にするのはバックエンドの設定変更なので、M2の前にユーザーが判断する（要件1.5）。判断の選択肢は、有効にするか、要件2.4をMVPから外すかの2つ |
 | 3 | AndroidアプリのAnalyticsデータストリームとCrashlyticsが有効であることの確認 | Firebaseコンソール | M1の前 | — |
 | 4 | Google CloudのAPIキーの制限（Androidアプリのパッケージ名と署名証明書）の検討 | Google Cloudコンソール | M6の前 | 任意 |
 | 5 | AdMobでAndroidアプリとバナー広告ユニットを新規作成 | AdMob | M5の前 | iOSとは共用しない（14.2） |
