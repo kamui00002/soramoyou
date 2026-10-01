@@ -554,5 +554,34 @@ service cloud.firestore {
       // 書き込みは不可（加算・減算・返金は Cloud Functions 専用）
       allow write: if false;
     }
+
+    // ============================================
+    // そらとも（招待制の小さなグループで空を共有する）⭐️
+    // spec: .kiro/specs/soratomo/
+    // ⚠️ いまはキャプションの条件だけ（tasks.md 1.1）。メンバー判定・項目の制限・
+    //    投稿者の一致・作成日時は 2.1 / 2.2 で足す。それまで deploy しない。
+    //    機能フラグ（soratomoBeta）を本番で持つ人はまだいないため、誤って出ても誰も作成できない。
+    // ============================================
+
+    // そらとも投稿のキャプションの検証（要件 11.11）
+    // - 無い（キーごと省略）か、1〜100 文字（Unicode のコードポイント数）の文字列
+    // - 改行類（CR・LF・U+0085・U+2028・U+2029）を含まない
+    // 長さは size() でなく、正規表現の回数指定 {1,100} で数える。
+    //   size() は UTF-16 の単位で数える（絵文字 1 つが 2）ため、アプリ（unicodeScalars.count）・
+    //   Functions（Array.from(s).length）のコードポイント数とずれる。回数指定はコードポイント単位で数える。
+    //   どちらも 2026-10-01 に Rules test API で確かめた（.kiro/specs/soratomo/research.md の要確認 1）。
+    // 改行は「含む」を探す書き方（.*[...].*）にしない。正規表現の `.` は既定で改行に一致しないため、
+    //   改行が 2 つ以上あるキャプションを取りこぼす。「禁止文字以外だけでできている」の全体一致で書く。
+    function isValidSoratomoCaption(data) {
+      return !('caption' in data)
+             || (data.caption is string
+                 && data.caption.matches('[^\\r\\n\\x{85}\\x{2028}\\x{2029}]{1,100}'));
+    }
+
+    match /soratomoGroups/{groupId}/skies/{skyId} {
+      allow create: if isAuthenticated()
+                    && request.auth.token.soratomoBeta == true
+                    && isValidSoratomoCaption(request.resource.data);
+    }
   }
 }
