@@ -51,7 +51,7 @@
 | Q8 | 自分の投稿の削除をMVPに含めます（M4の最後） | Androidだけを使うユーザーが誤投稿を消せない状態を避けます。iOSと同じ手順（`FirestoreService.swift:354-378`→`StorageService.swift:332-350`）でバックエンドの変更は不要で、`storagePath`を必ず書くので画像も確実に消せます | 機能の有無は可逆／実行した削除は不可逆 |
 | Q9 | クローズドテスト版から広告SDKを組み込み、**テスト広告**を表示します。本番の広告ユニットIDは本番トラック用のビルドでだけ有効にします。公開国は日本のみで始め、UMP（Google CMP）はM5で組み込んでおきます | レイアウトの崩れ（14.4・14.5）をテスト期間中に確認できます。テスターのクリックによる無効トラフィックを避けられます。AdMobはストアでの公開・リンク前は配信が制限されます（AdMob Help answer/10564477）。認定CMPの要件はEEA・英国・スイス向けで（answer/13554116）、国を広げるときに後付けしなくて済むよう先に入れます | 可逆 |
 | Q10 | PostHogはiOSと同じプロジェクト（`LoggingService.swift:30-31`と同じ公開キー・ホスト）を共用し、OSの区別はSDKが既定で付ける`$os`・`$lib`で行います。Firebase Analyticsは同一プロジェクトにAndroidアプリを登録します。画面名は「ホーム」「投稿」「編集」「プロフィール」の4つで、iOSに無い画面・操作のイベントはMVPでは新設しません | 共用すれば同じファネルで両OSを比べられます。iOSは画面計測をPostHogにだけ送っているので（`LoggingService.swift:47-50`）同じ経路にそろえ、単一Activityでは画面を区別できないFirebaseの自動screen_viewは無効にします | 可逆 |
-| Q11 | minSdk 26／targetSdk 36／compileSdk 36 | 下限を決める依存はGMA SDK（minSdk 24）で、FirebaseとPostHogは23です。26にするのは、`java.time`をデシュガーなしで使い、検証する端末の範囲を狭めるためです。公式の端末分布はAndroid Studio内でしか提供されておらず、本書では**未確認**です（着手時に24と26の到達率の差を確かめて確定します）。targetSdk 36は新規アプリの必須値です | minSdkを下げるのは可逆／**上げると既存ユーザーが更新を受け取れなくなる（実質不可逆）**ため公開前に確定します |
+| Q11 | minSdk 26／targetSdk 36／compileSdk 37 | 下限を決める依存はGMA SDK（minSdk 24）で、FirebaseとPostHogは23です。26にするのは、`java.time`をデシュガーなしで使い、検証する端末の範囲を狭めるためです。公式の端末分布はAndroid Studio内でしか提供されておらず、本書では**未確認**です（着手時に24と26の到達率の差を確かめて確定します）。targetSdk 36は新規アプリの必須値です。compileSdkは、Compose BOM 2026.09.00（Compose 1.12）・lifecycle 2.11・navigation 2.10・Coil 3.6がcompileSdk 37以上を求めるため、タスク1.2で36から37に変更しました（2026-10-02、ユーザー承認。ビルド時だけの値で、端末での動きは変わりません） | minSdkを下げるのは可逆／**上げると既存ユーザーが更新を受け取れなくなる（実質不可逆）**ため公開前に確定します |
 | Q12 | 下の「確認済みの現行条件」に従います | 2026-10-01に公式ページで確認しました（`research.md`にURLと取得日を記録） | — |
 
 **Q12 確認済みの現行条件（2026-10-01）**
@@ -220,7 +220,7 @@ graph TB
 | 広告 | GMA Next-Gen SDK 1.5.0とUMP SDK | バナー広告・同意の取得 | Legacy SDK（25.5.0）は保守モード。Next-GenはminSdk 24・compileSdk 35以上が必要 |
 | 画像メタデータ | androidx.exifinterface | 撮影日時と向きの読み取り | — |
 | テスト | JUnit（`:contract`・`:app`のJVMテスト）、Firebase Local Emulator Suite（firebase-tools） | 単体テスト・ルールとの結合テスト | エミュレータはリポジトリの`firestore.rules`・`storage.rules`をそのまま読み込みます |
-| SDKレベル | minSdk 26／targetSdk 36／compileSdk 36 | — | Q11 |
+| SDKレベル | minSdk 26／targetSdk 36／compileSdk 37 | — | Q11（compileSdkはタスク1.2で36から37に変更） |
 
 ### プロジェクト構成
 
