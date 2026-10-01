@@ -265,9 +265,7 @@ class FirestoreService: FirestoreServiceProtocol {
 
             let snapshot = try await query.getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            return PostDocumentDecoder.decodePosts(snapshot.documents, source: "public_posts")
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -288,9 +286,9 @@ class FirestoreService: FirestoreServiceProtocol {
 
             let snapshot = try await query.getDocuments()
 
-            let posts = try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            // 壊れた投稿は 1 件だけ飛ばし、ページ全体は落とさない。
+            // 次ページの起点は飛ばした分も含めた snapshot.documents.last のまま（下で返す）
+            let posts = PostDocumentDecoder.decodePosts(snapshot.documents, source: "home_feed")
 
             // 最後のドキュメントを取得
             let lastDoc = snapshot.documents.last
@@ -324,9 +322,9 @@ class FirestoreService: FirestoreServiceProtocol {
 
             let snapshot = try await query.getDocuments()
 
-            let posts = try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            // 壊れた投稿は 1 件だけ飛ばし、ページ全体は落とさない。
+            // 次ページの起点は飛ばした分も含めた snapshot.documents.last のまま（下で返す）
+            let posts = PostDocumentDecoder.decodePosts(snapshot.documents, source: "gallery")
 
             return (posts: posts, lastDocument: snapshot.documents.last)
         } catch {
@@ -392,9 +390,7 @@ class FirestoreService: FirestoreServiceProtocol {
 
             let snapshot = try await query.getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            return PostDocumentDecoder.decodePosts(snapshot.documents, source: "user_posts")
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -761,9 +757,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            return PostDocumentDecoder.decodePosts(snapshot.documents, source: "search_hashtag")
         } catch {
             throw FirestoreServiceError.searchFailed(error)
         }
@@ -778,9 +772,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
 
-            var posts = try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            var posts = PostDocumentDecoder.decodePosts(snapshot.documents, source: "search_color")
 
             // 閾値が指定されている場合は、ColorMatchingでRGB距離フィルタリングを適用
             if let threshold {
@@ -803,9 +795,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            return PostDocumentDecoder.decodePosts(snapshot.documents, source: "search_time_of_day")
         } catch {
             throw FirestoreServiceError.searchFailed(error)
         }
@@ -819,9 +809,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            return PostDocumentDecoder.decodePosts(snapshot.documents, source: "search_sky_type")
         } catch {
             throw FirestoreServiceError.searchFailed(error)
         }
@@ -852,9 +840,7 @@ class FirestoreService: FirestoreServiceProtocol {
             // Firestoreからデータを取得
             let snapshot = try await queryResult.query.getDocuments()
 
-            let posts = try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            let posts = PostDocumentDecoder.decodePosts(snapshot.documents, source: "search_posts")
 
             // PostQueryBuilderでクライアントサイドフィルタリングを適用
             return PostQueryBuilder.applyClientSideFilters(
