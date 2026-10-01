@@ -37,7 +37,7 @@ extension FirestoreServiceProtocol {
     func fetchPostsWithSnapshot(
         limit _: Int,
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    ) async throws -> PostPage {
         fatalError("MockFirestoreService.fetchPostsWithSnapshot は未実装です")
     }
 
@@ -47,7 +47,7 @@ extension FirestoreServiceProtocol {
         sortField _: String,
         limit _: Int,
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    ) async throws -> PostPage {
         fatalError("MockFirestoreService.fetchPostsWithSnapshot(絞り込み版) は未実装です")
     }
 
@@ -71,7 +71,7 @@ extension FirestoreServiceProtocol {
         userId _: String,
         limit _: Int,
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    ) async throws -> PostPage {
         fatalError("MockFirestoreService.fetchUserPostsPage は未実装です")
     }
 

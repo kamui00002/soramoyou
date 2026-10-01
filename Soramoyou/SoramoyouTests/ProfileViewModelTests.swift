@@ -636,11 +636,15 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     /// recountPostsCount が呼ばれた回数
     var recountPostsCountCallCount = 0
 
-    func fetchUserPostsPage(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    func fetchUserPostsPage(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage {
         defer { fetchUserPostsPageCallCount += 1 }
-        guard let pages = userPostPages else { return (userPosts, nil) }
+        // 壊れた投稿の無いモックなので「読んだ件数 = 返す件数」として続きの有無を決める
+        guard let pages = userPostPages else {
+            return PostPage(posts: userPosts, lastDocument: nil, isExhausted: userPosts.count < limit)
+        }
         let index = fetchUserPostsPageCallCount
-        return (index < pages.count ? pages[index] : [], nil)
+        let page = index < pages.count ? pages[index] : []
+        return PostPage(posts: page, lastDocument: nil, isExhausted: page.count < limit)
     }
 
     func recountPostsCount(userId: String) async throws -> Int {
@@ -651,7 +655,7 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     // その他のメソッドは空実装
     func createPost(_ post: Post) async throws -> Post { return post }
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
-    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) { return ([], nil) }
+    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage { return PostPage(posts: [], lastDocument: nil, isExhausted: true) }
     func fetchPost(postId: String) async throws -> Post { throw FirestoreServiceError.notFound }
     func deletePost(postId: String, userId: String) async throws {}
     func saveDraft(_ draft: Draft) async throws -> Draft { return draft }

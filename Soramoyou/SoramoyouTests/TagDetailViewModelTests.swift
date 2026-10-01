@@ -184,10 +184,10 @@ final class MockTagFeedServiceForTagDetail: TagFeedServiceProtocol {
 
     func fetchPostsByHashtag(
         _: String,
-        limit _: Int,
+        limit: Int,
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
-        (posts: stubbedPosts, lastDocument: nil)
+    ) async throws -> PostPage {
+        PostPage(posts: stubbedPosts, lastDocument: nil, isExhausted: stubbedPosts.count < limit)
     }
 
     func fetchInferredTags(userId _: String, topN _: Int) async throws -> [String] {

@@ -15,7 +15,7 @@ protocol FirestoreServiceProtocol {
     /// （Firestore ルール isValidPostUpdate がカウント不変を要求するため）。postsCount は加算しない。
     func updatePost(_ post: Post) async throws -> Post
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
-    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?)
+    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage
     /// ギャラリータブ用: 時間帯／空の種類の絞り込みと並び替え（新着/人気）に対応したページング取得
     func fetchPostsWithSnapshot(
         timeOfDay: TimeOfDay?,
@@ -23,12 +23,12 @@ protocol FirestoreServiceProtocol {
         sortField: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?)
+    ) async throws -> PostPage
     func fetchPost(postId: String) async throws -> Post
     func deletePost(postId: String, userId: String) async throws
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post]
     /// 自分のプロフィールのグリッド用: 次ページのカーソル（最後のドキュメント）も一緒に返す ⭐️
-    func fetchUserPostsPage(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?)
+    func fetchUserPostsPage(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage
     /// 他ユーザーのプロフィール用: 閲覧可能な公開範囲だけに絞って投稿を取得する ⭐️
     /// - Important: `fetchUserPosts` は公開範囲で絞らないため、他人のプロフィールで使うと
     ///   Firestore Security Rules が「private も含みうるクエリ」と判断してクエリ全体が
@@ -272,7 +272,7 @@ class FirestoreService: FirestoreServiceProtocol {
     }
 
     /// 投稿を取得（DocumentSnapshotも返す）
-    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage {
         do {
             var query: Query = postsCollection
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
@@ -287,13 +287,10 @@ class FirestoreService: FirestoreServiceProtocol {
             let snapshot = try await query.getDocuments()
 
             // 壊れた投稿は 1 件だけ飛ばし、ページ全体は落とさない。
-            // 次ページの起点は飛ばした分も含めた snapshot.documents.last のまま（下で返す）
+            // 次ページの起点と「続きがあるか」は、飛ばした分も含めて実際に読んだドキュメントで決める
             let posts = PostDocumentDecoder.decodePosts(snapshot.documents, source: "home_feed")
 
-            // 最後のドキュメントを取得
-            let lastDoc = snapshot.documents.last
-
-            return (posts: posts, lastDocument: lastDoc)
+            return PostPage(posts: posts, snapshot: snapshot, limit: limit)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -309,7 +306,7 @@ class FirestoreService: FirestoreServiceProtocol {
         sortField: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    ) async throws -> PostPage {
         do {
             let query = PostQueryBuilder.buildGalleryQuery(
                 collection: postsCollection,
@@ -323,10 +320,10 @@ class FirestoreService: FirestoreServiceProtocol {
             let snapshot = try await query.getDocuments()
 
             // 壊れた投稿は 1 件だけ飛ばし、ページ全体は落とさない。
-            // 次ページの起点は飛ばした分も含めた snapshot.documents.last のまま（下で返す）
+            // 次ページの起点と「続きがあるか」は、飛ばした分も含めて実際に読んだドキュメントで決める
             let posts = PostDocumentDecoder.decodePosts(snapshot.documents, source: "gallery")
 
-            return (posts: posts, lastDocument: snapshot.documents.last)
+            return PostPage(posts: posts, snapshot: snapshot, limit: limit)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -400,12 +397,12 @@ class FirestoreService: FirestoreServiceProtocol {
     ///
     /// `fetchUserPosts` と同じクエリ形状（userId 等値 + createdAt 降順）なので、
     /// 既存の複合インデックスでそのまま動く（新規インデックス不要）。
-    /// - Returns: 投稿と「このページの最後のドキュメント」。ページが空なら lastDocument は nil。
+    /// - Returns: 投稿・「このページの最後のドキュメント」・続きの有無。ページが空なら lastDocument は nil。
     func fetchUserPostsPage(
         userId: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    ) async throws -> PostPage {
         do {
             var query: Query = postsCollection
                 .whereField("userId", isEqualTo: userId)
@@ -427,9 +424,10 @@ class FirestoreService: FirestoreServiceProtocol {
                     return nil
                 }
             }
-            // カーソルはデコード失敗分も含めた「実際に読んだ最後の 1 件」にする
-            // （デコード後の配列で決めると、壊れたドキュメントが末尾にあるとき同じページを読み直す）
-            return (posts, snapshot.documents.last)
+            // カーソルと「続きがあるか」は、デコード失敗分も含めた「実際に読んだドキュメント」で決める
+            // （デコード後の配列で決めると、壊れたドキュメントが末尾にあるとき同じページを読み直し、
+            //   件数が limit を割っただけで続きがあるのに打ち切ってしまう）
+            return PostPage(posts: posts, snapshot: snapshot, limit: limit)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }

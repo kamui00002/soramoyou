@@ -206,8 +206,8 @@ class PaginatedPostsViewModel: ObservableObject {
     /// デフォルトでは `fetchPostsWithSnapshot` を使用。
     /// サブクラスでオーバーライドして、ユーザー投稿のみ取得する等のカスタムクエリを実装可能。
     /// - Parameter lastDocument: ページネーション用の最後のドキュメント（nilなら最初のページ）
-    /// - Returns: 取得した投稿と最後のドキュメントのタプル
-    func executeQuery(lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    /// - Returns: 取得した投稿・最後のドキュメント・続きの有無
+    func executeQuery(lastDocument: DocumentSnapshot?) async throws -> PostPage {
         return try await firestoreService.fetchPostsWithSnapshot(
             limit: pageSize,
             lastDocument: lastDocument
