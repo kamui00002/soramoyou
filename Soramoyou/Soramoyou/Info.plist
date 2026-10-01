@@ -2,6 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!--
+	⭐️ Crashlytics の自動収集を構成ごとに切り替える（値はビルド設定 CRASHLYTICS_COLLECTION_ENABLED）。
+	Debug = NO: Debug は dSYM を作らない（DEBUG_INFORMATION_FORMAT = dwarf）ので、送ると
+	「見つからない dSYM（必須）」が Crashlytics に溜まるだけで、二度と解決できない。
+	Release = YES: 明示的に有効化する。※ FirebaseDataCollectionDefaultEnabled より優先される。
+	⚠️ どの構成でもビルド設定を必ず定義すること。未定義だと空文字に展開され、
+	空文字は boolValue で NO になる（＝本番で黙って収集が止まる）。
+	コードの setCrashlyticsCollectionEnabled() は端末に値が残り、Info.plist より優先されるので使わない。
+	-->
+	<key>FirebaseCrashlyticsCollectionEnabled</key>
+	<string>$(CRASHLYTICS_COLLECTION_ENABLED)</string>
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-5237930968754753~7016872745</string>
 	<key>SKAdNetworkItems</key>
