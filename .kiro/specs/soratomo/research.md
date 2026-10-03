@@ -196,6 +196,13 @@
      - ②と対照が同じ拒否で返った（前段で止まった）: 呼び出し元の設定が付いていない。①の出力を見直し、同じくユーザーに相談する。
      - ②が関数から`UNAUTHENTICATED`以外（`INTERNAL`など）で返った: 呼び出し元の設定は問題ない。8.1の配線の不具合として直す。
    - クレームの無いアカウントが`permission-denied`（`flag_off`）、クレームのあるアカウントが成功になることは、tasks 9.1のとおり、アプリと9.2の後の15.1・15.2で確かめる（IDトークンを手で作らない）。
+   - **結果（2026-10-04・tasks 9.1・検証済み）**: ①と②はどちらも期待どおりだった。上の「結果ごとの扱い」に従い、tasks 5と9.1を完了にした。現物（デプロイの出力・読み返し・HTTPの応答・ログ）は本体の`.claude/handoffs/2026-10-04_そらともS4_9.1の現物.txt`にある。時刻はUTC。
+     - 前提: mainの#149・#150・#151・#155を取り込んだ`6580046`からデプロイした。`sync_with_base_branch`がこのセッションに無かったので、手元で`git merge`した。衝突は0で、`functions/`とルールの差分も0。デプロイ前に、本番の11本とソースの既存の11本で、名前・リージョン・トリガー・メモリが一致することを確かめた。
+     - ① `firebase deploy --only functions --project soramoyou-ios`をターミナルパネルで実行した（2026-10-03T21:38:12Z〜21:40:49Z）。結果は作成4（Callable 3本と`onSoratomoSkyCreated`）・更新11・削除0。警告と権限（IAM）の失敗は1行も出ていない。
+     - デプロイ後に読み返した: 15本すべてがasia-northeast1で`ACTIVE`。Callable 3本は、Cloud Runの`roles/run.invoker`が`allUsers`で、ingressが`ALLOW_ALL`。`onSoratomoSkyCreated`の`run.invoker`は空だった。ただし本番で動いている`onPostCreated`も同じ形だった（トリガーのリージョン・サービスアカウント・再試行なし、も同じ）。
+     - ② 21:43:00Zに、`Authorization`無し・本文`{"data":{}}`で送った。返りはHTTP 401で、本文は`{"error":{"message":"ログインが必要です","status":"UNAUTHENTICATED"}}`。このメッセージは`functions/soratomo.js`56行の文言で、SDKの中には無い。関数のログにも、応答と同じトレースID（`cd362052…`）で`soratomoCreateGroup: rejected`（`reason: unauthenticated`・`uid: null`）が残った。
+     - 対照: 21:43:01Zに、本文`{}`で送った。返りはHTTP 400で、本文は`{"error":{"message":"Bad Request","status":"INVALID_ARGUMENT"}}`。関数のログには、SDKの`Request body is missing data.`が残った（トレース`67568106…`）。②と応答が違い、どちらもCallableの規約のJSONで、どちらのトレースも関数のログにある。だから前段では止まっていない。
+     - 想定と違った点: 対照の要求では、SDKがERRORの重さでスタックトレースをログに出した（`Invalid request, unable to process.`）。1回きりの確認によるもので、Error Reportingに1件出ることがある。また、ログの検証結果は`auth: MISSING`・`app: MISSING`のまま「passed」で、App Checkは強制していない。
 5. **日次件数の数え方に使う複合インデックス**: `skies`の`authorId`（昇順）と`createdAt`（昇順）で`count()`が通るか。通らない場合はエラーに含まれる作成リンクで向きを合わせる。数え方が失敗しても投稿は止めない（判定はv1ではアプリ側の目安のため）。
    - **結果（2026-10-01・検証済み）**: 向きは`authorId`昇順・`createdAt`昇順・コレクションの範囲で合っていた。
    - デプロイ前: 本番のFirestore RESTに、アプリと同じ形の`count()`（`authorId`の一致と`createdAt >= その日の0時`）を1回投げた。`FAILED_PRECONDITION`（インデックスが必要）が返った。エラーの作成リンクの中身を読むと、要求は`skies`・`COLLECTION`・`authorId`昇順・`createdAt`昇順（＋`__name__`昇順）で、定義ファイルに足したものと一致した。
