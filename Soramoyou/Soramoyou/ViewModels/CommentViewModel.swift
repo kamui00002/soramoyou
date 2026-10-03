@@ -45,9 +45,10 @@ class CommentViewModel: ObservableObject {
             )
             comments = result.comments
             lastDocument = result.lastDocument
-            if result.comments.count < pageSize {
-                hasMoreComments = false
-            }
+            // 「続きがあるか」はサービスが読んだ件数で判定した値を使う。
+            // 変換できた件数（result.comments.count）で判定すると、壊れたコメントを
+            // 1 件スキップしただけで最後のページと誤判定し、古いコメントに辿り着けなくなる。
+            hasMoreComments = result.hasMore
         } catch {
             ErrorHandler.logError(error, context: "CommentViewModel.fetchComments")
             errorMessage = error.userFriendlyMessage
@@ -68,15 +69,12 @@ class CommentViewModel: ObservableObject {
                 limit: pageSize,
                 lastDocument: lastDocument
             )
-            if result.comments.isEmpty {
-                hasMoreComments = false
-            } else {
-                comments.append(contentsOf: result.comments)
-                lastDocument = result.lastDocument
-                if result.comments.count < pageSize {
-                    hasMoreComments = false
-                }
+            comments.append(contentsOf: result.comments)
+            // ページ丸ごと壊れていて 0 件でも、読んだ位置まではカーソルを進める
+            if let nextDocument = result.lastDocument {
+                lastDocument = nextDocument
             }
+            hasMoreComments = result.hasMore
         } catch {
             ErrorHandler.logError(error, context: "CommentViewModel.loadMoreComments")
             errorMessage = error.userFriendlyMessage

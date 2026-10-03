@@ -139,10 +139,12 @@ protocol FirestoreServiceProtocol {
     /// 表示中の投稿群のうちお気に入り済みの postId を返す（1件ずつ get・likes と同じ方式）
     func batchCheckFavoriteStatus(postIds: [String], userId: String) async throws -> Set<String>
     /// 自分のお気に入りを新しい順に1ページ返す。`after` は前ページ末尾の createdAt（nil=先頭）
-    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> [Favorite]
+    /// 続きの有無は `isExhausted`（読んだ件数）で判定する（壊れた 1 件をスキップしても続きを見失わない）
+    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> FavoritePage
 
     // Comments
-    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?)
+    /// コメントを新しい順に 1 ページ返す。`hasMore` は読んだ件数で判定する（壊れた 1 件をスキップしても続きを見失わない）
+    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?, hasMore: Bool)
     func addComment(postId: String, userId: String, content: String, authorName: String?, authorPhotoURL: String?) async throws -> Comment
     func deleteComment(commentId: String, postId: String, userId: String) async throws
 
@@ -264,9 +266,7 @@ class FirestoreService: FirestoreServiceProtocol {
 
             let snapshot = try await query.getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            return PostDocumentDecoder.decodePosts(snapshot.documents, source: "public_posts")
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -287,9 +287,9 @@ class FirestoreService: FirestoreServiceProtocol {
 
             let snapshot = try await query.getDocuments()
 
-            let posts = try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            // 壊れた投稿は 1 件だけ飛ばし、ページ全体は落とさない。
+            // 次ページの起点は飛ばした分も含めた snapshot.documents.last のまま（下で返す）
+            let posts = PostDocumentDecoder.decodePosts(snapshot.documents, source: "home_feed")
 
             // 最後のドキュメントを取得
             let lastDoc = snapshot.documents.last
@@ -323,9 +323,9 @@ class FirestoreService: FirestoreServiceProtocol {
 
             let snapshot = try await query.getDocuments()
 
-            let posts = try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            // 壊れた投稿は 1 件だけ飛ばし、ページ全体は落とさない。
+            // 次ページの起点は飛ばした分も含めた snapshot.documents.last のまま（下で返す）
+            let posts = PostDocumentDecoder.decodePosts(snapshot.documents, source: "gallery")
 
             return (posts: posts, lastDocument: snapshot.documents.last)
         } catch {
@@ -391,9 +391,7 @@ class FirestoreService: FirestoreServiceProtocol {
 
             let snapshot = try await query.getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            return PostDocumentDecoder.decodePosts(snapshot.documents, source: "user_posts")
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -537,9 +535,8 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "updatedAt", descending: true)
                 .getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Draft(from: document.data())
-            }
+            // 壊れた下書きは 1 件だけスキップする（パスとエラーは FirestoreDocumentDecoder が記録する）
+            return FirestoreDocumentDecoder.decodeDrafts(snapshot.documents)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -761,9 +758,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            return PostDocumentDecoder.decodePosts(snapshot.documents, source: "search_hashtag")
         } catch {
             throw FirestoreServiceError.searchFailed(error)
         }
@@ -778,9 +773,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
 
-            var posts = try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            var posts = PostDocumentDecoder.decodePosts(snapshot.documents, source: "search_color")
 
             // 閾値が指定されている場合は、ColorMatchingでRGB距離フィルタリングを適用
             if let threshold {
@@ -803,9 +796,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            return PostDocumentDecoder.decodePosts(snapshot.documents, source: "search_time_of_day")
         } catch {
             throw FirestoreServiceError.searchFailed(error)
         }
@@ -819,9 +810,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 .order(by: "createdAt", descending: true)
                 .getDocuments()
 
-            return try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            return PostDocumentDecoder.decodePosts(snapshot.documents, source: "search_sky_type")
         } catch {
             throw FirestoreServiceError.searchFailed(error)
         }
@@ -852,9 +841,7 @@ class FirestoreService: FirestoreServiceProtocol {
             // Firestoreからデータを取得
             let snapshot = try await queryResult.query.getDocuments()
 
-            let posts = try snapshot.documents.compactMap { document in
-                try Post(from: document.data())
-            }
+            let posts = PostDocumentDecoder.decodePosts(snapshot.documents, source: "search_posts")
 
             // PostQueryBuilderでクライアントサイドフィルタリングを適用
             return PostQueryBuilder.applyClientSideFilters(
@@ -1674,8 +1661,9 @@ class FirestoreService: FirestoreServiceProtocol {
     ///   - after: 前ページ末尾の createdAt（nil で先頭ページ）。
     ///            `DocumentSnapshot` ではなく Date をカーソルにすることで、
     ///            protocol に Firestore 型を出さずテストでモックできる。
-    /// - Returns: お気に入りの配列（createdAt 降順）
-    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> [Favorite] {
+    /// - Returns: お気に入り（createdAt 降順）・次ページの起点・続きの有無。
+    ///            起点と続きの有無は、変換できた件数ではなく実際に読んだドキュメントで決まる
+    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> FavoritePage {
         do {
             var query: Query = favoritesCollection(userId: userId)
                 .order(by: "createdAt", descending: true)
@@ -1688,7 +1676,7 @@ class FirestoreService: FirestoreServiceProtocol {
 
             // ⚠️ compactMap { try? ... } は壊れたドキュメントを無言で落とすため禁止（tech-spec）。
             //    失敗した1件はパスをログに残してスキップし、ページ全体は巻き込まない。
-            return snapshot.documents.compactMap { document in
+            let favorites = snapshot.documents.compactMap { document -> Favorite? in
                 do {
                     return try Favorite(from: document.data(), documentId: document.documentID)
                 } catch {
@@ -1696,6 +1684,9 @@ class FirestoreService: FirestoreServiceProtocol {
                     return nil
                 }
             }
+            // スキップで favorites.count が limit を割っても、次ページの起点と「続きがあるか」は
+            // 飛ばした分も含めて実際に読んだドキュメントで決める（件数で決めると続きを見失う）
+            return FavoritePage(favorites: favorites, snapshot: snapshot, limit: limit)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
@@ -1705,7 +1696,8 @@ class FirestoreService: FirestoreServiceProtocol {
     // MARK: - Comments
 
     /// コメント一覧を取得（ページネーション対応）
-    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?) {
+    /// - Returns: `hasMore` は「読んだドキュメントが 1 ページ分あったか」。変換できた件数ではない
+    func fetchComments(postId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (comments: [Comment], lastDocument: DocumentSnapshot?, hasMore: Bool) {
         do {
             var query: Query = commentsCollection
                 .whereField("postId", isEqualTo: postId)
@@ -1718,11 +1710,17 @@ class FirestoreService: FirestoreServiceProtocol {
 
             let snapshot = try await query.getDocuments()
 
-            let comments: [Comment] = try snapshot.documents.map { document in
-                try Comment(from: document.data(), documentId: document.documentID)
-            }
+            // 壊れたコメントは 1 件だけスキップする（パスとエラーは FirestoreDocumentDecoder が記録する）
+            let comments = FirestoreDocumentDecoder.decodeComments(snapshot.documents)
 
-            return (comments: comments, lastDocument: snapshot.documents.last)
+            // カーソルと「続きがあるか」は、変換に失敗した分も含めた「実際に読んだ件数」で決める。
+            // 変換後の件数で決めると、壊れたコメントが 1 件あるだけで
+            // 「最後のページ」と誤判定し、それより古いコメントに辿り着けなくなる。
+            return (
+                comments: comments,
+                lastDocument: snapshot.documents.last,
+                hasMore: snapshot.documents.count >= limit
+            )
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }

@@ -73,7 +73,8 @@ final class FavoritesViewModel: ObservableObject {
     /// ⚠️ 削除済み・非公開の favorites だけが数百件ある人で無限に回らないための予算。
     private let maxPagesPerRequest: Int
 
-    /// 次ページ取得用カーソル（解決を終えた最後の favorite の createdAt）
+    /// 次ページ取得用カーソル（解決を終えた最後の favorite の createdAt。
+    /// ページを最後まで消費したときは、壊れていて飛ばしたドキュメントも含めて読んだ最後の1件）
     private var cursor: Date?
 
     /// 解決できた投稿の全量（favorites の並び順＝新しい順）
@@ -255,15 +256,17 @@ final class FavoritesViewModel: ObservableObject {
     ///   - userId: 閲覧者自身の userId
     ///   - startCursor: 開始位置（nil なら先頭から）
     /// - Returns: 積み上げた結果。`cursor` は解決を終えた最後の1件を指す
+    ///   （ページを最後まで消費したときは、壊れていて飛ばしたドキュメントも含めて読んだ最後の1件）
     private func fetchVisiblePages(userId: String, after startCursor: Date?) async throws -> PageBatch {
         var batch = PageBatch(cursor: startCursor)
 
         for _ in 0..<maxPagesPerRequest {
-            let favorites = try await firestoreService.fetchFavorites(
+            let page = try await firestoreService.fetchFavorites(
                 userId: userId,
                 limit: pageSize,
                 after: batch.cursor
             )
+            let favorites = page.favorites
             let resolution = await resolvePosts(for: favorites)
 
             batch.posts.append(contentsOf: resolution.posts)
@@ -280,7 +283,17 @@ final class FavoritesViewModel: ObservableObject {
                 return batch
             }
 
-            batch.hasMore = favorites.count == pageSize
+            // ページを最後まで消費できた。カーソルは、壊れていて飛ばしたドキュメントも含めた
+            // 「実際に読んだ最後の1件」まで進める。`favorites` の末尾で止めると、
+            // ページ丸ごと壊れていたときに1歩も進まず、同じページを読み直し続ける。
+            if let lastReadCreatedAt = page.lastReadCreatedAt {
+                batch.cursor = lastReadCreatedAt
+            }
+
+            // 続きの有無は、変換後の件数ではなく実際に読んだドキュメント数で決まる `isExhausted` で判定する。
+            // `favorites.count == pageSize` で見ると、壊れた1件を飛ばしただけの満杯のページで
+            // 「続きなし」と誤判定してページ送りが止まる。
+            batch.hasMore = !page.isExhausted
             // 1件でも出せたら止める。1件も出せなかったときだけ次のページへ進む。
             if !batch.posts.isEmpty || !batch.hasMore { return batch }
         }
@@ -396,7 +409,8 @@ final class FavoritesViewModel: ObservableObject {
     private struct PageBatch {
         var posts: [Post] = []
         var unavailable = 0
-        /// 次に続ける位置（＝解決を終えた最後の1件の createdAt）
+        /// 次に続ける位置（＝解決を終えた最後の1件の createdAt。
+        /// ページを最後まで消費したときは、壊れていて飛ばしたドキュメントも含めて読んだ最後の1件）
         var cursor: Date?
         var hasMore = false
         var transientError: Error?

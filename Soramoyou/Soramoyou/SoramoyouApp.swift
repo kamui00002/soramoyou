@@ -59,8 +59,23 @@ struct SoramoyouApp: App {
 
     /// Crashlyticsの設定
     private func setupCrashlytics() {
-        // CrashlyticsはFirebaseApp.configure()で自動的に有効化される
-        // 追加の設定が必要な場合はここに記述
+        // CrashlyticsはFirebaseApp.configure()で自動的に有効化される。
+        // ⭐️ 収集の有効／無効は Info.plist の FirebaseCrashlyticsCollectionEnabled（ビルド設定
+        //    CRASHLYTICS_COLLECTION_ENABLED）で決める。Debug = NO / Release = YES。
+        //    コードの setCrashlyticsCollectionEnabled() は端末に値が残って Info.plist より優先されるため、
+        //    Debug で止めると、同じ端末に後から入れた TestFlight 版まで止まってしまう。だから使わない。
+        #if DEBUG
+            // Debug は dSYM を作らない（DEBUG_INFORMATION_FORMAT = dwarf）ので、このビルドのクラッシュは
+            // Crashlytics に届いても関数名に直せない（「見つからない dSYM（必須）」として残り続ける）。
+            // 収集を止めている間、レポートは端末に溜まって「送るか捨てるか」の指示を待つ。
+            // 放っておくと、同じ端末で収集が有効なビルド（Release）を起動したときに溜まった分がまとめて送られる。
+            // そうならないよう、Debug では起動のたびに溜まった分を捨てる。
+            // ⚠️ 捨てられるのは「この起動より前」の分だけ。最後の Debug 起動中に溜まった分（クラッシュに限らず
+            //    LoggingService.recordError の非致命エラーも）は、次に同じ端末で Release を起動すると送られうる。
+            //    逆に、同じ端末に残っていた TestFlight 版の未送信分も、Debug を起動するとここで捨てられる
+            //    （同じ bundle ID なので保存場所が共通）。どちらも開発者の端末だけの話なので許容している。
+            Crashlytics.crashlytics().deleteUnsentReports()
+        #endif
     }
 
     var body: some Scene {
