@@ -155,6 +155,16 @@ class TagDetailViewModel: PaginatedPostsViewModel {
         posts = posts.filter { !blockedUserIds.contains($0.userId) }
     }
 
+    /// 投稿詳細でのブロック（`.userBlocked` 通知）を受けて、その人の投稿を一覧から除く ⭐️
+    ///
+    /// 表示中の投稿から除くだけでなく、`blockedUserIds` に足すことで、以降に読むページ
+    /// （`executeQuery` の除外）からも除く。
+    override func handleUserBlocked(_ userId: String) {
+        guard !blockedUserIds.contains(userId) else { return }
+        blockedUserIds.append(userId)
+        filterBlockedUsers()
+    }
+
     // MARK: - Follow State
 
     /// このタグをフォロー済みかどうかをサーバーから読み込む
