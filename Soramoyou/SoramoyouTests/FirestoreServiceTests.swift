@@ -4,6 +4,28 @@
 //
 //  Created on 2025-12-06.
 //
+//
+//  🔧 2026-09-16 修正: 本物の Firestore（本番プロジェクト）へ通信するテストを明示オプトインにする。
+//
+//  背景:
+//    - このファイルの async テストは本物の Firestore へ投稿・下書き・ユーザーを書き込みに行く統合テスト。
+//      GoogleService-Info.plist が置かれた環境では、全件実行のたびに本番へ通信していた
+//      （PR #110 で直した StorageServiceTests と同じ構造）。
+//
+//  方針:
+//    - 実通信するテストは環境変数 SORAMOYOU_FIRESTORE_INTEGRATION_TESTS=1 での明示オプトインにする
+//      （既定はスキップ。全件実行・CI・XcodeBuildMCP の test_sim では走らない）。
+//    - Firestore を触らない純粋な単体テスト（初期化・toFirestoreData・init(from:)）はそのまま常時実行。
+//
+//  実通信テストの有効化方法:
+//    - xcodebuild: 環境変数に TEST_RUNNER_ を前置すると test host アプリへ届く
+//        TEST_RUNNER_SORAMOYOU_FIRESTORE_INTEGRATION_TESTS=1 xcodebuild test ... \
+//          -only-testing:SoramoyouTests/FirestoreServiceTests
+//    - Xcode: スキーム編集 > Test > Arguments > Environment Variables に
+//        SORAMOYOU_FIRESTORE_INTEGRATION_TESTS = 1 を追加
+//    ⚠️ 有効化すると本物の Firestore へ書き込みに行く（test-user-id 等の固定 ID を使うため、
+//       firestore.rules が許可する環境では本番データに残る。エミュレータ or テスト専用プロジェクトを推奨）。
+//
 
 import XCTest
 @testable import Soramoyou
@@ -12,6 +34,31 @@ import FirebaseFirestore
 final class FirestoreServiceTests: XCTestCase {
     var firestoreService: FirestoreService!
     
+    // MARK: - 実通信テストのガード
+
+    /// 実通信テストをオプトインするための環境変数名
+    private static let integrationTestsEnvironmentKey = "SORAMOYOU_FIRESTORE_INTEGRATION_TESTS"
+
+    /// Firebase（GoogleService-Info.plist）が設定されているか確認する
+    private func isFirebaseConfigured() -> Bool {
+        Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil
+    }
+
+    /// 実通信テストが環境変数で明示的に有効化されているか
+    private func isIntegrationTestingEnabled() -> Bool {
+        ProcessInfo.processInfo.environment[Self.integrationTestsEnvironmentKey] == "1"
+    }
+
+    /// 本物の Firestore へ通信するテストの共通ガード。
+    /// plist がない環境と、環境変数でオプトインしていない環境ではスキップする。
+    private func skipUnlessIntegrationTestsEnabled() throws {
+        try XCTSkipUnless(isFirebaseConfigured(), "Firebase not configured in test environment")
+        try XCTSkipUnless(
+            isIntegrationTestingEnabled(),
+            "実通信テストは既定でスキップ。有効化するには環境変数 \(Self.integrationTestsEnvironmentKey)=1 を設定する"
+        )
+    }
+
     override func setUp() {
         super.setUp()
         firestoreService = FirestoreService()
@@ -31,6 +78,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testCreatePost() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let post = createTestPost()
         
@@ -47,6 +97,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testFetchPost() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let post = createTestPost()
         _ = try await firestoreService.createPost(post)
@@ -64,6 +117,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testFetchPosts() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let post1 = createTestPost(id: "test-post-1")
         let post2 = createTestPost(id: "test-post-2")
@@ -82,6 +138,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testFetchPostsWithPagination() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let post1 = createTestPost(id: "test-post-pag-1")
         let post2 = createTestPost(id: "test-post-pag-2")
@@ -105,6 +164,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testDeletePost() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let post = createTestPost()
         _ = try await firestoreService.createPost(post)
@@ -124,6 +186,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testFetchPostsWithVisibilityFilter() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let publicPost = createTestPost(id: "test-public", visibility: .public)
         let privatePost = createTestPost(id: "test-private", visibility: .private)
@@ -145,6 +210,9 @@ final class FirestoreServiceTests: XCTestCase {
     // MARK: - Draft Tests
     
     func testSaveDraft() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let draft = createTestDraft()
         
@@ -160,6 +228,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testFetchDrafts() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let draft1 = createTestDraft(id: "test-draft-1")
         let draft2 = createTestDraft(id: "test-draft-2")
@@ -178,6 +249,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testLoadDraft() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let draft = createTestDraft()
         _ = try await firestoreService.saveDraft(draft)
@@ -194,6 +268,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testDeleteDraft() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let draft = createTestDraft()
         _ = try await firestoreService.saveDraft(draft)
@@ -214,6 +291,9 @@ final class FirestoreServiceTests: XCTestCase {
     // MARK: - User Tests
     
     func testFetchUser() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let user = createTestUser()
         _ = try await firestoreService.updateUser(user)
@@ -227,6 +307,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testUpdateUser() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let user = createTestUser()
         
@@ -239,6 +322,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testUpdateEditTools() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let userId = "test-user-id"
         let tools: [EditTool] = [.brightness, .contrast, .saturation]
@@ -255,6 +341,9 @@ final class FirestoreServiceTests: XCTestCase {
     // MARK: - Search Tests
     
     func testSearchByHashtag() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let post = createTestPost(hashtags: ["sky", "blue"])
         _ = try await firestoreService.createPost(post)
@@ -270,6 +359,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testSearchByColor() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let post = createTestPost(skyColors: ["#0000FF", "#FF0000"])
         _ = try await firestoreService.createPost(post)
@@ -285,6 +377,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testSearchByTimeOfDay() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let post = createTestPost(timeOfDay: .morning)
         _ = try await firestoreService.createPost(post)
@@ -300,6 +395,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testSearchBySkyType() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let post = createTestPost(skyType: .clear)
         _ = try await firestoreService.createPost(post)
@@ -315,6 +413,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testSearchPostsComposite() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let post = createTestPost(
             hashtags: ["sky"],
@@ -338,6 +439,9 @@ final class FirestoreServiceTests: XCTestCase {
     }
     
     func testFetchUserPosts() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given
         let userId = "test-user-id"
         let post1 = createTestPost(id: "test-user-post-1", userId: userId)
@@ -461,6 +565,9 @@ extension FirestoreServiceTests {
 
     /// 匿名ユーザーのプロフィール更新が成功することを確認
     func testUpdateAnonymousUser() async throws {
+        // 本物の Firestore へ通信するため、明示オプトイン時のみ実行
+        try skipUnlessIntegrationTestsEnabled()
+
         // Given: emailがnilの匿名ユーザー
         let user = createAnonymousTestUser()
 
