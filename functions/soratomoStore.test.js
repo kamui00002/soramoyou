@@ -5,6 +5,8 @@
 //   JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 //     firebase emulators:exec --only firestore --project soramoyou-ios "cd functions && node --test soratomoStore.test.js"
 //
+// ⚠️ soratomoStore.test.js と soratomo.test.js は、同じエミュレーターの文書を各テストの前に全部消して使う。
+//    node --test に2つ渡すと既定では同時に走って消し合うので、--test-concurrency=1 を付ける（npm run test:emulator）。
 // ⚠️ 本番へ書く事故の柵: プロジェクトID の soramoyou-ios は本番と同じで、この Mac の firebase-admin は
 //    資格情報を持っている。FIRESTORE_EMULATOR_HOST が無いと、firebase-admin はそのまま本番の Firestore へ書く。
 //    そこで、エミュレーター（127.0.0.1・localhost・[::1]）を指していなければ、initializeApp より前に例外で止める。

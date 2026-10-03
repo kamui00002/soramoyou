@@ -7,8 +7,9 @@
     "node": "22"
   },
   "scripts": {
-    "lint": "node --check index.js && node --check recommendationCore.js && node --check skyMotion.js && node --check skyMotionCore.js && node --check skyMotionPurchase.js && node --check skyMotionPurchaseVerify.js",
-    "test": "node --test recommendationCore.test.js skyMotionCore.test.js skyMotionPurchaseVerify.test.js",
+    "lint": "node --check index.js && node --check recommendationCore.js && node --check skyMotion.js && node --check skyMotionCore.js && node --check skyMotionPurchase.js && node --check skyMotionPurchaseVerify.js && node --check soratomoCore.js && node --check soratomoStore.js && node --check soratomo.js",
+    "test": "node --test recommendationCore.test.js skyMotionCore.test.js skyMotionPurchaseVerify.test.js soratomoCore.test.js pushHelpers.test.js ../scripts/set-soratomo-beta-claim.test.js",
+    "test:emulator": "firebase emulators:exec --only firestore --project soramoyou-ios 'node --test --test-concurrency=1 soratomoStore.test.js soratomo.test.js'",
     "deploy": "firebase deploy --only functions --project soramoyou-ios",
     "logs": "firebase functions:log --project soramoyou-ios"
   },
