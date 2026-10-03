@@ -465,6 +465,120 @@ final class FavoritesViewModelTests: XCTestCase {
         ]
         XCTAssertEqual(mock.receivedAfterValues, expectedCursors, "同じカーソルから読み直す")
     }
+
+    // MARK: - 壊れたお気に入りドキュメントを飛ばしたページ ⭐️
+    //
+    // 本番の `fetchFavorites` は、変換に失敗したドキュメントを 1 件ずつ飛ばす（一覧全体は生かす）。
+    // そのため満杯（limit 件）に読んだページでも、返る件数は limit を割る。
+    // 「件数 == pageSize ＝ 続きあり」で判定すると、壊れた 1 件だけで続きを見失う。
+
+    /// 16. 1ページ目に壊れたお気に入りがあっても、満杯まで読めていれば続きを読む ⭐️
+    func testBrokenFavoriteInFirstPageKeepsHasMore() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(3) で切ると 1ページ目 = [p1, broken, p2]（満杯に読んだが、返るのは2件）、2ページ目 = [p3, p4]
+        mock.allFavorites = makeFavorites(["p1", "broken", "p2", "p3", "p4"])
+        mock.brokenFavoriteIds = ["broken"]
+        mock.postsById = [
+            "p1": makePost("p1"), "p2": makePost("p2"),
+            "p3": makePost("p3"), "p4": makePost("p4")
+        ]
+        let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 3)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["p1", "p2"])
+        XCTAssertTrue(viewModel.hasMore, "満杯に読んだページなので続きがある（返った件数で判定しない）")
+        XCTAssertFalse(viewModel.stalledWithMore, "1件以上出せているので行き詰まりではない")
+        XCTAssertEqual(viewModel.unavailableCount, 0, "壊れたドキュメントは『非公開・削除』の脚注には数えない")
+
+        await viewModel.loadMore()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["p1", "p2", "p3", "p4"], "壊れた1件の先も読める")
+        XCTAssertFalse(viewModel.hasMore, "2ページ目は pageSize 未満しか読めなかったので終わり")
+    }
+
+    /// 17. 追加ページに壊れたお気に入りがあっても、その先を読む ⭐️
+    func testBrokenFavoriteInLoadMorePageKeepsHasMore() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(3) で切ると 1ページ目 = [p1, p2, p3]、2ページ目 = [p4, broken, p5]（返るのは2件）、3ページ目 = [p6]
+        mock.allFavorites = makeFavorites(["p1", "p2", "p3", "p4", "broken", "p5", "p6"])
+        mock.brokenFavoriteIds = ["broken"]
+        for id in ["p1", "p2", "p3", "p4", "p5", "p6"] {
+            mock.postsById[id] = makePost(id)
+        }
+        let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 3)
+
+        await viewModel.load()
+        await viewModel.loadMore()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["p1", "p2", "p3", "p4", "p5"])
+        XCTAssertTrue(viewModel.hasMore, "2ページ目も満杯に読めているので、まだ続きがある")
+
+        await viewModel.loadMore()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["p1", "p2", "p3", "p4", "p5", "p6"])
+        XCTAssertFalse(viewModel.hasMore)
+    }
+
+    /// 18. ページ丸ごと壊れていても、カーソルを進めて次のページを読む ⭐️
+    ///
+    /// ⚠️ 返る件数が 0 でも、壊れたドキュメントは **読んではいる**。カーソルを「変換できた最後の1件」で
+    ///    決めると 1 歩も進まず、同じ壊れたページを予算いっぱい読み直して行き詰まる
+    ///    （ボタンで続きを読んでも、また同じページから読み直すだけ）。
+    func testAllBrokenPageAdvancesCursorToNextPage() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(2) で切ると 1ページ目 = [p1, p2]、2ページ目 = [broken1, broken2]（返るのは0件）、3ページ目 = [p3]
+        mock.allFavorites = makeFavorites(["p1", "p2", "broken1", "broken2", "p3"])
+        mock.brokenFavoriteIds = ["broken1", "broken2"]
+        mock.postsById = ["p1": makePost("p1"), "p2": makePost("p2"), "p3": makePost("p3")]
+        let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
+
+        await viewModel.load()
+        await viewModel.loadMore()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["p1", "p2", "p3"], "壊れたページを越えて p3 まで辿り着く")
+        XCTAssertFalse(viewModel.hasMore)
+        XCTAssertFalse(viewModel.stalledWithMore)
+        let expectedCursors: [Date?] = [
+            nil,
+            mock.allFavorites[1].createdAt,  // 2回目 = 1ページ目末尾の p2
+            mock.allFavorites[3].createdAt   // ⭐️ 3回目 = 壊れた broken2。p2 に据え置くと同じページを読み直す
+        ]
+        XCTAssertEqual(mock.receivedAfterValues, expectedCursors, "壊れたドキュメントも読んだ位置として進める")
+    }
+
+    /// 19. 壊れたページが予算を超えて続いても、予算で止まり、続きから再開できる ⭐️
+    ///
+    /// 予算（1リクエスト5ページ）と `stalledWithMore` の振る舞いは、削除済みが続くとき（テスト10）と同じ。
+    /// そのうえで、次の読み込みが **止まった位置の先から** 始まる（同じページを読み直さない）ことを見る。
+    func testAllBrokenPagesStopAtPageBudgetAndResumeFromWhereStopped() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(2) × 8ページ = 16件、全件が壊れている。9回目の読み込みで0件＝終端
+        mock.allFavorites = makeFavorites((1...16).map { "broken\($0)" })
+        mock.brokenFavoriteIds = Set(mock.allFavorites.map(\.postId))
+        let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
+
+        await viewModel.load()
+
+        XCTAssertTrue(viewModel.posts.isEmpty)
+        XCTAssertEqual(mock.receivedAfterValues.count, 5, "無限には繰らない（1リクエストあたり5ページまで）")
+        XCTAssertTrue(viewModel.hasMore, "予算切れ。続きが残っているのに『全部消えた』と断定しない")
+        XCTAssertTrue(viewModel.stalledWithMore, "手動の導線を画面に出す必要がある状態")
+        XCTAssertNil(viewModel.lastError, "壊れたドキュメントは一時的な失敗ではないので、エラー画面にはしない")
+
+        // 手動ボタンから続きを読む
+        await viewModel.loadMore()
+
+        XCTAssertTrue(viewModel.posts.isEmpty)
+        XCTAssertFalse(viewModel.hasMore, "最後まで読み切った")
+        XCTAssertFalse(viewModel.stalledWithMore)
+        // 2回目以降のカーソル = 各ページ末尾（broken2, broken4, …, broken16）
+        let pageEndCursors: [Date?] = stride(from: 1, to: 16, by: 2).map { mock.allFavorites[$0].createdAt }
+        XCTAssertEqual(
+            mock.receivedAfterValues, [nil] + pageEndCursors,
+            "各ページの末尾から1ページずつ進む（同じページを読み直さない）"
+        )
+    }
 }
 
 // MARK: - Mock
@@ -493,9 +607,13 @@ final class MockFirestoreServiceForFavoritesList: FirestoreServiceProtocol {
     ///    この経路を再現できる口が無いと、`load` / `loadMore` の catch 節は一度も実行されないまま
     ///    「テストは全部 green」になる（＝落ちない代わりに、何も証明していない）。
     var fetchFavoritesFailure: (call: Int, error: Error)?
+    /// 壊れていて変換に失敗するお気に入りの postId ⭐️
+    ///
+    /// 本番の `fetchFavorites` は、変換に失敗したドキュメントを 1 件ずつ飛ばす。
+    /// ただしクエリの `limit` には数えられる（＝読んだ件数には入る）ので、返る件数は limit を割る。
+    var brokenFavoriteIds: Set<String> = []
 
-
-    func fetchFavorites(userId _: String, limit: Int, after: Date?) async throws -> [Favorite] {
+    func fetchFavorites(userId _: String, limit: Int, after: Date?) async throws -> FavoritePage {
         receivedAfterValues.append(after)
         // 何回目の呼び出しかは記録した件数で数える（＝失敗した回も1回として数える）
         if let failure = fetchFavoritesFailure, failure.call == receivedAfterValues.count {
@@ -505,7 +623,14 @@ final class MockFirestoreServiceForFavoritesList: FirestoreServiceProtocol {
         let remaining = after.map { cursor in
             allFavorites.filter { $0.createdAt < cursor }
         } ?? allFavorites
-        return Array(remaining.prefix(limit))
+        // limit 件読んでから、壊れたものを飛ばす（本番と同じ順序）
+        let read = Array(remaining.prefix(limit))
+        // 本番（FavoritePage(favorites:snapshot:limit:)）と同じく、起点と続きの有無は読んだドキュメントで決める
+        return FavoritePage(
+            favorites: read.filter { !brokenFavoriteIds.contains($0.postId) },
+            lastReadCreatedAt: read.last?.createdAt,
+            isExhausted: read.count < limit
+        )
     }
 
     func fetchPost(postId: String) async throws -> Post {
