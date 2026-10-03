@@ -74,12 +74,16 @@ class TagDetailViewModel: PaginatedPostsViewModel {
     // MARK: - Query Override
 
     /// ハッシュタグ絞り込みのページング取得に差し替える
+    ///
+    /// ブロック中の投稿者の投稿は、ここ（ページを返す前）で除く。
+    /// 理由は HomeViewModel.executeQuery と同じ（1 ページ全部がブロック中の投稿者でも無限スクロールを止めないため）。
     override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> PostPage {
-        try await tagFeedService.fetchPostsByHashtag(
+        let page = try await tagFeedService.fetchPostsByHashtag(
             tag,
             limit: pageSize,
             lastDocument: lastDocument
         )
+        return page.filteringPosts { !blockedUserIds.contains($0.userId) }
     }
 
     // MARK: - Fetch Overrides
