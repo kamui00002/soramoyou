@@ -11,6 +11,8 @@ struct ContentView: View {
     @EnvironmentObject var authViewModel: AuthViewModel
     /// お気に入り（🔖）状態の共有 Manager ⭐️ サインアウト時のローカル破棄を配線するために参照する
     @EnvironmentObject private var favoriteManager: FavoriteManager
+    /// いいね状態の共有 Manager ⭐️ 同じくサインアウト時のローカル破棄を配線するために参照する（#147）
+    @EnvironmentObject private var likeManager: LikeManager
     @State private var isLoading = true
     @State private var hasRequestedATT = false
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
@@ -73,6 +75,8 @@ struct ContentView: View {
         .onChange(of: authViewModel.isAuthenticated) { isAuthenticated in
             if !isAuthenticated {
                 favoriteManager.clearOnSignOut()
+                // いいね（ピンクのハート）も同じ理由で消す（#147）⭐️
+                likeManager.clearOnSignOut()
                 // おすすめの空（自分の一覧）も同じ理由で消す。アカウント削除でもここを通る ⭐️
                 RecommendationManager.shared.clearOnSignOut()
             }
@@ -94,5 +98,6 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
             .environmentObject(AuthViewModel())
             .environmentObject(FavoriteManager())
+            .environmentObject(LikeManager())
     }
 }
