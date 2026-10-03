@@ -139,7 +139,8 @@ protocol FirestoreServiceProtocol {
     /// 表示中の投稿群のうちお気に入り済みの postId を返す（1件ずつ get・likes と同じ方式）
     func batchCheckFavoriteStatus(postIds: [String], userId: String) async throws -> Set<String>
     /// 自分のお気に入りを新しい順に1ページ返す。`after` は前ページ末尾の createdAt（nil=先頭）
-    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> [Favorite]
+    /// 続きの有無は `isExhausted`（読んだ件数）で判定する（壊れた 1 件をスキップしても続きを見失わない）
+    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> FavoritePage
 
     // Comments
     /// コメントを新しい順に 1 ページ返す。`hasMore` は読んだ件数で判定する（壊れた 1 件をスキップしても続きを見失わない）
@@ -1660,8 +1661,9 @@ class FirestoreService: FirestoreServiceProtocol {
     ///   - after: 前ページ末尾の createdAt（nil で先頭ページ）。
     ///            `DocumentSnapshot` ではなく Date をカーソルにすることで、
     ///            protocol に Firestore 型を出さずテストでモックできる。
-    /// - Returns: お気に入りの配列（createdAt 降順）
-    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> [Favorite] {
+    /// - Returns: お気に入り（createdAt 降順）・次ページの起点・続きの有無。
+    ///            起点と続きの有無は、変換できた件数ではなく実際に読んだドキュメントで決まる
+    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> FavoritePage {
         do {
             var query: Query = favoritesCollection(userId: userId)
                 .order(by: "createdAt", descending: true)
@@ -1674,7 +1676,7 @@ class FirestoreService: FirestoreServiceProtocol {
 
             // ⚠️ compactMap { try? ... } は壊れたドキュメントを無言で落とすため禁止（tech-spec）。
             //    失敗した1件はパスをログに残してスキップし、ページ全体は巻き込まない。
-            return snapshot.documents.compactMap { document in
+            let favorites = snapshot.documents.compactMap { document -> Favorite? in
                 do {
                     return try Favorite(from: document.data(), documentId: document.documentID)
                 } catch {
@@ -1682,6 +1684,9 @@ class FirestoreService: FirestoreServiceProtocol {
                     return nil
                 }
             }
+            // スキップで favorites.count が limit を割っても、次ページの起点と「続きがあるか」は
+            // 飛ばした分も含めて実際に読んだドキュメントで決める（件数で決めると続きを見失う）
+            return FavoritePage(favorites: favorites, snapshot: snapshot, limit: limit)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }
