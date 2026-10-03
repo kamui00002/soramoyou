@@ -175,19 +175,46 @@ final class MockFirestoreServiceForTagDetail: FirestoreServiceProtocol {
     func unfollowTag(userId: String, tag: String) async throws {
         unfollowTagCalls.append((userId: userId, tag: tag))
     }
+
+    // MARK: 一覧の取得（ブロック除外のテスト用）⭐️
+
+    /// fetchBlockedUserIds が返すブロック中のユーザー ID
+    var blockedUserIds: [String] = []
+
+    func fetchBlockedUserIds(userId _: String) async throws -> [String] {
+        blockedUserIds
+    }
+
+    /// 投稿者情報は無い扱い（一覧の表示には影響しない）
+    func fetchPublicProfile(userId _: String) async throws -> PublicProfile {
+        throw FirestoreServiceError.notFound
+    }
 }
 
 /// タグフィード取得の Mock。フォローのテストでは一覧を読まないので空を返すだけ。
 /// （実サービスの既定引数だと Firestore.firestore() に触れてしまうため、必ず注入する）
 final class MockTagFeedServiceForTagDetail: TagFeedServiceProtocol {
     var stubbedPosts: [Post] = []
+    /// 呼ばれた順に返すページ（未設定なら stubbedPosts を 1 ページで返す）⭐️
+    var stubbedPages: [MockFirestoreServiceForPaging.Page]?
+    /// fetchPostsByHashtag が呼ばれた回数
+    private(set) var fetchCallCount = 0
 
     func fetchPostsByHashtag(
         _: String,
         limit: Int,
         lastDocument _: DocumentSnapshot?
     ) async throws -> PostPage {
-        PostPage(posts: stubbedPosts, lastDocument: nil, isExhausted: stubbedPosts.count < limit)
+        defer { fetchCallCount += 1 }
+        if let stubbedPages {
+            // 本物の DocumentSnapshot は作れないので、呼ばれた回数で何ページ目かを決める
+            guard fetchCallCount < stubbedPages.count else {
+                return PostPage(posts: [], lastDocument: nil, isExhausted: true)
+            }
+            let page = stubbedPages[fetchCallCount]
+            return PostPage(posts: page.posts, lastDocument: nil, isExhausted: page.readCount < limit)
+        }
+        return PostPage(posts: stubbedPosts, lastDocument: nil, isExhausted: stubbedPosts.count < limit)
     }
 
     func fetchInferredTags(userId _: String, topN _: Int) async throws -> [String] {
