@@ -42,4 +42,15 @@ extension PostPage {
             isExhausted: snapshot.documents.count < limit
         )
     }
+
+    /// 投稿だけを絞り込んだページを返す ⭐️
+    ///
+    /// カーソル（`lastDocument`）と枯渇判定（`isExhausted`）は**絞り込む前の読み取り結果のまま**残す。
+    /// 絞り込みで投稿が減っても、実際に読んだ位置と「続きがあるか」は変わらないため
+    /// （件数で決め直すと、ブロック中の投稿者だけのページで「続きなし」と誤判定する）。
+    /// - Parameter isIncluded: 残す投稿なら true
+    /// - Returns: 投稿だけを絞り込んだページ
+    func filteringPosts(_ isIncluded: (Post) -> Bool) -> PostPage {
+        PostPage(posts: posts.filter(isIncluded), lastDocument: lastDocument, isExhausted: isExhausted)
+    }
 }
