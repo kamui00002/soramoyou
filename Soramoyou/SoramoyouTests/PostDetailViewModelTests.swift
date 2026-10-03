@@ -95,6 +95,45 @@ final class PostDetailViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.errorMessage, "アラート導線が無い画面なので errorMessage には出さない（ログのみ）")
         XCTAssertFalse(viewModel.isLoadingAuthor, "失敗時もローディング表示は畳むべき")
     }
+
+    // MARK: - ブロック通知 ⭐️
+
+    /// ブロックに成功したら、一覧に伝える通知（.userBlocked）をブロック相手の ID 付きで送る
+    func testBlockPostAuthor_成功したらブロック相手のIDを付けて通知を送る() async {
+        let mock = MockFirestoreServiceForPostDetail()
+        let viewModel = PostDetailViewModel(firestoreService: mock, authService: makeSignedInAuthService())
+        let post = Post(id: "post1", userId: "blocked-user", images: [], visibility: .public)
+        let notified = expectation(forNotification: .userBlocked, object: nil) { notification in
+            notification.userInfo?[Notification.blockedUserIdKey] as? String == "blocked-user"
+        }
+
+        await viewModel.blockPostAuthor(post: post)
+
+        await fulfillment(of: [notified], timeout: 1)
+        XCTAssertEqual(mock.blockedUserIds, ["blocked-user"])
+    }
+
+    /// ブロックに失敗したら通知を送らない（一覧から消したのに実際はブロックされていない、を防ぐ）
+    func testBlockPostAuthor_失敗したら通知を送らない() async {
+        let mock = MockFirestoreServiceForPostDetail()
+        mock.stubbedBlockUserError = FirestoreServiceError.notFound
+        let viewModel = PostDetailViewModel(firestoreService: mock, authService: makeSignedInAuthService())
+        let post = Post(id: "post1", userId: "blocked-user", images: [], visibility: .public)
+        let notified = expectation(forNotification: .userBlocked, object: nil)
+        notified.isInverted = true
+
+        await viewModel.blockPostAuthor(post: post)
+
+        await fulfillment(of: [notified], timeout: 0.3)
+        XCTAssertNotNil(viewModel.reportError, "失敗はエラーとして画面に出す")
+    }
+
+    /// ログイン済みの認証サービス（ログインしていないとブロック処理は何もしない）
+    private func makeSignedInAuthService() -> MockAuthService {
+        let authService = MockAuthService()
+        authService.currentUserValue = User(id: "current-user", email: "test@example.com")
+        return authService
+    }
 }
 
 // MARK: - Mock
@@ -127,5 +166,17 @@ final class MockFirestoreServiceForPostDetail: FirestoreServiceProtocol {
             fatalError("MockFirestoreServiceForPostDetail.stubbedPublicProfile が未設定です")
         }
         return stubbedPublicProfile
+    }
+
+    // MARK: ブロック（通知のテスト用）⭐️
+
+    /// blockUser を失敗させたいときに設定する
+    var stubbedBlockUserError: Error?
+    /// blockUser に渡されたブロック相手の ID
+    private(set) var blockedUserIds: [String] = []
+
+    func blockUser(userId _: String, blockedUserId: String) async throws {
+        if let stubbedBlockUserError { throw stubbedBlockUserError }
+        blockedUserIds.append(blockedUserId)
     }
 }

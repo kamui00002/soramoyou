@@ -102,6 +102,15 @@ class PostDetailViewModel: ObservableObject {
 
         do {
             try await firestoreService.blockUser(userId: currentUserId, blockedUserId: post.userId)
+            // ブロックできたら、開いている一覧（ホーム・ForYou・タグ・ギャラリー）に伝えて、
+            // その人の投稿を消してもらう ⭐️（詳細画面を閉じても、一覧は引っ張って更新するまで
+            // その人の投稿を出し続けていた）。失敗したときは送らない（一覧から消したのに実際は
+            // ブロックされていない、を防ぐ）
+            NotificationCenter.default.post(
+                name: .userBlocked,
+                object: nil,
+                userInfo: [Notification.blockedUserIdKey: post.userId]
+            )
         } catch {
             ErrorHandler.logError(error, context: "PostDetailViewModel.blockPostAuthor", userId: currentUserId)
             reportError = error.userFriendlyMessage
@@ -142,4 +151,21 @@ class PostDetailViewModel: ObservableObject {
         }
     }
 
+}
+
+// MARK: - ブロック通知 ☁️
+
+extension Notification.Name {
+    /// 投稿者をブロックした時に送信される通知 ☁️
+    ///
+    /// userInfo の `Notification.blockedUserIdKey` に、ブロックした相手のユーザー ID（String）が入る。
+    /// ホーム・ForYou・タグ・ギャラリーの一覧（`PaginatedPostsViewModel`）が受け取り、
+    /// 表示中の投稿と以降のページからその人の投稿を除く（投稿詳細でブロックしても、
+    /// 一覧が引っ張って更新するまでその人の投稿を出し続けていた不具合の対策）。
+    static let userBlocked = Notification.Name("com.soramoyou.userBlocked")
+}
+
+extension Notification {
+    /// `.userBlocked` の userInfo で、ブロックした相手のユーザー ID を入れるキー
+    static let blockedUserIdKey = "blockedUserId"
 }
