@@ -76,4 +76,51 @@ async function sendToUid(uid, notification, data) {
   await sendToToken(uid, userData && userData.fcmToken, notification, data);
 }
 
-module.exports = { isInvalidTokenError, sendToToken, sendToUid };
+/**
+ * そらとも用: APNs のまとめ指定（スレッドID・置き換えキー）つきで1通送り、結果を返す（要件9.5・9.7・9.8・9.12）。
+ * sendToToken の兄弟。違いは ① thread-id と apns-collapse-id を付ける ② 結果を返す（投稿ごとの集計に使う）の 2 点。
+ * - 音は既定の音。バッジは付けない（アプリのバッジ数を変えない）
+ * - データの値はすべて文字列にする（FCM の data は文字列しか受け付けない）。null / undefined の項目は送らない
+ * - 無効なトークンは sendToToken と同じ規則（isInvalidTokenError）・同じ update で消す。
+ *   update は文書が無ければ失敗するだけで、文書を作り直さない
+ * - 例外を投げない（1人の失敗で残りの受信者への送信を止めないため）
+ * @param {string} uid トークンの持ち主（無効トークン掃除のドキュメント特定に使う）
+ * @param {string|null|undefined} token users/{uid}.fcmToken の値
+ * @param {{title: string, body: string}} notification
+ * @param {Object<string, unknown>} data
+ * @param {{threadId: string, collapseId: string}} grouping グループごとの値（soratomo-{groupId}）
+ * @returns {Promise<"sent"|"no_token"|"invalid_token"|"failed">}
+ */
+async function sendToTokenGrouped(uid, token, notification, data, grouping) {
+  if (!token) return "no_token";
+  try {
+    const stringData = {};
+    for (const [key, value] of Object.entries(data || {})) {
+      if (value !== null && value !== undefined) stringData[key] = String(value);
+    }
+    await messaging.send({
+      token,
+      notification,
+      data: stringData,
+      apns: {
+        headers: { "apns-collapse-id": grouping.collapseId },
+        payload: { aps: { sound: "default", threadId: grouping.threadId } },
+      },
+    });
+    return "sent";
+  } catch (err) {
+    const code = err && err.code;
+    if (isInvalidTokenError(code)) {
+      await db
+        .collection("users")
+        .doc(uid)
+        .update({ fcmToken: FieldValue.delete() })
+        .catch((e) => logger.warn("fcmTokenクリーンアップ失敗", { uid, code: String(e && e.code) }));
+      return "invalid_token";
+    }
+    logger.error("FCM送信に失敗しました（まとめ指定つき）", { uid, code: String(code) });
+    return "failed";
+  }
+}
+
+module.exports = { isInvalidTokenError, sendToToken, sendToUid, sendToTokenGrouped };
