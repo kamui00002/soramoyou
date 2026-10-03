@@ -151,10 +151,11 @@ class MockFirestoreServiceForHome: FirestoreServiceProtocol {
         return Array(posts.prefix(limit))
     }
     
-    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage {
         // 簡易実装: 実際のDocumentSnapshotは作成しない
         let postsToReturn = Array(posts.prefix(limit))
-        return (posts: postsToReturn, lastDocument: nil)
+        // 壊れた投稿の無いモックなので「読んだ件数 = 返す件数」として続きの有無を決める
+        return PostPage(posts: postsToReturn, lastDocument: nil, isExhausted: postsToReturn.count < limit)
     }
     
     func fetchPost(postId: String) async throws -> Post {

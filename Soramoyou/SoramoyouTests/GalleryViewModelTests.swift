@@ -423,12 +423,13 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
         return Array(posts.prefix(limit))
     }
 
-    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage {
         if shouldThrowError {
             throw FirestoreServiceError.notFound
         }
         let postsToReturn = Array(posts.prefix(limit))
-        return (posts: postsToReturn, lastDocument: nil)
+        // 壊れた投稿の無いモックなので「読んだ件数 = 返す件数」として続きの有無を決める
+        return PostPage(posts: postsToReturn, lastDocument: nil, isExhausted: postsToReturn.count < limit)
     }
 
     func fetchPostsWithSnapshot(
@@ -437,7 +438,7 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
         sortField: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    ) async throws -> PostPage {
         // ⚠️ このモックは timeOfDay/skyType を両方クライアント側で filter するため、本番 Firestore の
         // 複合インデックス制約（両フィルタ同時 → 4 フィールド複合インデックス必須）を再現しない。
         // インデックス欠落による FAILED_PRECONDITION はモックでは検出できず、実データ検証が必須。
@@ -462,7 +463,9 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
             result = result.sorted { $0.likesCount > $1.likesCount }
         }
 
-        return (posts: Array(result.prefix(limit)), lastDocument: nil)
+        // 絞り込みは本番ではサーバー側なので「読んだ件数 = 絞り込み後に返す件数」になる
+        let postsToReturn = Array(result.prefix(limit))
+        return PostPage(posts: postsToReturn, lastDocument: nil, isExhausted: postsToReturn.count < limit)
     }
 
     func fetchPost(postId: String) async throws -> Post {

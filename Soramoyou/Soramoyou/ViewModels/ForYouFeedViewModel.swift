@@ -142,13 +142,15 @@ final class ForYouFeedViewModel: HomeViewModel {
     /// 基底のクエリ実行を Paginator のマージ取得に差し替える。
     /// - Note: 引数 lastDocument は使わない（カーソルは各ストリームが保持）。
     ///   戻りの lastDocument も常に nil（基底はカーソルを不透明に保存するだけなので無害）。
+    ///   続きの有無は Paginator の真値を返す（Paginator は 0 件ページを続きありのまま返さないので、
+    ///   基底の「0 件なら次のページを読み進める」ループがここを続けて呼ぶことはない）。
     override func executeQuery(
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    ) async throws -> PostPage {
         guard let paginator else {
-            return (posts: [], lastDocument: nil)
+            return PostPage(posts: [], lastDocument: nil, isExhausted: true)
         }
         let page = try await paginator.nextPage(limit: pageSize)
-        return (posts: page, lastDocument: nil)
+        return PostPage(posts: page, lastDocument: nil, isExhausted: !paginator.hasMore)
     }
 }

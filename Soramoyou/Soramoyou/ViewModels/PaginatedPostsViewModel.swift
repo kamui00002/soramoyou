@@ -46,6 +46,13 @@ class PaginatedPostsViewModel: ObservableObject {
     /// 上書きし、posts と選択中の状態が食い違う不具合を防ぐ（レビュー F4）。
     private var fetchGeneration = 0
 
+    /// 1 回の読み込みで読み進める最大ページ数 ⭐️
+    ///
+    /// 全件が壊れていて変換後 0 件になったページでは、画面の「最後の投稿が見えたら次を読む」
+    /// きっかけが生まれず、無限スクロールが止まってしまう。そこで表示できる投稿が出るまで
+    /// 次のページを読み進めるが、壊れた投稿が大量に続いても読み取りが膨らまないよう上限を設ける。
+    static let maxPagesPerLoad = 3
+
     // MARK: - Computed Properties（サブクラスでオーバーライド）
 
     /// ViewModel名（エラーログのコンテキストに使用）
@@ -81,12 +88,11 @@ class PaginatedPostsViewModel: ObservableObject {
         hasMorePosts = true
 
         do {
-            // リトライ可能な操作として実行
-            let result = try await RetryableOperation.executeIfRetryable(
+            let result = try await fetchVisiblePage(
+                after: nil,
+                generation: generation,
                 operationName: "\(viewModelName).fetchPosts"
-            ) { [self] in
-                try await self.executeQuery(lastDocument: nil)
-            }
+            )
             // 古い取得（await 中に新しい fetchPosts が始まった）の結果は捨てる。
             // 最新世代がローディング解除・表示更新を担うため、ここでは何もせず抜ける。
             guard generation == fetchGeneration else { return }
@@ -94,10 +100,10 @@ class PaginatedPostsViewModel: ObservableObject {
             lastDocument = result.lastDocument
             lastError = nil
 
-            // 取得件数がページサイズ未満なら、これ以上投稿はない
-            if result.posts.count < pageSize {
-                hasMorePosts = false
-            }
+            // 続きの有無は「実際に読んだドキュメント数」で決まる isExhausted で判定する。
+            // 取得件数（posts.count）で判定すると、壊れた投稿を飛ばしただけの満杯のページでも
+            // 「続きなし」と誤判定して無限スクロールが止まる
+            hasMorePosts = !result.isExhausted
         } catch {
             guard generation == fetchGeneration else { return }
             // エラーをログに記録
@@ -128,27 +134,23 @@ class PaginatedPostsViewModel: ObservableObject {
         defer { isLoadingMore = false }
 
         do {
-            // リトライ可能な操作として実行
-            let result = try await RetryableOperation.executeIfRetryable(
+            let result = try await fetchVisiblePage(
+                after: lastDocument,
+                generation: generation,
                 operationName: "\(viewModelName).loadMorePosts"
-            ) { [self] in
-                try await self.executeQuery(lastDocument: self.lastDocument)
-            }
+            )
 
             // 途中で fetchPosts（絞り込み変更など）が走っていたら、この旧ページは捨てる。
             guard generation == fetchGeneration else { return }
 
-            if result.posts.isEmpty {
-                hasMorePosts = false
-            } else {
-                posts.append(contentsOf: result.posts)
-                lastDocument = result.lastDocument
-
-                // 取得件数がページサイズ未満なら、これ以上投稿はない
-                if result.posts.count < pageSize {
-                    hasMorePosts = false
-                }
+            posts.append(contentsOf: result.posts)
+            // カーソルは投稿が 0 件でも進める（上限で止まった全件壊れのページを、次回また読み直さないため）。
+            // 1 件も読めなかった（＝続きなし）ときだけは nil なので、位置を変えない
+            if let nextCursor = result.lastDocument {
+                lastDocument = nextCursor
             }
+            // 続きの有無は isExhausted で判定する（fetchPosts と同じ理由）
+            hasMorePosts = !result.isExhausted
         } catch {
             guard generation == fetchGeneration else { return }
             // エラーをログに記録
@@ -199,6 +201,44 @@ class PaginatedPostsViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Page Loading
+
+    /// 表示できる投稿が 1 件以上あるページを取得する ⭐️
+    ///
+    /// 変換後 0 件（ページ内の全件が壊れている）なのに続きがあるときは、カーソルを進めて
+    /// 次のページを読む。表示できる投稿が出る・続きが無くなる・`maxPagesPerLoad` に達する・
+    /// 新しい fetchPosts が始まる、のいずれかでその時点のページを返す
+    /// （上限で止まったときは「続きありの空ページ」になり、次のスクロールでまた続きを読む）。
+    /// - Parameters:
+    ///   - cursor: 読み始めの位置（nil なら最初のページ）
+    ///   - generation: 呼び出し元の取得世代（変わったら読み進めをやめる）
+    ///   - operationName: リトライ・ログ用の操作名
+    /// - Returns: 最後に読んだページ（カーソルと続きの有無もそのページのもの）
+    private func fetchVisiblePage(
+        after cursor: DocumentSnapshot?,
+        generation: Int,
+        operationName: String
+    ) async throws -> PostPage {
+        var nextCursor = cursor
+        var pagesRead = 0
+        while true {
+            let pageCursor = nextCursor
+            // リトライ可能な操作として実行
+            let page = try await RetryableOperation.executeIfRetryable(
+                operation: { [self] in try await self.executeQuery(lastDocument: pageCursor) },
+                operationName: operationName
+            )
+            pagesRead += 1
+            if !page.posts.isEmpty || page.isExhausted || pagesRead >= Self.maxPagesPerLoad
+                || generation != fetchGeneration
+            {
+                return page
+            }
+            // 全件が壊れていたページ。飛ばした分も含めて読んだ位置から続きを読む
+            nextCursor = page.lastDocument
+        }
+    }
+
     // MARK: - Query Hook（サブクラスでオーバーライド可能）
 
     /// Firestoreクエリを実行する
@@ -206,8 +246,8 @@ class PaginatedPostsViewModel: ObservableObject {
     /// デフォルトでは `fetchPostsWithSnapshot` を使用。
     /// サブクラスでオーバーライドして、ユーザー投稿のみ取得する等のカスタムクエリを実装可能。
     /// - Parameter lastDocument: ページネーション用の最後のドキュメント（nilなら最初のページ）
-    /// - Returns: 取得した投稿と最後のドキュメントのタプル
-    func executeQuery(lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    /// - Returns: 取得した投稿・最後のドキュメント・続きの有無
+    func executeQuery(lastDocument: DocumentSnapshot?) async throws -> PostPage {
         return try await firestoreService.fetchPostsWithSnapshot(
             limit: pageSize,
             lastDocument: lastDocument
