@@ -207,6 +207,48 @@ final class ForYouFeedViewModelTests: XCTestCase {
         )
     }
 
+    // MARK: - 投稿詳細でのブロック（.userBlocked 通知）⭐️
+
+    /// ブロック通知を受けたら、表示中の投稿から除き、Paginator が次に返すページからも除く。
+    /// Paginator のブロック判定がリフレッシュ時の集合のまま固定だと、次のページにその人の投稿が混ざり、
+    /// 後がけの除外で消える分だけ追加件数が減る（＝ 20 件増えるはずが 10 件しか増えない）。
+    func testブロック通知で表示中から除きPaginatorの次のページでも除く() async {
+        // 2 ストリームの投稿が新しい順に交互に並ぶ（A = ブロックしない人 / B = ブロックする人）
+        let streamA = makeCountingStream(
+            id: "A",
+            posts: (0 ..< 40).map { makePost("a\($0)", user: "keep", t: 10000 - TimeInterval($0 * 2)) },
+            counter: CallCounter()
+        )
+        let streamB = makeCountingStream(
+            id: "B",
+            posts: (0 ..< 40).map { makePost("b\($0)", user: "blocked", t: 9999 - TimeInterval($0 * 2)) },
+            counter: CallCounter()
+        )
+        let builder = StubSourceBuilder(result: .success(
+            ForYouFeedSources(streams: [streamA, streamB], followeeCount: 2, tagCount: 0, tagSource: "none")
+        ))
+        let viewModel = ForYouFeedViewModel(
+            firestoreService: MockFirestoreServiceForForYou(),
+            authService: makeSignedInAuth(),
+            sourceBuilder: builder
+        )
+        await viewModel.fetchPosts()
+        XCTAssertEqual(viewModel.posts.filter { $0.userId == "blocked" }.count, 10, "前提: ブロック前は半分がブロックする人")
+
+        NotificationCenter.default.post(
+            name: .userBlocked,
+            object: nil,
+            userInfo: [Notification.blockedUserIdKey: "blocked"]
+        )
+        await waitForMainActorTasks { !viewModel.posts.contains { $0.userId == "blocked" } }
+        XCTAssertEqual(viewModel.posts.count, 10, "表示中のブロックした人の投稿が消える")
+
+        await viewModel.loadMorePosts()
+
+        XCTAssertFalse(viewModel.posts.contains { $0.userId == "blocked" })
+        XCTAssertEqual(viewModel.posts.count, 30, "Paginator が次のページでブロックした人を飛ばし、ちょうど 1 ページ分（20 件）増える")
+    }
+
     // MARK: - (D4 回帰) リフレッシュ中の loadMorePosts 割り込み
 
     /// リフレッシュが Paginator を差し替えた直後の await 窓（基底のブロックリスト取得中）に
