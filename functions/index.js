@@ -546,3 +546,6 @@ exports.onSkyMotionPurchaseCreated = require("./skyMotionPurchase").onSkyMotionP
 // pending詰まりのリコンサイラ（⚠️ Object.assign配線ではないため個別exportが必須。忘れるとdeployされない）
 exports.reconcilePendingSkyMotionPurchases =
   require("./skyMotionPurchase").reconcilePendingSkyMotionPurchases;
+
+// MARK: - 「そらとも」（友達グループで空を共有）の Callable 3本と新着投稿の通知。詳細は functions/soratomo.js
+Object.assign(exports, require("./soratomo"));

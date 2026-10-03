@@ -554,5 +554,122 @@ service cloud.firestore {
       // 書き込みは不可（加算・減算・返金は Cloud Functions 専用）
       allow write: if false;
     }
+
+    // ============================================
+    // そらとも（招待制の小さなグループで空を共有する）⭐️
+    // spec: .kiro/specs/soratomo/
+    // 書き手: グループ・メンバー・招待コード・通知の間引き・利用者ごとの所属は Cloud Functions（Admin SDK）だけ。
+    //   Admin SDK はルールを通らないので、ここではクライアントからの書き込みをすべて拒否する。
+    //   アプリが書けるのは投稿（skies）の作成と削除だけ。
+    // collectionGroup のクエリと {path=**} のルールは使わない（既存のインデックスとルールに干渉させない。要件 13.1）。
+    // テスト: scripts/rules_test_soratomo.py（許可と拒否の両方・--mutants で陽性対照）。ルールを変えたら両方を流す。
+    // ============================================
+
+    // そらともの機能フラグ（カスタムクレーム soratomoBeta）を持つログイン利用者か（要件 1.6）
+    // - アプリ・ルール・Functions の 3 か所で同じクレームを要求する。一般公開でクレームの運用をやめるときは、
+    //   3 か所を同時に変える（ずれると、入口は出るのに読み書きが拒否される）
+    // - token.soratomoBeta と直接書くと、クレームの無い人では「項目が無い」エラーで拒否になる。
+    //   get の既定値 false で読み、エラーでなく条件として拒否する
+    function isSoratomoUser() {
+      return isAuthenticated() && request.auth.token.get('soratomoBeta', false) == true;
+    }
+
+    // そのグループのメンバーか（要件 11.1・11.2）
+    // - メンバーの文書 1 件の存在で判定する。メンバーの文書は参加の Callable だけが作る（要件 11.8）
+    // - request.auth.uid を読むので、必ず isSoratomoUser() の後ろに && でつなぐ（未ログインで評価させない）
+    function isSoratomoMember(groupId) {
+      return exists(/databases/$(database)/documents/soratomoGroups/$(groupId)/members/$(request.auth.uid));
+    }
+
+    // そらとも投稿のキャプションの検証（要件 11.11）
+    // - 無い（キーごと省略）か、1〜100 文字（Unicode のコードポイント数）の文字列
+    // - 改行類（CR・LF・U+0085・U+2028・U+2029）を含まない
+    // 長さは size() でなく、正規表現の回数指定 {1,100} で数える。
+    //   size() は UTF-16 の単位で数える（絵文字 1 つが 2）ため、アプリ（unicodeScalars.count）・
+    //   Functions（Array.from(s).length）のコードポイント数とずれる。回数指定はコードポイント単位で数える。
+    //   どちらも 2026-10-01 に Rules test API で確かめた（.kiro/specs/soratomo/research.md の要確認 1）。
+    // 改行は「含む」を探す書き方（.*[...].*）にしない。正規表現の `.` は既定で改行に一致しないため、
+    //   改行が 2 つ以上あるキャプションを取りこぼす。「禁止文字以外だけでできている」の全体一致で書く。
+    function isValidSoratomoCaption(data) {
+      return !('caption' in data)
+             || (data.caption is string
+                 && data.caption.matches('[^\\r\\n\\x{85}\\x{2028}\\x{2029}]{1,100}'));
+    }
+
+    // そらとも投稿の画像の幅・高さ（ピクセル）。1〜2048 の整数
+    // （表示用の画像は長辺 2048px 以下に縮小してから送る。要件 6.1・design.md の SoratomoImageEncoder）
+    function isValidSoratomoDimension(value) {
+      return value is int && value >= 1 && value <= 2048;
+    }
+
+    // そらとも投稿の作成時の項目の検証（要件 11.3・11.4・11.11・11.12・11.13）
+    // - 項目は 5 つだけ。画像のパスや URL の項目は持てない（画像の場所は groupId・authorId・skyId から導く）
+    // - キャプション以外の 4 つは必須
+    // - 投稿者は要求した本人。作成日時はサーバーの時刻だけ（アプリは FieldValue.serverTimestamp() で書く。
+    //   端末の時計で並び順を操作させない）
+    function isValidSoratomoSky(data) {
+      return data.keys().hasOnly(['authorId', 'caption', 'width', 'height', 'createdAt'])
+             && data.keys().hasAll(['authorId', 'width', 'height', 'createdAt'])
+             && data.authorId == request.auth.uid
+             && data.createdAt == request.time
+             && isValidSoratomoDimension(data.width)
+             && isValidSoratomoDimension(data.height)
+             && isValidSoratomoCaption(data);
+    }
+
+    // グループ（名前・オーナー・招待コード・メンバー数）
+    match /soratomoGroups/{groupId} {
+      // 1 件ずつの取得（get）だけをメンバーに許す。招待コードもここから読む（要件 11.9）
+      allow get: if isSoratomoUser() && isSoratomoMember(groupId);
+      // 一覧（list）は拒否する。メンバーは自分の所属の写し（soratomoUsers/{uid}/groups）から一覧を作る
+      allow list: if false;
+      // 作成・メンバー数の更新・招待コードの再発行は Callable のトランザクションだけ（要件 11.8）
+      allow write: if false;
+
+      // メンバー（文書 ID は uid）
+      match /members/{memberId} {
+        // メンバー一覧（list を含む）はメンバーだけが読める
+        allow read: if isSoratomoUser() && isSoratomoMember(groupId);
+        // メンバーの追加は、有効な招待コードによる参加の Callable だけ（要件 11.8）
+        allow write: if false;
+      }
+
+      // 投稿（アプリは作成と削除だけを行い、更新はしない）
+      match /skies/{skyId} {
+        // 読み取り（タイムラインの一覧を含む）はメンバーだけ（要件 11.1・11.2）
+        allow read: if isSoratomoUser() && isSoratomoMember(groupId);
+        allow create: if isSoratomoUser()
+                      && isSoratomoMember(groupId)
+                      && isValidSoratomoSky(request.resource.data);
+        allow update: if false;
+        // 削除は投稿者本人だけ。オーナーを含むほかのメンバーには許さない（要件 11.6・11.15）。
+        // 作成と同じ allow write にまとめない（削除の要求には内容が無く、作成の条件で必ず拒否される。PR #141 と同じ型）
+        allow delete: if isSoratomoUser() && resource.data.authorId == request.auth.uid;
+      }
+
+      // 通知の間引きの状態（文書 ID は受信者の uid）。Functions の内部の記録なので、誰にも読ませない
+      match /notifyState/{uid} {
+        allow read, write: if false;
+      }
+    }
+
+    // 招待コード → グループの対応表（文書 ID は招待コード）
+    // 一覧・取得ともに拒否し、総当たりでコードを探られないようにする（要件 11.9）。
+    // 参加の Callable がコードを受け取り、Admin SDK で引く
+    match /soratomoInviteCodes/{code} {
+      allow read, write: if false;
+    }
+
+    // 利用者ごとの所属数（所属は 10 個までの判定に使う）
+    match /soratomoUsers/{uid} {
+      allow read: if isSoratomoUser() && isOwner(uid);
+      allow write: if false;
+
+      // 所属しているグループの写し（グループ一覧の表示用）。本人だけが読める（list を含む）
+      match /groups/{groupId} {
+        allow read: if isSoratomoUser() && isOwner(uid);
+        allow write: if false;
+      }
+    }
   }
 }
