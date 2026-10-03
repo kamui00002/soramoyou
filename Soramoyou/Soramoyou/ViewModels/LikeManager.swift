@@ -106,6 +106,10 @@ class LikeManager: ObservableObject {
         // Firestore に反映
         do {
             let serverCount = try await firestoreService.setLike(postId: postId, userId: userId, isLiked: willLike)
+            // ⚠️ 書き込みの最中にサインアウト／アカウント切替が挟まっていたら、前のユーザーの結果を
+            //    今のユーザーの画面へ書き戻さない（clearOnSignOut で消した状態が復活する・#147）。
+            //    FavoriteManager.toggleFavorite と同じガード。
+            guard authService.currentUser()?.id == userId else { return }
             // 成功した時点でサーバーは「押した意図どおり」の状態。途中で状態の読み直しが挟まっても、ここでそろえる。
             if willLike {
                 likedPostIds.insert(postId)
@@ -116,6 +120,11 @@ class LikeManager: ObservableObject {
             // 既にその状態だった（サーバーは書かなかった）場合も、ここで正しい数字にそろう。
             likeCountOverrides[postId] = LikeCountOverride(baseCount: post.likesCount, count: serverCount, isLiked: willLike)
         } catch {
+            // ⚠️ 成功時と同じく、アカウントが変わっていたら前のユーザー宛の巻き戻しをしない（#147）
+            guard authService.currentUser()?.id == userId else {
+                ErrorHandler.logError(error, context: "LikeManager.toggleLike", userId: userId)
+                return
+            }
             // エラー時にリバート
             if willLike {
                 likedPostIds.remove(postId)
@@ -135,6 +144,9 @@ class LikeManager: ObservableObject {
 
         do {
             let likedIds = try await firestoreService.batchCheckLikeStatus(postIds: postIds, userId: userId)
+            // ⚠️ 読み取りの最中にアカウントが変わっていたら、届いたのは前のユーザーのいいね状態なので反映しない（#147）。
+            //    FavoriteManager.checkFavoriteStatus と同じガード。
+            guard authService.currentUser()?.id == userId else { return }
             // ⚠️ 問い合わせた範囲だけサーバー値で上書きする（FavoriteManager と同じ subtract → formUnion）。
             //    formUnion だけだと、別端末で外したいいねがピンクのまま残る。
             //    問い合わせていない postId は触らないので、ページング追加読み込みでも既存状態は壊れない。
@@ -153,5 +165,18 @@ class LikeManager: ObservableObject {
         } catch {
             ErrorHandler.logError(error, context: "LikeManager.checkLikeStatus", userId: userId)
         }
+    }
+
+    /// サインアウト時にローカル状態を捨てる ⭐️（#147）
+    ///
+    /// ⚠️ Manager は App レベルの `@StateObject` でサインアウトしても破棄されず、
+    ///    `checkLikeStatus` は**問い合わせた範囲しか**上書きしないため、明示的に消さないと
+    ///    共有端末で次のユーザーに前のユーザーのいいね（ピンクのハート）や押した結果の数字が見えてしまう。
+    ///    `FavoriteManager.clearOnSignOut()` と同じ対策で、呼び出しも同じく ContentView で配線している
+    ///    （AuthViewModel からは別 `@StateObject` の本 Manager に手が届かないため）。
+    func clearOnSignOut() {
+        likedPostIds = []
+        likeCountOverrides = [:]
+        showLoginPrompt = false
     }
 }
