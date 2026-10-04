@@ -14,6 +14,8 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var authViewModel: AuthViewModel
+    /// ⭐️ そらともの判定（有効のときだけ「そらとも通知」の行を出す・tasks 14.2・要件 10.14）。アプリの起点で渡している
+    @EnvironmentObject var soratomoGate: SoratomoFeatureGate
     @StateObject private var viewModel = SettingsViewModel()
     @State private var showingPrivacyPolicy = false
     @State private var showingTermsOfService = false
@@ -329,6 +331,17 @@ struct SettingsView: View {
                         description: "誰かが新しい空を投稿したらお知らせします",
                         isOn: pushEveryoneBinding
                     )
+                    // ⭐️ そらとも通知（判定が有効のときだけ・既存の 3 つと同じ並びの最後に 1 つだけ）。
+                    // グループごとの切り替えは無く、説明でもグループごとにオフにできるとは書かない（要件 10.15・10.17・13.7）。
+                    if soratomoGate.isEnabled {
+                        Divider().padding(.leading, 60)
+                        notificationToggleRow(
+                            icon: "person.3.fill", iconColor: .indigo,
+                            title: "そらとも通知",
+                            description: "そらともで友達が空を投稿したらお知らせします",
+                            isOn: pushSoratomoBinding
+                        )
+                    }
                 }
             }
         }
@@ -383,6 +396,14 @@ struct SettingsView: View {
         Binding(
             get: { viewModel.notifyNewPostsFromEveryone },
             set: { newValue in Task { await viewModel.setNotificationPreference(.newPostsFromEveryone, enabled: newValue) } }
+        )
+    }
+
+    /// ⭐️ そらとも通知トグルの Binding（保存先は ViewModel がそらとものプロフィールの窓口へ分ける）。
+    private var pushSoratomoBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.notifySoratomo },
+            set: { newValue in Task { await viewModel.setNotificationPreference(.soratomo, enabled: newValue) } }
         )
     }
 
@@ -949,5 +970,6 @@ struct SettingsView_Previews: PreviewProvider {
     static var previews: some View {
         SettingsView()
             .environmentObject(AuthViewModel())
+            .environmentObject(SoratomoFeatureGate())
     }
 }

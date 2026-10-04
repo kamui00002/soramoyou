@@ -70,11 +70,12 @@ final class SettingsViewModelTests: XCTestCase {
 
     private func makeSUT(
         currentUser: User?,
-        firestore: MockFirestoreServiceForSettings
+        firestore: MockFirestoreServiceForSettings,
+        soratomo: MockSoratomoProfileService = MockSoratomoProfileService()
     ) -> SettingsViewModel {
         let auth = MockAuthService()
         auth.currentUserValue = currentUser
-        return SettingsViewModel(authService: auth, firestoreService: firestore)
+        return SettingsViewModel(authService: auth, firestoreService: firestore, soratomoProfileService: soratomo)
     }
 
     /// 設定を開いたら Firestore の現在値が @Published に反映される。
@@ -129,6 +130,112 @@ final class SettingsViewModelTests: XCTestCase {
 
         XCTAssertFalse(sut.notifyNewPostsFromEveryone, "未ログインは既定 false に巻き戻る")
         XCTAssertFalse(firestore.updateCalled)
+    }
+
+    // MARK: - そらとも通知（tasks 14.2）⭐️
+    //
+    // ⚠️ 共有のモック MockSoratomoProfileService は、既定で失敗（.unknown）を返す。成功の経路では先に .success(()) を入れる。
+    // ⚠️ ON にする経路は実の PushNotificationManager（通知の許可）に触れるので、既定の ON → OFF の経路で確かめる。
+
+    /// 計装の pref の値: そらともは "soratomo"、既存の 3 つは値を変えない（要件 14.6）。
+    func testPrefKeyValuesIncludingSoratomo() {
+        let sut = makeSUT(currentUser: User(id: "u1"), firestore: MockFirestoreServiceForSettings())
+
+        XCTAssertEqual(sut.prefKey(.soratomo), "soratomo")
+        XCTAssertEqual(sut.prefKey(.reactions), "reactions")
+        XCTAssertEqual(sut.prefKey(.newPostsFromFollowing), "following")
+        XCTAssertEqual(sut.prefKey(.newPostsFromEveryone), "everyone")
+    }
+
+    /// そらとも通知の既定値は ON（利用者モデルの既定と同じ）。
+    func testSoratomoDefaultsToOn() {
+        let sut = makeSUT(currentUser: User(id: "u1"), firestore: MockFirestoreServiceForSettings())
+
+        XCTAssertTrue(sut.notifySoratomo)
+    }
+
+    /// 設定を開いたら、保存済みの OFF はそのまま OFF、未保存（nil）は ON として読む。
+    func testLoadReflectsSoratomoPreference() async {
+        let firestore = MockFirestoreServiceForSettings()
+        firestore.fetchUserResult = User(id: "u1", notifySoratomo: false)
+        let sut = makeSUT(currentUser: User(id: "u1"), firestore: firestore)
+        await sut.loadNotificationPreferences()
+        XCTAssertFalse(sut.notifySoratomo, "保存済みの OFF を読む")
+
+        let firestoreUnset = MockFirestoreServiceForSettings()
+        firestoreUnset.fetchUserResult = User(id: "u1", notifySoratomo: nil)
+        let sutUnset = makeSUT(currentUser: User(id: "u1"), firestore: firestoreUnset)
+        sutUnset.notifySoratomo = false
+        await sutUnset.loadNotificationPreferences()
+        XCTAssertTrue(sutUnset.notifySoratomo, "未保存は ON として読む")
+    }
+
+    /// そらとも通知の切り替えは、そらとものサービスへだけ保存する（既存の 3 つの保存は呼ばない）。
+    func testSoratomoToggleSavesViaSoratomoProfileService() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let soratomo = MockSoratomoProfileService()
+        soratomo.setNotifySoratomoResult = .success(())
+        let sut = makeSUT(currentUser: User(id: "u1"), firestore: firestore, soratomo: soratomo)
+
+        await sut.setNotificationPreference(.soratomo, enabled: false)
+
+        XCTAssertFalse(sut.notifySoratomo)
+        XCTAssertEqual(soratomo.setNotifySoratomoCalls.count, 1)
+        XCTAssertEqual(soratomo.setNotifySoratomoCalls.first?.uid, "u1")
+        XCTAssertEqual(soratomo.setNotifySoratomoCalls.first?.enabled, false)
+        XCTAssertFalse(firestore.updateCalled, "既存の 3 つの保存は呼ばない")
+        XCTAssertNil(sut.pushNotificationMessage)
+        // 既存の 3 つの値は動かない
+        XCTAssertTrue(sut.notifyReactions)
+        XCTAssertTrue(sut.notifyNewPostsFromFollowing)
+        XCTAssertFalse(sut.notifyNewPostsFromEveryone)
+    }
+
+    /// 既存の 3 つの切り替えは、これまでどおり updateNotificationPreferences へ保存し、そらとものサービスは呼ばない。
+    func testExistingPreferencesDoNotCallSoratomoService() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let soratomo = MockSoratomoProfileService()
+        let sut = makeSUT(currentUser: User(id: "u1"), firestore: firestore, soratomo: soratomo)
+
+        await sut.setNotificationPreference(.reactions, enabled: false)
+        XCTAssertEqual(firestore.updatedPrefs?.reactions, false)
+        XCTAssertEqual(firestore.updatedPrefs?.following, true)
+        XCTAssertEqual(firestore.updatedPrefs?.everyone, false)
+
+        await sut.setNotificationPreference(.newPostsFromFollowing, enabled: false)
+        XCTAssertEqual(firestore.updatedPrefs?.reactions, false)
+        XCTAssertEqual(firestore.updatedPrefs?.following, false)
+        XCTAssertEqual(firestore.updatedPrefs?.everyone, false)
+
+        XCTAssertTrue(soratomo.setNotifySoratomoCalls.isEmpty, "既存の 3 つはそらとものサービスへ行かない")
+        XCTAssertTrue(sut.notifySoratomo, "そらとも通知の値は動かない")
+    }
+
+    /// そらとも通知の保存に失敗したら、元の ON に戻して案内を出す（既存の 3 つと同じ）。
+    func testSoratomoToggleRevertsOnSaveFailure() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let soratomo = MockSoratomoProfileService()
+        soratomo.setNotifySoratomoResult = .failure(.network)
+        let sut = makeSUT(currentUser: User(id: "u1"), firestore: firestore, soratomo: soratomo)
+
+        await sut.setNotificationPreference(.soratomo, enabled: false)
+
+        XCTAssertTrue(sut.notifySoratomo, "保存失敗時は元の true に巻き戻る")
+        XCTAssertNotNil(sut.pushNotificationMessage)
+        XCTAssertFalse(firestore.updateCalled)
+    }
+
+    /// 未ログインなら、そらとも通知も保存せずに戻す。
+    func testSoratomoToggleRevertsWhenNotLoggedIn() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let soratomo = MockSoratomoProfileService()
+        soratomo.setNotifySoratomoResult = .success(())
+        let sut = makeSUT(currentUser: nil, firestore: firestore, soratomo: soratomo)
+
+        await sut.setNotificationPreference(.soratomo, enabled: false)
+
+        XCTAssertTrue(sut.notifySoratomo)
+        XCTAssertTrue(soratomo.setNotifySoratomoCalls.isEmpty)
     }
 
     // MARK: - 退会（アカウント削除）

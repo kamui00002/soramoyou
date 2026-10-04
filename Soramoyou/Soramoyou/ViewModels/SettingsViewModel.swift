@@ -30,6 +30,9 @@ class SettingsViewModel: ObservableObject {
     @Published var notifyNewPostsFromFollowing = true
     /// 誰かが新規投稿したら知らせる（全員）
     @Published var notifyNewPostsFromEveryone = false
+    /// ⭐️ そらとも（友達グループ）で友達が空を投稿したら知らせる（tasks 14.2・要件 10.14〜10.16）。
+    /// 既定値は利用者モデルの既定（未保存は ON）と同じものを使う。保存先だけが既存の 3 つと違う（`users/{uid}.notifySoratomo`）。
+    @Published var notifySoratomo = User.notifySoratomoDefault
     /// プッシュ通知まわりの案内（許可されていない／保存失敗）。誘導アラートに使う。
     @Published var pushNotificationMessage: String?
     /// 通知プレフのトグル切替（直近 Task）。連打時に最後の操作を最終状態にするための直列化に使う（golden-hour と同様）。
@@ -37,14 +40,20 @@ class SettingsViewModel: ObservableObject {
 
     private let authService: AuthServiceProtocol
     private let firestoreService: FirestoreServiceProtocol
+    /// ⭐️ そらとも通知の保存先（`users/{uid}.notifySoratomo` だけを `updateData` で書く・tasks 11.5）
+    private let soratomoProfileService: SoratomoProfileServiceProtocol
 
     /// ゴールデンアワー通知の切替処理（直近の Task）。連打時の直列化に使う。
     private var goldenHourToggleTask: Task<Void, Never>?
 
+    /// - Parameter soratomoProfileService: そらとも通知の保存先。既定は本物（`SoratomoProfileService` は
+    ///   MainActor の型ではなく、作っただけでは Firebase に触れないので、既定の引数で作ってよい）
     init(authService: AuthServiceProtocol = AuthService(),
-         firestoreService: FirestoreServiceProtocol = FirestoreService()) {
+         firestoreService: FirestoreServiceProtocol = FirestoreService(),
+         soratomoProfileService: SoratomoProfileServiceProtocol = SoratomoProfileService()) {
         self.authService = authService
         self.firestoreService = firestoreService
+        self.soratomoProfileService = soratomoProfileService
     }
 
     // MARK: - ゴールデンアワー通知
@@ -97,6 +106,7 @@ class SettingsViewModel: ObservableObject {
         case reactions              // 自分の投稿への いいね/コメント
         case newPostsFromFollowing  // フォロー中の人の新規投稿
         case newPostsFromEveryone   // 誰かの新規投稿（全員）
+        case soratomo               // ⭐️ そらとも（友達グループ）の新規投稿。グループごとではなく、そらとも全体で 1 つ
     }
 
     /// 設定画面を開いたときに、現在の配信プレフを Firestore から読み込む。
@@ -107,6 +117,8 @@ class SettingsViewModel: ObservableObject {
             notifyReactions = user.notifyReactions
             notifyNewPostsFromFollowing = user.notifyNewPostsFromFollowing
             notifyNewPostsFromEveryone = user.notifyNewPostsFromEveryone
+            // ⭐️ そらとも通知は未保存（nil）なら ON として読む（利用者モデルの notifySoratomoEnabled）
+            notifySoratomo = user.notifySoratomoEnabled
         } catch {
             // 取得失敗時は既定値のまま表示する（保存時に再取得する）。
             ErrorHandler.logError(error, context: "SettingsViewModel.loadNotificationPreferences", userId: userId)
@@ -137,14 +149,8 @@ class SettingsViewModel: ObservableObject {
         }
 
         do {
-            // 通知プレフ3つ（＋updatedAt）だけをターゲット更新。User 全体を書かないので
-            // 設定画面を開いている間に増えたフォロー数等を古い値で巻き戻さない。
-            try await firestoreService.updateNotificationPreferences(
-                userId: userId,
-                notifyReactions: notifyReactions,
-                notifyNewPostsFromFollowing: notifyNewPostsFromFollowing,
-                notifyNewPostsFromEveryone: notifyNewPostsFromEveryone
-            )
+            // 保存先は種類で分ける（既存の 3 つ → updateNotificationPreferences、そらとも → setNotifySoratomo）。
+            try await saveNotificationPreference(pref, userId: userId)
             LoggingService.shared.logEvent("push_pref_changed", parameters: [
                 "pref": prefKey(pref),
                 "enabled": enabled
@@ -152,7 +158,12 @@ class SettingsViewModel: ObservableObject {
         } catch {
             apply(pref, !enabled)  // 保存失敗なら戻す
             pushNotificationMessage = "通知設定を保存できませんでした。通信環境をご確認ください。"
-            ErrorHandler.logError(error, context: "SettingsViewModel.setNotificationPreference", userId: userId)
+            if pref == .soratomo {
+                // ⭐️ そらともの失敗の記録は固定の文脈だけ（uid などを混ぜない・要件 15.1・15.4）
+                SoratomoError.record(error, context: "soratomo.setNotifySoratomo")
+            } else {
+                ErrorHandler.logError(error, context: "SettingsViewModel.setNotificationPreference", userId: userId)
+            }
             return
         }
 
@@ -166,21 +177,43 @@ class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// ⭐️ プレフを保存先へ書く（tasks 14.2）。
+    /// - 既存の 3 つ: 通知プレフ3つ（＋updatedAt）だけをターゲット更新。User 全体を書かないので
+    ///   設定画面を開いている間に増えたフォロー数等を古い値で巻き戻さない。
+    /// - そらとも: `users/{uid}.notifySoratomo` だけを書く（既存の 3 つの保存は呼ばない）。
+    /// ⚠️ どちらも Firestore の `updateData` なので、圏外でも失敗にならず、サーバーに届くまで戻らない
+    ///   （既存の 3 つと同じ扱い。画面は楽観的に切り替わったまま、次の切り替えは前の保存の完了を待つ）。
+    private func saveNotificationPreference(_ pref: PushPreference, userId: String) async throws {
+        if pref == .soratomo {
+            try await soratomoProfileService.setNotifySoratomo(uid: userId, enabled: notifySoratomo)
+        } else {
+            try await firestoreService.updateNotificationPreferences(
+                userId: userId,
+                notifyReactions: notifyReactions,
+                notifyNewPostsFromFollowing: notifyNewPostsFromFollowing,
+                notifyNewPostsFromEveryone: notifyNewPostsFromEveryone
+            )
+        }
+    }
+
     /// @Published のプレフ値を更新する（楽観的 UI / 巻き戻し用）。
     private func apply(_ pref: PushPreference, _ value: Bool) {
         switch pref {
         case .reactions: notifyReactions = value
         case .newPostsFromFollowing: notifyNewPostsFromFollowing = value
         case .newPostsFromEveryone: notifyNewPostsFromEveryone = value
+        case .soratomo: notifySoratomo = value
         }
     }
 
     /// 計装用のプレフ識別子（イベントパラメータ）。
-    private func prefKey(_ pref: PushPreference) -> String {
+    /// ⭐️ 単体テストで 4 つの値を固定するため private を外した（tasks 14.2・要件 14.6）。
+    func prefKey(_ pref: PushPreference) -> String {
         switch pref {
         case .reactions: return "reactions"
         case .newPostsFromFollowing: return "following"
         case .newPostsFromEveryone: return "everyone"
+        case .soratomo: return "soratomo"
         }
     }
 
