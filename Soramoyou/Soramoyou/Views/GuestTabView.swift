@@ -181,5 +181,14 @@ struct GuestTabView_Previews: PreviewProvider {
     static var previews: some View {
         GuestTabView()
             .environmentObject(AuthViewModel())
+            // ホームのツールバーの「そらとも」の入口が判定を読む（Preview では常に未ログイン扱いで、入口は出ない）⭐️
+            .environmentObject(SoratomoFeatureGate(provider: SoratomoEntryGuestPreviewProvider()))
     }
+}
+
+/// Preview 用のアカウントの窓口（ログインしていない扱い。FirebaseAuth を呼ばない）⭐️
+@MainActor
+private struct SoratomoEntryGuestPreviewProvider: SoratomoClaimsProviding {
+    func currentAccountKind() -> SoratomoAccountKind? { nil }
+    func claims(forceRefresh _: Bool) async throws -> [String: Any] { [:] }
 }

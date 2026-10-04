@@ -17,6 +17,12 @@ struct MainTabView: View {
     @AppStorage(WhatsNewContent.lastSeenKey) private var lastSeenWhatsNewVersion = ""
     @State private var showWhatsNew = false
 
+    // そらとも（友達グループで空を共有）⭐️ tasks 14.1
+    /// 機能フラグの判定（SoramoyouApp が注入。ログイン時の評価は ContentView）
+    @EnvironmentObject private var soratomoGate: SoratomoFeatureGate
+    /// そらともへの遷移を決めるルーター（全画面のカバーの表示と、通知の保留の行き先を持つ）
+    @ObservedObject private var soratomoRouter = SoratomoRouter.shared
+
     enum Tab: Int, CaseIterable {
         case home = 0
         case gallery = 1
@@ -73,6 +79,12 @@ struct MainTabView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // そらともの根の画面を全画面で出す口 ⭐️ tasks 14.1
+            // ⚠️ What's New の fullScreenCover（外側の ZStack に付いている）とは別の階層（タブの中身の Group）に付ける。
+            //    同じビューに 2 つ付けると片方しか出ないため。What's New の表示中は canPresent を false にして待つ
+            .fullScreenCover(isPresented: $soratomoRouter.isPresented) {
+                SoratomoRootView(router: .shared, dependencies: .live)
+            }
 
             // カスタムフローティングタブバー
             floatingTabBar
@@ -95,6 +107,18 @@ struct MainTabView: View {
         // 全プラットフォームで全画面になる .fullScreenCover を使う（オンボ用途にも適切）。
         .fullScreenCover(isPresented: $showWhatsNew, onDismiss: handleWhatsNewDismiss) {
             WhatsNewView(onClose: { showWhatsNew = false })
+        }
+        // そらともの通知の保留の行き先を、表示できる状況になったら開く ⭐️ tasks 14.1
+        // （タブの画面の表示時・フラグの判定が決まった時・通知のタップが届いた時。
+        //   What's New を閉じた時は handleWhatsNewDismiss から呼ぶ）
+        .onAppear {
+            resolveSoratomoPending()
+        }
+        .onChange(of: soratomoGate.state) { _ in
+            resolveSoratomoPending()
+        }
+        .onChange(of: soratomoRouter.pending) { _ in
+            resolveSoratomoPending()
         }
     }
 
@@ -129,6 +153,29 @@ struct MainTabView: View {
         LoggingService.shared.logEvent(
             "whats_new_dismissed",
             parameters: ["version": WhatsNewContent.currentID]
+        )
+        // What's New の表示中に待たせていた、そらともの通知の行き先をもう一度試す ⭐️ tasks 14.1
+        // （onDismiss は閉じるアニメーションの後に呼ばれるので、ここなら次の全画面を出せる）
+        resolveSoratomoPending()
+    }
+
+    // MARK: - そらとも ⭐️ tasks 14.1
+
+    /// そらともの通知の保留の行き先を、いまの状況で開くか・破棄するか・待つかをルーターに決めさせる
+    ///
+    /// この画面はログイン済みのときだけ出る（ContentView の分岐）ので、ログイン状態は `.signedIn` で渡す。
+    /// 未ログインの保留の破棄は ContentView が行う。
+    /// - フラグの判定前（unknown）: ルーターが保留のまま待つ（判定が決まると onChange でもう一度呼ばれる）
+    /// - フラグが無効: ルーターが破棄して `flag_off` を記録する（そらともの画面は出さない）
+    /// - フラグが有効: What's New の表示中は `canPresent = false` で待ち、閉じたら開く
+    ///
+    /// ⚠️ design.md の Risks のとおり、待ち合わせは What's New だけ。タブの中のほかのシートの表示中や、
+    ///    What's New の 1.5 秒の待ちの間にそらともが先に出た場合の挙動は、実機で確かめる。
+    private func resolveSoratomoPending() {
+        soratomoRouter.resolvePending(
+            session: .signedIn,
+            gate: soratomoGate.state,
+            canPresent: !showWhatsNew
         )
     }
 
@@ -277,7 +324,16 @@ struct MainTabView_Previews: PreviewProvider {
     static var previews: some View {
         MainTabView()
             .environmentObject(AuthViewModel())
+            // そらともの判定（Preview では常に未ログイン扱いの窓口。入口もカバーも出ない）⭐️
+            .environmentObject(SoratomoFeatureGate(provider: SoratomoEntryMainTabPreviewProvider()))
     }
+}
+
+/// Preview 用のアカウントの窓口（ログインしていない扱い。FirebaseAuth を呼ばない）⭐️
+@MainActor
+private struct SoratomoEntryMainTabPreviewProvider: SoratomoClaimsProviding {
+    func currentAccountKind() -> SoratomoAccountKind? { nil }
+    func claims(forceRefresh _: Bool) async throws -> [String: Any] { [:] }
 }
 
 
