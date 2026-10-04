@@ -420,4 +420,15 @@ final class SoratomoTimelineViewModelTests: XCTestCase {
         XCTAssertEqual(days.map(\.title), ["今日", "昨日"])
         XCTAssertEqual(days.map { $0.skies.map(\.id) }, [["a", "b"], ["c"]])
     }
+
+    // MARK: - 投稿画像の VoiceOver の説明（14.3 の点検で直した・要件 16.5）
+
+    func testRowImageLabelUsesCaptionOrFallsBackForEmptyOrWhitespace() {
+        // キャプションがあればキャプション
+        XCTAssertEqual(SoratomoTimelineRow.imageAccessibilityLabel(caption: "夕焼け", authorName: "そら"), "夕焼け")
+        // nil・空・空白だけは「{表示名}さんの空」
+        XCTAssertEqual(SoratomoTimelineRow.imageAccessibilityLabel(caption: nil, authorName: "そら"), "そらさんの空")
+        XCTAssertEqual(SoratomoTimelineRow.imageAccessibilityLabel(caption: "", authorName: "そら"), "そらさんの空")
+        XCTAssertEqual(SoratomoTimelineRow.imageAccessibilityLabel(caption: "  ", authorName: "そら"), "そらさんの空")
+    }
 }

@@ -60,8 +60,8 @@ struct SoratomoInviteView: View {
             .navigationTitle("友達を招待")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
-                // 画面名「そらとも招待」を記録し、グループの監視を始める（張り直しは ViewModel が防ぐ）
-                SoratomoAnalytics.screen(.invite)
+                // グループの監視を始める（張り直しは ViewModel が防ぐ）。
+                // 画面名の記録は根の画面（SoratomoRootView）がパスの変化で 1 回だけ行う（14.3 の点検で集約）
                 viewModel.start()
             }
             .sheet(isPresented: $isShowingShareSheet) {

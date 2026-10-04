@@ -38,7 +38,9 @@ struct SoratomoGroupListView: View {
         _viewModel = StateObject(
             wrappedValue: SoratomoGroupListViewModel(
                 groupService: dependencies.groupService,
-                currentUid: dependencies.currentUid
+                currentUid: dependencies.currentUid,
+                // パスが空 = 入口から開いた。通知から開いたとき（パスにタイムラインがある）は soratomo_opened を記録しない
+                logsOpened: router.path.isEmpty
             )
         )
     }
@@ -86,10 +88,7 @@ struct SoratomoGroupListView: View {
                 guard isEmpty else { return }
                 Task { await viewModel.load() }
             }
-            .onAppear {
-                // 画面の切り替えで 1 回記録する（一覧へ戻ったときも、画面が切り替わったので記録する）
-                SoratomoAnalytics.screen(.groupList)
-            }
+            // 画面名の記録は根の画面（SoratomoRootView）がパスの変化で 1 回だけ行う（14.3 の点検で集約）
     }
 
     // MARK: - 中身

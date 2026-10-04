@@ -54,10 +54,7 @@ struct SoratomoMembersView: View {
             .task {
                 await reload()
             }
-            .onAppear {
-                // 画面の切り替えで 1 回記録する（この画面から先へ進む画面は無いので、表示のたびに重ならない）
-                SoratomoAnalytics.screen(.members)
-            }
+            // 画面名の記録は根の画面（SoratomoRootView）がパスの変化で 1 回だけ行う（14.3 の点検で集約）
     }
 
     // MARK: - 中身

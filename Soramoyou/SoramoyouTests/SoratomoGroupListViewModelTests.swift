@@ -71,6 +71,33 @@ final class SoratomoGroupListViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.errorMessage, SoratomoError.network.userMessage)
     }
 
+    func testOpenedFromNotificationDoesNotLogOpened() async {
+        // 通知から開いたとき（一覧の上にタイムライン）は、入口から開いたことにならない（14.3 の点検で直した）
+        let service = MockSoratomoGroupService()
+        service.fetchMyGroupsResult = .success([makeGroup(id: "g1")])
+        let log = EventLog()
+        let viewModel = SoratomoGroupListViewModel(
+            groupService: service,
+            currentUid: { "me" },
+            logsOpened: false,
+            logEvent: { log.events.append($0) }
+        )
+
+        await viewModel.load()
+
+        XCTAssertTrue(log.events.isEmpty)
+        XCTAssertEqual(service.fetchMyGroupsCalls, ["me"])
+    }
+
+    func testScreenNameFollowsLastDestinationInPath() {
+        // 画面名は、パスの末尾（いま見えている画面）で決まる。空なら一覧（14.3 の点検で根の画面へ集約）
+        XCTAssertEqual(SoratomoRootView.screen(for: []), .groupList)
+        XCTAssertEqual(SoratomoRootView.screen(for: [.timeline(groupId: "g")]), .timeline)
+        XCTAssertEqual(SoratomoRootView.screen(for: [.timeline(groupId: "g"), .invite(groupId: "g")]), .invite)
+        XCTAssertEqual(SoratomoRootView.screen(for: [.timeline(groupId: "g"), .members(groupId: "g")]), .members)
+        XCTAssertEqual(SoratomoRootView.screen(for: [.timeline(groupId: "g"), .skyDetail(groupId: "g", skyId: "s")]), .skyDetail)
+    }
+
     func testSignedOutDoesNotLoad() async {
         let service = MockSoratomoGroupService()
         let viewModel = SoratomoGroupListViewModel(

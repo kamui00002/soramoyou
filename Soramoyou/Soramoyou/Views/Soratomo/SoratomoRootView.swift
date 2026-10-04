@@ -41,12 +41,36 @@ struct SoratomoRootView: View {
         .overlay(alignment: .top) {
             noticeBanner
         }
+        // 画面名の記録（要件 14.5）。各画面の onAppear は、戻るスワイプを途中でやめたときなどに重ねて発火しうるので、
+        // パス（`router.path`）を単一の真実源にして「画面の切り替え 1 回 = 記録 1 回」にする（MainTabView の selectedTab と同じ形）。
+        // 投稿画面（シート）はパスに入らないので、投稿画面の側で記録する
+        .task {
+            SoratomoAnalytics.screen(Self.screen(for: router.path))
+        }
+        .onChange(of: router.path) { newPath in
+            // 閉じるとき（dismiss は isPresented を先に false にしてからパスを空にする）は記録しない
+            guard router.isPresented else { return }
+            SoratomoAnalytics.screen(Self.screen(for: newPath))
+        }
         // 一時表示が変わるたびに、数秒後に消す（同じ文言が続けて来ても、id が nil を挟むので数え直す）
         .task(id: router.notice) {
             guard router.notice != nil else { return }
             try? await Task.sleep(nanoseconds: Self.noticeSeconds * 1_000_000_000)
             guard !Task.isCancelled else { return }
             router.notice = nil
+        }
+    }
+
+    // MARK: - 画面名
+
+    /// パスの末尾（いま見えている画面）の画面名。パスが空なら一覧
+    static func screen(for path: [SoratomoDestination]) -> SoratomoScreen {
+        switch path.last {
+        case nil: .groupList
+        case .timeline: .timeline
+        case .invite: .invite
+        case .members: .members
+        case .skyDetail: .skyDetail
         }
     }
 

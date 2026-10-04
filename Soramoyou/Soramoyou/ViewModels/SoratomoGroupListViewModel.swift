@@ -36,15 +36,20 @@ final class SoratomoGroupListViewModel: ObservableObject {
     /// - Parameters:
     ///   - groupService: グループのサービス
     ///   - currentUid: いまログインしている利用者の uid を返す
+    ///   - logsOpened: `soratomo_opened` を記録するか。入口から開いたときだけ true（要件 14 の表の「入口からグループ一覧を開いた」）。
+    ///     通知から開いたとき（一覧の上にタイムライン）は false にする（14.3 の点検で直した）
     ///   - logEvent: 計測の記録。既定は本番の `SoratomoAnalytics.log`
     init(
         groupService: any SoratomoGroupServiceProtocol,
         currentUid: @escaping () -> String?,
+        logsOpened: Bool = true,
         logEvent: @escaping (SoratomoEvent) -> Void = SoratomoAnalytics.log
     ) {
         self.groupService = groupService
         self.currentUid = currentUid
         self.logEvent = logEvent
+        // 記録しないときは「記録済み」として始める（load の 1 回だけの判定をそのまま使う）
+        hasLoggedOpened = !logsOpened
     }
 
     // MARK: - 読み込み

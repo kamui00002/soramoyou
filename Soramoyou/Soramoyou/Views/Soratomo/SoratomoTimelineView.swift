@@ -127,10 +127,7 @@ struct SoratomoTimelineView: View {
             .task(id: authorIds) {
                 await profileStore.prefetch(uids: authorIds)
             }
-            .onAppear {
-                // 画面の切り替えで 1 回記録する（投稿詳細などから戻ったときも、画面が切り替わったので記録する）
-                SoratomoAnalytics.screen(.timeline)
-            }
+            // 画面名の記録は根の画面（SoratomoRootView）がパスの変化で 1 回だけ行う（14.3 の点検で集約）
     }
 
     // MARK: - 中身
@@ -432,9 +429,15 @@ struct SoratomoTimelineRow: View {
 
     /// 投稿画像の VoiceOver の説明
     private var imageAccessibilityLabel: String {
-        if let caption = sky.caption, !caption.isEmpty {
-            return caption
-        }
-        return "\(authorName)さんの空"
+        Self.imageAccessibilityLabel(caption: sky.caption, authorName: authorName)
+    }
+
+    /// 投稿画像の VoiceOver の説明を作る（14.3 の点検で直した・テストで固定する）
+    ///
+    /// 規則は投稿詳細（`SoratomoSkyDetailView.imageAccessibilityLabel`）と同じにする。
+    /// キャプションは前後の空白を除かずに保存されうる（`sanitizeCaption` は改行だけを除く）ので、
+    /// 空白だけのキャプションも「無い」として「{表示名}さんの空」にする（要件 16.5）。
+    static func imageAccessibilityLabel(caption: String?, authorName: String) -> String {
+        SoratomoSkyDetailView.imageAccessibilityLabel(caption: caption, displayName: authorName)
     }
 }
