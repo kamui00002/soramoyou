@@ -43,6 +43,8 @@ enum SoratomoFirestorePath {
 /// - ⚠️ 札が解放されると、自動で止まる（`deinit` で `cancel()` を呼ぶ）。
 ///   監視を続けたい間は、ViewModel のプロパティに札を持っておくこと。`_ = service.observe…` のように
 ///   受け取らずに捨てると、その場で監視が止まる。
+/// - ⚠️ `observe〜` に渡す `onChange` では、札の持ち主（ViewModel）を `[weak self]` で捕まえること。
+///   強く捕まえると「SDK → onChange → ViewModel → 札」の輪ができ、ViewModel も札も解放されず、監視が止まらない。
 ///   逆に、件数の上限を伸ばして張り直すとき（tasks 11.2）は、新しい札でプロパティを上書きするだけで
 ///   古い監視が止まる（止め忘れによる二重の監視を防ぐため、この形にした）。
 final class SoratomoListenerToken: @unchecked Sendable {
