@@ -253,6 +253,16 @@
 - 上限 30 件のチェックは書き込み前にクライアント側で行う（`arrayUnion` は配列長を見ない）。判定は必ずサーバーから取り直した最新値に対して行うこと。
 - 旧ユーザーはフィールド自体が存在しない（＝欠落）。読み込み側は Optional で扱う。
 
+## users への追加フィールド（そらとも通知）⭐️（2026-10-04）
+```json
+{
+  "notifySoratomo": "boolean"   // 通知: 参加しているそらともグループの新着投稿（既定 true・欠落=true）
+}
+```
+- 既定値（ON）は **iOS `User.notifySoratomoDefault` と Cloud Functions `functions/soratomoCore.js` の `SORATOMO_PREF_DEFAULT` で一致必須**。真偽値でない値も欠落と同じ扱い（ON）。
+- 既存の通知プレフ 3 つ（`functions/index.js` の `PREF_DEFAULTS`）には**混ぜない**。別の項目・別の既定値として持つ（要件 13.7）。
+- 書き込みは `notifySoratomo` だけを `updateData` で行う（そらとものプロフィールの窓口）。`User.toFirestoreData()` では書かない。`followedTags` と同じ理由で、User 全体の setData(merge) が手元の古い値でサーバーの最新値を巻き戻すため。
+
 ## publicProfiles コレクション — 書き込み契約 ⭐️
 
 - **`followersCount` / `followingCount` はクライアント書き込み対象外**。正典はCloud Functions（`onFollowCreated` / `onFollowDeleted`）が `follows` を `count()` した結果を代入する値。
@@ -305,6 +315,27 @@
   `expireAt` に **TTL ポリシー**を設定して自動削除する（未設定だと消えない）:
   `gcloud firestore fields ttls update expireAt --collection-group=recommendationNotices --enable-ttl --project=soramoyou-ios`
   期限後は同じ組でも再び通知されうる（1 年に 1 回までなら連打にはならない）。
+
+## そらとも（友達グループで空を共有）のコレクション ⭐️（2026-10-04・spec: `.kiro/specs/soratomo/`）
+
+| コレクション | 文書ID | 項目 | 書き手 |
+|---|---|---|---|
+| `soratomoGroups` | 自動ID | `name`・`ownerId`・`inviteCode`・`memberCount`・`createdAt`・`lastActivityAt` | Functions |
+| `soratomoGroups/{groupId}/members` | uid | `uid`・`role`（`owner` / `member`）・`joinedAt` | Functions |
+| `soratomoGroups/{groupId}/skies` | 自動ID | `authorId`・`caption`（任意）・`width`・`height`・`createdAt`（サーバー時刻） | アプリ（作成・削除だけ） |
+| `soratomoGroups/{groupId}/notifyState` | 受信者の uid | `lastSentAt`・`lastSkyId` | Functions |
+| `soratomoInviteCodes` | 招待コード | `groupId`・`createdAt` | Functions |
+| `soratomoUsers` | uid | `groupCount`・`lastCreateRequestId`・`lastCreatedGroupId`・`updatedAt` | Functions |
+| `soratomoUsers/{uid}/groups` | groupId | `groupId`・`joinedAt` | Functions |
+
+- 画像は Storage の `soratomo/{groupId}/{authorId}/{skyId}/display.jpg` と `thumb.jpg`。パスは iOS の `SoratomoImagePaths` だけが作る。`skies` には画像のパスや URL の項目を持たない（ルールが拒否する）。
+- そらともの投稿は iOS では `SoratomoSky`（既存の `Post` とは別の型）。既存の画面・お気に入り・おすすめ・ウィジェット・カレンダーへは型の上で渡せない（要件 13.2〜13.4）。
+- サブコレクションに `posts` の名前を使わない。collectionGroup のクエリと `{path=**}` のルールも使わない（既存の投稿のクエリ・ルールに混ざらないため・要件 13.1）。
+- 読み書きの条件は `firestore.rules` と `storage.rules` の `soratomo` の節（クレーム `soratomoBeta` とメンバー判定）。
+- **一致させる値**（片方だけ変えると、アプリが通すものをサーバーが拒否する、またはその逆になる）。文字数はすべてコードポイントで数える。
+  - 招待コードの字種・長さ・区切りの文字: iOS `SoratomoInviteCode` ⇔ Functions `soratomoCore.js`（`INVITE_ALPHABET`・`INVITE_CODE_LENGTH`・`INVITE_CODE_SEPARATORS`）
+  - グループ名の上限 30: iOS `SoratomoTextRules.groupNameMax` ⇔ Functions `GROUP_NAME_MAX`
+  - キャプションの上限 100 と改行の禁止: iOS `SoratomoTextRules`（`captionMax`・`sanitizeCaption`）⇔ ルールの `isValidSoratomoCaption`
 
 ---
 
