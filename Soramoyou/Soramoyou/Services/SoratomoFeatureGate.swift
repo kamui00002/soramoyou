@@ -155,6 +155,17 @@ final class SoratomoFeatureGate: ObservableObject {
     }
 
     /// サインアウト時に判定を戻す（`unknown` にして入口を隠す）
+    /// トークンを一時的に取れなかったときだけ、もう一度判定する（アプリが前面に戻ったときに呼ぶ・レビューで足した）
+    ///
+    /// 判定し直すのはログイン状態が変わったときだけなので、起動時に通信できずにトークンを取れないと、
+    /// その起動の間ずっと入口が出なかった。ほかの状態（有効・クレーム無しなど）では何もしない。
+    /// - Returns: 判定の後の状態
+    @discardableResult
+    func reevaluateIfTokenUnavailable() async -> State {
+        guard state == .disabled(.tokenUnavailable) else { return state }
+        return await evaluate()
+    }
+
     func reset() {
         generation += 1
         state = .unknown

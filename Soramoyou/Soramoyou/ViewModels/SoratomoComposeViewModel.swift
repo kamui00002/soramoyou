@@ -59,6 +59,8 @@ final class SoratomoComposeViewModel: ObservableObject {
     /// ⚠️ 失敗は `throws(SoratomoError)` ではなく `Result` で返す。typed throws の関数の型を値として持つ
     ///    （Optional で包む・既定値にする）と、実行時の型の情報に iOS 18 が要る。下限は iOS 16 のため。
     typealias Encode = @Sendable (Data) async -> Result<SoratomoEncodedImages, SoratomoError>
+    /// 写真の元のバイト列からプレビューを作る（既定は `makePreview(from:)`。テストで待たせるために差し替える）
+    typealias MakePreview = @Sendable (Data) async -> UIImage?
 
     // MARK: - 定数
 
@@ -114,6 +116,15 @@ final class SoratomoComposeViewModel: ObservableObject {
     /// 写真を選び直した回数（古い写真のプレビュー作りが、新しい写真を上書きしないため）
     private var photoGeneration = 0
 
+    /// 選び直した写真のプレビューを作っている間か（その間は確定できない。レビューで直した）
+    ///
+    /// 作っている間も `photoData` は前の写真のままなので、ここで止めないと、画面に出る写真（選び直した後）と
+    /// 送られる写真（選び直す前）が食い違う。
+    @Published private(set) var isPreparingPhoto = false
+
+    /// プレビューを作る
+    private let makePreviewImage: MakePreview
+
     // MARK: - Init
 
     /// - Parameters:
@@ -124,6 +135,7 @@ final class SoratomoComposeViewModel: ObservableObject {
     ///   - currentUid: いまログインしている利用者の uid を返す
     ///   - now: いまの時刻を返す（既定は `Date()`）
     ///   - encode: 写真の変換（既定はメインアクターの外で `SoratomoImageEncoder.encode`）
+    ///   - makePreview: プレビューの作成（既定は `makePreview(from:)`）
     ///   - beginBackgroundTask: 背景で処理を続ける口（既定は `UIApplication.beginBackgroundTask`）
     ///   - endBackgroundTask: 背景で処理を続ける口を閉じる（既定は `UIApplication.endBackgroundTask`）
     ///   - logEvent: 計測の記録。既定は本番の `SoratomoAnalytics.log`
@@ -136,6 +148,7 @@ final class SoratomoComposeViewModel: ObservableObject {
         now: @escaping () -> Date = Date.init,
         // 関数の参照ではなくクロージャで包む（Swift 5 モードで、参照を @Sendable に変える警告を出さないため）
         encode: @escaping Encode = { await SoratomoComposeViewModel.encodeOffMainActor($0) },
+        makePreview: @escaping MakePreview = { await SoratomoComposeViewModel.makePreview(from: $0) },
         beginBackgroundTask: @escaping BeginBackgroundTask = SoratomoComposeViewModel.beginApplicationBackgroundTask,
         endBackgroundTask: @escaping EndBackgroundTask = SoratomoComposeViewModel.endApplicationBackgroundTask,
         logEvent: @escaping (SoratomoEvent) -> Void = SoratomoAnalytics.log
@@ -147,6 +160,7 @@ final class SoratomoComposeViewModel: ObservableObject {
         self.currentUid = currentUid
         self.now = now
         self.encode = encode
+        self.makePreviewImage = makePreview
         self.beginBackgroundTask = beginBackgroundTask
         self.endBackgroundTask = endBackgroundTask
         self.logEvent = logEvent
@@ -176,7 +190,7 @@ final class SoratomoComposeViewModel: ObservableObject {
 
     /// 確定できるか（写真が使えて、キャプションが上限以内で、送信中・完了後でない）
     var canSubmit: Bool {
-        photoData != nil && !isCaptionOverLimit && !isBusy && phase != .finished
+        photoData != nil && !isPreparingPhoto && !isCaptionOverLimit && !isBusy && phase != .finished
     }
 
     /// 失敗の文言（失敗していなければ nil）
@@ -211,15 +225,22 @@ final class SoratomoComposeViewModel: ObservableObject {
         let generation = photoGeneration
 
         guard let data, !data.isEmpty else {
+            isPreparingPhoto = false
             showUnreadablePhoto()
             return
         }
 
-        // プレビュー作りは画像の展開を伴うので、メインアクターの外で行う
-        let preview = await Self.makePreview(from: data)
+        // 作っている間は確定させない（前の写真が送られないように）
+        isPreparingPhoto = true
 
-        // 待っている間に別の写真が選ばれていたら、古い結果は捨てる
+        // プレビュー作りは画像の展開を伴うので、メインアクターの外で行う
+        let preview = await makePreviewImage(data)
+
+        // 待っている間に別の写真が選ばれていたら、古い結果は捨てる（準備中の印は、新しい選択が下ろす）
         guard generation == photoGeneration else { return }
+        isPreparingPhoto = false
+        // 念のため: 送信中・完了後には写真を差し替えない（送っている写真と画面の写真が食い違うため）
+        guard !isBusy, phase != .finished else { return }
 
         guard let preview else {
             showUnreadablePhoto()

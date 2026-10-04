@@ -216,7 +216,10 @@ final class SoratomoRouter: ObservableObject {
         }
 
         switch gate {
-        case .unknown:
+        case .unknown, .disabled(.tokenUnavailable):
+            // 判定前・トークンを一時的に取れない間は、保留のまま待つ。取れなかったのは通信などのせいで、
+            // フラグが無効と決まったわけではない（flag_off と記録すると計測の意味がずれる。レビューで直した）。
+            // 前面に戻ったときにゲートが判定し直し、結果が変わればもう一度ここが呼ばれる
             return
         case .disabled:
             discardPending(as: .flagOff)

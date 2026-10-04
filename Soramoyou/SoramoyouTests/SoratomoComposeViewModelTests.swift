@@ -41,6 +41,16 @@ final class SoratomoComposeViewModelTests: XCTestCase {
     }
 
     /// 変換を途中で止めておく門（二重の確定を、送信の途中で試すため）
+    /// プレビューの作成を止めるかの切り替え（最初の写真は止めず、選び直した写真だけ止めるため）
+    private final class PreviewSwitch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var block = false
+        var shouldBlock: Bool {
+            get { lock.lock(); defer { lock.unlock() }; return block }
+            set { lock.lock(); block = newValue; lock.unlock() }
+        }
+    }
+
     private final class EncodeGate: @unchecked Sendable {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<Void, Never>?
@@ -147,7 +157,8 @@ final class SoratomoComposeViewModelTests: XCTestCase {
     /// テスト対象を作る
     private func makeViewModel(
         now: @escaping () -> Date = { Date(timeIntervalSince1970: 1_000_000) },
-        encode: SoratomoComposeViewModel.Encode? = nil
+        encode: SoratomoComposeViewModel.Encode? = nil,
+        makePreview: SoratomoComposeViewModel.MakePreview? = nil
     ) -> SoratomoComposeViewModel {
         let images = Self.encodedImages
         // 既定の変換は、決まった 2 枚を返すだけ
@@ -162,6 +173,7 @@ final class SoratomoComposeViewModelTests: XCTestCase {
             currentUid: { "me" },
             now: now,
             encode: encode ?? succeedingEncode,
+            makePreview: makePreview ?? { await SoratomoComposeViewModel.makePreview(from: $0) },
             beginBackgroundTask: { handler in
                 background.beginCount += 1
                 background.onExpiration = handler
@@ -170,6 +182,38 @@ final class SoratomoComposeViewModelTests: XCTestCase {
             endBackgroundTask: { background.ended.append($0) },
             logEvent: { log.events.append($0) }
         )
+    }
+
+    // MARK: - 写真の選び直し（レビューで直した）
+
+    func testReselectingPhotoBlocksSubmitUntilPreviewIsReady() async {
+        let gate = EncodeGate()
+        let previewSwitch = PreviewSwitch()
+        let viewModel = makeViewModel(makePreview: { data in
+            if previewSwitch.shouldBlock {
+                await gate.wait()
+            }
+            return await SoratomoComposeViewModel.makePreview(from: data)
+        })
+        // 写真 A を選んで、確定できる状態にする
+        await fillInput(viewModel)
+
+        // 写真 B を選び直す。プレビューを作っている間は、前の写真（A）を送らせない
+        previewSwitch.shouldBlock = true
+        let reselect = Task { await viewModel.selectPhoto(Self.makeJPEG()) }
+        while !gate.hasEntered {
+            await Task.yield()
+        }
+        XCTAssertTrue(viewModel.isPreparingPhoto)
+        XCTAssertFalse(viewModel.canSubmit)
+        await viewModel.submit()
+        XCTAssertTrue(skyService.newSkyIdCalls.isEmpty)
+
+        // B のプレビューができたら、確定できる
+        gate.open()
+        await reselect.value
+        XCTAssertFalse(viewModel.isPreparingPhoto)
+        XCTAssertTrue(viewModel.canSubmit)
     }
 
     /// 写真とキャプションを入れた状態にする

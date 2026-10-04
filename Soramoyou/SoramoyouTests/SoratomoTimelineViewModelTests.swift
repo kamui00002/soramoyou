@@ -155,9 +155,13 @@ final class SoratomoTimelineViewModelTests: XCTestCase {
 
         XCTAssertTrue(fixture.recorder.accessible.isEmpty)
         XCTAssertTrue(fixture.recorder.notAccessible.isEmpty)
-        // 引き下げの更新で、止まったグループの監視を張り直す
-        fixture.viewModel.refresh()
-        XCTAssertEqual(fixture.groupService.observeGroupCalls, [groupId, groupId])
+        // 監視は止めない（サービスの監視は続いていて、つながれば結果が届く。レビューで直した）
+        XCTAssertTrue(fixture.groupService.cancelledGroupObservations.isEmpty)
+
+        // つながってグループが届いたら、手動の更新なしで「読めた」を知らせる
+        fixture.groupService.emitGroup(groupId: groupId, .success(makeGroup()))
+        XCTAssertEqual(fixture.recorder.accessible, [groupId])
+        XCTAssertEqual(fixture.groupService.observeGroupCalls, [groupId])
     }
 
     func testStartTwiceDoesNotObserveTwice() {

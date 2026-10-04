@@ -132,6 +132,32 @@ final class SoratomoFeatureGateTests: XCTestCase {
         XCTAssertFalse(gate.isEnabled)
     }
 
+    func testReevaluateAfterTokenFailureBecomesEnabled() async {
+        // 起動時に取れなかったら、前面に戻ったときの判定し直しで有効になる（レビューで足した）
+        provider.kind = .registered
+        provider.results = [.failure(MockClaimsProvider.TokenError()), .success(["soratomoBeta": true])]
+        await gate.evaluate()
+        XCTAssertEqual(gate.state, .disabled(.tokenUnavailable))
+
+        let state = await gate.reevaluateIfTokenUnavailable()
+
+        XCTAssertEqual(state, .enabled)
+        XCTAssertEqual(provider.forceRefreshCalls.count, 2)
+    }
+
+    func testReevaluateDoesNothingUnlessTokenUnavailable() async {
+        // クレーム無しで決まった判定は、前面に戻っても問い合わせ直さない
+        provider.kind = .registered
+        provider.results = [.success([:])]
+        await gate.evaluate()
+        XCTAssertEqual(gate.state, .disabled(.claimMissing))
+
+        let state = await gate.reevaluateIfTokenUnavailable()
+
+        XCTAssertEqual(state, .disabled(.claimMissing))
+        XCTAssertEqual(provider.forceRefreshCalls.count, 1)
+    }
+
     // MARK: - 有効になる場合
 
     func testTrueClaimIsEnabled() async {

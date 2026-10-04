@@ -100,6 +100,11 @@ struct SoramoyouApp: App {
                 Task {
                     await GoldenHourNotificationManager.shared.rescheduleIfEnabled()
                 }
+                // そらとも（友達グループで空を共有）⭐️: 起動時にトークンを取れなかったときだけ、判定し直す
+                // （取れれば入口が出て、待っていた通知の保留も解決される）
+                Task {
+                    await soratomoGate.reevaluateIfTokenUnavailable()
+                }
             }
         }
     }

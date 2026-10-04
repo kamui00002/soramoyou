@@ -126,6 +126,16 @@ struct MainTabView: View {
 
     /// アップデートした既存ユーザーにのみ、新機能紹介を1回だけ表示する。
     /// ATT/AdMob 等のシステムダイアログと衝突しないよう少し待ってから出す。
+    /// 猶予の後に What's New を出してよいか ⭐️ tasks 14.1（レビューで足した）
+    ///
+    /// そらとも（友達グループで空を共有）の全画面が先に出ているときは出さない。出そうとすると、子のカバーの表示中に
+    /// 親から 2 枚目を出すことになり、表示に失敗して `showWhatsNew` が true のまま残りうる。残ると、この起動の間は
+    /// そらともの通知の保留が解決されなくなる（canPresent がずっと false）。出さなかった場合は既読にならないので、
+    /// 次回の起動で出る（design.md の Risks に書いた挙動と同じ）。
+    static func canShowWhatsNewAfterDelay(lastSeenID: String, currentID: String, isSoratomoPresented: Bool) -> Bool {
+        lastSeenID != currentID && !isSoratomoPresented
+    }
+
     private func maybeShowWhatsNew() async {
         guard WhatsNewGate.shouldPresent(
             currentID: WhatsNewContent.currentID,
@@ -136,8 +146,12 @@ struct MainTabView: View {
         // 起動直後は ATT/AdMob ダイアログが先に出るため、その猶予を与える
         try? await Task.sleep(nanoseconds: 1_500_000_000)
 
-        // 猶予中に既読化された場合は出さない
-        guard lastSeenWhatsNewVersion != WhatsNewContent.currentID else { return }
+        // 猶予中に既読化された場合・そらともの全画面が先に出ている場合は出さない
+        guard Self.canShowWhatsNewAfterDelay(
+            lastSeenID: lastSeenWhatsNewVersion,
+            currentID: WhatsNewContent.currentID,
+            isSoratomoPresented: soratomoRouter.isPresented
+        ) else { return }
 
         showWhatsNew = true
         LoggingService.shared.logEvent(

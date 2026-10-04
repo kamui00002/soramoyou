@@ -52,8 +52,8 @@ final class SoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Sendable 
     /// タイムラインを監視する（作成日時の新しい順・最大 `limit` 件）
     ///
     /// - `includeMetadataChanges: true` で監視する。理由: `false` だと、キャッシュの結果（`isFromCache == true`）の後に
-    ///   サーバーが同じ内容を返しても、中身が変わらないので 2 回目の結果が届かない。画面が「オフライン」の表示を
-    ///   戻せなくなる（要件 12.1）。`limit` は 20〜60 なので、metadata だけの発火が増えるコストは無視できる。
+    ///   サーバーが同じ内容を返しても、中身が変わらないので 2 回目の結果が届かない。ViewModel が失敗の表示や
+    ///   続きの読み込み中を解除できなくなる（オフラインの表示そのものは `NetworkStatusMonitor` で出している）。`limit` は 20〜60 なので、metadata だけの発火が増えるコストは無視できる。
     /// - `createdAt` は送信直後の推定値で読む（`serverTimestampBehavior = .estimate`）。
     /// - 札が止められた（`cancel()` か解放）後は、すでにメインアクターへの引き継ぎ待ちだった結果も届けない。
     ///   上限を伸ばして張り直すとき、古い監視の遅れた結果が新しい結果を上書きしないようにするため。

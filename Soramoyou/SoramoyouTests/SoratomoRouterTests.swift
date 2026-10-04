@@ -212,7 +212,8 @@ final class SoratomoRouterTests: XCTestCase {
 
     /// フラグが無効なら、理由に関わらず、破棄して flag_off を記録する。そらともの画面は出さない
     func testResolvePending_disabledGateDiscardsAndLogsFlagOff() {
-        let reasons: [SoratomoFeatureGate.DisabledReason] = [.signedOut, .anonymous, .claimMissing, .tokenUnavailable]
+        // tokenUnavailable（一時的に取れない）は破棄せずに待つ（下の別のテスト）
+        let reasons: [SoratomoFeatureGate.DisabledReason] = [.signedOut, .anonymous, .claimMissing]
         for reason in reasons {
             eventLog.events.removeAll()
             router.receive(userInfo: soratomoUserInfo())
@@ -224,6 +225,29 @@ final class SoratomoRouterTests: XCTestCase {
             XCTAssertEqual(router.path, [], "\(reason)")
             XCTAssertEqual(eventLog.events, [.notificationOpened(.flagOff)], "\(reason)")
         }
+    }
+
+    /// トークンを一時的に取れない間は、破棄も記録もせずに待つ。取れて有効になったら開く（レビューで直した）
+    func testResolvePending_tokenUnavailableKeepsPendingUntilEnabled() {
+        router.receive(userInfo: soratomoUserInfo())
+
+        router.resolvePending(session: .signedIn, gate: .disabled(.tokenUnavailable), canPresent: true)
+
+        XCTAssertNotNil(router.pending)
+        XCTAssertFalse(router.isPresented)
+        XCTAssertTrue(eventLog.events.isEmpty)
+
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
+        XCTAssertNil(router.pending)
+        XCTAssertTrue(router.isPresented)
+    }
+
+    /// What's New は、そらともの全画面が先に出ているときは出さない（14.1・レビューで直した）
+    func testWhatsNewIsNotShownWhileSoratomoIsPresented() {
+        XCTAssertTrue(MainTabView.canShowWhatsNewAfterDelay(lastSeenID: "old", currentID: "new", isSoratomoPresented: false))
+        XCTAssertFalse(MainTabView.canShowWhatsNewAfterDelay(lastSeenID: "old", currentID: "new", isSoratomoPresented: true))
+        // 既読なら、そらともに関係なく出さない（前からの判定）
+        XCTAssertFalse(MainTabView.canShowWhatsNewAfterDelay(lastSeenID: "new", currentID: "new", isSoratomoPresented: false))
     }
 
     /// フラグが無効なら、ほかの全画面が出ている間（canPresent == false）でも待たずに破棄する

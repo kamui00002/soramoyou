@@ -157,7 +157,11 @@ struct SoratomoSkyDraft: Equatable, Sendable {
 struct SoratomoTimelineSnapshot: Equatable, Sendable {
     /// 作成日時の新しい順の投稿
     let skies: [SoratomoSky]
-    /// 端末のキャッシュからの結果か（オフラインの表示に使う・要件 12.1）
+    /// 端末のキャッシュからの結果か
+    ///
+    /// ⚠️ いまの画面は読んでいない（オフラインの表示は `NetworkStatusMonitor.isOnline` で出している）。
+    ///    監視を `includeMetadataChanges: true` にしているので、同じ内容でもキャッシュ→サーバーの切り替わりで結果が届き、
+    ///    失敗の表示の解除や続きの読み込み中の解除に使われる。この値そのものは将来のオフライン表示のために残している
     let isFromCache: Bool
     /// 続きがありうるか（件数が上限と等しい）
     let mayHaveMore: Bool

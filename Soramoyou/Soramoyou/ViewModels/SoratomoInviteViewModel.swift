@@ -170,10 +170,10 @@ final class SoratomoInviteViewModel: ObservableObject {
             inviteCode = newCode
             logEvent(.inviteCodeRegenerated)
         } catch {
-            let failure = Self.soratomoError(from: error)
+            // サービスは typed throws なので、error はそのまま SoratomoError（ほかの ViewModel と同じ書き方）
             // 表示中のコード（inviteCode）は変えない（要件 3.12）
-            SoratomoError.record(failure, context: "soratomo.regenerateInviteCode")
-            logEvent(.inviteRegenerateFailed(SoratomoRegenerateFailReason(failure)))
+            SoratomoError.record(error, context: "soratomo.regenerateInviteCode")
+            logEvent(.inviteRegenerateFailed(SoratomoRegenerateFailReason(error)))
             regenerateErrorMessage = SoratomoFailedAction.regenerateInviteCode.userMessage
         }
     }
@@ -198,10 +198,5 @@ final class SoratomoInviteViewModel: ObservableObject {
             "招待コード: \(inviteCode.displayText)",
             "アプリをお持ちでない方: \(appStoreURL)",
         ].joined(separator: "\n")
-    }
-
-    /// サービスの失敗を `SoratomoError` にそろえる（サービスは typed throws なので、ふつうはそのまま返る）
-    private static func soratomoError(from error: any Error) -> SoratomoError {
-        error as? SoratomoError ?? .unknown
     }
 }

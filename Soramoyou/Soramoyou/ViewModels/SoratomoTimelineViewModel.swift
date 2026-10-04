@@ -297,7 +297,9 @@ final class SoratomoTimelineViewModel: ObservableObject {
     /// - メンバーでない（`.notMember`）・拒否（`.permissionDenied`）は「読めなかった」として知らせる
     ///   （ルーターがパスにこのタイムラインがあるときだけ一覧へ戻す）。読めた後にメンバーでなくなったときも戻す
     /// - 通信の失敗（`.network`）は、読めないと決まったわけではない（端末のキャッシュに無いだけのこともある）ので、
-    ///   一覧へは戻さず、オフラインの表示のまま待つ（要件 12.1）。引き下げで張り直せる
+    ///   一覧へは戻さず、オフラインの表示のまま待つ（要件 12.1）。⚠️ このとき監視の札は手放さない
+    ///   （サービスの監視は続いていて、つながれば正しい結果が届く。札を捨てると監視が外れ、通信が戻っても
+    ///   グループ名・人数・ルーターへの知らせが来ない。レビューで直した）
     private func handleGroup(_ result: Result<SoratomoGroup, SoratomoError>) {
         switch result {
         case let .success(newGroup):
@@ -314,6 +316,9 @@ final class SoratomoTimelineViewModel: ObservableObject {
             case .notMember, .permissionDenied:
                 hasReportedAccess = true
                 reportNotAccessible(groupId)
+            case .network:
+                // 監視は続いている（キャッシュに無いだけ・再接続を待っている）。札を持ったまま、つながるのを待つ
+                break
             default:
                 // 失敗で止まった監視は、引き下げの更新（refresh）で張り直す。読めていたグループ名は出したままにする
                 groupToken = nil
