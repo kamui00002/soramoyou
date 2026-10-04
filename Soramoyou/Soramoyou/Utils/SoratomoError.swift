@@ -89,6 +89,37 @@ enum SoratomoError: Error, Equatable, CaseIterable {
     }
 }
 
+// MARK: - 操作ごとの失敗の文言
+
+/// 失敗したとき、種類ではなく「何ができなかったか」を出す操作
+/// （design.md の Error Categories の表の下・要件 3.12・8.19・18.5）
+///
+/// この 3 つの操作は、通信できない場合を含めて、失敗したら操作の文言を出す。
+/// `SoratomoError` の case にしないのは、計測の理由（`not_owner`・`network` など）を種類から写すため。
+/// 操作の名前を case にすると、種類が消えて、計測の理由がすべて `unknown` に落ちる。
+/// 例: 再発行の失敗 → 画面は `SoratomoFailedAction.regenerateInviteCode.userMessage`、
+///     計測は `SoratomoRegenerateFailReason(from: error)`
+enum SoratomoFailedAction: CaseIterable {
+    /// 招待コードの再発行（表示中の招待コードは変えない・要件 3.12）
+    case regenerateInviteCode
+    /// 自分の投稿の削除（投稿はタイムラインに残す・要件 8.19）
+    case deleteSky
+    /// 表示名の保存（入力した表示名を残す・要件 18.5）。文字数の検証の失敗は `SoratomoError.displayNameInvalid` の文言
+    case saveDisplayName
+
+    /// 画面に出す文言（利用者の入力を含めない固定の文言）
+    var userMessage: String {
+        switch self {
+        case .regenerateInviteCode:
+            "招待コードを再発行できませんでした"
+        case .deleteSky:
+            "削除できませんでした"
+        case .saveDisplayName:
+            "表示名を保存できませんでした"
+        }
+    }
+}
+
 // MARK: - 失敗の記録
 
 extension SoratomoError {

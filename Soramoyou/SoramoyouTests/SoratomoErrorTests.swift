@@ -50,6 +50,23 @@ final class SoratomoErrorTests: XCTestCase {
         }
     }
 
+    func testFailedActionMessagesMatchDesign() {
+        // 操作ごとの失敗の文言（design.md の Error Categories の表の下・要件 3.12・8.19・18.5）
+        let expected: [SoratomoFailedAction: String] = [
+            .regenerateInviteCode: "招待コードを再発行できませんでした",
+            .deleteSky: "削除できませんでした",
+            .saveDisplayName: "表示名を保存できませんでした",
+        ]
+        XCTAssertEqual(Set(expected.keys), Set(SoratomoFailedAction.allCases))
+        for action in SoratomoFailedAction.allCases {
+            let message = action.userMessage
+            XCTAssertEqual(message, expected[action], "\(action)")
+            // 種類の文言と同じく、内部の識別子を画面に出さない（要件 12.5）
+            XCTAssertFalse(message.contains("_"), "\(action): \(message)")
+            XCTAssertNil(message.range(of: "[a-z]{3,}", options: .regularExpression), "\(action): \(message)")
+        }
+    }
+
     func testNumbersInMessagesMatchLimits() {
         // 文言の数字と上限の定数を合わせる（片方だけ変えると、画面の案内と実際の判定が食い違う）
         XCTAssertTrue(SoratomoError.invalidName.userMessage.contains("1〜\(SoratomoTextRules.groupNameMax)文字"))
