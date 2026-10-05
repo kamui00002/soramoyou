@@ -147,7 +147,7 @@ struct SoratomoTimelineView: View {
         }
     }
 
-    /// 日付の見出しで区切った投稿の一覧
+    /// 日付の見出しで区切った投稿の一覧（1 投稿 = 1 枚のガラスのカード）
     private var timelineList: some View {
         List {
             groupHeader
@@ -156,13 +156,21 @@ struct SoratomoTimelineView: View {
 
             ForEach(viewModel.days()) { day in
                 Section {
+                    // 日付は画面の上に貼り付く見出し（Section の header）にしない。行が透明なので、
+                    // カードが見出しの下に潜って文字が重なるため。行として置き、VoiceOver の見出しの印だけ付ける
+                    // （2026-10-05 ユーザー判断）
+                    Text(day.title)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.soratomoSecondary)
+                        .accessibilityAddTraits(.isHeader)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 0, trailing: 20))
+                        .soratomoClearRowBackground()
+
                     ForEach(day.skies) { sky in
                         row(for: sky)
-                            .soratomoClearRowBackground()
+                            .soratomoCardRow()
                     }
-                } header: {
-                    Text(day.title)
-                        .accessibilityAddTraits(.isHeader)
                 }
             }
 
@@ -179,7 +187,7 @@ struct SoratomoTimelineView: View {
         }
     }
 
-    /// 投稿 1 件の行（選ぶと投稿詳細へ進む）
+    /// 投稿 1 件のカード（選ぶと投稿詳細へ進む）
     private func row(for sky: SoratomoSky) -> some View {
         Button {
             router.path.append(.skyDetail(groupId: sky.groupId, skyId: sky.id))
@@ -190,8 +198,15 @@ struct SoratomoTimelineView: View {
                 authorPhotoURL: profileStore.photoURL(for: sky.authorId),
                 isDeleting: viewModel.deletingSkyIds.contains(sky.id)
             )
+            // 行そのものが上下に 4pt の余白を持つので、上下は 10pt にして 14pt にそろえる
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // カードの余白をタップしても開けるように、カード全体を押せる範囲にする
+            .contentShape(SoratomoCardSurface.shape)
         }
         .buttonStyle(.plain)
+        .soratomoCard()
         .accessibilityHint("投稿を大きく表示します")
         // 削除の操作は投稿者本人にだけ出す（要件 8.15）。VoiceOver ではアクションとして読める
         .contextMenu {
@@ -212,17 +227,21 @@ struct SoratomoTimelineView: View {
         }
     }
 
-    /// 上部のグループ名とメンバー数（要件 8.13）
+    /// 上部のグループの頭文字のアイコン・グループ名・メンバー数（要件 8.13）
     @ViewBuilder
     private var groupHeader: some View {
         if let group = viewModel.group {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(group.name)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text("\(group.memberCount)人")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                // 飾り（VoiceOver では読まない）
+                SoratomoGroupIcon(name: group.name)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text("\(group.memberCount)人")
+                        .font(.caption)
+                        .foregroundStyle(.soratomoSecondary)
+                }
             }
             .accessibilityElement(children: .combine)
         }
@@ -390,7 +409,7 @@ struct SoratomoTimelineRow: View {
                     Spacer(minLength: 4)
                     Text(sky.createdAt, style: .time)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.soratomoSecondary)
                 }
                 if let caption = sky.caption, !caption.isEmpty {
                     Text(caption)
@@ -400,7 +419,7 @@ struct SoratomoTimelineRow: View {
                 if isDeleting {
                     Text("削除しています…")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.soratomoSecondary)
                 }
             }
         }

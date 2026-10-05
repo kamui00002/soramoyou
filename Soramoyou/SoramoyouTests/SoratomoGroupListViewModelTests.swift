@@ -113,4 +113,68 @@ final class SoratomoGroupListViewModelTests: XCTestCase {
             return XCTFail("未ログインでは状態を変えない")
         }
     }
+
+    // MARK: - カードの文字（2026-10-05 ガラスのカード G3）
+
+    /// 作成日時と最後の活動の時刻を指定したグループ
+    private func makeGroup(createdAt: Date, lastActivityAt: Date) -> SoratomoGroup {
+        SoratomoGroup(
+            id: "g1",
+            name: "空の会",
+            ownerId: "owner",
+            inviteCode: SoratomoInviteCode.parse(userInput: "ABCD-EFGH")!,
+            memberCount: 3,
+            createdAt: createdAt,
+            lastActivityAt: lastActivityAt
+        )
+    }
+
+    /// 投稿が一度も無い（作成時の時刻のまま）なら「まだ空なし」、投稿があれば相対の時刻
+    func testLastSkyTextSaysNoSkyUntilFirstPost() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let ja = Locale(identifier: "ja_JP")
+        let created = now.addingTimeInterval(-86400 * 3)
+
+        let noSky = makeGroup(createdAt: created, lastActivityAt: created)
+        XCTAssertFalse(SoratomoGroupListView.hasSky(noSky))
+        XCTAssertEqual(SoratomoGroupListView.lastSkyText(for: noSky, now: now, locale: ja), "まだ空なし")
+
+        let fiveMinutes = makeGroup(createdAt: created, lastActivityAt: now.addingTimeInterval(-300))
+        XCTAssertTrue(SoratomoGroupListView.hasSky(fiveMinutes))
+        let text = SoratomoGroupListView.lastSkyText(for: fiveMinutes, now: now, locale: ja)
+        XCTAssertTrue(text.contains("5") && text.contains("分前"), "実際: \(text)")
+
+        let yesterday = makeGroup(createdAt: created, lastActivityAt: now.addingTimeInterval(-86400))
+        XCTAssertEqual(SoratomoGroupListView.lastSkyText(for: yesterday, now: now, locale: ja), "昨日")
+    }
+
+    /// VoiceOver は「名前、N人、最後の空は…」。投稿が無ければ「名前、N人、まだ空なし」
+    func testCardAccessibilityLabel() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let ja = Locale(identifier: "ja_JP")
+        let created = now.addingTimeInterval(-86400 * 3)
+
+        let noSky = makeGroup(createdAt: created, lastActivityAt: created)
+        XCTAssertEqual(SoratomoGroupListView.cardAccessibilityLabel(for: noSky, now: now, locale: ja), "空の会、3人、まだ空なし")
+
+        let yesterday = makeGroup(createdAt: created, lastActivityAt: now.addingTimeInterval(-86400))
+        XCTAssertEqual(SoratomoGroupListView.cardAccessibilityLabel(for: yesterday, now: now, locale: ja), "空の会、3人、最後の空は昨日")
+    }
+
+    /// 頭文字は 1 文字目（絵文字も 1 文字）。空の名前なら空文字
+    func testGroupIconInitial() {
+        XCTAssertEqual(SoratomoGroupIcon.initial(of: "空の会"), "空")
+        XCTAssertEqual(SoratomoGroupIcon.initial(of: "🌅夕焼け部"), "🌅")
+        XCTAssertEqual(SoratomoGroupIcon.initial(of: ""), "")
+    }
+
+    /// 「透明度を下げる」が ON なら白のカード。OFF なら iOS 26 以上はガラス
+    func testCardStyleFallsBackToOpaqueWhenReduceTransparency() {
+        XCTAssertEqual(SoratomoCardStyle.resolve(reduceTransparency: true), .opaque)
+        if #available(iOS 26.0, *) {
+            XCTAssertEqual(SoratomoCardStyle.resolve(reduceTransparency: false), .glass)
+        } else {
+            XCTAssertEqual(SoratomoCardStyle.resolve(reduceTransparency: false), .opaque)
+        }
+    }
 }

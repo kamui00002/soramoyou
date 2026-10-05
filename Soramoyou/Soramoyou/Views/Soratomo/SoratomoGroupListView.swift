@@ -27,6 +27,9 @@ struct SoratomoGroupListView: View {
     /// 出しているフォーム（作成か参加。nil なら出していない）
     @State private var formMode: SoratomoGroupFormMode?
 
+    /// 文字の大きさの設定（大きな文字のときはカードの中の並べ方を変える）
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     // MARK: - Init
 
     /// - Parameters:
@@ -62,9 +65,7 @@ struct SoratomoGroupListView: View {
                 }
             }
             // 作成と参加の 2 つの操作は、一覧の状態に関わらず常に下に出す（要件 5.5）
-            .safeAreaInset(edge: .bottom) {
-                actionButtons
-            }
+            .modifier(SoratomoBottomActionBar(bar: actionButtons))
             .sheet(item: $formMode) { mode in
                 SoratomoGroupFormView(
                     mode: mode,
@@ -109,29 +110,65 @@ struct SoratomoGroupListView: View {
         }
     }
 
-    /// グループの一覧（選ぶとタイムラインへ進む）
+    /// グループの一覧（1 グループ = 1 枚のガラスのカード。選ぶとタイムラインへ進む）
     private func groupList(_ groups: [SoratomoGroup]) -> some View {
         List(groups) { group in
-            NavigationLink(value: SoratomoDestination.timeline(groupId: group.id)) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(group.name)
-                        .font(.body)
-                        .lineLimit(1)
-                    Text("\(group.memberCount)人")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 4)
-            }
-            // VoiceOver では「グループ名、N人」と読む
-            .accessibilityElement(children: .combine)
-            .accessibilityHint("タイムラインを開きます")
-            .soratomoClearRowBackground()
+            groupCard(group)
+                .soratomoCardRow()
         }
         .listStyle(.plain)
         .refreshable {
             await viewModel.load()
         }
+    }
+
+    /// グループ 1 つのカード（頭文字のアイコン・グループ名・メンバー数・最後に空が届いた時刻）
+    ///
+    /// `NavigationLink` でなく `Button` にしている: List の中の NavigationLink は「>」を行の外側（カードの外）に描くため。
+    /// 行き先はルーターのパスに足す（タイムラインの投稿の行と同じ形）。「>」はカードの中に自分で描く
+    private func groupCard(_ group: SoratomoGroup) -> some View {
+        Button {
+            router.path.append(.timeline(groupId: group.id))
+        } label: {
+            HStack(spacing: 12) {
+                SoratomoGroupIcon(name: group.name)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(group.name)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                    Text("\(group.memberCount)人")
+                        .font(.caption)
+                        .foregroundStyle(.soratomoSecondary)
+                    // 大きな文字の設定では右に置くと名前も時刻も切れるので、名前の下に回す（2026-10-05 のスクショ）
+                    if dynamicTypeSize.isAccessibilitySize {
+                        lastSkyLabel(for: group)
+                    }
+                }
+                Spacer(minLength: 8)
+                if !dynamicTypeSize.isAccessibilitySize {
+                    lastSkyLabel(for: group)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.soratomoSecondary)
+            }
+            .padding(16)
+            // カードの余白をタップしても開けるように、カード全体を押せる範囲にする
+            .contentShape(SoratomoCardSurface.shape)
+        }
+        .buttonStyle(.plain)
+        .soratomoCard()
+        // VoiceOver では「グループ名、N人、最後の空は5分前」と読む（アイコンと「>」は飾りなので読まない）
+        .accessibilityLabel(Self.cardAccessibilityLabel(for: group))
+        .accessibilityHint("タイムラインを開きます")
+    }
+
+    /// 「最後に空が届いた時刻」の文字（例「5分前」「まだ空なし」）
+    private func lastSkyLabel(for group: SoratomoGroup) -> some View {
+        Text(Self.lastSkyText(for: group))
+            .font(.caption)
+            .foregroundStyle(.soratomoSecondary)
+            .lineLimit(1)
     }
 
     /// グループが無い間の案内（要件 5.4）
@@ -168,29 +205,138 @@ struct SoratomoGroupListView: View {
     }
 
     /// 「グループを作る」と「招待コードで参加」の 2 つの操作
+    ///
+    /// 「招待コードで参加」はアイコンつきで横に並べると幅が足りず、2 行に折れていた（2026-10-05 のスクショ）。
+    /// 文言は変えずに、入る形を上から順に試す: アイコンつきで横並び → 文字だけで横並び → 縦並び（大きな文字の設定など）
     private var actionButtons: some View {
-        HStack(spacing: 12) {
+        ViewThatFits(in: .horizontal) {
+            actionButtonRow(vertical: false, showsIcon: true)
+            actionButtonRow(vertical: false, showsIcon: false)
+            actionButtonRow(vertical: true, showsIcon: true)
+        }
+        .controlSize(.large)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    /// 2 つの操作を 1 列（横か縦）に並べる
+    /// - Parameters:
+    ///   - vertical: 縦に並べるか
+    ///   - showsIcon: アイコンを付けるか
+    private func actionButtonRow(vertical: Bool, showsIcon: Bool) -> some View {
+        let layout = vertical ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
+        return layout {
             Button {
                 formMode = .create
             } label: {
-                Label("グループを作る", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
+                actionLabel("グループを作る", systemImage: "plus", showsIcon: showsIcon, wraps: vertical)
             }
-            .buttonStyle(.borderedProminent)
+            .modifier(SoratomoActionButtonStyle(isProminent: true))
             .accessibilityLabel("グループを作る")
 
             Button {
                 formMode = .join
             } label: {
-                Label("招待コードで参加", systemImage: "ticket")
-                    .frame(maxWidth: .infinity)
+                actionLabel("招待コードで参加", systemImage: "ticket", showsIcon: showsIcon, wraps: vertical)
             }
-            .buttonStyle(.bordered)
+            .modifier(SoratomoActionButtonStyle(isProminent: false))
             .accessibilityLabel("招待コードで参加")
         }
-        .controlSize(.large)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.bar)
+    }
+
+    /// 操作のボタンの文字（横並びのときは 1 行に収める。縦並びのときだけ折り返してよい）
+    @ViewBuilder
+    private func actionLabel(_ title: String, systemImage: String, showsIcon: Bool, wraps: Bool) -> some View {
+        Group {
+            if showsIcon {
+                Label(title, systemImage: systemImage)
+            } else {
+                Text(title)
+            }
+        }
+        .lineLimit(wraps ? nil : 1)
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - 補助
+
+    /// 一度でも空が投稿されたグループか
+    ///
+    /// 作成のときは `createdAt` と `lastActivityAt` に同じサーバーの時刻が入り、投稿のトリガーだけが
+    /// `lastActivityAt` を投稿の時刻へ進める（functions/soratomoStore.js・soratomo.js）。
+    /// ⚠️ 削除しても `lastActivityAt` は戻らないので、全部消したグループも「投稿あり」になる（既知・許容）
+    static func hasSky(_ group: SoratomoGroup) -> Bool {
+        group.lastActivityAt > group.createdAt
+    }
+
+    /// カードの右に出す「最後に空が届いた時刻」の文字（例「5分前」「昨日」。投稿が無ければ「まだ空なし」）
+    ///
+    /// 一覧を読み直したとき（開いたとき・戻ったとき・引き下げたとき）にだけ作り直す（時計に合わせて動かしはしない）
+    /// - Parameters:
+    ///   - group: グループ
+    ///   - now: いまの時刻（テストで固定するため）
+    ///   - locale: 言語と地域（テストで固定するため）
+    static func lastSkyText(for group: SoratomoGroup, now: Date = Date(), locale: Locale = .current) -> String {
+        guard hasSky(group) else { return "まだ空なし" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = locale
+        // 「1日前」でなく「昨日」のように言う
+        formatter.dateTimeStyle = .named
+        return formatter.localizedString(for: group.lastActivityAt, relativeTo: now)
+    }
+
+    /// カードの VoiceOver の読み上げ（例「空、2人、最後の空は5分前」「空、2人、まだ空なし」）
+    /// - Parameters:
+    ///   - group: グループ
+    ///   - now: いまの時刻（テストで固定するため）
+    ///   - locale: 言語と地域（テストで固定するため）
+    static func cardAccessibilityLabel(for group: SoratomoGroup, now: Date = Date(), locale: Locale = .current) -> String {
+        let lastSky = lastSkyText(for: group, now: now, locale: locale)
+        let activity = hasSky(group) ? "最後の空は\(lastSky)" : lastSky
+        return "\(group.name)、\(group.memberCount)人、\(activity)"
+    }
+}
+
+// MARK: - 下の操作の置き方
+
+/// 「グループを作る」「招待コードで参加」のボタンの見た目
+/// （iOS 26 以上は本物のガラスのボタン、それより前は今までの普通のボタン）
+private struct SoratomoActionButtonStyle: ViewModifier {
+    /// 目立たせる方（作る）か
+    let isProminent: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            if isProminent {
+                content.buttonStyle(.glassProminent)
+            } else {
+                content.buttonStyle(.glass)
+            }
+        } else if isProminent {
+            content.buttonStyle(.borderedProminent)
+        } else {
+            content.buttonStyle(.bordered)
+        }
+    }
+}
+
+/// 下の操作を画面の下に置く
+///
+/// - iOS 26 以上: 帯を付けずにガラスのボタンだけを置く。下に潜るカードは画面の端でぼかす（`safeAreaBar`）
+/// - iOS 26 未満: 今までどおり、帯（`.bar`）の上にボタンを置く
+private struct SoratomoBottomActionBar<Bar: View>: ViewModifier {
+    /// 下に置くもの
+    let bar: Bar
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.safeAreaBar(edge: .bottom) {
+                bar
+            }
+        } else {
+            content.safeAreaInset(edge: .bottom) {
+                bar.background(.bar)
+            }
+        }
     }
 }
