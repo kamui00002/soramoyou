@@ -31,7 +31,9 @@ struct SoratomoGroup: Identifiable, Equatable, Sendable {
     let memberCount: Int
     /// 作成日時
     let createdAt: Date
-    /// 最後に投稿・参加があった日時（グループ一覧の並び順に使う）
+    /// 最後に投稿があった日時（投稿が無ければ作成日時。グループ一覧の並び順に使う）
+    ///
+    /// 参加では更新しない（書くのは作成と、投稿のトリガー `onSoratomoSkyCreated` だけ）
     let lastActivityAt: Date
 }
 

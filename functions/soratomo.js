@@ -177,9 +177,9 @@ async function handleSoratomoSkyCreated(event) {
   const sky = event.data ? event.data.data() : null;
   if (!sky) return;
 
+  const groupRef = db.collection("soratomoGroups").doc(groupId);
   try {
     const posterId = typeof sky.authorId === "string" ? sky.authorId : "";
-    const groupRef = db.collection("soratomoGroups").doc(groupId);
     const [groupSnap, membersSnap] = await Promise.all([groupRef.get(), groupRef.collection("members").get()]);
     if (!groupSnap.exists) {
       logger.warn("onSoratomoSkyCreated: グループが無い", { groupId, skyId });
@@ -224,16 +224,19 @@ async function handleSoratomoSkyCreated(event) {
       })
     );
 
+    // 投稿1件ごとの集計（IDと件数だけ・要件9.11）
+    logger.info("onSoratomoSkyCreated: summary", core.summarizeNotifyOutcomes(groupId, skyId, outcomes));
+  } catch (err) {
+    logger.error("onSoratomoSkyCreated: 失敗", { groupId, skyId, errorName: err && err.name, errorCode: err && err.code });
+  } finally {
+    // 通知の準備（投稿者・宛先の読み取りなど）のどこで失敗しても、一覧の並び順（要件5.3）のために必ず更新する。
+    // 最新の活動時刻を書くのはこのトリガーだけなので、ここで飛ばすと次の投稿まで古いままになる（レビューで直した）。
+    // グループが無いときは bumpLastActivity の中で何もしない。
     try {
       await bumpLastActivity(groupRef, sky.createdAt);
     } catch (err) {
       logger.warn("onSoratomoSkyCreated: 最新の活動時刻の更新に失敗", { groupId, skyId, errorName: err && err.name });
     }
-
-    // 投稿1件ごとの集計（IDと件数だけ・要件9.11）
-    logger.info("onSoratomoSkyCreated: summary", core.summarizeNotifyOutcomes(groupId, skyId, outcomes));
-  } catch (err) {
-    logger.error("onSoratomoSkyCreated: 失敗", { groupId, skyId, errorName: err && err.name, errorCode: err && err.code });
   }
 }
 

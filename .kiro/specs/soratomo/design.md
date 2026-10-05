@@ -869,7 +869,7 @@ enum SoratomoAnalytics {
 | `apns.headers` | `{ "apns-collapse-id": "soratomo-{groupId}" }`（29バイト。上限64バイト以内） |
 | `apns.payload.aps` | `{ sound: "default", threadId: "soratomo-{groupId}" }`。`badge`は付けない |
 
-- Ordering / delivery guarantees: トリガーの配信は少なくとも1回。受信者ごとの`notifyState`が`lastSkyId`を持つので、同じ投稿の再配信は「重複」として送らない。
+- Ordering / delivery guarantees: トリガーの配信は少なくとも1回。受信者ごとの`notifyState`が`lastSkyId`を持つので、直前に送った投稿の再配信は「重複」として送らない（間に別の投稿を送った後に届いた遅い再配信は見分けられない。トリガーは再試行しないので、起きるのは基盤の重複配信が5分を過ぎて遅れた場合だけで、受け入れる）。
 - 集計ログの形: `{ groupId, skyId, sent, throttled, duplicate, noToken, sendFailed, prefOff, blocked, flagOff }`。名前・キャプション・コード・トークンは含めない（9.11、15.2、15.3）。
 
 #### sendToTokenGrouped（pushHelpers.jsへの追加）

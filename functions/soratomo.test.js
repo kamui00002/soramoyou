@@ -364,6 +364,23 @@ test("トリガー: グループの最新の活動時刻を、投稿の作成日
   assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("lastActivityAt").toMillis(), createdAt.toMillis());
 });
 
+test("トリガー: 通知の準備で失敗しても、グループの最新の活動時刻は更新する（レビューで直した）", async () => {
+  await seedScene();
+  const core = require("./soratomoCore");
+  const original = core.buildNotification;
+  core.buildNotification = () => {
+    throw new Error("通知の準備の失敗");
+  };
+  try {
+    const createdAt = Timestamp.fromMillis(Date.UTC(2026, 5, 1));
+    await postSky("s1", { createdAt });
+    assert.equal(record.sends.length, 0, "準備で失敗したので、だれにも送らない");
+    assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("lastActivityAt").toMillis(), createdAt.toMillis());
+  } finally {
+    core.buildNotification = original;
+  }
+});
+
 test("トリガー: 表示名が空なら「だれか」、キャプションが無ければ「」を付けない", async () => {
   await seedScene({ posterName: "" });
   await postSky("s1", { caption: null });

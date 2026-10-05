@@ -154,7 +154,6 @@ final class SoratomoFeatureGate: ObservableObject {
         return apply(result, evaluatedAt: evaluating)
     }
 
-    /// サインアウト時に判定を戻す（`unknown` にして入口を隠す）
     /// トークンを一時的に取れなかったときだけ、もう一度判定する（アプリが前面に戻ったときに呼ぶ・レビューで足した）
     ///
     /// 判定し直すのはログイン状態が変わったときだけなので、起動時に通信できずにトークンを取れないと、
@@ -166,6 +165,7 @@ final class SoratomoFeatureGate: ObservableObject {
         return await evaluate()
     }
 
+    /// サインアウト時に判定を戻す（`unknown` にして入口を隠す）
     func reset() {
         generation += 1
         state = .unknown

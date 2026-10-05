@@ -3,6 +3,7 @@
 //
 // index.js（likes/comments/posts のリアクション通知）と skyMotion.js（空を動かすの完了/失敗通知）で
 // **同一の送信・無効トークン掃除ロジックがコピーされていた**のを1箇所に集約したもの。
+// soratomo.js（そらともの新着投稿の通知）は、まとめ指定つきの sendToTokenGrouped を使う ⭐️。
 // 「FCM 無効トークンの判定・掃除」はアプリ全体で1つの規則であるべきで、2箇所化すると
 // 片方だけ直す事故が起きる（PREF_DEFAULTS の「iOSとfunctionsで一致必須」と同種の教訓）。
 //
@@ -111,6 +112,8 @@ async function sendToTokenGrouped(uid, token, notification, data, grouping) {
   } catch (err) {
     const code = err && err.code;
     if (isInvalidTokenError(code)) {
+      // ⚠️ 無効トークンの掃除は sendToToken と同じ。変えるときは両方を直す
+      //    （既存の sendToToken を触らない方針〈要件13.7〉のため、共通の関数には切り出していない）
       await db
         .collection("users")
         .doc(uid)

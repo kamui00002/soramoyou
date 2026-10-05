@@ -38,17 +38,6 @@ const MAX_INVITE_CODE_ATTEMPTS = 5;
 /** 作成の要求ID（アプリが作る UUID）の長さの上限。 */
 const REQUEST_ID_MAX = 128;
 
-/** ドメインのエラーの理由（design.md の SoratomoErrorDetails）。 */
-const SORATOMO_ERROR_REASONS = Object.freeze([
-  "flag_off",
-  "invalid_name",
-  "invalid_format",
-  "not_found",
-  "group_full",
-  "user_limit",
-  "not_owner",
-]);
-
 // MARK: - エラー
 
 /** 理由つきの失敗。配線（soratomo.js）が HttpsError の code と details.reason に写す。 */
@@ -289,7 +278,6 @@ async function claimNotifySlot(db, { groupId, uid, skyId, nowMs }) {
 }
 
 module.exports = {
-  SORATOMO_ERROR_REASONS,
   SoratomoDomainError,
   createGroupTx,
   joinGroupTx,
