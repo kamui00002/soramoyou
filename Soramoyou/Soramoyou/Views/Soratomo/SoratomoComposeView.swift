@@ -74,6 +74,7 @@ struct SoratomoComposeView: View {
                 }
                 .padding()
             }
+            .soratomoSkyBackground()
             .navigationTitle("空を投稿")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

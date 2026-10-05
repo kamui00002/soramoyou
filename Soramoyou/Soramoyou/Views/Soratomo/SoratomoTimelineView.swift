@@ -152,11 +152,13 @@ struct SoratomoTimelineView: View {
         List {
             groupHeader
                 .listRowSeparator(.hidden)
+                .soratomoClearRowBackground()
 
             ForEach(viewModel.days()) { day in
                 Section {
                     ForEach(day.skies) { sky in
                         row(for: sky)
+                            .soratomoClearRowBackground()
                     }
                 } header: {
                     Text(day.title)
@@ -168,6 +170,7 @@ struct SoratomoTimelineView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .listRowSeparator(.hidden)
+                    .soratomoClearRowBackground()
             }
         }
         .listStyle(.plain)

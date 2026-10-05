@@ -77,6 +77,7 @@ struct SoratomoMembersView: View {
     private func memberList(_ members: [SoratomoMember]) -> some View {
         List(members) { member in
             memberRow(member)
+                .soratomoClearRowBackground()
         }
         .listStyle(.plain)
         .refreshable {

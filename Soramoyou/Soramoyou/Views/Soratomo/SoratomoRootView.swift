@@ -34,6 +34,7 @@ struct SoratomoRootView: View {
     var body: some View {
         NavigationStack(path: $router.path) {
             SoratomoGroupListView(router: router, dependencies: dependencies)
+                .soratomoSkyBackground()
                 .navigationDestination(for: SoratomoDestination.self) { destination in
                     view(for: destination)
                 }
@@ -80,12 +81,16 @@ struct SoratomoRootView: View {
     @ViewBuilder
     private func view(for destination: SoratomoDestination) -> some View {
         switch destination {
+        // 背景は雲つきの空にそろえる（SoratomoSkyBackground.swift）。投稿詳細だけは写真の色を邪魔しないよう付けない
         case let .timeline(groupId):
             SoratomoTimelineView(groupId: groupId, router: router, dependencies: dependencies)
+                .soratomoSkyBackground()
         case let .invite(groupId):
             SoratomoInviteView(groupId: groupId, dependencies: dependencies)
+                .soratomoSkyBackground()
         case let .members(groupId):
             SoratomoMembersView(groupId: groupId, dependencies: dependencies)
+                .soratomoSkyBackground()
         case let .skyDetail(groupId, skyId):
             SoratomoSkyDetailView(groupId: groupId, skyId: skyId, dependencies: dependencies)
         }

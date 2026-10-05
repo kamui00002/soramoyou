@@ -82,6 +82,8 @@ struct SoratomoGroupFormView: View {
     var body: some View {
         NavigationStack {
             content
+                // 背景を雲つきの空に（表示名の入力・通知の事前説明もこの content の中に出る）
+                .soratomoSkyBackground()
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {

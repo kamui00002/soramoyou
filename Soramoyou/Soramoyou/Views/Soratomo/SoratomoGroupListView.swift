@@ -126,6 +126,7 @@ struct SoratomoGroupListView: View {
             // VoiceOver では「グループ名、N人」と読む
             .accessibilityElement(children: .combine)
             .accessibilityHint("タイムラインを開きます")
+            .soratomoClearRowBackground()
         }
         .listStyle(.plain)
         .refreshable {
