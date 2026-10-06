@@ -45,9 +45,9 @@ enum PostDocumentDecoder {
     /// - Important: ページングの起点（次ページの `start(afterDocument:)`）は呼び出し側で
     ///   **`snapshot.documents.last` のまま**にすること。変換後の配列から決めると、
     ///   末尾の壊れたドキュメントを起点にできず同じページを読み直してしまう。
-    /// - Note: スキップで返す件数がページサイズを割ると、`PaginatedPostsViewModel` は
-    ///   「件数 < pageSize ＝ 続きなし」と判断して無限スクロールを止める。
-    ///   ページ全体が出ないよりは軽い劣化として許容する（TagFeedService と同じ判断）。
+    /// - Note: スキップで返す件数はページサイズを割ることがある。続きの有無は件数でなく、
+    ///   呼び出し側が `PostPage(posts:snapshot:limit:)` で作る `isExhausted`
+    ///   （実際に読んだドキュメント数）で判定すること。
     /// - Parameters:
     ///   - documents: クエリで取得したドキュメント
     ///   - source: 取得経路の名前（ログ用。例: `home_feed`）

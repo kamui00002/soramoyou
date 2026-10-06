@@ -202,6 +202,40 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(mockFirestoreService.fetchUserPostsPageCallCount, 2)
     }
 
+    /// ⭐️ 壊れた投稿を飛ばしたページ: 件数が 1 ページ分を割っても、満杯まで読めていれば続きを読む
+    func testLoadMoreUserPosts_壊れた投稿を飛ばしたページでも満杯まで読めていれば続きを読む() async {
+        let testUser = createTestUser()
+        let imageInfo = ImageInfo(url: "https://example.com/image.jpg", width: 1024, height: 768, order: 0)
+        let makePost = { (id: String) in
+            Post(id: id, userId: testUser.id, images: [imageInfo], caption: nil, visibility: .public)
+        }
+        // 1 ページ目は 1 ページ分読んだうち 1 件が壊れていて、表示できるのは 1 件少ない
+        let firstPage = (0 ..< ProfileViewModel.postsPageSize - 1).map { makePost("post-\($0)") }
+        let secondPage = [makePost("post-a"), makePost("post-b")]
+        mockFirestoreService.userPostPages = [firstPage, secondPage]
+        mockFirestoreService.userPostPageReadCounts = [ProfileViewModel.postsPageSize, secondPage.count]
+        let authService = MockAuthService()
+        authService.currentUserValue = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService,
+            authService: authService
+        )
+
+        await viewModel.loadUserPosts()
+        XCTAssertEqual(viewModel.userPosts.count, ProfileViewModel.postsPageSize - 1)
+        XCTAssertTrue(viewModel.hasMorePosts, "読んだのは満杯の 1 ページ分なので、続きがある")
+
+        // When: 末尾まで来たので続きを読む
+        let added = await viewModel.loadMoreUserPosts()
+
+        // Then: 2 ページ目が読まれ、そこで終わる
+        XCTAssertEqual(added.map(\.id), ["post-a", "post-b"])
+        XCTAssertFalse(viewModel.hasMorePosts)
+        XCTAssertEqual(mockFirestoreService.fetchUserPostsPageCallCount, 2)
+    }
+
     func testUpdateProfile() async {
         // Given
         let testUser = createTestUser()
@@ -629,6 +663,9 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
 
     /// fetchUserPostsPage が返すページ（未設定なら userPosts を 1 ページで返す）⭐️
     var userPostPages: [[Post]]?
+    /// userPostPages の各ページで Firestore から実際に読んだドキュメント数（壊れた投稿も含む）。
+    /// 壊れた投稿を飛ばしたページの再現用。未設定ならページの投稿数と同じ（＝壊れた投稿なし）
+    var userPostPageReadCounts: [Int]?
     /// fetchUserPostsPage が呼ばれた回数
     var fetchUserPostsPageCallCount = 0
     /// recountPostsCount が返す「全投稿数」（nil なら userPosts.count）⭐️
@@ -636,11 +673,16 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     /// recountPostsCount が呼ばれた回数
     var recountPostsCountCallCount = 0
 
-    func fetchUserPostsPage(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    func fetchUserPostsPage(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage {
         defer { fetchUserPostsPageCallCount += 1 }
-        guard let pages = userPostPages else { return (userPosts, nil) }
+        // 本番（PostPage(posts:snapshot:limit:)）と同じく、読んだ件数で続きの有無を決める
+        guard let pages = userPostPages else {
+            return PostPage(posts: userPosts, lastDocument: nil, isExhausted: userPosts.count < limit)
+        }
         let index = fetchUserPostsPageCallCount
-        return (index < pages.count ? pages[index] : [], nil)
+        let page = index < pages.count ? pages[index] : []
+        let readCount = userPostPageReadCounts.flatMap { index < $0.count ? $0[index] : nil } ?? page.count
+        return PostPage(posts: page, lastDocument: nil, isExhausted: readCount < limit)
     }
 
     func recountPostsCount(userId: String) async throws -> Int {
@@ -651,7 +693,7 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     // その他のメソッドは空実装
     func createPost(_ post: Post) async throws -> Post { return post }
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
-    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) { return ([], nil) }
+    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage { return PostPage(posts: [], lastDocument: nil, isExhausted: true) }
     func fetchPost(postId: String) async throws -> Post { throw FirestoreServiceError.notFound }
     func deletePost(postId: String, userId: String) async throws {}
     func saveDraft(_ draft: Draft) async throws -> Draft { return draft }

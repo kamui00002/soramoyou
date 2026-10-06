@@ -77,6 +77,21 @@ class HomeViewModel: PaginatedPostsViewModel {
         await fetchAuthorsForCurrentPosts()
     }
 
+    /// 1 ページ分を取得し、ブロック中の投稿者の投稿を除いて返す ⭐️
+    ///
+    /// 除外は `posts` に入れた後でなく、ここ（ページを返す前）で行う。後から除外すると、
+    /// 1 ページ全部がブロック中の投稿者だったときに追加分がすべて消えて最後の投稿が変わらず、
+    /// 「最後の投稿が見えたら次を読む」きっかけが生まれないまま無限スクロールが止まる。
+    /// ここで除外すれば、基底の「表示できる投稿が無いページは次のページを読み進める」に乗る。
+    /// - Note: fetchPosts / loadMorePosts の後がけの `filterBlockedUsers()` は従来どおり残す
+    ///   （二重にかかっても結果は同じ）。
+    /// - Note: ForYouFeedViewModel はこのメソッドを super を呼ばずに上書きする
+    ///   （Paginator がページを返す前にブロック除外する）ので、ここは通らない。
+    override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> PostPage {
+        let page = try await super.executeQuery(lastDocument: lastDocument)
+        return page.filteringPosts { !blockedUserIds.contains($0.userId) }
+    }
+
     // ⚠️ この著者取得・ブロック除外ロジックは HomeViewModel / TagDetailViewModel / GalleryViewModel
     //    （Gallery はランキング表示中のみ著者を取得し、失敗を ErrorHandler でログに残す）に重複がある。
     //    仕様を変えるときは全箇所を同時に更新すること。基底 PaginatedPostsViewModel への引き上げは別リファクタ PR で検討。
@@ -120,7 +135,17 @@ class HomeViewModel: PaginatedPostsViewModel {
         posts = posts.filter { !blockedUserIds.contains($0.userId) }
     }
 
-    // MARK: - Report & Block
+    /// 投稿詳細でのブロック（`.userBlocked` 通知）を受けて、その人の投稿を一覧から除く ⭐️
+    ///
+    /// 表示中の投稿から除くだけでなく、`blockedUserIds` に足すことで、以降に読むページ
+    /// （`executeQuery` の除外）からも除く。
+    override func handleUserBlocked(_ userId: String) {
+        guard !blockedUserIds.contains(userId) else { return }
+        blockedUserIds.append(userId)
+        filterBlockedUsers()
+    }
+
+    // MARK: - Report
 
     /// 通報を送信
     func submitReport(post: Post, reason: ReportReason) async {
@@ -135,21 +160,6 @@ class HomeViewModel: PaginatedPostsViewModel {
             )
         } catch {
             ErrorHandler.logError(error, context: "HomeViewModel.submitReport", userId: reporterId)
-            reportError = error.userFriendlyMessage
-        }
-    }
-
-    /// 投稿者をブロック
-    func blockPostAuthor(post: Post) async {
-        guard let currentUserId = authService.currentUser()?.id else { return }
-
-        do {
-            try await firestoreService.blockUser(userId: currentUserId, blockedUserId: post.userId)
-            // ブロック後、該当ユーザーの投稿をフィードから除外
-            blockedUserIds.append(post.userId)
-            filterBlockedUsers()
-        } catch {
-            ErrorHandler.logError(error, context: "HomeViewModel.blockPostAuthor", userId: currentUserId)
             reportError = error.userFriendlyMessage
         }
     }

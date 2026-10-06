@@ -74,12 +74,16 @@ class TagDetailViewModel: PaginatedPostsViewModel {
     // MARK: - Query Override
 
     /// ハッシュタグ絞り込みのページング取得に差し替える
-    override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
-        try await tagFeedService.fetchPostsByHashtag(
+    ///
+    /// ブロック中の投稿者の投稿は、ここ（ページを返す前）で除く。
+    /// 理由は HomeViewModel.executeQuery と同じ（1 ページ全部がブロック中の投稿者でも無限スクロールを止めないため）。
+    override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> PostPage {
+        let page = try await tagFeedService.fetchPostsByHashtag(
             tag,
             limit: pageSize,
             lastDocument: lastDocument
         )
+        return page.filteringPosts { !blockedUserIds.contains($0.userId) }
     }
 
     // MARK: - Fetch Overrides
@@ -149,6 +153,16 @@ class TagDetailViewModel: PaginatedPostsViewModel {
     private func filterBlockedUsers() {
         guard !blockedUserIds.isEmpty else { return }
         posts = posts.filter { !blockedUserIds.contains($0.userId) }
+    }
+
+    /// 投稿詳細でのブロック（`.userBlocked` 通知）を受けて、その人の投稿を一覧から除く ⭐️
+    ///
+    /// 表示中の投稿から除くだけでなく、`blockedUserIds` に足すことで、以降に読むページ
+    /// （`executeQuery` の除外）からも除く。
+    override func handleUserBlocked(_ userId: String) {
+        guard !blockedUserIds.contains(userId) else { return }
+        blockedUserIds.append(userId)
+        filterBlockedUsers()
     }
 
     // MARK: - Follow State

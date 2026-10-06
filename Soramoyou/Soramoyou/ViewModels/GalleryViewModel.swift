@@ -130,6 +130,8 @@ class GalleryViewModel: PaginatedPostsViewModel {
     private let rankingService: RankingServiceProtocol
     /// 現在時刻の取得元（テストでキャッシュ期限を検証できるよう差し替え可能）
     private let now: () -> Date
+    /// 認証サービス（ブロックリストを読む本人の ID の取得元。テストでモックを注入できるよう保持する）
+    private let authService: AuthServiceProtocol
 
     /// ランキングに並ぶ投稿の投稿者（userId → 公開プロフィール）⭐️
     ///
@@ -148,13 +150,16 @@ class GalleryViewModel: PaginatedPostsViewModel {
     ///   - firestoreService: Firestoreサービス（テスト時にモックを注入可能）
     ///   - rankingService: ランキング取得サービス（nil なら firestoreService を使う既定実装）
     ///   - now: 現在時刻の取得元
+    ///   - authService: 認証サービス（HomeViewModel / TagDetailViewModel と同じく注入可能にする）
     init(
         firestoreService: FirestoreServiceProtocol = FirestoreService(),
         rankingService: RankingServiceProtocol? = nil,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        authService: AuthServiceProtocol = AuthService()
     ) {
         self.rankingService = rankingService ?? RankingService(firestoreService: firestoreService)
         self.now = now
+        self.authService = authService
         super.init(firestoreService: firestoreService)
     }
 
@@ -353,9 +358,9 @@ class GalleryViewModel: PaginatedPostsViewModel {
     /// - ランキング: 期間中のいいねをアプリ内で集計して上位 30 件を一括取得（ページング無効）
     /// - 色モード: `searchByColor` で一括取得（ページング無効）
     /// - 通常: 時間帯／空の種類フィルタ ＋ 並び替え ＋ ページング
-    override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> PostPage {
         // 1 ページ目の取得時だけブロックリストを読み直す（従来 fetchPosts の先頭で行っていたのと同じ頻度）。
-        // ランキング集計（loadRanking）と、取得後の filterBlockedUsers の両方がこの結果を使う。
+        // ランキング集計（loadRanking）・通常モードのページの除外・取得後の filterBlockedUsers がこの結果を使う。
         if lastDocument == nil {
             await loadBlockedUsers()
         }
@@ -363,10 +368,10 @@ class GalleryViewModel: PaginatedPostsViewModel {
         // ランキング: 2 ページ目以降は無い（空を返してページング終了）
         if let period = effectiveSortOrder.rankingPeriod {
             if lastDocument != nil {
-                return (posts: [], lastDocument: nil)
+                return PostPage(posts: [], lastDocument: nil, isExhausted: true)
             }
             let result = try await loadRanking(period: period)
-            return (posts: result.entries.map(\.post), lastDocument: nil)
+            return PostPage(posts: result.entries.map(\.post), lastDocument: nil, isExhausted: true)
         }
 
         // 色で探すモード: SearchView と同じ一括取得方式。
@@ -374,20 +379,23 @@ class GalleryViewModel: PaginatedPostsViewModel {
         // 2ページ目以降は取得しない（空を返してページング終了）。
         if let color = selectedColor {
             if lastDocument != nil {
-                return (posts: [], lastDocument: nil)
+                return PostPage(posts: [], lastDocument: nil, isExhausted: true)
             }
             let colorPosts = try await firestoreService.searchByColor(color, threshold: colorThreshold)
-            return (posts: colorPosts, lastDocument: nil)
+            return PostPage(posts: colorPosts, lastDocument: nil, isExhausted: true)
         }
 
-        // 通常モード: フィルタ＋並び替え＋ページング
-        return try await firestoreService.fetchPostsWithSnapshot(
+        // 通常モード: フィルタ＋並び替え＋ページング。
+        // ブロック中の投稿者の投稿はページを返す前に除く（理由は HomeViewModel.executeQuery と同じ）。
+        // ランキングは rankingService が除外済み、色モードは一括取得で先読みしないので、ここだけでよい
+        let page = try await firestoreService.fetchPostsWithSnapshot(
             timeOfDay: selectedTimeOfDay,
             skyType: selectedSkyType,
             sortField: effectiveSortOrder.sortField ?? "createdAt",
             limit: pageSize,
             lastDocument: lastDocument
         )
+        return page.filteringPosts { !blockedUserIds.contains($0.userId) }
     }
 
     // MARK: - ランキング取得
@@ -470,7 +478,6 @@ class GalleryViewModel: PaginatedPostsViewModel {
 
     /// ブロックユーザーリストを読み込む
     private func loadBlockedUsers() async {
-        let authService = AuthService()
         guard let currentUserId = authService.currentUser()?.id else { return }
 
         do {
@@ -484,6 +491,16 @@ class GalleryViewModel: PaginatedPostsViewModel {
     private func filterBlockedUsers() {
         guard !blockedUserIds.isEmpty else { return }
         posts = posts.filter { !blockedUserIds.contains($0.userId) }
+    }
+
+    /// 投稿詳細でのブロック（`.userBlocked` 通知）を受けて、その人の投稿を一覧から除く ⭐️
+    ///
+    /// 表示中の投稿から除くだけでなく、`blockedUserIds` に足すことで、以降に読むページ
+    /// （`executeQuery` の除外）からも除く。
+    override func handleUserBlocked(_ userId: String) {
+        guard !blockedUserIds.contains(userId) else { return }
+        blockedUserIds.append(userId)
+        filterBlockedUsers()
     }
 
     /// 投稿をローカル一覧から削除する（削除完了後のUI更新用）

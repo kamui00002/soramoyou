@@ -11,6 +11,8 @@ struct ContentView: View {
     @EnvironmentObject var authViewModel: AuthViewModel
     /// お気に入り（🔖）状態の共有 Manager ⭐️ サインアウト時のローカル破棄を配線するために参照する
     @EnvironmentObject private var favoriteManager: FavoriteManager
+    /// いいね状態の共有 Manager ⭐️ 同じくサインアウト時のローカル破棄を配線するために参照する（#147）
+    @EnvironmentObject private var likeManager: LikeManager
     /// そらとも（友達グループで空を共有）の機能フラグの判定 ⭐️ tasks 14.1
     /// ログインが確定したら評価し、サインアウトで判定を戻す（SoramoyouApp が注入）
     @EnvironmentObject private var soratomoGate: SoratomoFeatureGate
@@ -78,6 +80,8 @@ struct ContentView: View {
         .onChange(of: authViewModel.isAuthenticated) { isAuthenticated in
             if !isAuthenticated {
                 favoriteManager.clearOnSignOut()
+                // いいね（ピンクのハート）も同じ理由で消す（#147）⭐️
+                likeManager.clearOnSignOut()
                 // おすすめの空（自分の一覧）も同じ理由で消す。アカウント削除でもここを通る ⭐️
                 RecommendationManager.shared.clearOnSignOut()
                 // そらとも（友達グループで空を共有）も同じ理由で消す ⭐️ tasks 14.1
@@ -142,6 +146,7 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
             .environmentObject(AuthViewModel())
             .environmentObject(FavoriteManager())
+            .environmentObject(LikeManager())
             // そらともの判定（Preview では常に未ログイン扱いの窓口）⭐️
             .environmentObject(SoratomoFeatureGate(provider: SoratomoEntryContentPreviewProvider()))
     }

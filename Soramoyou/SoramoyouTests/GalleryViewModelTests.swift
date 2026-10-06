@@ -415,6 +415,12 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
     var lastSearchedColor: String?
     /// 色で探す（searchByColor）の返却結果
     var colorSearchResults: [Post] = []
+    /// 絞り込み版 fetchPostsWithSnapshot が呼ばれた順に返すページ（未設定なら posts から作る）⭐️
+    var postPages: [MockFirestoreServiceForPaging.Page]?
+    /// 絞り込み版 fetchPostsWithSnapshot が呼ばれた回数
+    private(set) var filteredFetchCallCount = 0
+    /// fetchBlockedUserIds が返すブロック中のユーザー ID
+    var blockedUserIds: [String] = []
 
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
         if shouldThrowError {
@@ -423,12 +429,13 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
         return Array(posts.prefix(limit))
     }
 
-    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage {
         if shouldThrowError {
             throw FirestoreServiceError.notFound
         }
         let postsToReturn = Array(posts.prefix(limit))
-        return (posts: postsToReturn, lastDocument: nil)
+        // 壊れた投稿の無いモックなので「読んだ件数 = 返す件数」として続きの有無を決める
+        return PostPage(posts: postsToReturn, lastDocument: nil, isExhausted: postsToReturn.count < limit)
     }
 
     func fetchPostsWithSnapshot(
@@ -437,12 +444,21 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
         sortField: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    ) async throws -> PostPage {
         // ⚠️ このモックは timeOfDay/skyType を両方クライアント側で filter するため、本番 Firestore の
         // 複合インデックス制約（両フィルタ同時 → 4 フィールド複合インデックス必須）を再現しない。
         // インデックス欠落による FAILED_PRECONDITION はモックでは検出できず、実データ検証が必須。
         if shouldThrowError {
             throw FirestoreServiceError.notFound
+        }
+        defer { filteredFetchCallCount += 1 }
+        if let postPages {
+            // 本物の DocumentSnapshot は作れないので、呼ばれた回数で何ページ目かを決める
+            guard filteredFetchCallCount < postPages.count else {
+                return PostPage(posts: [], lastDocument: nil, isExhausted: true)
+            }
+            let page = postPages[filteredFetchCallCount]
+            return PostPage(posts: page.posts, lastDocument: nil, isExhausted: page.readCount < limit)
         }
         // クエリ条件を記録（テストの検証用）
         lastSortField = sortField
@@ -462,7 +478,9 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
             result = result.sorted { $0.likesCount > $1.likesCount }
         }
 
-        return (posts: Array(result.prefix(limit)), lastDocument: nil)
+        // 絞り込みは本番ではサーバー側なので「読んだ件数 = 絞り込み後に返す件数」になる
+        let postsToReturn = Array(result.prefix(limit))
+        return PostPage(posts: postsToReturn, lastDocument: nil, isExhausted: postsToReturn.count < limit)
     }
 
     func fetchPost(postId: String) async throws -> Post {
@@ -514,7 +532,7 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
     func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {}
     func blockUser(userId: String, blockedUserId: String) async throws {}
     func unblockUser(userId: String, blockedUserId: String) async throws {}
-    func fetchBlockedUserIds(userId: String) async throws -> [String] { return [] }
+    func fetchBlockedUserIds(userId: String) async throws -> [String] { return blockedUserIds }
     func searchByHashtag(_ hashtag: String) async throws -> [Post] { return [] }
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post] {
         if shouldThrowError {

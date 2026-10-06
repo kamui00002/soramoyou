@@ -423,8 +423,10 @@ class ProfileViewModel: ObservableObject {
             guard generation == postsGeneration else { return }
             let posts = page.posts
             postsCursor = page.lastDocument
-            // 1 ページ分きっちり取れたなら、続きがある可能性がある
-            hasMorePosts = posts.count >= Self.postsPageSize
+            // 1 ページ分きっちり読めたなら、続きがある可能性がある。
+            // 件数（posts.count）でなく isExhausted で判定する: 壊れた投稿を飛ばしたページは
+            // 件数が 1 ページ分を割るため、件数で見ると続きがあるのに打ち切ってしまう
+            hasMorePosts = !page.isExhausted
 
             logger.info("loadUserPosts: fetched \(posts.count) posts")
 
@@ -608,7 +610,8 @@ class ProfileViewModel: ObservableObject {
             guard generation == postsGeneration else { return [] }
 
             postsCursor = page.lastDocument
-            hasMorePosts = page.posts.count >= Self.postsPageSize
+            // 続きの有無は件数でなく isExhausted で判定する（loadUserPosts と同じ理由）
+            hasMorePosts = !page.isExhausted
 
             // 他人のプロフィールは初回と同じく公開投稿だけに絞る
             let visible = isOwnProfile ? page.posts : page.posts.filter { $0.visibility == .public }

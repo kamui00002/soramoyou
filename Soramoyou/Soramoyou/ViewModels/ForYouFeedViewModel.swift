@@ -31,6 +31,11 @@ final class ForYouFeedViewModel: HomeViewModel {
     private let sourceBuilder: ForYouFeedSourceBuilderProtocol
     /// 現在のマージページネーター。fetchPosts のたびに新規作成する。
     private var paginator: MergedFeedPaginator?
+    /// Paginator が投稿を返す前に除くブロック中の投稿者 ⭐️
+    ///
+    /// リフレッシュ時に読んだ集合に、投稿詳細でのブロック（`handleUserBlocked`）を後から足せるよう
+    /// プロパティで持つ（Paginator にその場の集合を渡すと、次のページにブロックした人の投稿が混ざる）。
+    private var paginatorBlockedUserIds: Set<String> = []
     /// 計装（for_you_feed_loaded）用に直近のソース構成を保持
     private var lastSources: ForYouFeedSources?
     /// fetchPosts の並行実行ガード。
@@ -85,10 +90,11 @@ final class ForYouFeedViewModel: HomeViewModel {
         do {
             let sources = try await sourceBuilder.buildSources(for: userId)
             lastSources = sources
+            paginatorBlockedUserIds = blockedIds
             paginator = MergedFeedPaginator(
                 sources: sources.streams,
                 fetchPageSize: pageSize,
-                isBlocked: { blockedIds.contains($0) }
+                isBlocked: { [weak self] in self?.paginatorBlockedUserIds.contains($0) ?? false }
             )
         } catch {
             // ソース構成（フォロー一覧の取得）に失敗したら、無言の空フィードにせず
@@ -125,6 +131,15 @@ final class ForYouFeedViewModel: HomeViewModel {
         }
     }
 
+    /// 投稿詳細でのブロック（`.userBlocked` 通知）を、Paginator の除外にも足す ⭐️
+    ///
+    /// 基底（HomeViewModel）は表示中の投稿から除き、後がけの除外にも足す。ここで Paginator 側にも
+    /// 足さないと、次のページにブロックした人の投稿が混ざり、後がけの除外で消える分だけ件数が減る。
+    override func handleUserBlocked(_ userId: String) {
+        paginatorBlockedUserIds.insert(userId)
+        super.handleUserBlocked(userId)
+    }
+
     /// 次のページを取得（基底の取得フロー後に残量を Paginator の真値へ上書き）
     override func loadMorePosts() async {
         // リフレッシュが Paginator を差し替えてから基底 fetchPosts が世代を進めるまでの
@@ -142,13 +157,15 @@ final class ForYouFeedViewModel: HomeViewModel {
     /// 基底のクエリ実行を Paginator のマージ取得に差し替える。
     /// - Note: 引数 lastDocument は使わない（カーソルは各ストリームが保持）。
     ///   戻りの lastDocument も常に nil（基底はカーソルを不透明に保存するだけなので無害）。
+    ///   続きの有無は Paginator の真値を返す（Paginator は 0 件ページを続きありのまま返さないので、
+    ///   基底の「0 件なら次のページを読み進める」ループがここを続けて呼ぶことはない）。
     override func executeQuery(
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    ) async throws -> PostPage {
         guard let paginator else {
-            return (posts: [], lastDocument: nil)
+            return PostPage(posts: [], lastDocument: nil, isExhausted: true)
         }
         let page = try await paginator.nextPage(limit: pageSize)
-        return (posts: page, lastDocument: nil)
+        return PostPage(posts: page, lastDocument: nil, isExhausted: !paginator.hasMore)
     }
 }
