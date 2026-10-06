@@ -237,6 +237,104 @@ final class LikeManagerTests: XCTestCase {
         XCTAssertTrue(manager.isLiked("p1"), "成功後は押した状態（いいね）にそろう")
         XCTAssertEqual(manager.likeCount(for: post), 6, "数字もサーバーの値にそろう")
     }
+
+    // MARK: - サインアウト・アカウント切替（#147）⭐️
+    //
+    // LikeManager は App レベルの @StateObject で、サインアウトしても破棄されない。
+    // 共有端末で次のユーザーに、前のユーザーのいいね（ピンクのハート）が見えてはいけない。
+
+    /// 12. サインアウトで、いいね状態・押した結果の数字・ログイン案内がすべて消える
+    func testClearOnSignOutEmptiesLocalState() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikesCounts["p1"] = 5
+        mock.serverLikedPostIds = ["p2"]
+        let manager = makeManager(firestore: mock)
+        let post = makePost(id: "p1", likesCount: 5)
+        await manager.toggleLike(post: post)
+        await manager.checkLikeStatus(for: [makePost(id: "p2", likesCount: 1)])
+        manager.showLoginPrompt = true
+        XCTAssertTrue(manager.isLiked("p1"))
+        XCTAssertTrue(manager.isLiked("p2"))
+
+        manager.clearOnSignOut()
+
+        XCTAssertFalse(manager.isLiked("p1"))
+        XCTAssertFalse(manager.isLiked("p2"))
+        XCTAssertEqual(manager.likeCount(for: post), 5, "押した結果の数字も消え、投稿の値に戻る")
+        XCTAssertFalse(manager.showLoginPrompt)
+    }
+
+    /// 13. 書き込み中にサインアウトして別のアカウントになったら、成功しても前のユーザーのいいねを戻さない
+    func testSuccessAfterAccountSwitchDoesNotRestoreState() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikesCounts["p1"] = 5
+        let auth = makeSignedInAuth(userId: "me")
+        let manager = LikeManager(firestoreService: mock, authService: auth)
+        let post = makePost(id: "p1", likesCount: 5)
+        mock.holdNextWrite = true
+
+        let tap = Task { await manager.toggleLike(post: post) }
+        await waitUntil { mock.isHoldingWrite }
+        switchAccount(auth, to: "you", manager: manager)
+        mock.releaseHeldWrite()
+        await tap.value
+
+        XCTAssertFalse(manager.isLiked("p1"), "次のユーザーに前のユーザーのいいねを見せない")
+        XCTAssertEqual(manager.likeCount(for: post), 5, "前のユーザーが押した結果の数字も出さない")
+    }
+
+    /// 14. 書き込み中にアカウントが変わったら、失敗しても前のユーザーの状態へ巻き戻さない
+    func testFailureAfterAccountSwitchDoesNotRevert() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikesCounts["p1"] = 5
+        mock.serverLikedPostIds = ["p1"]
+        let auth = makeSignedInAuth(userId: "me")
+        let manager = LikeManager(firestoreService: mock, authService: auth)
+        let post = makePost(id: "p1", likesCount: 5)
+        await manager.checkLikeStatus(for: [post])
+        XCTAssertTrue(manager.isLiked("p1"), "前提: いいね済み")
+        mock.writeError = FirestoreServiceError.notFound
+        mock.holdNextWrite = true
+
+        let tap = Task { await manager.toggleLike(post: post) } // 外す → 失敗する
+        await waitUntil { mock.isHoldingWrite }
+        switchAccount(auth, to: "you", manager: manager)
+        mock.releaseHeldWrite()
+        await tap.value
+
+        XCTAssertFalse(manager.isLiked("p1"), "失敗の巻き戻しで前のユーザーのいいねを復活させない")
+    }
+
+    /// 15. いいね状態の読み取り中にアカウントが変わったら、届いた前のユーザーの状態を反映しない
+    func testCheckLikeStatusAfterAccountSwitchIsIgnored() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikedPostIds = ["p1"]
+        let auth = makeSignedInAuth(userId: "me")
+        let manager = LikeManager(firestoreService: mock, authService: auth)
+        mock.holdNextCheck = true
+
+        let check = Task { await manager.checkLikeStatus(for: [self.makePost(id: "p1", likesCount: 1)]) }
+        await waitUntil { mock.isHoldingWrite }
+        switchAccount(auth, to: "you", manager: manager)
+        mock.releaseHeldWrite()
+        await check.value
+
+        XCTAssertFalse(manager.isLiked("p1"), "前のユーザーの読み取り結果を次のユーザーに反映しない")
+    }
+
+    /// ログイン済みの認証サービス（アカウントを途中で切り替えるテスト用に、外から触れるようにする）
+    private func makeSignedInAuth(userId: String) -> MockAuthService {
+        let auth = MockAuthService()
+        auth.currentUserValue = User(id: userId)
+        return auth
+    }
+
+    /// サインアウトして別のアカウントでサインインし直す（ContentView がサインアウト時に clearOnSignOut を呼ぶのと同じ順）
+    private func switchAccount(_ auth: MockAuthService, to userId: String, manager: LikeManager) {
+        auth.currentUserValue = nil
+        manager.clearOnSignOut()
+        auth.currentUserValue = User(id: userId)
+    }
 }
 
 // MARK: - Mock
@@ -254,6 +352,8 @@ final class MockFirestoreServiceForLikes: FirestoreServiceProtocol {
     var writeError: Error?
     /// true にすると、次の書き込み 1 回だけを `releaseHeldWrite()` まで止める（連打テスト用）
     var holdNextWrite = false
+    /// true にすると、次のいいね状態の読み取り 1 回だけを `releaseHeldWrite()` まで止める（アカウント切替テスト用）⭐️
+    var holdNextCheck = false
     /// 止める／再開するの受け渡しは別スレッドから来うるので、ロックで守る
     private let holdLock = NSLock()
     private var heldWrite: CheckedContinuation<Void, Never>?
@@ -278,6 +378,11 @@ final class MockFirestoreServiceForLikes: FirestoreServiceProtocol {
     private func waitIfHeld() async {
         guard holdNextWrite else { return }
         holdNextWrite = false
+        await waitForRelease()
+    }
+
+    /// releaseHeldWrite() が呼ばれるまで待つ（書き込み・読み取り共通）
+    private func waitForRelease() async {
         await withCheckedContinuation { continuation in
             let resumeNow: Bool = holdLock.withLock {
                 if releaseRequested { return true }
@@ -307,7 +412,13 @@ final class MockFirestoreServiceForLikes: FirestoreServiceProtocol {
     }
 
     func batchCheckLikeStatus(postIds: [String], userId _: String) async throws -> Set<String> {
+        // 読んだ結果は止める前に決める（止めている間にサインアウトしても、届くのは前のユーザーの状態）
+        let likedIds = serverLikedPostIds.intersection(postIds)
+        if holdNextCheck {
+            holdNextCheck = false
+            await waitForRelease()
+        }
         // 問い合わせた範囲に絞って返す（本物と同じ振る舞い）
-        serverLikedPostIds.intersection(postIds)
+        return likedIds
     }
 }
