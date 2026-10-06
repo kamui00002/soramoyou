@@ -38,6 +38,35 @@ enum WhatsNewContent {
     /// What's New とは別枠の一度きり通知だが、永続化キーの置き場所はここに集約する運用に合わせる。
     static let hasSeenLivingSkyCoachMarkKey = "hasSeenLivingSkyCoachMark"
 
+    // MARK: - そらともの紹介（機能フラグが有効な人だけ）⭐️
+
+    /// そらともの紹介の識別子。`currentID` とは別に持つ。
+    /// - 1.13.0 のそらともは機能フラグ（クレーム soratomoBeta）の内側なので、全員向けの `currentID` には載せられない
+    /// - オンボーディングの完了では既読にしない。招待された人は新規ユーザーのことが多く、
+    ///   オンボーディングを終えてからクレームが付くため、`currentID` に載せると一度も見ないまま既読になる
+    /// - 1.14 で全員に公開するときは、オンボーディングにページを足し、全員向けの What's New に載せ直す
+    static let soratomoIntroID = "2026-10-soratomo-beta"
+
+    /// 既読済みのそらともの紹介の識別子を保存するキー。
+    static let soratomoIntroSeenKey = "lastSeenSoratomoIntro"
+
+    /// そらともの紹介シートの見出し（招待された新規ユーザーも見るので「アップデート」とは書かない）
+    static let soratomoIntroHeadline = "そらともが使えるようになりました"
+
+    /// そらともの紹介ページ。アイコンはホームの入口ボタン（SoratomoEntryButton）と揃える。
+    static let soratomoPages: [WhatsNewPage] = [
+        WhatsNewPage(
+            icon: "person.2.circle",
+            badge: "先行公開",
+            title: "そらとも",
+            description: "家族や友達だけの小さなグループで、\n撮った空を見せ合えます\nホームの「そらとも」から始めましょう",
+            gradientColors: [
+                Color(red: 0.55, green: 0.80, blue: 0.98),
+                Color(red: 0.36, green: 0.58, blue: 0.90),
+            ]
+        ),
+    ]
+
     // MARK: - 紹介ページ
 
     /// 今回（1.12.0: いいねランキング＋私のおすすめの空＋空優先AE）の新機能紹介ページ。
@@ -118,5 +147,19 @@ enum WhatsNewGate {
         guard hasCompletedOnboarding else { return false }
         // 同じ識別子を既読なら出さない（1回だけ）
         return lastSeenID != currentID
+    }
+
+    /// そらともの紹介を表示すべきかを返す。
+    /// - Parameters:
+    ///   - isSoratomoEnabled: そらともの機能フラグが有効か（判定前の unknown は false として渡す）
+    ///   - lastSeenID: 既読済みのそらともの紹介の識別子（未読なら ""）
+    ///   - introID: 現在のそらともの紹介の識別子（`WhatsNewContent.soratomoIntroID`）
+    /// - Returns: 「フラグが有効」かつ「未読」のときだけ true。オンボーディングの完了は見ない（新規ユーザーにも出す）
+    static func shouldPresentSoratomoIntro(
+        isSoratomoEnabled: Bool,
+        lastSeenID: String,
+        introID: String
+    ) -> Bool {
+        isSoratomoEnabled && lastSeenID != introID
     }
 }

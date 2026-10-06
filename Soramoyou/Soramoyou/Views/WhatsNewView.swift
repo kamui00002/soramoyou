@@ -15,9 +15,13 @@ struct WhatsNewView: View {
     /// 閉じる操作。呼び出し側で sheet を閉じ、onDismiss 側で既読化される。
     let onClose: () -> Void
 
-    @State private var currentPage = 0
+    /// 表示するページ（既定は全員向けの What's New。そらともの紹介は `WhatsNewContent.soratomoPages`）
+    var pages: [WhatsNewPage] = WhatsNewContent.pages
 
-    private let pages = WhatsNewContent.pages
+    /// 上部の見出し
+    var headline = "アップデートで新機能が増えました"
+
+    @State private var currentPage = 0
 
     /// iPad などの広い画面でコンテンツが間延びしないよう最大幅を制限する
     private let maxContentWidth: CGFloat = 500
@@ -58,7 +62,7 @@ struct WhatsNewView: View {
     /// 上部: 見出し＋閉じるボタン
     private var header: some View {
         HStack {
-            Text("アップデートで新機能が増えました")
+            Text(headline)
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .foregroundColor(.white.opacity(0.9))
                 .shadow(DesignTokens.Shadow.text)
