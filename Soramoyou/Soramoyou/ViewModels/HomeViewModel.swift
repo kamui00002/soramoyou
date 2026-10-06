@@ -135,7 +135,17 @@ class HomeViewModel: PaginatedPostsViewModel {
         posts = posts.filter { !blockedUserIds.contains($0.userId) }
     }
 
-    // MARK: - Report & Block
+    /// 投稿詳細でのブロック（`.userBlocked` 通知）を受けて、その人の投稿を一覧から除く ⭐️
+    ///
+    /// 表示中の投稿から除くだけでなく、`blockedUserIds` に足すことで、以降に読むページ
+    /// （`executeQuery` の除外）からも除く。
+    override func handleUserBlocked(_ userId: String) {
+        guard !blockedUserIds.contains(userId) else { return }
+        blockedUserIds.append(userId)
+        filterBlockedUsers()
+    }
+
+    // MARK: - Report
 
     /// 通報を送信
     func submitReport(post: Post, reason: ReportReason) async {
@@ -150,21 +160,6 @@ class HomeViewModel: PaginatedPostsViewModel {
             )
         } catch {
             ErrorHandler.logError(error, context: "HomeViewModel.submitReport", userId: reporterId)
-            reportError = error.userFriendlyMessage
-        }
-    }
-
-    /// 投稿者をブロック
-    func blockPostAuthor(post: Post) async {
-        guard let currentUserId = authService.currentUser()?.id else { return }
-
-        do {
-            try await firestoreService.blockUser(userId: currentUserId, blockedUserId: post.userId)
-            // ブロック後、該当ユーザーの投稿をフィードから除外
-            blockedUserIds.append(post.userId)
-            filterBlockedUsers()
-        } catch {
-            ErrorHandler.logError(error, context: "HomeViewModel.blockPostAuthor", userId: currentUserId)
             reportError = error.userFriendlyMessage
         }
     }

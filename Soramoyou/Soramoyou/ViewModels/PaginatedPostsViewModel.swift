@@ -46,6 +46,9 @@ class PaginatedPostsViewModel: ObservableObject {
     /// 上書きし、posts と選択中の状態が食い違う不具合を防ぐ（レビュー F4）。
     private var fetchGeneration = 0
 
+    /// 投稿者のブロック通知（`.userBlocked`）の購読トークン
+    private var userBlockedObserver: NSObjectProtocol?
+
     /// 1 回の読み込みで読み進める最大ページ数 ⭐️
     ///
     /// 全件が壊れていて変換後 0 件になったページでは、画面の「最後の投稿が見えたら次を読む」
@@ -67,7 +70,42 @@ class PaginatedPostsViewModel: ObservableObject {
     /// - Parameter firestoreService: Firestoreサービス（テスト時にモックを注入可能）
     init(firestoreService: FirestoreServiceProtocol = FirestoreService()) {
         self.firestoreService = firestoreService
+        setupUserBlockedObserver()
     }
+
+    deinit {
+        if let observer = userBlockedObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    // MARK: - ブロック通知（サブクラスでオーバーライド）
+
+    /// 投稿詳細でのブロック（`.userBlocked` 通知）を購読する ☁️
+    ///
+    /// 投稿詳細でブロックしても、一覧は引っ張って更新するまでその人の投稿を出し続けていた。
+    /// 通知を受けたら `handleUserBlocked(_:)` を呼び、各一覧（ホーム・ForYou・タグ・ギャラリー）が
+    /// 表示中の投稿と以降のページからその人の投稿を除く。
+    /// 購読の形は `.postCreated`（ProfileViewModel / CalendarDiaryViewModel）と同じ。
+    private func setupUserBlockedObserver() {
+        userBlockedObserver = NotificationCenter.default.addObserver(
+            forName: .userBlocked,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let userId = notification.userInfo?[Notification.blockedUserIdKey] as? String,
+                  !userId.isEmpty else { return }
+            Task { @MainActor in
+                self?.handleUserBlocked(userId)
+            }
+        }
+    }
+
+    /// 投稿者がブロックされたときに呼ばれる（既定では何もしない）
+    ///
+    /// ブロック中の投稿者を除く一覧（サブクラス）で上書きし、表示中の投稿と以降のページから除く。
+    /// - Parameter userId: ブロックされたユーザーの ID
+    func handleUserBlocked(_: String) {}
 
     // MARK: - Fetch Posts（初回読み込み）
 
