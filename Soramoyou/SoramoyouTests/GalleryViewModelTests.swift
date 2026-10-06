@@ -415,6 +415,12 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
     var lastSearchedColor: String?
     /// 色で探す（searchByColor）の返却結果
     var colorSearchResults: [Post] = []
+    /// 絞り込み版 fetchPostsWithSnapshot が呼ばれた順に返すページ（未設定なら posts から作る）⭐️
+    var postPages: [MockFirestoreServiceForPaging.Page]?
+    /// 絞り込み版 fetchPostsWithSnapshot が呼ばれた回数
+    private(set) var filteredFetchCallCount = 0
+    /// fetchBlockedUserIds が返すブロック中のユーザー ID
+    var blockedUserIds: [String] = []
 
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
         if shouldThrowError {
@@ -444,6 +450,15 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
         // インデックス欠落による FAILED_PRECONDITION はモックでは検出できず、実データ検証が必須。
         if shouldThrowError {
             throw FirestoreServiceError.notFound
+        }
+        defer { filteredFetchCallCount += 1 }
+        if let postPages {
+            // 本物の DocumentSnapshot は作れないので、呼ばれた回数で何ページ目かを決める
+            guard filteredFetchCallCount < postPages.count else {
+                return PostPage(posts: [], lastDocument: nil, isExhausted: true)
+            }
+            let page = postPages[filteredFetchCallCount]
+            return PostPage(posts: page.posts, lastDocument: nil, isExhausted: page.readCount < limit)
         }
         // クエリ条件を記録（テストの検証用）
         lastSortField = sortField
@@ -517,7 +532,7 @@ class MockFirestoreServiceForGallery: FirestoreServiceProtocol {
     func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {}
     func blockUser(userId: String, blockedUserId: String) async throws {}
     func unblockUser(userId: String, blockedUserId: String) async throws {}
-    func fetchBlockedUserIds(userId: String) async throws -> [String] { return [] }
+    func fetchBlockedUserIds(userId: String) async throws -> [String] { return blockedUserIds }
     func searchByHashtag(_ hashtag: String) async throws -> [Post] { return [] }
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post] {
         if shouldThrowError {

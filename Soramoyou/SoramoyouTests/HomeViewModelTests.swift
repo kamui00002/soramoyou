@@ -146,12 +146,28 @@ final class HomeViewModelTests: XCTestCase {
 class MockFirestoreServiceForHome: FirestoreServiceProtocol {
     var posts: [Post] = []
     var singlePost: Post?
+    /// fetchPostsWithSnapshot が呼ばれた順に返すページ（未設定なら posts を 1 ページで返す）⭐️
+    /// ページごとに中身を変えたいテスト（ブロック中の投稿者だけのページなど）で使う
+    var postPages: [MockFirestoreServiceForPaging.Page]?
+    /// fetchPostsWithSnapshot が呼ばれた回数
+    private(set) var fetchPostsWithSnapshotCallCount = 0
+    /// fetchBlockedUserIds が返すブロック中のユーザー ID
+    var blockedUserIds: [String] = []
     
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
         return Array(posts.prefix(limit))
     }
     
     func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage {
+        defer { fetchPostsWithSnapshotCallCount += 1 }
+        if let postPages {
+            // 本物の DocumentSnapshot は作れないので、呼ばれた回数で何ページ目かを決める
+            guard fetchPostsWithSnapshotCallCount < postPages.count else {
+                return PostPage(posts: [], lastDocument: nil, isExhausted: true)
+            }
+            let page = postPages[fetchPostsWithSnapshotCallCount]
+            return PostPage(posts: page.posts, lastDocument: nil, isExhausted: page.readCount < limit)
+        }
         // 簡易実装: 実際のDocumentSnapshotは作成しない
         let postsToReturn = Array(posts.prefix(limit))
         // 壊れた投稿の無いモックなので「読んだ件数 = 返す件数」として続きの有無を決める
@@ -182,7 +198,7 @@ class MockFirestoreServiceForHome: FirestoreServiceProtocol {
     func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {}
     func blockUser(userId: String, blockedUserId: String) async throws {}
     func unblockUser(userId: String, blockedUserId: String) async throws {}
-    func fetchBlockedUserIds(userId: String) async throws -> [String] { return [] }
+    func fetchBlockedUserIds(userId: String) async throws -> [String] { return blockedUserIds }
     func searchByHashtag(_ hashtag: String) async throws -> [Post] { return [] }
     func searchByColor(_ color: String, threshold: Double?) async throws -> [Post] { return [] }
     func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] { return [] }
