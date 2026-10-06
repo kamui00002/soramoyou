@@ -615,7 +615,7 @@
 				CODE_SIGN_ENTITLEMENTS = Soramoyou/Soramoyou.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CRASHLYTICS_COLLECTION_ENABLED = NO;
-				CURRENT_PROJECT_VERSION = 105;
+				CURRENT_PROJECT_VERSION = 110;
 				DEVELOPMENT_TEAM = B7F79FDM78;
 				ENABLE_PREVIEWS = YES;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -642,7 +642,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.12.1;
+				MARKETING_VERSION = 1.13.0;
 				MTL_COMPILER_FLAGS = "-fcikernel";
 				MTLLINKER_FLAGS = "-fcikernel";
 				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.Soramoyou;
@@ -664,7 +664,7 @@
 				CODE_SIGN_ENTITLEMENTS = Soramoyou/Soramoyou.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CRASHLYTICS_COLLECTION_ENABLED = YES;
-				CURRENT_PROJECT_VERSION = 105;
+				CURRENT_PROJECT_VERSION = 110;
 				DEVELOPMENT_TEAM = B7F79FDM78;
 				ENABLE_PREVIEWS = YES;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -691,7 +691,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.12.1;
+				MARKETING_VERSION = 1.13.0;
 				MTL_COMPILER_FLAGS = "-fcikernel";
 				MTLLINKER_FLAGS = "-fcikernel";
 				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.Soramoyou;
@@ -712,7 +712,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = SoramoyouWidgetExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 105;
+				CURRENT_PROJECT_VERSION = 110;
 				DEVELOPMENT_TEAM = B7F79FDM78;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = SoramoyouWidget/Info.plist;
@@ -724,7 +724,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.12.1;
+				MARKETING_VERSION = 1.13.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.Soramoyou.SoramoyouWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -744,7 +744,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = SoramoyouWidgetExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 105;
+				CURRENT_PROJECT_VERSION = 110;
 				DEVELOPMENT_TEAM = B7F79FDM78;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = SoramoyouWidget/Info.plist;
@@ -756,7 +756,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.12.1;
+				MARKETING_VERSION = 1.13.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.yoshidometoru.Soramoyou.SoramoyouWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
