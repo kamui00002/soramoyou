@@ -183,7 +183,7 @@ class MockFirestoreServiceForSearch: FirestoreServiceProtocol {
     // その他のメソッドは空実装
     func createPost(_ post: Post) async throws -> Post { return post }
     func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
-    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) { return ([], nil) }
+    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage { return PostPage(posts: [], lastDocument: nil, isExhausted: true) }
     func fetchPost(postId: String) async throws -> Post { throw FirestoreServiceError.notFound }
     func deletePost(postId: String, userId: String) async throws {}
     func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }

@@ -353,7 +353,7 @@ class GalleryViewModel: PaginatedPostsViewModel {
     /// - ランキング: 期間中のいいねをアプリ内で集計して上位 30 件を一括取得（ページング無効）
     /// - 色モード: `searchByColor` で一括取得（ページング無効）
     /// - 通常: 時間帯／空の種類フィルタ ＋ 並び替え ＋ ページング
-    override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> PostPage {
         // 1 ページ目の取得時だけブロックリストを読み直す（従来 fetchPosts の先頭で行っていたのと同じ頻度）。
         // ランキング集計（loadRanking）と、取得後の filterBlockedUsers の両方がこの結果を使う。
         if lastDocument == nil {
@@ -363,10 +363,10 @@ class GalleryViewModel: PaginatedPostsViewModel {
         // ランキング: 2 ページ目以降は無い（空を返してページング終了）
         if let period = effectiveSortOrder.rankingPeriod {
             if lastDocument != nil {
-                return (posts: [], lastDocument: nil)
+                return PostPage(posts: [], lastDocument: nil, isExhausted: true)
             }
             let result = try await loadRanking(period: period)
-            return (posts: result.entries.map(\.post), lastDocument: nil)
+            return PostPage(posts: result.entries.map(\.post), lastDocument: nil, isExhausted: true)
         }
 
         // 色で探すモード: SearchView と同じ一括取得方式。
@@ -374,10 +374,10 @@ class GalleryViewModel: PaginatedPostsViewModel {
         // 2ページ目以降は取得しない（空を返してページング終了）。
         if let color = selectedColor {
             if lastDocument != nil {
-                return (posts: [], lastDocument: nil)
+                return PostPage(posts: [], lastDocument: nil, isExhausted: true)
             }
             let colorPosts = try await firestoreService.searchByColor(color, threshold: colorThreshold)
-            return (posts: colorPosts, lastDocument: nil)
+            return PostPage(posts: colorPosts, lastDocument: nil, isExhausted: true)
         }
 
         // 通常モード: フィルタ＋並び替え＋ページング

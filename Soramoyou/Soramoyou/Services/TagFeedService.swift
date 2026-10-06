@@ -25,12 +25,12 @@ protocol TagFeedServiceProtocol {
     ///   - hashtag: "#" を含まない生のタグ文字列
     ///   - limit: 1ページあたりの件数
     ///   - lastDocument: 前ページの最後のドキュメント（nil なら先頭ページ）
-    /// - Returns: 投稿と、次ページ取得に使う最後のドキュメント
+    /// - Returns: 投稿・次ページ取得に使う最後のドキュメント・続きの有無
     func fetchPostsByHashtag(
         _ hashtag: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?)
+    ) async throws -> PostPage
 
     /// 自分の投稿からよく使っているハッシュタグを推定する
     /// - Parameters:
@@ -129,7 +129,7 @@ final class TagFeedService: TagFeedServiceProtocol {
         _ hashtag: String,
         limit: Int,
         lastDocument: DocumentSnapshot?
-    ) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    ) async throws -> PostPage {
         do {
             var query: Query = postsCollection
                 .whereField("visibility", isEqualTo: Visibility.public.rawValue)
@@ -147,10 +147,8 @@ final class TagFeedService: TagFeedServiceProtocol {
             // ⚠️ compactMap { try? ... } は壊れたドキュメントを無言で落とすため使わない。
             //    1件のデコード失敗でページ全体を捨てると一覧が真っ白になるので、
             //    パスをログに残したうえでその1件だけスキップする（tech-spec.md の方針）。
-            // ⚠️ スキップにより posts.count が limit を割ると、基底 PaginatedPostsViewModel
-            //    （posts.count < pageSize で hasMorePosts=false）がページングを早期に打ち切る。
-            //    壊れたドキュメントは現状想定されないため graceful degradation として許容し、
-            //    PR-7 のマージ層（0件ページ禁止）と併せて見直す。
+            //    スキップで posts.count が limit を割っても、続きの有無は PostPage.isExhausted
+            //    （実際に読んだドキュメント数）で判定するので、ページングは打ち切られない。
             let posts = snapshot.documents.compactMap { document -> Post? in
                 do {
                     return try Post(from: document.data())
@@ -160,9 +158,9 @@ final class TagFeedService: TagFeedServiceProtocol {
                 }
             }
 
-            // 次ページの起点は「デコード成否に関わらず実際に読んだ最後のドキュメント」。
+            // 次ページの起点と「続きがあるか」は「デコード成否に関わらず実際に読んだドキュメント」で決める。
             // posts.last だとスキップした壊れたドキュメントで無限ループになる。
-            return (posts: posts, lastDocument: snapshot.documents.last)
+            return PostPage(posts: posts, snapshot: snapshot, limit: limit)
         } catch {
             throw FirestoreServiceError.fetchFailed(error)
         }

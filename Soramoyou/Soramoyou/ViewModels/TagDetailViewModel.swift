@@ -74,7 +74,7 @@ class TagDetailViewModel: PaginatedPostsViewModel {
     // MARK: - Query Override
 
     /// ハッシュタグ絞り込みのページング取得に差し替える
-    override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> (posts: [Post], lastDocument: DocumentSnapshot?) {
+    override func executeQuery(lastDocument: DocumentSnapshot?) async throws -> PostPage {
         try await tagFeedService.fetchPostsByHashtag(
             tag,
             limit: pageSize,
