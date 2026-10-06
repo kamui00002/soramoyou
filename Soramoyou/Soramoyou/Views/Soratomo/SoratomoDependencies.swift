@@ -93,6 +93,14 @@ final class SoratomoDependencies {
     /// いまログインしている利用者の uid（未ログインなら nil）
     let currentUid: () -> String?
 
+    /// いま開いているタイムラインの ViewModel（投稿詳細から、タイムラインと同じ削除の経路を使うため）
+    ///
+    /// - タイムラインが表示されたときに自分の ViewModel を入れる（`@StateObject` は init の中ではまだ作られないため）
+    /// - 弱参照なので、タイムラインが画面の積み重ねから外れれば自然に nil になる。
+    ///   ⚠️ タイムラインの `onDisappear` で消さない（投稿詳細を上に積んだときにも呼ばれるため）
+    /// - 投稿詳細は、グループ ID が一致するときだけ使う（別のグループの ViewModel を使わないため）
+    weak var activeTimelineViewModel: SoratomoTimelineViewModel?
+
     /// - Parameters: 各サービス。テストや Preview では、モックを渡す
     ///   （`skyLookup` に既定値を付けないのは、既定の引数がメインアクターの外で評価され、
     ///   メインアクターの `SoratomoSkyLookup()` を呼べないため）
