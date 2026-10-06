@@ -15,19 +15,27 @@ struct MainTabView: View {
     // What's New（新機能紹介）の表示制御
     @AppStorage(WhatsNewContent.onboardingCompletedKey) private var hasCompletedOnboarding = false
     @AppStorage(WhatsNewContent.lastSeenKey) private var lastSeenWhatsNewVersion = ""
-    @State private var showWhatsNew = false
-    /// いま出している（または次に出す）紹介の種類。全画面カバーは 1 枚だけにして、中身をこれで切り替える
+    /// いま出している紹介の種類（nil = 出していない）。全画面カバーは `item:` で駆動し、中身は引数で受け取る
+    /// （`isPresented:` と別の @State で種類を持つと、カバーの中身が古い種類のまま評価され、
+    ///   そらともの紹介を出したつもりで全員向けのページが出ることがある。2026-10-06 にシミュレータで実測）
+    @State private var presentedWhatsNew: WhatsNewKind?
+    /// 紹介を出しているか（`presentedWhatsNew` から導く）
+    private var showWhatsNew: Bool { presentedWhatsNew != nil }
+    /// 直前に出した紹介の種類。閉じた後の既読化で使う（onDismiss の時点で `presentedWhatsNew` は nil になっている）。
+    /// 全画面カバーは 1 枚だけにして、中身を種類で切り替える
     /// （カバーを 2 枚にすると、同時に出そうとしたときに片方が表示に失敗する）
     @State private var whatsNewKind: WhatsNewKind = .general
     /// 既読済みのそらともの紹介の識別子 ⭐️
     @AppStorage(WhatsNewContent.soratomoIntroSeenKey) private var lastSeenSoratomoIntro = ""
 
     /// 紹介の種類
-    enum WhatsNewKind {
+    enum WhatsNewKind: Identifiable {
         /// 全員向けの What's New（`WhatsNewContent.currentID`）
         case general
         /// そらともの紹介（機能フラグが有効な人だけ・`WhatsNewContent.soratomoIntroID`）
         case soratomo
+
+        var id: Self { self }
     }
 
     // そらとも（友達グループで空を共有）⭐️ tasks 14.1
@@ -118,13 +126,13 @@ struct MainTabView: View {
         }
         // iPad では .sheet が中央フォームカードになり全画面グラデが崩れるため、
         // 全プラットフォームで全画面になる .fullScreenCover を使う（オンボ用途にも適切）。
-        .fullScreenCover(isPresented: $showWhatsNew, onDismiss: handleWhatsNewDismiss) {
-            switch whatsNewKind {
+        .fullScreenCover(item: $presentedWhatsNew, onDismiss: handleWhatsNewDismiss) { kind in
+            switch kind {
             case .general:
-                WhatsNewView(onClose: { showWhatsNew = false })
+                WhatsNewView(onClose: { presentedWhatsNew = nil })
             case .soratomo:
                 WhatsNewView(
-                    onClose: { showWhatsNew = false },
+                    onClose: { presentedWhatsNew = nil },
                     pages: WhatsNewContent.soratomoPages,
                     headline: WhatsNewContent.soratomoIntroHeadline
                 )
@@ -183,7 +191,7 @@ struct MainTabView: View {
         ) else { return }
 
         whatsNewKind = .general
-        showWhatsNew = true
+        presentedWhatsNew = .general
         LoggingService.shared.logEvent(
             "whats_new_shown",
             parameters: ["version": WhatsNewContent.currentID]
@@ -232,7 +240,7 @@ struct MainTabView: View {
         ) else { return }
 
         whatsNewKind = .soratomo
-        showWhatsNew = true
+        presentedWhatsNew = .soratomo
         LoggingService.shared.logEvent(
             "whats_new_shown",
             parameters: ["version": WhatsNewContent.soratomoIntroID]
