@@ -202,5 +202,55 @@ service firebase.storage {
                    && isImageFile()
                    && isValidSize();
     }
+
+    // ============================================
+    // そらとも（招待制の小さなグループで空を共有する）の画像 ⭐️
+    // spec: .kiro/specs/soratomo/（tasks 4.1）
+    // パス: soratomo/{groupId}/{authorId}/{skyId}/display.jpg と thumb.jpg（アプリだけが作成・削除する）
+    // - 読み取りは、機能フラグを持つそのグループのメンバーだけ。Firestore のメンバーの文書の存在で判定する（1 回の評価で 1 件）
+    // - Storage のルールから Firestore を読むには、初回の deploy で IAM の付与が要る（tasks 4.3）。
+    //   付与しないと、メンバーの読み取りも拒否される
+    // - 作成と削除を同じ allow write にまとめない。削除の要求には request.resource が無いので、
+    //   内容の検査を混ぜると削除が必ず拒否される（PR #141 と同じ型の不具合）
+    // - 既存のパスのルールは変えない（要件 13.8）
+    // テスト: Rules test API で firestore.exists をモックして評価する（research.md の要確認 2・tasks 4.2）
+    // ============================================
+    match /soratomo/{groupId}/{authorId}/{skyId}/{fileName} {
+      // 機能フラグ（カスタムクレーム soratomoBeta）を持つログイン利用者か（要件 1.6）
+      // - firestore.rules の isSoratomoUser() と同じ条件。token.soratomoBeta と直接書くと、
+      //   クレームの無い人では「項目が無い」エラーで拒否になる。get の既定値 false で読み、条件として拒否する
+      function isSoratomoUser() {
+        return isAuthenticated() && request.auth.token.get('soratomoBeta', false) == true;
+      }
+
+      // そのグループのメンバーか（要件 11.1・11.2）
+      // - request.auth.uid を読むので、必ず isSoratomoUser() の後ろに && でつなぐ（未ログインで評価させない）
+      function isSoratomoMember() {
+        return firestore.exists(/databases/(default)/documents/soratomoGroups/$(groupId)/members/$(request.auth.uid));
+      }
+
+      // 保存できる大きさの上限（バイト）。表示用は 1.5MB、サムネイルは 200KB（要件 11.5）
+      function maxSoratomoImageSize(name) {
+        return name == 'display.jpg' ? 1572864 : 204800;
+      }
+
+      allow read: if isSoratomoUser() && isSoratomoMember();
+
+      // 作成: メンバー本人が自分の投稿者のパスへ、決まった 2 つのファイル名の JPEG を上限以内で保存するときだけ（要件 11.5）
+      // - 投稿者 ID の一致を先に見て、他人のパスでは Firestore を読まずに拒否する
+      allow create: if isSoratomoUser()
+                    && request.auth.uid == authorId
+                    && isSoratomoMember()
+                    && fileName in ['display.jpg', 'thumb.jpg']
+                    && request.resource.contentType == 'image/jpeg'
+                    && request.resource.size <= maxSoratomoImageSize(fileName);
+
+      // 上書きは拒否する（投稿の再試行は新しい投稿 ID で保存する）
+      allow update: if false;
+
+      // 削除: 投稿者本人だけ（オーナーを含むほかのメンバーには許さない。要件 11.6・11.15）
+      // - 内容（request.resource）の検査を含めない（要件 11.7）
+      allow delete: if isSoratomoUser() && request.auth.uid == authorId;
+    }
   }
 }

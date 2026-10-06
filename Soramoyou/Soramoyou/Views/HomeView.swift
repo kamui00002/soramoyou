@@ -105,6 +105,11 @@ struct HomeView: View {
                 ToolbarItem(placement: .principal) {
                     AppTitleView()
                 }
+                // そらとも（友達グループで空を共有）の入口 ⭐️ tasks 14.1
+                // 機能フラグが有効のときだけボタンが出る（無効・判定前・ゲスト中は何も描かない）
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    SoratomoEntryButton()
+                }
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .refreshable {

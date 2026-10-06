@@ -73,4 +73,42 @@ final class WhatsNewGateTests: XCTestCase {
             hasCompletedOnboarding: true
         ))
     }
+
+    // MARK: - そらともの紹介（機能フラグが有効な人だけ）
+
+    private let soratomoIntroID = "soratomo-current"
+
+    /// フラグが有効で未読 → 表示する
+    func testSoratomoIntroEnabledUnseenShouldPresent() {
+        XCTAssertTrue(WhatsNewGate.shouldPresentSoratomoIntro(
+            isSoratomoEnabled: true,
+            lastSeenID: "",
+            introID: soratomoIntroID
+        ))
+    }
+
+    /// フラグが有効でも既読 → 出さない（1回だけ）
+    func testSoratomoIntroAlreadySeenShouldNotPresent() {
+        XCTAssertFalse(WhatsNewGate.shouldPresentSoratomoIntro(
+            isSoratomoEnabled: true,
+            lastSeenID: soratomoIntroID,
+            introID: soratomoIntroID
+        ))
+    }
+
+    /// フラグが無効（判定前を含む）→ 出さない（クレームの無い人には見せない）
+    func testSoratomoIntroDisabledShouldNotPresent() {
+        XCTAssertFalse(WhatsNewGate.shouldPresentSoratomoIntro(
+            isSoratomoEnabled: false,
+            lastSeenID: "",
+            introID: soratomoIntroID
+        ))
+    }
+
+    /// そらともの紹介の識別子は、全員向けの What's New と別でなければならない
+    /// （同じだと、オンボーディングの完了で既読になり、招待された新規ユーザーに届かない）
+    func testSoratomoIntroIDDiffersFromGeneralID() {
+        XCTAssertNotEqual(WhatsNewContent.soratomoIntroID, WhatsNewContent.currentID)
+        XCTAssertNotEqual(WhatsNewContent.soratomoIntroSeenKey, WhatsNewContent.lastSeenKey)
+    }
 }

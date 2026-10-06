@@ -38,6 +38,10 @@ final class GoldenHourNotificationManager: NSObject {
     /// prefix 一致で削除することで、将来の他種の通知と衝突させない。
     static let identifierPrefix = "goldenhour-"
 
+    /// アプリが前面にあるときに届いた通知の出し方（通知センターのデリゲートはこのクラスだけなので、全種類の通知に効く）
+    /// - `.list` を入れるのは、前面で受けた通知を通知センターにも残すため。無いとバナーが消えたあと見返せない
+    static let foregroundPresentationOptions: UNNotificationPresentationOptions = [.banner, .sound, .list]
+
     /// 何日先まで事前スケジュールするか（iOS の pending 上限64に対して余裕を持たせる）
     private let scheduleDays = 14
 
@@ -226,12 +230,12 @@ final class GoldenHourNotificationManager: NSObject {
 
 extension GoldenHourNotificationManager: UNUserNotificationCenterDelegate {
 
-    /// アプリがフォアグラウンドでも通知をバナー表示する
+    /// アプリがフォアグラウンドでも通知をバナー表示し、通知センターにも残す
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
+        Self.foregroundPresentationOptions
     }
 
     /// 通知タップを計測する
@@ -242,5 +246,10 @@ extension GoldenHourNotificationManager: UNUserNotificationCenterDelegate {
         if response.notification.request.identifier.hasPrefix(Self.identifierPrefix) {
             LoggingService.shared.logEvent("golden_hour_notification_tapped", parameters: nil)
         }
+        // そらとも（友達グループで空を共有）の新着通知なら、行き先をルーターへ渡す ⭐️ tasks 14.1
+        // ルーターは type が soratomoPost のものだけを保留にし、既存の通知とゴールデンアワーでは何もしない。
+        // 表示はここでは決めない（ログイン状態・機能フラグ・What's New の表示中かが分かった時点で画面側が解決する。
+        // コールドスタートで画面より先にタップが届いても、保留はルーターが持っているので失わない）
+        SoratomoRouter.shared.receive(userInfo: response.notification.request.content.userInfo)
     }
 }

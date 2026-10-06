@@ -16,6 +16,25 @@ struct MainTabView: View {
     @AppStorage(WhatsNewContent.onboardingCompletedKey) private var hasCompletedOnboarding = false
     @AppStorage(WhatsNewContent.lastSeenKey) private var lastSeenWhatsNewVersion = ""
     @State private var showWhatsNew = false
+    /// いま出している（または次に出す）紹介の種類。全画面カバーは 1 枚だけにして、中身をこれで切り替える
+    /// （カバーを 2 枚にすると、同時に出そうとしたときに片方が表示に失敗する）
+    @State private var whatsNewKind: WhatsNewKind = .general
+    /// 既読済みのそらともの紹介の識別子 ⭐️
+    @AppStorage(WhatsNewContent.soratomoIntroSeenKey) private var lastSeenSoratomoIntro = ""
+
+    /// 紹介の種類
+    enum WhatsNewKind {
+        /// 全員向けの What's New（`WhatsNewContent.currentID`）
+        case general
+        /// そらともの紹介（機能フラグが有効な人だけ・`WhatsNewContent.soratomoIntroID`）
+        case soratomo
+    }
+
+    // そらとも（友達グループで空を共有）⭐️ tasks 14.1
+    /// 機能フラグの判定（SoramoyouApp が注入。ログイン時の評価は ContentView）
+    @EnvironmentObject private var soratomoGate: SoratomoFeatureGate
+    /// そらともへの遷移を決めるルーター（全画面のカバーの表示と、通知の保留の行き先を持つ）
+    @ObservedObject private var soratomoRouter = SoratomoRouter.shared
 
     enum Tab: Int, CaseIterable {
         case home = 0
@@ -73,6 +92,12 @@ struct MainTabView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // そらともの根の画面を全画面で出す口 ⭐️ tasks 14.1
+            // ⚠️ What's New の fullScreenCover（外側の ZStack に付いている）とは別の階層（タブの中身の Group）に付ける。
+            //    同じビューに 2 つ付けると片方しか出ないため。What's New の表示中は canPresent を false にして待つ
+            .fullScreenCover(isPresented: $soratomoRouter.isPresented) {
+                SoratomoRootView(router: .shared, dependencies: .live)
+            }
 
             // カスタムフローティングタブバー
             floatingTabBar
@@ -94,7 +119,30 @@ struct MainTabView: View {
         // iPad では .sheet が中央フォームカードになり全画面グラデが崩れるため、
         // 全プラットフォームで全画面になる .fullScreenCover を使う（オンボ用途にも適切）。
         .fullScreenCover(isPresented: $showWhatsNew, onDismiss: handleWhatsNewDismiss) {
-            WhatsNewView(onClose: { showWhatsNew = false })
+            switch whatsNewKind {
+            case .general:
+                WhatsNewView(onClose: { showWhatsNew = false })
+            case .soratomo:
+                WhatsNewView(
+                    onClose: { showWhatsNew = false },
+                    pages: WhatsNewContent.soratomoPages,
+                    headline: WhatsNewContent.soratomoIntroHeadline
+                )
+            }
+        }
+        // そらともの通知の保留の行き先を、表示できる状況になったら開く ⭐️ tasks 14.1
+        // （タブの画面の表示時・フラグの判定が決まった時・通知のタップが届いた時。
+        //   What's New を閉じた時は handleWhatsNewDismiss から呼ぶ）
+        .onAppear {
+            resolveSoratomoPending()
+        }
+        .onChange(of: soratomoGate.state) { _ in
+            resolveSoratomoPending()
+            // フラグの判定は起動後に非同期で決まるので、決まったところでそらともの紹介を試す ⭐️
+            Task { await maybeShowSoratomoIntro() }
+        }
+        .onChange(of: soratomoRouter.pending) { _ in
+            resolveSoratomoPending()
         }
     }
 
@@ -102,19 +150,39 @@ struct MainTabView: View {
 
     /// アップデートした既存ユーザーにのみ、新機能紹介を1回だけ表示する。
     /// ATT/AdMob 等のシステムダイアログと衝突しないよう少し待ってから出す。
+    /// 猶予の後に What's New を出してよいか ⭐️ tasks 14.1（レビューで足した）
+    ///
+    /// そらとも（友達グループで空を共有）の全画面が先に出ているときは出さない。出そうとすると、子のカバーの表示中に
+    /// 親から 2 枚目を出すことになり、表示に失敗して `showWhatsNew` が true のまま残りうる。残ると、この起動の間は
+    /// そらともの通知の保留が解決されなくなる（canPresent がずっと false）。出さなかった場合は既読にならないので、
+    /// 次回の起動で出る（design.md の Risks に書いた挙動と同じ）。
+    static func canShowWhatsNewAfterDelay(lastSeenID: String, currentID: String, isSoratomoPresented: Bool) -> Bool {
+        lastSeenID != currentID && !isSoratomoPresented
+    }
+
     private func maybeShowWhatsNew() async {
         guard WhatsNewGate.shouldPresent(
             currentID: WhatsNewContent.currentID,
             lastSeenID: lastSeenWhatsNewVersion,
             hasCompletedOnboarding: hasCompletedOnboarding
-        ) else { return }
+        ) else {
+            // 全員向けを出さないときだけ、そらともの紹介を試す（2 枚続けて出さない。残った方は次の起動で出る）
+            await maybeShowSoratomoIntro()
+            return
+        }
 
         // 起動直後は ATT/AdMob ダイアログが先に出るため、その猶予を与える
         try? await Task.sleep(nanoseconds: 1_500_000_000)
 
-        // 猶予中に既読化された場合は出さない
-        guard lastSeenWhatsNewVersion != WhatsNewContent.currentID else { return }
+        // 猶予中に既読化された場合・そらともの全画面が先に出ている場合・
+        // 猶予中にそらともの紹介が先に出た場合は出さない
+        guard !showWhatsNew, Self.canShowWhatsNewAfterDelay(
+            lastSeenID: lastSeenWhatsNewVersion,
+            currentID: WhatsNewContent.currentID,
+            isSoratomoPresented: soratomoRouter.isPresented
+        ) else { return }
 
+        whatsNewKind = .general
         showWhatsNew = true
         LoggingService.shared.logEvent(
             "whats_new_shown",
@@ -125,10 +193,69 @@ struct MainTabView: View {
     /// シートが閉じられたら（×・スワイプ・「さっそく使う」いずれでも）既読化する。
     /// 既読化を1箇所に集約し、どの閉じ方でも「1回だけ」を保証する。
     private func handleWhatsNewDismiss() {
-        lastSeenWhatsNewVersion = WhatsNewContent.currentID
+        let version: String
+        switch whatsNewKind {
+        case .general:
+            version = WhatsNewContent.currentID
+            lastSeenWhatsNewVersion = version
+        case .soratomo:
+            version = WhatsNewContent.soratomoIntroID
+            lastSeenSoratomoIntro = version
+        }
         LoggingService.shared.logEvent(
             "whats_new_dismissed",
-            parameters: ["version": WhatsNewContent.currentID]
+            parameters: ["version": version]
+        )
+        // What's New の表示中に待たせていた、そらともの通知の行き先をもう一度試す ⭐️ tasks 14.1
+        // （onDismiss は閉じるアニメーションの後に呼ばれるので、ここなら次の全画面を出せる）
+        resolveSoratomoPending()
+    }
+
+    /// 機能フラグが有効な人に、そらともの紹介を 1 回だけ出す ⭐️
+    ///
+    /// 全員向けの What's New と同じく、ATT/AdMob のダイアログを避けるため少し待ってから出す。
+    /// 何かの全画面（What's New・そらとも）が出ている間は出さない。出さなかった場合は既読にならないので、次の起動で出る。
+    private func maybeShowSoratomoIntro() async {
+        guard !showWhatsNew, WhatsNewGate.shouldPresentSoratomoIntro(
+            isSoratomoEnabled: soratomoGate.isEnabled,
+            lastSeenID: lastSeenSoratomoIntro,
+            introID: WhatsNewContent.soratomoIntroID
+        ) else { return }
+
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+        // 猶予中に状況が変わっていないかを確かめ直す（フラグが無効になった・何かの全画面が先に出た・既読になった）
+        guard !showWhatsNew, !soratomoRouter.isPresented, WhatsNewGate.shouldPresentSoratomoIntro(
+            isSoratomoEnabled: soratomoGate.isEnabled,
+            lastSeenID: lastSeenSoratomoIntro,
+            introID: WhatsNewContent.soratomoIntroID
+        ) else { return }
+
+        whatsNewKind = .soratomo
+        showWhatsNew = true
+        LoggingService.shared.logEvent(
+            "whats_new_shown",
+            parameters: ["version": WhatsNewContent.soratomoIntroID]
+        )
+    }
+
+    // MARK: - そらとも ⭐️ tasks 14.1
+
+    /// そらともの通知の保留の行き先を、いまの状況で開くか・破棄するか・待つかをルーターに決めさせる
+    ///
+    /// この画面はログイン済みのときだけ出る（ContentView の分岐）ので、ログイン状態は `.signedIn` で渡す。
+    /// 未ログインの保留の破棄は ContentView が行う。
+    /// - フラグの判定前（unknown）: ルーターが保留のまま待つ（判定が決まると onChange でもう一度呼ばれる）
+    /// - フラグが無効: ルーターが破棄して `flag_off` を記録する（そらともの画面は出さない）
+    /// - フラグが有効: What's New の表示中は `canPresent = false` で待ち、閉じたら開く
+    ///
+    /// ⚠️ design.md の Risks のとおり、待ち合わせは What's New だけ。タブの中のほかのシートの表示中や、
+    ///    What's New の 1.5 秒の待ちの間にそらともが先に出た場合の挙動は、実機で確かめる。
+    private func resolveSoratomoPending() {
+        soratomoRouter.resolvePending(
+            session: .signedIn,
+            gate: soratomoGate.state,
+            canPresent: !showWhatsNew
         )
     }
 
@@ -277,7 +404,16 @@ struct MainTabView_Previews: PreviewProvider {
     static var previews: some View {
         MainTabView()
             .environmentObject(AuthViewModel())
+            // そらともの判定（Preview では常に未ログイン扱いの窓口。入口もカバーも出ない）⭐️
+            .environmentObject(SoratomoFeatureGate(provider: SoratomoEntryMainTabPreviewProvider()))
     }
+}
+
+/// Preview 用のアカウントの窓口（ログインしていない扱い。FirebaseAuth を呼ばない）⭐️
+@MainActor
+private struct SoratomoEntryMainTabPreviewProvider: SoratomoClaimsProviding {
+    func currentAccountKind() -> SoratomoAccountKind? { nil }
+    func claims(forceRefresh _: Bool) async throws -> [String: Any] { [:] }
 }
 
 

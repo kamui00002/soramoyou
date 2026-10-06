@@ -38,6 +38,12 @@ struct User: Identifiable, Codable {
     var notifyReactions: Bool
     var notifyNewPostsFromFollowing: Bool
     var notifyNewPostsFromEveryone: Bool
+    /// 「そらとも通知」（友達グループの新着投稿の通知）⭐️
+    ///
+    /// 読み取り専用: `toFirestoreData()` では書かない（`followedTags` と同じ扱い）。
+    /// 保存は `users/{uid}.notifySoratomo` だけを `updateData` で書く（そらとものプロフィールの窓口・tasks 11.5）。
+    /// 未保存（旧ユーザー・未設定）は nil。実際に使う値は `notifySoratomoEnabled`（既定 ON）。
+    var notifySoratomo: Bool?
     let createdAt: Date
     var updatedAt: Date
 
@@ -57,6 +63,7 @@ struct User: Identifiable, Codable {
         notifyReactions: Bool = true,
         notifyNewPostsFromFollowing: Bool = true,
         notifyNewPostsFromEveryone: Bool = false,
+        notifySoratomo: Bool? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -75,6 +82,7 @@ struct User: Identifiable, Codable {
         self.notifyReactions = notifyReactions
         self.notifyNewPostsFromFollowing = notifyNewPostsFromFollowing
         self.notifyNewPostsFromEveryone = notifyNewPostsFromEveryone
+        self.notifySoratomo = notifySoratomo
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -95,6 +103,7 @@ struct User: Identifiable, Codable {
         notifyReactions = true
         notifyNewPostsFromFollowing = true
         notifyNewPostsFromEveryone = false
+        notifySoratomo = nil
         createdAt = Date()
         updatedAt = Date()
     }
@@ -152,6 +161,7 @@ struct User: Identifiable, Codable {
         // User 全体を setData(merge) する updateUser 経由で書くと、キャッシュ済みの旧配列が
         // サーバーの最新値を巻き戻してしまうため
         // （updateNotificationPreferences が field-scoped に切られているのと同じ理由）。
+        // そらとも通知 ⭐️: notifySoratomo も同じ理由でここでは書かない（読み取り専用）。
 
         return data
     }
@@ -181,6 +191,8 @@ struct User: Identifiable, Codable {
         notifyReactions = documentData["notifyReactions"] as? Bool ?? true
         notifyNewPostsFromFollowing = documentData["notifyNewPostsFromFollowing"] as? Bool ?? true
         notifyNewPostsFromEveryone = documentData["notifyNewPostsFromEveryone"] as? Bool ?? false
+        // そらとも通知 ⭐️: 欠落・真偽値でないときは nil（＝既定の ON。Functions の読み方と同じ）
+        notifySoratomo = documentData["notifySoratomo"] as? Bool
 
         // TimestampからDateに変換
         if let createdAtTimestamp = documentData["createdAt"] as? Timestamp {
@@ -219,6 +231,23 @@ extension User {
     /// このクエリ演算子の上限が 30 個であることに由来する。
     /// arrayUnion は配列長を見ないため、上限チェックは書き込み前に呼び出し側で行う。
     static let maxFollowedTags = 30
+}
+
+// MARK: - そらとも通知の既定値 ⭐️
+
+extension User {
+    /// 「そらとも通知」が未保存のときの扱い（ON・要件 9.14）
+    ///
+    /// ⚠️ Functions の `SORATOMO_PREF_DEFAULT`（functions/soratomoCore.js）と必ず一致させること。
+    ///    食い違うと、設定画面には ON と出るのに通知が届かない（またはその逆）になる。
+    ///    既存の 3 つの通知設定（functions/index.js の `PREF_DEFAULTS`）には混ぜず、
+    ///    別の項目・別の既定値として持つ（要件 13.7）。
+    static let notifySoratomoDefault = true
+
+    /// 実際に使う「そらとも通知」の値（未保存なら既定の ON）
+    var notifySoratomoEnabled: Bool {
+        notifySoratomo ?? Self.notifySoratomoDefault
+    }
 }
 
 // MARK: - UserModelError

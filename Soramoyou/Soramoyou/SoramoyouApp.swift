@@ -19,6 +19,9 @@ struct SoramoyouApp: App {
     @StateObject private var likeManager = LikeManager()
     /// お気に入り（🔖）状態の共有 Manager ⭐️ いいねと同じく全画面で共有する
     @StateObject private var favoriteManager = FavoriteManager()
+    /// そらとも（友達グループで空を共有）の入口を出すかの判定 ⭐️ ゲスト中の画面も同じものを読む。
+    /// 評価（ログイン状態の確定時）とサインアウト時の reset() の呼び出しは ContentView 側（tasks 14.1）
+    @StateObject private var soratomoGate = SoratomoFeatureGate()
     /// シーンの状態（フォアグラウンド復帰でゴールデンアワー通知を洗い替えするために監視）
     @Environment(\.scenePhase) private var scenePhase
 
@@ -84,6 +87,7 @@ struct SoramoyouApp: App {
                 .environmentObject(authViewModel)
                 .environmentObject(likeManager)
                 .environmentObject(favoriteManager)
+                .environmentObject(soratomoGate)
         }
         .onChange(of: scenePhase) { newPhase in
             // フォアグラウンド復帰のたびに、有効ならゴールデンアワー通知の14日窓を洗い替えする
@@ -95,6 +99,11 @@ struct SoramoyouApp: App {
                 PushNotificationManager.shared.registerForPushIfAuthorized()
                 Task {
                     await GoldenHourNotificationManager.shared.rescheduleIfEnabled()
+                }
+                // そらとも（友達グループで空を共有）⭐️: 起動時にトークンを取れなかったときだけ、判定し直す
+                // （取れれば入口が出て、待っていた通知の保留も解決される）
+                Task {
+                    await soratomoGate.reevaluateIfTokenUnavailable()
                 }
             }
         }
