@@ -34,6 +34,7 @@ const IMAGE_PATHS = [
   "/screenshots/postinfo.png",
   "/screenshots/search.png",
   "/screenshots/profile.png",
+  "/screenshots/soratomo.png",
 ];
 
 const imageCache: Record<string, string> = {};
@@ -614,6 +615,75 @@ function Slide6() {
   );
 }
 
+// Slide 7: そらとも ⭐️ — 1.14 で公開。家族・友達だけのグループのタイムライン。
+// 「大切な人と」の温かさに合わせ、ブランドの朝焼けグラデ（ピンク→空色）で、端末は中央に大きく置く。
+// ⚠️ 素材の撮影はテスト用アカウントとテスト用グループだけで行う（実在の人の名前・写真を写さない）。
+function Slide7() {
+  return (
+    <div
+      style={{
+        width: IPHONE_W,
+        height: IPHONE_H,
+        position: "relative",
+        overflow: "hidden",
+        background:
+          "linear-gradient(180deg, #f6b8c4 0%, #fcd9d2 22%, #c9e4f2 55%, #7fbde6 80%, #4f94d0 100%)",
+      }}
+    >
+      <SunGlow
+        style={{
+          top: "-6%",
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: 900,
+          height: 900,
+        }}
+      />
+      <CloudBlob
+        style={{
+          top: "20%",
+          left: "-12%",
+          width: 500,
+          height: 320,
+          background: "rgba(255,255,255,0.35)",
+        }}
+      />
+      <CloudBlob
+        style={{
+          top: "26%",
+          right: "-14%",
+          width: 520,
+          height: 300,
+          background: "rgba(255,255,255,0.3)",
+        }}
+      />
+
+      <div
+        style={{ position: "absolute", top: IPHONE_H * 0.06, width: "100%" }}
+      >
+        <Caption
+          canvasW={IPHONE_W}
+          headline={"今日の空を\n大切な人と"}
+          label="そらとも"
+          color="#3a2a4a"
+        />
+      </div>
+
+      <Phone
+        src={img("/screenshots/soratomo.png")}
+        alt="そらとも"
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: "50%",
+          transform: "translateX(-50%) translateY(12%)",
+          width: "84%",
+        }}
+      />
+    </div>
+  );
+}
+
 // ─── Slide Registry ──────────────────────────────────────
 
 const SLIDES = [
@@ -623,6 +693,7 @@ const SLIDES = [
   { id: "postinfo", label: "投稿分析", component: Slide4 },
   { id: "search", label: "検索", component: Slide5 },
   { id: "profile", label: "プロフィール", component: Slide6 },
+  { id: "soratomo", label: "そらとも", component: Slide7 },
 ];
 
 // ─── Preview + Export ────────────────────────────────────
