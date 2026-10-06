@@ -275,8 +275,13 @@ struct SoratomoGroupListView: View {
     /// - Parameters:
     ///   - group: グループ
     ///   - now: いまの時刻（テストで固定するため）
-    ///   - locale: 言語と地域（テストで固定するため）
-    static func lastSkyText(for group: SoratomoGroup, now: Date = Date(), locale: Locale = .current) -> String {
+    ///   - locale: 言語と地域（既定は日本語。テストで固定するため）
+    ///
+    /// ⚠️ 既定を `.current` にしてはいけない。アプリは日本語のローカライズを持たない
+    /// （pbxproj の developmentRegion = en・.lproj / String Catalog なし）ので、`Locale.current` の言語は
+    /// 端末を日本語にしても英語になり「8 hours ago」と出る（2026-10-06）。
+    /// 日付の文字を作るほかの画面（PostInfoView・DraftsView・ShareCardView）と同じく ja_JP を明示する
+    static func lastSkyText(for group: SoratomoGroup, now: Date = Date(), locale: Locale = Locale(identifier: "ja_JP")) -> String {
         guard hasSky(group) else { return "まだ空なし" }
         let formatter = RelativeDateTimeFormatter()
         formatter.locale = locale
@@ -289,8 +294,8 @@ struct SoratomoGroupListView: View {
     /// - Parameters:
     ///   - group: グループ
     ///   - now: いまの時刻（テストで固定するため）
-    ///   - locale: 言語と地域（テストで固定するため）
-    static func cardAccessibilityLabel(for group: SoratomoGroup, now: Date = Date(), locale: Locale = .current) -> String {
+    ///   - locale: 言語と地域（既定は日本語。理由は `lastSkyText` の注記。テストで固定するため）
+    static func cardAccessibilityLabel(for group: SoratomoGroup, now: Date = Date(), locale: Locale = Locale(identifier: "ja_JP")) -> String {
         let lastSky = lastSkyText(for: group, now: now, locale: locale)
         let activity = hasSky(group) ? "最後の空は\(lastSky)" : lastSky
         return "\(group.name)、\(group.memberCount)人、\(activity)"
