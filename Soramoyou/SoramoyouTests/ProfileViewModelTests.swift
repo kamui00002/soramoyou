@@ -464,6 +464,62 @@ final class ProfileViewModelTests: XCTestCase {
         // Then: 失敗を握りつぶさずユーザーに見せる
         XCTAssertNotNil(viewModel.errorMessage)
     }
+
+    /// 回帰テスト ⭐️: 保存できたら、他の画面（そらとも）へ新しい表示名とアイコンを知らせる
+    ///
+    /// 以前は知らせなかったため、そらとものタイムラインは再起動するまで古い表示名のままだった。
+    func testUpdateProfilePostsProfileUpdatedNotification() async {
+        // Given
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+        viewModel.editingDisplayName = "天名"
+
+        let notified = expectation(forNotification: .profileUpdated, object: nil) { notification in
+            let userInfo = notification.userInfo
+            return userInfo?[Notification.profileUpdatedUserIdKey] as? String == testUser.id
+                && userInfo?[Notification.profileUpdatedDisplayNameKey] as? String == "天名"
+                && userInfo?[Notification.profileUpdatedPhotoURLKey] as? String == testUser.photoURL
+        }
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then
+        await fulfillment(of: [notified], timeout: 1)
+    }
+
+    /// 公開プロフィールを書けなかったときは知らせない（そらともの表示だけ新しい名前になる、を防ぐ）
+    func testUpdateProfileDoesNotPostProfileUpdatedNotificationOnFailure() async {
+        // Given
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        mockFirestoreService.updatePublicProfileFieldsError = FirestoreServiceError.updateFailed(
+            NSError(domain: "FIRFirestoreErrorDomain", code: 7)
+        )
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+        viewModel.editingDisplayName = "天名"
+
+        let notified = expectation(forNotification: .profileUpdated, object: nil)
+        notified.isInverted = true
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then
+        XCTAssertNotNil(viewModel.errorMessage)
+        await fulfillment(of: [notified], timeout: 0.5)
+    }
     
     func testLoadEditTools() async {
         // Given

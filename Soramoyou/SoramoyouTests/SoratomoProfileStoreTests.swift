@@ -306,4 +306,81 @@ final class SoratomoProfileStoreTests: XCTestCase {
         XCTAssertEqual(store.displayName(for: "u1"), "そら")
         XCTAssertEqual(fetcher.fetchedUids, ["u1", "u1"])
     }
+
+    // MARK: - 自分のプロフィールの保存（.profileUpdated 通知）
+
+    /// 回帰テスト ⭐️: プロフィール編集で表示名とアイコンを保存したら、持っている覚えも新しい値になる
+    ///
+    /// 以前は一度取った uid を読み直さなかったため、プロフィール編集で「空」→「天名」に変えても、
+    /// そらとものタイムラインは再起動するまで「空」のままだった（2026-10-06 実測）。
+    func testProfileUpdatedNotificationReplacesStoredNameAndPhoto() async {
+        fetcher.setProfile(
+            PublicProfile(id: "u1", displayName: "空", photoURL: "https://example.com/old.jpg", followersCount: 3),
+            for: "u1"
+        )
+        await store.prefetch(uids: ["u1"])
+        XCTAssertEqual(store.displayName(for: "u1"), "空")
+
+        postProfileUpdated(uid: "u1", displayName: "天名", photoURL: "https://example.com/new.jpg")
+        await waitUntil { store.displayName(for: "u1") == "天名" }
+
+        XCTAssertEqual(store.displayName(for: "u1"), "天名")
+        XCTAssertEqual(store.photoURL(for: "u1"), URL(string: "https://example.com/new.jpg"))
+        // 表示名とアイコン以外（サーバーが保つカウンタなど）は触らない
+        XCTAssertEqual(store.profiles["u1"]?.followersCount, 3)
+        // 新しい値は通知から入れる。取りに行き直さない
+        XCTAssertEqual(fetcher.fetchedUids, ["u1"])
+    }
+
+    /// 表示名とアイコンを消して保存したら（キーが無い）、代替の表示に戻る
+    func testProfileUpdatedNotificationWithoutNameAndPhotoFallsBack() async {
+        fetcher.setProfile(PublicProfile(id: "u1", displayName: "空", photoURL: "https://example.com/old.jpg"), for: "u1")
+        await store.prefetch(uids: ["u1"])
+
+        postProfileUpdated(uid: "u1", displayName: nil, photoURL: nil)
+        await waitUntil { store.displayName(for: "u1") == "ユーザー" }
+
+        XCTAssertEqual(store.displayName(for: "u1"), "ユーザー")
+        XCTAssertNil(store.photoURL(for: "u1"))
+    }
+
+    /// 持っていない uid の通知では、覚えを増やさない（次の prefetch がサーバーの新しい値を取る）
+    func testProfileUpdatedNotificationForUnknownUidAddsNothing() async {
+        fetcher.setProfile(PublicProfile(id: "u1", displayName: "空"), for: "u1")
+        await store.prefetch(uids: ["u1"])
+
+        postProfileUpdated(uid: "u2", displayName: "天名", photoURL: nil)
+        // 同じ通知で u1 も差し替えて、通知の処理が終わったことを確かめてから u2 を見る
+        postProfileUpdated(uid: "u1", displayName: "天名", photoURL: nil)
+        await waitUntil { store.displayName(for: "u1") == "天名" }
+
+        XCTAssertEqual(store.displayName(for: "u1"), "天名")
+        XCTAssertNil(store.profiles["u2"])
+        XCTAssertEqual(store.profiles.count, 1)
+    }
+
+    /// サインアウト（clear）の後に届いた通知で、前の覚えを復活させない
+    func testProfileUpdatedNotificationAfterClearDoesNotRestore() async {
+        fetcher.setProfile(PublicProfile(id: "u1", displayName: "空"), for: "u1")
+        await store.prefetch(uids: ["u1"])
+        store.clear()
+
+        postProfileUpdated(uid: "u1", displayName: "天名", photoURL: nil)
+        await waitUntil(timeout: 0.3) { store.profiles["u1"] != nil }
+
+        XCTAssertTrue(store.profiles.isEmpty)
+        XCTAssertEqual(store.displayName(for: "u1"), "ユーザー")
+    }
+
+    /// プロフィール編集の保存と同じ通知を送る（nil の値はキーごと入れない）
+    private func postProfileUpdated(uid: String, displayName: String?, photoURL: String?) {
+        var userInfo: [String: Any] = [Notification.profileUpdatedUserIdKey: uid]
+        if let displayName {
+            userInfo[Notification.profileUpdatedDisplayNameKey] = displayName
+        }
+        if let photoURL {
+            userInfo[Notification.profileUpdatedPhotoURLKey] = photoURL
+        }
+        NotificationCenter.default.post(name: .profileUpdated, object: nil, userInfo: userInfo)
+    }
 }

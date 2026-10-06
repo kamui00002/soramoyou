@@ -568,6 +568,18 @@ class ProfileViewModel: ObservableObject {
                 }
             }
 
+            // 公開プロフィールまで書けたら、他の画面（そらとも）へ新しい表示名とアイコンを知らせる ⭐️
+            // そらともの覚え（SoratomoProfileStore）は一度取った人を読み直さないため、知らせないと
+            // 再起動するまで古い表示名のままだった。書けなかったときは送らない（`.userBlocked` と同じ考え方）
+            var profileUserInfo: [String: Any] = [Notification.profileUpdatedUserIdKey: savedUser.id]
+            if let displayName = savedUser.displayName {
+                profileUserInfo[Notification.profileUpdatedDisplayNameKey] = displayName
+            }
+            if let photoURL = savedUser.photoURL {
+                profileUserInfo[Notification.profileUpdatedPhotoURLKey] = photoURL
+            }
+            NotificationCenter.default.post(name: .profileUpdated, object: nil, userInfo: profileUserInfo)
+
             // 編集用の値をリセット
             editingProfileImage = nil
             shouldDeleteProfileImage = false
@@ -755,4 +767,22 @@ class ProfileViewModel: ObservableObject {
 extension Notification.Name {
     /// 新しい投稿が作成された時に送信される通知
     static let postCreated = Notification.Name("com.soramoyou.postCreated")
+
+    /// 自分のプロフィール（表示名・アイコン）を保存した時に送信される通知 ☁️
+    ///
+    /// userInfo の `Notification.profileUpdatedUserIdKey` に保存したユーザーの ID（String）、
+    /// `Notification.profileUpdatedDisplayNameKey` / `Notification.profileUpdatedPhotoURLKey` に
+    /// 保存した表示名・アイコンの URL（String）が入る。未設定（nil）のときはキーごと入れない。
+    /// そらともの表示名・アイコンの覚え（`SoratomoProfileStore`）が受け取り、持っている値を差し替える
+    /// （プロフィール編集で名前を変えても、そらとものタイムラインは再起動するまで古い名前のままだった不具合の対策）。
+    static let profileUpdated = Notification.Name("com.soramoyou.profileUpdated")
+}
+
+extension Notification {
+    /// `.profileUpdated` の userInfo で、保存したユーザーの ID を入れるキー
+    static let profileUpdatedUserIdKey = "profileUpdatedUserId"
+    /// `.profileUpdated` の userInfo で、保存した表示名を入れるキー（未設定ならキーごと無い）
+    static let profileUpdatedDisplayNameKey = "profileUpdatedDisplayName"
+    /// `.profileUpdated` の userInfo で、保存したアイコンの URL を入れるキー（未設定ならキーごと無い）
+    static let profileUpdatedPhotoURLKey = "profileUpdatedPhotoURL"
 }
