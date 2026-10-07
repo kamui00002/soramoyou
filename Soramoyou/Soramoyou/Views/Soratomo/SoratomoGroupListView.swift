@@ -277,9 +277,11 @@ struct SoratomoGroupListView: View {
     ///   - now: いまの時刻（テストで固定するため）
     ///   - locale: 言語と地域（既定は日本語。テストで固定するため）
     ///
-    /// ⚠️ 既定を `.current` にしてはいけない。アプリは日本語のローカライズを持たない
-    /// （pbxproj の developmentRegion = en・.lproj / String Catalog なし）ので、`Locale.current` の言語は
-    /// 端末を日本語にしても英語になり「8 hours ago」と出る（2026-10-06）。
+    /// ⚠️ 既定を `.current` にしてはいけない。当時アプリは日本語に対応していると申告しておらず
+    /// （pbxproj の developmentRegion = en・.lproj / String Catalog なし）、`Locale.current` の言語は
+    /// 端末を日本語にしても英語になり「8 hours ago」と出た（2026-10-06）。
+    /// 2026-10-07 に Info.plist の CFBundleLocalizations で日本語を申告したので、日本語の端末では `.current` でも
+    /// 日本語になる。それでも英語の端末で一覧に英語が混ざらないよう、ja_JP の明示は残す。
     /// 日付の文字を作るほかの画面（PostInfoView・DraftsView・ShareCardView）と同じく ja_JP を明示する
     static func lastSkyText(for group: SoratomoGroup, now: Date = Date(), locale: Locale = Locale(identifier: "ja_JP")) -> String {
         guard hasSky(group) else { return "まだ空なし" }

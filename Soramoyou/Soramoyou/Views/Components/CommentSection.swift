@@ -374,9 +374,11 @@ struct CommentRow: View {
     ///   - now: いまの時刻（テストで固定するため）
     ///   - locale: 言語と地域（既定は日本語。テストで固定するため）
     ///
-    /// ⚠️ 既定を `.current` にしてはいけない。アプリは日本語のローカライズを持たない
-    /// （pbxproj の developmentRegion = en）ので、`Locale.current` の言語は端末を日本語にしても英語になる。
+    /// ⚠️ 既定を `.current` にしてはいけない。当時アプリは日本語に対応していると申告しておらず
+    /// （pbxproj の developmentRegion = en）、`Locale.current` の言語は端末を日本語にしても英語になっていた。
     /// 以前の `Text(comment.createdAt, style: .relative)` はこの理由で英語で出ていた（2026-10-07 実機で確認）。
+    /// 同日 Info.plist の CFBundleLocalizations で日本語を申告したので、日本語の端末では `.current` でも日本語になる。
+    /// それでも英語の端末でコメント欄に英語が混ざらないよう、ja_JP の明示は残す。
     /// そらとものグループ一覧（`SoratomoGroupListView.lastSkyText`）と同じ書き方にそろえる
     static func timeText(for date: Date, now: Date = Date(), locale: Locale = Locale(identifier: "ja_JP")) -> String {
         let formatter = RelativeDateTimeFormatter()
