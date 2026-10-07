@@ -150,9 +150,11 @@ final class SoratomoGroupListViewModelTests: XCTestCase {
 
     /// 言語を渡さない（画面と同じ呼び方の）ときも日本語で出る
     ///
-    /// アプリは日本語のローカライズを持たない（developmentRegion = en・.lproj なし）ため、
-    /// `Locale.current` は端末を日本語にしても英語になる（2026-10-06「8 hours ago」の不具合）。
+    /// 当時アプリは日本語に対応していると申告しておらず（developmentRegion = en・.lproj なし）、
+    /// `Locale.current` は端末を日本語にしても英語になっていた（2026-10-06「8 hours ago」の不具合）。
     /// 上のテストは日本語を渡していたのでこれを見逃した。既定値のまま呼んで確かめる
+    /// ⚠️ 2026-10-07 に日本語を申告した後は、日本語の端末では既定値が `.current` でもこのテストは通る。
+    /// 既定値の ja_JP 固定を守れるのは、英語の端末で走らせたときだけ
     func testLastSkyTextDefaultsToJapanese() {
         let now = Date()
         let created = now.addingTimeInterval(-86400 * 3)
