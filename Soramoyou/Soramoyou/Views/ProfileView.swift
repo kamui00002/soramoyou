@@ -214,7 +214,11 @@ struct ProfileView: View {
             } message: {
                 Text("この投稿を削除しますか？この操作は取り消せません。")
             }
-            .sheet(isPresented: $showingEditProfile) {
+            // 下へスワイプして閉じた場合はキャンセルボタンを通らないので、閉じたときにも
+            // プロフィール編集の入力を保存済みの値に戻す（次に開いたとき入力途中の値が残らないように）。
+            .sheet(isPresented: $showingEditProfile, onDismiss: {
+                viewModel.resetProfileEdit()
+            }) {
                 if viewModel.isOwnProfile {
                     ProfileEditView(viewModel: viewModel)
                 }

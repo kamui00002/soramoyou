@@ -744,6 +744,18 @@ class ProfileViewModel: ObservableObject {
     func resetEditTools() {
         selectedTools = equippedTools
     }
+
+    /// プロフィール編集の入力を保存済みの値に戻す（キャンセル・シートを閉じたとき用）
+    ///
+    /// 入力欄（表示名・自己紹介・画像）の値はシートではなくこの ViewModel が持っているため、
+    /// 保存せずに閉じても戻さないと、次に開いたとき入力途中の値が残ってしまう。
+    /// 編集装備の `resetEditTools()` と同じく、保存済みの状態（`user`）を正として戻す。
+    func resetProfileEdit() {
+        editingDisplayName = user?.displayName ?? ""
+        editingBio = user?.bio ?? ""
+        editingProfileImage = nil
+        shouldDeleteProfileImage = false
+    }
     
     // MARK: - Validation
     

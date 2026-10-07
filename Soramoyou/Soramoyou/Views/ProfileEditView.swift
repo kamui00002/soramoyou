@@ -226,8 +226,11 @@ struct ProfileEditView: View {
     }
     
     private func resetEditingValues() {
-        // 編集用の値をリセット（ProfileViewModelのloadProfileで再設定される）
+        // 編集用の値をリセットする。
+        // ⚠️ 表示名・自己紹介・画像の入力値はシートでなく ProfileViewModel が持っているので、
+        //    ここで保存済みの値に戻さないと、次に開いたとき入力途中の値が残る（loadProfile は再表示では走らない）。
         selectedImage = nil
+        viewModel.resetProfileEdit()
     }
 }
 

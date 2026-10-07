@@ -258,6 +258,58 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.user?.bio, "Updated Bio")
     }
     
+    /// プロフィール編集を保存せずに閉じたら、入力（表示名・自己紹介・画像・画像削除の指定）が
+    /// 保存済みの値に戻ること。戻さないと次に開いたとき入力途中の値が残る（2026-10-07 シミュレータで実測）。
+    func testResetProfileEdit_保存せずに閉じたら入力が保存済みの値に戻る() {
+        // Given: 保存済みのプロフィールがあり、入力を途中まで変えた状態
+        let testUser = createTestUser()
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        viewModel.user = testUser
+        viewModel.editingDisplayName = "入力途中の名前"
+        viewModel.editingBio = "入力途中の自己紹介"
+        viewModel.editingProfileImage = UIImage()
+        viewModel.shouldDeleteProfileImage = true
+
+        // When
+        viewModel.resetProfileEdit()
+
+        // Then: 保存済みの値に戻り、画像の変更・削除の指定も取り消される
+        XCTAssertEqual(viewModel.editingDisplayName, "Test User")
+        XCTAssertEqual(viewModel.editingBio, "Test bio")
+        XCTAssertNil(viewModel.editingProfileImage)
+        XCTAssertFalse(viewModel.shouldDeleteProfileImage)
+        // 保存はしない（保存済みのプロフィールは変わらず、公開プロフィールへの書き込みも無い）
+        XCTAssertEqual(viewModel.user?.displayName, "Test User")
+        XCTAssertTrue(mockFirestoreService.updatePublicProfileFieldsCalls.isEmpty)
+    }
+
+    /// 表示名・自己紹介が未設定（nil）のユーザーでは、戻した後の入力は空になること。
+    func testResetProfileEdit_未設定の項目は空に戻る() {
+        // Given
+        var testUser = createTestUser()
+        testUser.displayName = nil
+        testUser.bio = nil
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        viewModel.user = testUser
+        viewModel.editingDisplayName = "入力途中"
+        viewModel.editingBio = "入力途中"
+
+        // When
+        viewModel.resetProfileEdit()
+
+        // Then
+        XCTAssertEqual(viewModel.editingDisplayName, "")
+        XCTAssertEqual(viewModel.editingBio, "")
+    }
+
     func testUpdateProfileWithImage() async {
         // Given
         let testUser = createTestUser()
