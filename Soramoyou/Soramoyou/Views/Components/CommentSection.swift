@@ -366,6 +366,27 @@ struct CommentRow: View {
         return name.isEmpty ? "" : String(name.prefix(1)).uppercased()
     }
 
+    /// コメントの日時の文字（例「5分前」「昨日」）
+    ///
+    /// 描画したときの時刻で作る（時計に合わせて動かしはしない。コメント一覧は開くたびに読み直す）
+    /// - Parameters:
+    ///   - date: コメントした時刻
+    ///   - now: いまの時刻（テストで固定するため）
+    ///   - locale: 言語と地域（既定は日本語。テストで固定するため）
+    ///
+    /// ⚠️ 既定を `.current` にしてはいけない。アプリは日本語のローカライズを持たない
+    /// （pbxproj の developmentRegion = en）ので、`Locale.current` の言語は端末を日本語にしても英語になる。
+    /// 以前の `Text(comment.createdAt, style: .relative)` はこの理由で英語で出ていた（2026-10-07 実機で確認）。
+    /// そらとものグループ一覧（`SoratomoGroupListView.lastSkyText`）と同じ書き方にそろえる
+    static func timeText(for date: Date, now: Date = Date(), locale: Locale = Locale(identifier: "ja_JP")) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = locale
+        // 「1日前」でなく「昨日」のように言う
+        formatter.dateTimeStyle = .named
+        // コメントした人の端末の時計が進んでいると未来の時刻になり「3秒後」と出てしまうので、いまで止める
+        return formatter.localizedString(for: min(date, now), relativeTo: now)
+    }
+
     /// アバター（プロフィール写真があれば KFImage、無ければ頭文字 / person アイコン）
     @ViewBuilder
     private var avatarView: some View {
@@ -424,8 +445,8 @@ struct CommentRow: View {
                             .fill(Color.white.opacity(0.1))
                     )
 
-                // 日時
-                Text(comment.createdAt, style: .relative)
+                // 日時（例「5分前」「昨日」）
+                Text(Self.timeText(for: comment.createdAt))
                     .font(.system(size: 11, design: .rounded))
                     .foregroundColor(DesignTokens.Colors.textTertiary)
                     .padding(.leading, 12)
