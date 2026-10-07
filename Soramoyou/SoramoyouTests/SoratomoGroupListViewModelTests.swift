@@ -148,6 +148,25 @@ final class SoratomoGroupListViewModelTests: XCTestCase {
         XCTAssertEqual(SoratomoGroupListView.lastSkyText(for: yesterday, now: now, locale: ja), "昨日")
     }
 
+    /// 言語を渡さない（画面と同じ呼び方の）ときも日本語で出る
+    ///
+    /// アプリは日本語のローカライズを持たない（developmentRegion = en・.lproj なし）ため、
+    /// `Locale.current` は端末を日本語にしても英語になる（2026-10-06「8 hours ago」の不具合）。
+    /// 上のテストは日本語を渡していたのでこれを見逃した。既定値のまま呼んで確かめる
+    func testLastSkyTextDefaultsToJapanese() {
+        let now = Date()
+        let created = now.addingTimeInterval(-86400 * 3)
+
+        let yesterday = makeGroup(createdAt: created, lastActivityAt: now.addingTimeInterval(-86400))
+        XCTAssertEqual(SoratomoGroupListView.lastSkyText(for: yesterday, now: now), "昨日")
+
+        let fiveMinutes = makeGroup(createdAt: created, lastActivityAt: now.addingTimeInterval(-300))
+        let text = SoratomoGroupListView.lastSkyText(for: fiveMinutes, now: now)
+        XCTAssertTrue(text.contains("5") && text.contains("分前"), "実際: \(text)")
+
+        XCTAssertEqual(SoratomoGroupListView.cardAccessibilityLabel(for: yesterday, now: now), "空の会、3人、最後の空は昨日")
+    }
+
     /// VoiceOver は「名前、N人、最後の空は…」。投稿が無ければ「名前、N人、まだ空なし」
     func testCardAccessibilityLabel() {
         let now = Date(timeIntervalSince1970: 1_000_000)
