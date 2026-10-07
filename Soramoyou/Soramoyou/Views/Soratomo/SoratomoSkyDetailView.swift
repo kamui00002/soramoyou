@@ -10,6 +10,9 @@
 //  - 画像は、サムネイル（タイムラインで読んだのでキャッシュにある前提）を先に出し、表示用画像が届いたら
 //    その上に重ねて置き換える。ピンチとダブルタップで拡大できる（iOS 16 で動く SwiftUI の操作だけを使う）
 //  - キャプションは全文を出す（行数を制限しない）
+//  - 自分の投稿のときだけ、ナビゲーションバー右の「…」から削除できる（長押しに気づけない人のため）。
+//    削除はタイムラインの ViewModel（`dependencies.activeTimelineViewModel`）の `delete` をそのまま使い、
+//    本人かの判定（`canDelete`）・確認の文言・失敗の文言もタイムラインとそろえる
 //  - 画像の VoiceOver の説明はキャプション。無ければ「{表示名}さんの空」
 //  - ⚠️ 画像は必ず `SoratomoStorageImageProvider` と `.targetCache(SoratomoImageCache.shared)` で読み、
 //    processor（ダウンサンプリングなど）は付けない（鍵が変わり、削除やサインアウトで消せなくなるため）
@@ -35,6 +38,13 @@ struct SoratomoSkyDetailView: View {
 
     /// 投稿者の表示名とアイコンの保持（容れ物は ObservableObject ではないので、変化を画面に出すため別に持つ）
     @ObservedObject private var profileStore: SoratomoProfileStore
+    /// この投稿のグループのタイムラインの ViewModel（削除に使う。開いていない・別のグループなら nil）
+    private let timelineViewModel: SoratomoTimelineViewModel?
+
+    /// 削除して閉じる途中か（閉じるまでの間に「表示できません」が一瞬出ないようにする）
+    @State private var didDelete = false
+    /// 画面を閉じる（削除できたらタイムラインへ戻る）
+    @Environment(\.dismiss) private var dismiss
 
     /// 確定した拡大率（1 = 等倍）
     @State private var zoomScale: CGFloat = 1
@@ -63,22 +73,35 @@ struct SoratomoSkyDetailView: View {
         self.skyId = skyId
         self.dependencies = dependencies
         _profileStore = ObservedObject(wrappedValue: dependencies.profileStore)
+        // 投稿詳細は必ずタイムラインを経由して開くので、そのタイムラインの ViewModel を借りる
+        // （グループ ID が違えば使わない）
+        if let viewModel = dependencies.activeTimelineViewModel, viewModel.groupId == groupId {
+            timelineViewModel = viewModel
+        } else {
+            timelineViewModel = nil
+        }
     }
 
     // MARK: - Body
 
     var body: some View {
         // 覚えから引く（覚えは ObservableObject ではないが、詳細を開いている間に変わるのは削除だけで、
-        // 削除はタイムラインで行うため、ここで読み直さなくてよい）
+        // 削除できたらこの画面を閉じるため、ここで読み直さなくてよい）
         let sky = dependencies.skyLookup.sky(groupId: groupId, skyId: skyId)
 
-        Group {
-            if let sky {
-                detail(sky)
-            } else {
-                unavailableView
-            }
-        }
+        withDeleteMenu(
+            Group {
+                if didDelete {
+                    // 削除できて閉じる途中（覚えから消えているが「表示できません」は出さない）
+                    Color.clear
+                } else if let sky {
+                    detail(sky)
+                } else {
+                    unavailableView
+                }
+            },
+            sky: sky
+        )
         .navigationTitle("空")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: sky?.authorId) {
@@ -90,6 +113,27 @@ struct SoratomoSkyDetailView: View {
     }
 
     // MARK: - 中身
+
+    /// 自分の投稿のときだけ、削除の「…」メニューを付ける（判定はタイムラインと同じ `canDelete`）
+    @ViewBuilder
+    private func withDeleteMenu<Content: View>(_ content: Content, sky: SoratomoSky?) -> some View {
+        if let sky, let timelineViewModel, timelineViewModel.canDelete(sky) {
+            let skyLookup = dependencies.skyLookup
+            content.modifier(
+                SoratomoSkyDeleteMenu(
+                    viewModel: timelineViewModel,
+                    sky: sky,
+                    isDeleted: { skyLookup.sky(groupId: sky.groupId, skyId: sky.id) == nil },
+                    onDeleted: {
+                        didDelete = true
+                        dismiss()
+                    }
+                )
+            )
+        } else {
+            content
+        }
+    }
 
     /// 投稿の詳細（画像・投稿者・キャプションの全文）
     private func detail(_ sky: SoratomoSky) -> some View {
@@ -246,5 +290,96 @@ struct SoratomoSkyDetailView: View {
             return caption
         }
         return "\(displayName)さんの空"
+    }
+}
+
+// MARK: - 削除の「…」メニュー
+
+/// 投稿詳細の、自分の投稿を削除する「…」メニュー（確認・削除中の表示・失敗の表示を含む）
+///
+/// 削除はタイムラインの ViewModel の `delete` をそのまま呼ぶ（新しい削除の実装は作らない）。
+/// 確認の文言・失敗の文言・削除中の表示（薄くして「削除しています…」）はタイムラインとそろえる。
+private struct SoratomoSkyDeleteMenu: ViewModifier {
+    /// タイムラインの ViewModel（削除の途中・失敗の文言を画面に出すため監視する）
+    @ObservedObject var viewModel: SoratomoTimelineViewModel
+    /// 削除する投稿
+    let sky: SoratomoSky
+    /// 投稿が消えたか（削除が成功すると、ViewModel が覚えから消す）
+    let isDeleted: () -> Bool
+    /// 削除できたときに呼ぶ（詳細を閉じる）
+    let onDeleted: () -> Void
+
+    /// 削除の確認を出しているか
+    @State private var isConfirmingDeletion = false
+
+    /// この投稿の削除の途中か（タイムラインの行と同じ判定）
+    private var isDeleting: Bool {
+        viewModel.deletingSkyIds.contains(sky.id)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isDeleting ? 0.5 : 1)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if isDeleting {
+                    Text("削除しています…")
+                        .font(.caption)
+                        .foregroundStyle(.soratomoSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        Button(role: .destructive) {
+                            isConfirmingDeletion = true
+                        } label: {
+                            Label("削除", systemImage: "trash")
+                        }
+                        .accessibilityLabel("この投稿を削除")
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("その他の操作")
+                    .disabled(isDeleting)
+                }
+            }
+            .confirmationDialog(
+                "この投稿を削除しますか？",
+                isPresented: $isConfirmingDeletion,
+                titleVisibility: .visible
+            ) {
+                Button("削除", role: .destructive) {
+                    Task {
+                        await viewModel.delete(sky)
+                        // 成功したときだけ閉じる（失敗・始めなかったときは投稿が残り、失敗の文言が出る）
+                        if isDeleted() {
+                            onDeleted()
+                        }
+                    }
+                }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("削除した投稿は元に戻せません")
+            }
+            .alert(
+                viewModel.deleteErrorMessage ?? "",
+                isPresented: isShowingDeleteError
+            ) {
+                Button("OK", role: .cancel) {}
+            }
+    }
+
+    /// 削除の失敗を出しているか（閉じたら文言を消す・タイムラインと同じ）
+    private var isShowingDeleteError: Binding<Bool> {
+        Binding(
+            get: { viewModel.deleteErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    viewModel.deleteErrorMessage = nil
+                }
+            }
+        )
     }
 }

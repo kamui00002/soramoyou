@@ -121,6 +121,8 @@ struct SoratomoTimelineView: View {
                 Button("OK", role: .cancel) {}
             }
             .task {
+                // 投稿詳細が同じ ViewModel で削除できるように、いま開いているタイムラインとして知らせる
+                dependencies.activeTimelineViewModel = viewModel
                 viewModel.start()
             }
             // 投稿者の表示名とアイコンを、まだ持っていない分だけ取りに行く
@@ -367,9 +369,12 @@ struct SoratomoTimelineView: View {
     }
 
     /// 削除の失敗を出しているか（閉じたら文言を消す）
+    ///
+    /// タイムラインが一番上に出ているときだけ出す。投稿詳細から削除して失敗したときは、
+    /// 詳細が同じ文言を出すので、下に隠れたタイムラインからは出さない（二重に出さないため）
     private var isShowingDeleteError: Binding<Bool> {
         Binding(
-            get: { viewModel.deleteErrorMessage != nil },
+            get: { viewModel.deleteErrorMessage != nil && router.path.last == .timeline(groupId: groupId) },
             set: { isPresented in
                 if !isPresented {
                     viewModel.deleteErrorMessage = nil
