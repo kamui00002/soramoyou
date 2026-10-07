@@ -62,9 +62,19 @@ final class SoratomoProfileStore: ObservableObject {
     /// （サインアウト・アカウント切替の前に始めた取得が、切替の後に前の保持を復活させないため）
     private var generation = 0
 
+    /// 自分のプロフィールの保存（`.profileUpdated` 通知）の購読
+    private var profileUpdatedObserver: NSObjectProtocol?
+
     /// - Parameter fetcher: 公開プロフィールの取得口
     init(fetcher: any SoratomoProfileFetcher) {
         self.fetcher = fetcher
+        setupProfileUpdatedObserver()
+    }
+
+    deinit {
+        if let observer = profileUpdatedObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     /// - Parameter firestoreService: 既存の Firestore サービス。既定は本物
@@ -147,6 +157,43 @@ final class SoratomoProfileStore: ObservableObject {
             return nil
         }
         return URL(string: raw)
+    }
+
+    // MARK: - 自分のプロフィールの保存
+
+    /// プロフィール編集の保存（`.profileUpdated` 通知）を購読する ☁️
+    ///
+    /// 一度取った uid は読み直さない（`prefetch` は持っていない uid だけを取りに行く）ので、
+    /// プロフィール編集で表示名を変えても、タイムラインは再起動するまで古い名前のままだった。
+    /// 購読の形は `.userBlocked`（PaginatedPostsViewModel）と同じ。
+    private func setupProfileUpdatedObserver() {
+        profileUpdatedObserver = NotificationCenter.default.addObserver(
+            forName: .profileUpdated,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let userInfo = notification.userInfo,
+                  let uid = userInfo[Notification.profileUpdatedUserIdKey] as? String,
+                  !uid.isEmpty else { return }
+            // キーが無い＝未設定（nil）
+            let displayName = userInfo[Notification.profileUpdatedDisplayNameKey] as? String
+            let photoURL = userInfo[Notification.profileUpdatedPhotoURLKey] as? String
+            Task { @MainActor in
+                self?.applyProfileUpdate(uid: uid, displayName: displayName, photoURL: photoURL)
+            }
+        }
+    }
+
+    /// 保存された表示名とアイコンで、持っている覚えを差し替える
+    ///
+    /// - 持っていない uid は何もしない（次の `prefetch` がサーバーの新しい値を取る。`clear()` の後に
+    ///   前の覚えを復活させないためでもある）
+    /// - 表示名とアイコン以外（サーバーが保つカウンタなど）は触らない
+    private func applyProfileUpdate(uid: String, displayName: String?, photoURL: String?) {
+        guard var profile = profiles[uid] else { return }
+        profile.displayName = displayName
+        profile.photoURL = photoURL
+        profiles[uid] = profile
     }
 
     // MARK: - 消去
