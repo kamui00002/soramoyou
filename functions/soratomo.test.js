@@ -34,13 +34,17 @@ if (!EMULATOR_HOST || !/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(EMULATOR_HO
 // 届かない宛先（ポート 9）を Storage のエミュレーターとして指しておく。エミュレーターが別に指定されていればそのまま使う。
 if (!process.env.STORAGE_EMULATOR_HOST) process.env.STORAGE_EMULATOR_HOST = "127.0.0.1:9";
 
+// 通報の送り先（秘密の値）。テストでは名前の解決できない偽の URL を入れ、下の fetch の偽物で受ける。
+const WEBHOOK_URL = "https://discord.invalid/api/webhooks/soratomo-test/not-a-real-token";
+process.env.DISCORD_REPORT_WEBHOOK_URL = WEBHOOK_URL;
+
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 
 // MARK: - 偽物（Auth・送信・ログ）
 
-const record = { sends: [], logs: [], getUsersCalls: [] };
+const record = { sends: [], logs: [], getUsersCalls: [], webhooks: [] };
 /** uid → customClaims。ここに無い uid は Auth に居ない扱い。 */
 let claims = new Map();
 /** 送信の結果（テストごとに差し替える）。 */
@@ -76,6 +80,25 @@ const fakeStorageGateway = {
   async deleteFile(path) {
     return storageFiles.delete(path) ? "deleted" : "absent";
   },
+};
+
+/**
+ * 通報の送り先への送信の結果（テストごとに差し替える）。既定は Discord と同じ 204（本文なし）。
+ * @type {(init: Object) => Promise<{ ok: boolean, status: number, text?: () => Promise<string> }>}
+ */
+let webhookImpl = async () => ({ ok: true, status: 204 });
+/**
+ * fetch の偽物: 送り先の URL への送信を記録して webhookImpl の結果を返す。エミュレーターへの要求（文書の全消去）だけを
+ * 本物の fetch に通し、それ以外の宛先へは送らずに失敗させる（テストから外へ出さない柵）。
+ */
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url, init) => {
+  if (url === WEBHOOK_URL) {
+    record.webhooks.push({ method: init && init.method, headers: init && init.headers, body: JSON.parse(init.body) });
+    return webhookImpl(init);
+  }
+  if (typeof url === "string" && url.startsWith(`http://${EMULATOR_HOST}/`)) return realFetch(url, init);
+  throw new Error(`テストから外へ送らない: ${String(url).slice(0, 30)}`);
 };
 
 const originalLoad = Module._load;
@@ -125,6 +148,8 @@ test.beforeEach(async () => {
   sendImpl = async () => "sent";
   getUsersImpl = null;
   storageFiles = new Set();
+  record.webhooks = [];
+  webhookImpl = async () => ({ ok: true, status: 204 });
 });
 
 test.after(async () => {
@@ -651,4 +676,96 @@ test("トリガー: グループが無ければ、例外を投げずに何もし
   await runTrigger("s1", "ghost");
   assert.equal(record.sends.length, 0);
   assert.equal(record.getUsersCalls.length, 0);
+});
+
+// MARK: - トリガー: onSoratomoReportCreated（release-gate 4.3）
+
+/**
+ * 通報の場面: グループ g1（名前・招待コードあり）で、bob が alice の投稿 s1（キャプションあり）を通報した記録を、
+ * 通報の Callable で作る。記録のスナップショットを返す（トリガーに渡す・再配信のテストで同じものをもう一度渡す）。
+ */
+async function seedReportScene() {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob"], name: "ひみつの空の会" });
+  await db.collection("users").doc("alice").set({ displayName: "ソラミ" });
+  await db
+    .collection("soratomoGroups")
+    .doc("g1")
+    .collection("skies")
+    .doc("s1")
+    .set({ authorId: "alice", caption: "夕焼けがきれい", width: 1, height: 1, createdAt: Timestamp.now() });
+  await call("soratomoReportSky", authOf("bob"), { groupId: "g1", skyId: "s1", reason: "harassment" });
+  record.logs = [];
+  return db.collection("soratomoReports").doc(core.reportDocId("g1", "s1", "bob")).get();
+}
+
+function runReportTrigger(snap) {
+  return fns.onSoratomoReportCreated.run({ params: { reportId: snap.id }, data: snap });
+}
+
+/** 送ってはいけないもの（キャプション・グループ名・表示名・招待コード・送り先の URL）。 */
+const FORWARD_SECRETS = ["夕焼けがきれい", "ひみつの空の会", "ソラミ", "SKYAAAAA", WEBHOOK_URL];
+
+test("転送: 通報の記録の作成で、IDと理由と時刻だけを送り、送信済みと送信日時を書く。ログは記録のIDだけ", async () => {
+  const snap = await seedReportScene();
+  await runReportTrigger(snap);
+
+  assert.equal(record.webhooks.length, 1);
+  const { method, headers, body } = record.webhooks[0];
+  assert.equal(method, "POST");
+  assert.equal(headers["Content-Type"], "application/json");
+  assert.equal(body.username, "そらとも 通報");
+  assert.equal(body.embeds[0].title, "そらともの通報が届きました");
+  const sent = JSON.stringify(body);
+  for (const id of [snap.id, "g1", "s1", "alice", "bob", "harassment"]) assert.ok(sent.includes(id), `本文に ${id} を載せる`);
+  for (const secret of FORWARD_SECRETS) assert.ok(!sent.includes(secret), `本文に「${secret}」を載せない`);
+  assert.ok(!/https?:\/\//.test(sent), "本文に URL（画像・コンソール）を載せない");
+
+  const after = (await snap.ref.get()).data();
+  assert.equal(after.forwardStatus, "sent");
+  assert.ok(after.forwardedAt instanceof Timestamp, "送信日時はサーバーの時刻");
+  assert.equal(after.forwardAttempts, 0);
+  assert.deepEqual(logFieldsOf("soratomoReport: forwarded"), [{ reportId: snap.id }]);
+  for (const secret of FORWARD_SECRETS) assert.ok(!allLogs().includes(secret), `ログに「${secret}」を出さない`);
+});
+
+test("転送: 送れなければ（HTTP の失敗・通信の失敗）未送信のまま失敗の回数を増やし、error のログは記録のIDと状態だけで、例外を投げない", async () => {
+  const snap = await seedReportScene();
+
+  // HTTP の失敗（応答の本文はログに出さない）
+  webhookImpl = async () => ({ ok: false, status: 500, text: async () => "応答のひみつの本文" });
+  await runReportTrigger(snap);
+  let after = (await snap.ref.get()).data();
+  assert.equal(after.forwardStatus, "pending");
+  assert.equal(after.forwardAttempts, 1);
+  assert.equal(after.forwardedAt, undefined);
+
+  // 通信の失敗（エラーの本文に送り先の URL が入っていてもログに出さない）
+  webhookImpl = async () => {
+    throw new TypeError(`fetch failed: ${WEBHOOK_URL}`);
+  };
+  await runReportTrigger(snap);
+  after = (await snap.ref.get()).data();
+  assert.equal(after.forwardStatus, "pending");
+  assert.equal(after.forwardAttempts, 2);
+
+  const failures = record.logs.filter((l) => l.level === "error").map((l) => l.args[1]);
+  assert.deepEqual(failures, [
+    { reportId: snap.id, status: 500 },
+    { reportId: snap.id, status: "fetch_failed" },
+  ]);
+  assert.deepEqual(logFieldsOf("soratomoReport: forwarded"), []);
+  for (const secret of ["応答のひみつの本文", ...FORWARD_SECRETS]) {
+    assert.ok(!allLogs().includes(secret), `ログに「${secret}」を出さない`);
+  }
+});
+
+test("転送: 送信済みの記録は送らない（同じ作成のイベントの再配信でも二重に送らない）", async () => {
+  const snap = await seedReportScene();
+  await runReportTrigger(snap);
+  assert.equal(record.webhooks.length, 1);
+
+  // 再配信: 作成のときのスナップショット（未送信のまま）がもう一度届く
+  await runReportTrigger(snap);
+  assert.equal(record.webhooks.length, 1, "いまの記録が送信済みなので送らない");
+  assert.equal((await snap.ref.get()).get("forwardAttempts"), 0);
 });

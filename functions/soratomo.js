@@ -11,9 +11,11 @@
 //   共通の削除で消す。クレームは確かめない（ログインは求める）。
 // - onSoratomoSkyCreated（tasks 8.2）: グループの新しい投稿を、投稿者以外のメンバーへ知らせる。
 //   既存の onPostCreated とは名前も対象（soratomoGroups/{groupId}/skies/{skyId}）も別。
+// - onSoratomoReportCreated（release-gate 4.3）: 通報の記録を、開発者の Discord（フィードバックとは別の送り先）へ
+//   ID・理由・時刻だけで送る。失敗は記録の状態で追い、例外を投げない。
 //
 // index.js の末尾の Object.assign(exports, require("./soratomo")) で公開する（tasks 8.3）。
-// ここで公開するのは Cloud Functions の 8 本だけにする（ほかの値を exports に混ぜない）。
+// ここで公開するのは Cloud Functions の 9 本だけにする（ほかの値を exports に混ぜない）。
 //
 // ⚠️ ログと個人情報（要件15.2・15.3）: ログに出すのは uid・groupId・skyId・結果の理由・件数だけ。
 //    グループ名・表示名・キャプション・招待コード・通知トークン・エラーの本文（文書のパスに招待コードが
@@ -25,8 +27,9 @@
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
-const { getFirestore } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 const core = require("./soratomoCore");
 const store = require("./soratomoStore");
@@ -387,6 +390,82 @@ const onSoratomoSkyCreated = onDocumentCreated(
   handleSoratomoSkyCreated
 );
 
+// MARK: - 通報の転送（release-gate 4.3）
+
+/**
+ * 通報の送り先（Discord の Webhook URL）。フィードバックの送り先（index.js の DISCORD_WEBHOOK_URL）とは別の秘密の値。
+ * 値は `firebase functions:secrets:set DISCORD_REPORT_WEBHOOK_URL` の対話の入力で設定し、リポジトリとログに置かない（要件7.6）。
+ */
+const DISCORD_REPORT_WEBHOOK_URL = defineSecret("DISCORD_REPORT_WEBHOOK_URL");
+
+/**
+ * 本文を Webhook へ POST し、結果を返す。成功は "ok"、HTTP の失敗はその状態（数値）、送り先が無い・通信の失敗は種類の文字列。
+ * 応答の本文とエラーの本文は読まずに捨てる（エラーの本文には送り先の URL が入ることがある）。
+ * @param {string} webhookUrl
+ * @param {Object} payload
+ * @returns {Promise<"ok"|number|"not_configured"|"fetch_failed">}
+ */
+async function postToWebhook(webhookUrl, payload) {
+  if (typeof webhookUrl !== "string" || webhookUrl === "") return "not_configured";
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return res.ok ? "ok" : res.status;
+  } catch (_err) {
+    return "fetch_failed";
+  }
+}
+
+/**
+ * 通報の記録を1件、開発者の Discord へ送り、記録の転送の状態を書く（要件7.1〜7.4・7.6）。
+ * トリガー（作成のとき）と定期実行（送り直し・tasks 4.4）の両方から呼ぶ。
+ * - 記録をいま読み直し、無い・送信済みなら送らない。作成のイベントの再配信（スナップショットは未送信のまま届く）と、
+ *   送り直しが重なっても二重に送らないため。送った後で状態の書き込みに失敗したときだけ、次の送り直しで二重になりうる
+ *   （内容が ID だけなので受け入れる・design の Event Contract）
+ * - 本文は soratomoCore.buildReportForwardPayload（ID・理由・時刻だけ。キャプション・名前・コード・画像は載せない）
+ * - 成功: 送信済みと送信日時を書く。失敗: 失敗の回数を1増やし、error のログに記録のIDと状態だけを出す
+ * - 例外は投げない（送り直しは定期実行が行う）。記録の読み書きの失敗も、名前と code だけをログに出して終える
+ * @param {FirebaseFirestore.DocumentReference} reportRef
+ * @param {string} webhookUrl
+ * @returns {Promise<"sent"|"skipped"|"failed">}
+ */
+async function forwardReport(reportRef, webhookUrl) {
+  const reportId = reportRef.id;
+  try {
+    const snap = await reportRef.get();
+    if (!snap.exists || snap.get("forwardStatus") === "sent") return "skipped";
+    const status = await postToWebhook(webhookUrl, core.buildReportForwardPayload({ ...snap.data(), reportId }));
+    if (status === "ok") {
+      await reportRef.update({ forwardStatus: "sent", forwardedAt: FieldValue.serverTimestamp() });
+      logger.info("soratomoReport: forwarded", { reportId });
+      return "sent";
+    }
+    logger.error("soratomoReport: forward_failed", { reportId, status });
+    await reportRef.update({ forwardAttempts: FieldValue.increment(1) });
+    return "failed";
+  } catch (err) {
+    logger.error("soratomoReport: forward_failed", {
+      reportId,
+      status: "store_failed",
+      errorName: err && err.name,
+      errorCode: err && err.code,
+    });
+    return "failed";
+  }
+}
+
+/** 通報の記録の作成で、開発者の Discord へ送る（要件7.1・7.3）。失敗しても例外を投げない（forwardReport）。 */
+const onSoratomoReportCreated = onDocumentCreated(
+  { document: "soratomoReports/{reportId}", region: REGION, secrets: [DISCORD_REPORT_WEBHOOK_URL] },
+  async (event) => {
+    if (!event.data) return;
+    await forwardReport(event.data.ref, DISCORD_REPORT_WEBHOOK_URL.value());
+  }
+);
+
 module.exports = {
   soratomoCreateGroup,
   soratomoJoinGroup,
@@ -396,4 +475,5 @@ module.exports = {
   soratomoAgreeGuideline,
   soratomoDeleteMyData,
   onSoratomoSkyCreated,
+  onSoratomoReportCreated,
 };
