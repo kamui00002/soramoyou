@@ -52,16 +52,65 @@ function fakeDb(docs) {
   };
 }
 
-/** 偽の auth。exists の uid だけアカウントがある。lookupError を渡すと getUser がそれを投げる。 */
+/**
+ * 偽の auth。exists の uid だけアカウントがある。lookupError を渡すと getUser がそれを投げる。
+ * getUsers は Admin SDK と同じく100件を超えると失敗し、渡された組の大きさを batches に記録する。
+ */
 function fakeAuth(exists, { lookupError = null } = {}) {
   const calls = [];
+  const batches = [];
   return {
     calls,
+    batches,
     async getUser(uid) {
       calls.push(uid);
       if (lookupError) throw lookupError;
       if (exists.includes(uid)) return { uid };
       throw Object.assign(new Error("not found"), { code: "auth/user-not-found" });
+    },
+    async getUsers(identifiers) {
+      if (identifiers.length > 100) throw Object.assign(new Error("too many"), { code: "auth/maximum-user-count-exceeded" });
+      batches.push(identifiers.length);
+      return {
+        users: identifiers.filter((i) => exists.includes(i.uid)).map((i) => ({ uid: i.uid })),
+        notFound: identifiers.filter((i) => !exists.includes(i.uid)),
+      };
+    },
+  };
+}
+
+/**
+ * find-orphans 用の偽の db（listDocuments と、投稿の authorId の select だけ）。
+ * @param {{ users?: string[], groups?: Record<string, { members?: string[], authors?: unknown[] }> }} tree
+ */
+function fakeTreeDb({ users = [], groups = {} }) {
+  const refOf = (id) => ({ id });
+  const groupRefOf = (id) => ({
+    id,
+    collection(sub) {
+      const group = groups[id];
+      if (sub === "members") return { listDocuments: async () => (group.members || []).map(refOf) };
+      if (sub === "skies") {
+        const docs = (group.authors || []).map((authorId) => ({ get: (key) => (key === "authorId" ? authorId : undefined) }));
+        return { select: () => ({ get: async () => ({ docs }) }) };
+      }
+      throw new Error(`想定外のサブコレクション: ${sub}`);
+    },
+  });
+  return {
+    collection(name) {
+      if (name === "soratomoUsers") return { listDocuments: async () => users.map(refOf) };
+      if (name === "soratomoGroups") return { listDocuments: async () => Object.keys(groups).map(groupRefOf) };
+      throw new Error(`想定外のコレクション: ${name}`);
+    },
+  };
+}
+
+/** 偽の Storage のゲートウェイ（listFiles だけ）。 */
+function fakeStorage(paths = []) {
+  return {
+    async *listFiles(prefix) {
+      for (const p of paths) if (p.startsWith(prefix)) yield p;
     },
   };
 }
@@ -344,6 +393,34 @@ test("unsuspend: 停止中なら解除を呼ぶ", async () => {
   const out = await admin.cmdUnsuspend(d, { uid: AUTHOR });
   assert.deepEqual(d.deletion.calls, [["unsuspendSoratomoUser", { uid: AUTHOR }]]);
   assert.match(out.lines.join("\n"), /利用停止を解いた/);
+});
+
+// MARK: - find-orphans（偽の db。Firestore のパスとクエリが本物で動くかは emulator のテスト）
+
+test("find-orphans --deep: ID の形でないグループの文書IDは出さずに数え、その下のアカウントの無い uid は並べる", async () => {
+  const d = deps({
+    db: fakeTreeDb({
+      groups: {
+        "ひみつのグループ名": { members: ["deadX"], authors: ["deadZ"] },
+        gOK: { members: ["alive", "deadY"] },
+      },
+    }),
+    auth: fakeAuth(["alive"]),
+    storage: fakeStorage([]),
+  });
+  const out = await admin.cmdFindOrphans(d, { deep: true });
+  assert.equal(out.exitCode, 0);
+  const text = out.lines.join("\n");
+  for (const expected of [
+    "アカウントの無い uid: 3 人",
+    "  deadX  データの残るグループ: （なし）",
+    "  deadY  データの残るグループ: gOK",
+    "  deadZ  データの残るグループ: （なし）",
+    "soratomoGroups の下で ID の形でないグループ: 1 個",
+  ]) {
+    assert.ok(text.includes(expected), `出力に「${expected}」が無い\n${text}`);
+  }
+  assertNoSecrets(out.lines);
 });
 
 // MARK: - 出力の部品

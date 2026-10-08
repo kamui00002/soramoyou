@@ -270,6 +270,8 @@ function deadlineOf(deps) {
  *   問い合わせが1組でも失敗したら、途中までの一覧を出さずに投げる（失敗を「アカウントが無い」と読まない）
  * - 出力できる ID の形（isPrintableId）でない値は、問い合わせず・表示せず、数だけを出す（名前などを出さないため。
  *   getUsers は形の違う識別子が1つでも混ざると組ごと失敗するので、その柵も兼ねる）
+ * - --deep のグループIDも、自動IDの形（core.isAutoId）のときだけ並べる。形の違う文書IDは数えるだけで、その下の uid は
+ *   集める（アカウントの無い人は見つけるが、データの残るグループには入れない。delete-user の --group も自動IDしか受け付けない）
  * @param {{ db: FirebaseFirestore.Firestore, auth: { getUsers: Function },
  *   storage: { listFiles: (prefix: string) => AsyncIterable<string> } }} deps
  * @param {{ deep: boolean }} args
@@ -281,6 +283,7 @@ async function cmdFindOrphans(deps, { deep }) {
   const found = new Map();
   let malformed = 0;
   let oddPaths = 0;
+  let oddGroups = 0;
   const add = (uid, groupId) => {
     if (!isPrintableId(uid)) {
       malformed += 1;
@@ -293,9 +296,11 @@ async function cmdFindOrphans(deps, { deep }) {
   for (const ref of await db.collection(USERS).listDocuments()) add(ref.id, null);
   if (deep) {
     for (const groupRef of await db.collection(GROUPS).listDocuments()) {
-      for (const memberRef of await groupRef.collection(MEMBERS).listDocuments()) add(memberRef.id, groupRef.id);
+      const groupId = core.isAutoId(groupRef.id) ? groupRef.id : null;
+      if (groupId === null) oddGroups += 1;
+      for (const memberRef of await groupRef.collection(MEMBERS).listDocuments()) add(memberRef.id, groupId);
       const skies = await groupRef.collection(SKIES).select("authorId").get();
-      for (const doc of skies.docs) add(doc.get("authorId"), groupRef.id);
+      for (const doc of skies.docs) add(doc.get("authorId"), groupId);
     }
     for await (const path of storage.listFiles("soratomo/")) {
       const parts = path.split("/");
@@ -323,6 +328,7 @@ async function cmdFindOrphans(deps, { deep }) {
   }
   if (malformed > 0) lines.push(`ID の形でない値: ${malformed} 件（数えるだけ・表示しない。コンソールで探す）`);
   if (oddPaths > 0) lines.push(`soratomo/ の下で形の違うパス: ${oddPaths} 件（数えるだけ・表示しない）`);
+  if (oddGroups > 0) lines.push(`soratomoGroups の下で ID の形でないグループ: ${oddGroups} 個（数えるだけ・表示しない。コンソールで探す）`);
   if (missing.length > 0) lines.push("消すには: delete-user <uid>（--deep のグループは --group <groupId> で足す）");
   return { lines, exitCode: 0 };
 }
