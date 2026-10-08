@@ -38,6 +38,7 @@
  *   ⚠️ 本番への投入は tasks 14.2 で、利用者の GO を取ってから行う。
  *
  * ■ テスト: node --test scripts/soratomo-ngwords.test.js（firebase-admin 非依存。本番には触れない。語はダミーだけ）
+ *   書き込みの経路（writeWordList）は scripts/soratomo-ngwords.emulator.test.js（npm run test:emulator）
  */
 
 "use strict";
@@ -196,6 +197,24 @@ function formatStats(stats, wordCount) {
   return `読んだ行: ${stats.lines}・空行: ${stats.blank}・コメント: ${stats.comments}・重複: ${stats.duplicates}・語: ${wordCount}`;
 }
 
+// MARK: - 書き込み
+
+/**
+ * 語のリストを soratomoConfig/ngWords に書き（前のリストは置き換える）、読み返して一致を確かめる。
+ * main から本番へ、エミュレーターのテスト（soratomo-ngwords.emulator.test.js）からエミュレーターへ書く。
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {string[]} words validateWordList を通った語
+ * @param {() => unknown} serverTimestamp FieldValue.serverTimestamp（firebase-admin をこのファイルの先頭で読まないため渡す）
+ * @returns {Promise<boolean>} 読み返した語の配列が、書いたものと同じ順で一致したか
+ */
+async function writeWordList(db, words, serverTimestamp) {
+  const { NG_WORDS_COLLECTION, NG_WORDS_DOC } = require("../functions/soratomoNgWords");
+  const ref = db.collection(NG_WORDS_COLLECTION).doc(NG_WORDS_DOC);
+  await ref.set({ words, updatedAt: serverTimestamp() });
+  const stored = (await ref.get()).get("words");
+  return Array.isArray(stored) && stored.length === words.length && stored.every((w, i) => w === words[i]);
+}
+
 // MARK: - 本体
 
 /**
@@ -257,15 +276,10 @@ async function main(argv) {
 
   const { initializeApp, applicationDefault } = functionsRequire("firebase-admin/app");
   const { getFirestore, FieldValue } = functionsRequire("firebase-admin/firestore");
-  const { NG_WORDS_COLLECTION, NG_WORDS_DOC } = require("../functions/soratomoNgWords");
   const app = initializeApp({ credential: applicationDefault(), projectId: EXPECTED_PROJECT_ID });
-  const ref = getFirestore(app).collection(NG_WORDS_COLLECTION).doc(NG_WORDS_DOC);
 
   console.log(`🔌 接続先 Firebase プロジェクト: ${EXPECTED_PROJECT_ID}`);
-  await ref.set({ words, updatedAt: FieldValue.serverTimestamp() });
-  const stored = (await ref.get()).get("words");
-  const same = Array.isArray(stored) && stored.length === words.length && stored.every((w, i) => w === words[i]);
-  if (!same) {
+  if (!(await writeWordList(getFirestore(app), words, () => FieldValue.serverTimestamp()))) {
     console.error("❌ 読み返した語のリストが、書いたものと一致しません");
     process.exitCode = 1;
     return;
@@ -292,6 +306,7 @@ module.exports = {
   validateWordList,
   describeRejection,
   formatStats,
+  writeWordList,
   findEmulatorEnv,
   functionsRequire,
   main,

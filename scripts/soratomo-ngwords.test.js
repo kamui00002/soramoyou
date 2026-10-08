@@ -208,6 +208,32 @@ test("checkWordFilePath: 無いパスと、ファイルでないもの（ディ�
   assert.deepEqual(ng.checkWordFilePath(tree.outside), { ok: false, reason: "not_file" });
 });
 
+// MARK: - writeWordList（読み返しの比較。書く経路そのものは soratomo-ngwords.emulator.test.js）
+
+/** 書いたものと違う値を読み返す偽の db。 */
+function fakeDbReadingBack(storedWords) {
+  const writes = [];
+  const ref = {
+    set: async (value) => writes.push(value),
+    get: async () => ({ get: (key) => (key === "words" ? storedWords : undefined) }),
+  };
+  return { writes, collection: () => ({ doc: () => ref }) };
+}
+
+test("writeWordList: 読み返した語が、数・順・中身のどれか1つでも違えば false", async () => {
+  const words = ["てすとごい", "だみー"];
+  const ts = () => "SERVER_TIMESTAMP";
+  assert.equal(await ng.writeWordList(fakeDbReadingBack(["てすとごい", "だみー"]), words, ts), true);
+  for (const stored of [["だみー", "てすとごい"], ["てすとごい"], ["てすとごい", "だみー", "よぶん"], ["てすとごい", "だみ"], undefined, "てすとごい"]) {
+    assert.equal(await ng.writeWordList(fakeDbReadingBack(stored), words, ts), false, JSON.stringify(stored));
+  }
+  // 長さの合う文字列（配列でない値）も false
+  assert.equal(await ng.writeWordList(fakeDbReadingBack("てす"), ["て", "す"], ts), false);
+  const db = fakeDbReadingBack(words);
+  await ng.writeWordList(db, words, ts);
+  assert.deepEqual(db.writes, [{ words, updatedAt: "SERVER_TIMESTAMP" }]);
+});
+
 // MARK: - 読み込み・固定している接続先（scripts/set-soratomo-beta-claim.test.js と同じ守り）
 
 test("読み込むだけでは firebase-admin を読まない（テストと --dry-run に依存を持ち込まない）", () => {

@@ -423,6 +423,19 @@ test("find-orphans --deep: ID の形でないグループの文書IDは出さず
   assertNoSecrets(out.lines);
 });
 
+test("find-orphans: getUsers には100件ずつ渡し、101人目（2つ目の組）のアカウントの無い uid も並べる", async () => {
+  const users = Array.from({ length: 101 }, (_, i) => `u${String(i).padStart(3, "0")}`);
+  const auth = fakeAuth(["u000", "u099"]);
+  const out = await admin.cmdFindOrphans(deps({ db: fakeTreeDb({ users }), auth, storage: fakeStorage([]) }), { deep: false });
+  assert.equal(out.exitCode, 0);
+  assert.deepEqual(auth.batches, [100, 1]);
+  assert.equal(out.lines[0], "調べた uid: 101 人（利用者の文書から）");
+  assert.equal(out.lines[1], "アカウントの無い uid: 99 人");
+  const listed = out.lines.filter((line) => /^ {2}u\d{3}$/.test(line)).map((line) => line.trim());
+  assert.deepEqual(listed, users.filter((uid) => uid !== "u000" && uid !== "u099"));
+  assert.equal(listed.at(-1), "u100");
+});
+
 // MARK: - 出力の部品
 
 test("formatTotals: 件数だけを出す（完了でないときは再実行を促す）", () => {
