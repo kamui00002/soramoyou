@@ -162,6 +162,11 @@ function allLogs() {
   return JSON.stringify(record.logs);
 }
 
+/** 文言が message のログ（例「soratomoCreateSky: ok」）の項目を、出た順に並べる。 */
+function logFieldsOf(message) {
+  return record.logs.filter((l) => l.args[0] === message).map((l) => l.args[1]);
+}
+
 async function seedGroup({ groupId, ownerId, inviteCode, memberIds, name = "種のグループ", lastActivityAt }) {
   const batch = db.batch();
   const ref = db.collection("soratomoGroups").doc(groupId);
@@ -182,19 +187,23 @@ async function seedGroup({ groupId, ownerId, inviteCode, memberIds, name = "種�
 
 // MARK: - Callable: ログインとフラグ（8.1）
 
+/** クレームを確かめる Callable（退会の削除の soratomoDeleteMyData 以外のすべて）と、正しい形の要求。 */
 const CALLABLES = [
   ["soratomoCreateGroup", { name: "空の会", requestId: "r1" }],
   ["soratomoJoinGroup", { code: "SKYAAAAA" }],
   ["soratomoRegenerateInviteCode", { groupId: "g1" }],
+  ["soratomoCreateSky", { groupId: "g1", skyId: "s1", width: 1080, height: 1440 }],
+  ["soratomoReportSky", { groupId: "g1", skyId: "s1", reason: "spam" }],
+  ["soratomoAgreeGuideline", { version: 1 }],
 ];
 
-test("Callable: 3本とも、ログインが無ければ unauthenticated", async () => {
+test("Callable: クレームを確かめる6本とも、ログインが無ければ unauthenticated", async () => {
   for (const [name, data] of CALLABLES) {
     await assert.rejects(call(name, undefined, data), httpsError("unauthenticated"), name);
   }
 });
 
-test("Callable: 3本とも、クレームが無い・true でなければ permission-denied（flag_off）で、何も書かない", async () => {
+test("Callable: クレームを確かめる6本とも、クレームが無い・true でなければ permission-denied（flag_off）で、何も書かない", async () => {
   await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
   for (const token of [{}, { soratomoBeta: false }, { soratomoBeta: "true" }]) {
     for (const [name, data] of CALLABLES) {
@@ -204,6 +213,8 @@ test("Callable: 3本とも、クレームが無い・true でなければ permis
   assert.equal((await db.collection("soratomoGroups").get()).size, 1);
   assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("inviteCode"), "SKYAAAAA");
   assert.equal((await db.collection("soratomoUsers").get()).size, 0);
+  assert.equal((await db.collection("soratomoGroups").doc("g1").collection("skies").get()).size, 0);
+  assert.equal((await db.collection("soratomoReports").get()).size, 0);
 });
 
 // MARK: - Callable: 作成・参加・再発行（8.1）
@@ -318,6 +329,93 @@ test("作成と参加: 利用停止中の人は permission-denied（suspended）
   assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("memberCount"), 1, "停止中は参加させない");
 });
 
+// MARK: - Callable: 投稿・通報・同意（release-gate 4.2）
+
+test("投稿: メンバーの投稿を5項目で作って { skyId, created: true }、同じIDの送り直しは created: false で1件のまま、ログはIDだけ", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  const input = { groupId: "g1", skyId: "s1", caption: "夕焼けがきれい", width: 1080, height: 1440 };
+  const skies = db.collection("soratomoGroups").doc("g1").collection("skies");
+
+  assert.deepEqual(await call("soratomoCreateSky", authOf("alice"), input), { skyId: "s1", created: true });
+  const sky = (await skies.doc("s1").get()).data();
+  assert.deepEqual(Object.keys(sky).sort(), ["authorId", "caption", "createdAt", "height", "width"]);
+  assert.equal(sky.authorId, "alice");
+  assert.ok(sky.createdAt instanceof Timestamp, "作成日時はサーバーの時刻");
+
+  assert.deepEqual(await call("soratomoCreateSky", authOf("alice"), input), { skyId: "s1", created: false });
+  assert.equal((await skies.get()).size, 1);
+
+  assert.deepEqual(logFieldsOf("soratomoCreateSky: ok"), [
+    { uid: "alice", groupId: "g1", skyId: "s1", created: true },
+    { uid: "alice", groupId: "g1", skyId: "s1", created: false },
+  ]);
+  assert.ok(!allLogs().includes("夕焼けがきれい"), "キャプションをログに出さない");
+});
+
+test("投稿: 語を含むキャプションは invalid-argument（ng_word）で作らず、拒否のログは uid・groupId・skyId・理由だけ", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  await assert.rejects(
+    call("soratomoCreateSky", authOf("alice"), { groupId: "g1", skyId: "s2", caption: "テストゴイの空", width: 1, height: 1 }),
+    httpsError("invalid-argument", "ng_word", {})
+  );
+  assert.equal((await db.collection("soratomoGroups").doc("g1").collection("skies").get()).size, 0);
+  assert.deepEqual(logFieldsOf("soratomoCreateSky: rejected"), [{ uid: "alice", groupId: "g1", skyId: "s2", reason: "ng_word" }]);
+  for (const secret of ["テストゴイの空", ...NG_WORDS]) {
+    assert.ok(!allLogs().includes(secret), `ログに「${secret}」を出さない`);
+  }
+});
+
+test("拒否のログ: 要求の groupId・skyId は自動IDの形のときだけ出す（形の違う値をログに書かせない）", async () => {
+  await assert.rejects(
+    call("soratomoCreateSky", authOf("alice"), { groupId: "ひみつの空の会", skyId: "s1", width: 1, height: 1 }),
+    httpsError("invalid-argument", "invalid_input", {})
+  );
+  assert.deepEqual(logFieldsOf("soratomoCreateSky: rejected"), [{ uid: "alice", skyId: "s1", reason: "invalid_input" }]);
+  assert.ok(!allLogs().includes("ひみつの空の会"));
+});
+
+test("通報: ほかの人の投稿の通報は { accepted: true } だけを返して記録を作り、2回目も同じ応答で記録は1件、ログは記録のIDと重複かどうか", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob"] });
+  await db
+    .collection("soratomoGroups")
+    .doc("g1")
+    .collection("skies")
+    .doc("s1")
+    .set({ authorId: "alice", caption: "夕焼けがきれい", width: 1, height: 1, createdAt: Timestamp.now() });
+  const input = { groupId: "g1", skyId: "s1", reason: "spam" };
+
+  assert.deepEqual(await call("soratomoReportSky", authOf("bob"), input), { accepted: true });
+  assert.deepEqual(await call("soratomoReportSky", authOf("bob"), input), { accepted: true });
+
+  const reports = await db.collection("soratomoReports").get();
+  assert.equal(reports.size, 1);
+  const reportId = core.reportDocId("g1", "s1", "bob");
+  assert.equal(reports.docs[0].id, reportId);
+  assert.equal(reports.docs[0].get("authorId"), "alice");
+  assert.equal(reports.docs[0].get("reporterId"), "bob");
+  assert.deepEqual(logFieldsOf("soratomoReportSky: ok"), [
+    { uid: "bob", reportId, duplicate: false },
+    { uid: "bob", reportId, duplicate: true },
+  ]);
+  assert.ok(!allLogs().includes("夕焼けがきれい"));
+});
+
+test("同意: 現行の版を記録して { version } を返す。古い版は failed-precondition（outdated_guideline・現行の版つき）で何も書かない", async () => {
+  await assert.rejects(
+    call("soratomoAgreeGuideline", authOf("alice"), { version: core.GUIDELINE_VERSION - 1 }),
+    httpsError("failed-precondition", "outdated_guideline", { currentVersion: core.GUIDELINE_VERSION })
+  );
+  assert.equal((await db.collection("soratomoUsers").doc("alice").get()).exists, false);
+
+  assert.deepEqual(await call("soratomoAgreeGuideline", authOf("alice"), { version: core.GUIDELINE_VERSION }), {
+    version: core.GUIDELINE_VERSION,
+  });
+  const user = (await db.collection("soratomoUsers").doc("alice").get()).data();
+  assert.equal(user.guidelineVersion, core.GUIDELINE_VERSION);
+  assert.ok(user.guidelineAgreedAt instanceof Timestamp, "同意の日時はサーバーの時刻");
+  assert.deepEqual(logFieldsOf("soratomoAgreeGuideline: ok"), [{ uid: "alice", version: core.GUIDELINE_VERSION }]);
+});
+
 // MARK: - Callable: 退会（release-gate 4.1）
 
 /** 退会の削除の場面: グループ gdel1 にオーナーの alice とメンバーの bob。2人とも投稿1件（画像2枚ずつ）と所属の写しを持つ。 */
@@ -340,7 +438,7 @@ async function seedDeletionScene() {
 
 /** 退会の Callable の ok のログ（1行だけのはず）の項目。 */
 function deleteOkLogs() {
-  return record.logs.filter((l) => l.level === "info" && l.args[0] === "soratomoDeleteMyData: ok").map((l) => l.args[1]);
+  return logFieldsOf("soratomoDeleteMyData: ok");
 }
 
 test("退会: ログインが無ければ unauthenticated で、何も消さない", async () => {

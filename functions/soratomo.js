@@ -1,17 +1,19 @@
 //
-// そらもよう Cloud Functions — 「そらとも」の配線（Callable 4本と onSoratomoSkyCreated）⭐️☁️
+// そらもよう Cloud Functions — 「そらとも」の配線（Callable 7本と onSoratomoSkyCreated）⭐️☁️
 //
 // - soratomoCreateGroup・soratomoJoinGroup・soratomoRegenerateInviteCode（tasks 8.1）:
 //   ログインと soratomoBeta のクレームを確かめ、soratomoStore.js のトランザクションを呼び、
 //   ドメインのエラー（SoratomoDomainError）を理由つきの HttpsError（code と details.reason）に写す。
 //   グループ名の検証と招待コードの正規化は、トランザクション（soratomoStore.js）の入口でも必ず通る。
+// - soratomoCreateSky・soratomoReportSky・soratomoAgreeGuideline（release-gate 4.2）: 投稿の作成・通報・
+//   ガイドラインへの同意。作りは上の3本と同じ（クレームを確かめ、トランザクションを呼ぶ）。
 // - soratomoDeleteMyData（release-gate 4.1）: 退会の前に、本人のそらとものデータを soratomoDeletion.js の
 //   共通の削除で消す。クレームは確かめない（ログインは求める）。
 // - onSoratomoSkyCreated（tasks 8.2）: グループの新しい投稿を、投稿者以外のメンバーへ知らせる。
 //   既存の onPostCreated とは名前も対象（soratomoGroups/{groupId}/skies/{skyId}）も別。
 //
 // index.js の末尾の Object.assign(exports, require("./soratomo")) で公開する（tasks 8.3）。
-// ここで公開するのは Cloud Functions の 5 本だけにする（ほかの値を exports に混ぜない）。
+// ここで公開するのは Cloud Functions の 8 本だけにする（ほかの値を exports に混ぜない）。
 //
 // ⚠️ ログと個人情報（要件15.2・15.3）: ログに出すのは uid・groupId・skyId・結果の理由・件数だけ。
 //    グループ名・表示名・キャプション・招待コード・通知トークン・エラーの本文（文書のパスに招待コードが
@@ -99,6 +101,19 @@ function toHttpsError(err) {
 }
 
 /**
+ * 拒否と想定外の失敗のログに添える、要求の groupId と skyId（自動IDの形のときだけ・design の Monitoring）。
+ * 要求の値は利用者が自由に書けるので、形を確かめずに出すと、名前やキャプションをログに書かせられる（要件14.2）。
+ * @param {Object} data 要求の本文
+ * @returns {{ groupId?: string, skyId?: string }}
+ */
+function requestIdFields(data) {
+  const fields = {};
+  if (core.isAutoId(data.groupId)) fields.groupId = data.groupId;
+  if (core.isAutoId(data.skyId)) fields.skyId = data.skyId;
+  return fields;
+}
+
+/**
  * Callable の本体を包む: ログインとクレームの確認 → 本体 → 結果のログ。失敗は HttpsError に写して投げ直す。
  * @param {string} name ログに出す Callable の名前
  * @param {(uid: string, data: Object) => Promise<Object>} body
@@ -129,7 +144,7 @@ function soratomoCallable(name, body, options = {}) {
     } catch (err) {
       const httpsError = toHttpsError(err);
       const reason = (httpsError.details && httpsError.details.reason) || httpsError.code;
-      const fields = { uid, reason };
+      const fields = { uid, ...requestIdFields(data), reason };
       if (httpsError.code === "internal") {
         // 想定外の失敗。本文は出さない（文書のパスに招待コードが含まれることがあるため）。名前と code だけ。
         logger.error(`${name}: internal`, { ...fields, errorName: err && err.name, errorCode: err && err.code });
@@ -168,6 +183,46 @@ const soratomoJoinGroup = soratomoCallable("soratomoJoinGroup", (uid, data) =>
 /** 招待コードを再発行する（オーナーだけ）。{ groupId } → { inviteCode } */
 const soratomoRegenerateInviteCode = soratomoCallable("soratomoRegenerateInviteCode", (uid, data) =>
   store.regenerateInviteCodeTx(db, { uid, groupId: data.groupId })
+);
+
+// MARK: - 投稿・通報・同意（release-gate 4.2）
+
+/**
+ * そらとも投稿の文書を作る。{ groupId, skyId, caption?, width, height } → { skyId, created }
+ * - 判定の順: 入力の検査 → 語のリストの取得 → トランザクション（利用停止→メンバー→既存の文書→NGワード→作成・
+ *   soratomoStore.createSkyTx）。入力を先に確かめるので、語のリストが読めないときも入力の誤りは invalid_input になる
+ * - 語のリストが一度も読めていなければ matcher() が失敗し、internal で止まる（検査を飛ばさない・要件11.5）
+ * - 同じ投稿IDの送り直しは created: false の成功（通信の失敗でアプリが送り直しても1件で済む）
+ * - 同意は確かめない（決定事項14）。利用停止はトランザクションの中で確かめる（要件8.6）
+ */
+const soratomoCreateSky = soratomoCallable(
+  "soratomoCreateSky",
+  async (uid, data) => {
+    if (!core.validateSkyInput(data).ok) throw new store.SoratomoDomainError("invalid_input");
+    return store.createSkyTx(db, { uid, input: data, policy: { containsNgWord: await ngWords.matcher() } });
+  },
+  { okLogFields: (result, data) => ({ groupId: data.groupId, skyId: result.skyId, created: result.created }) }
+);
+
+/**
+ * そらとも投稿を通報する。{ groupId, skyId, reason } → { accepted: true }
+ * - 通報者は認証の uid（要件6.2）。投稿者は投稿の文書から取る（要件6.8・soratomoStore.reportSkyTx）
+ * - 同じ人の同じ投稿への2回目も同じ応答にする（要件6.7）。記録のIDと重複かどうかは、利用者へ返さずログにだけ出す
+ * - 通報者・投稿者・ほかのメンバーには何も送らない（要件5.9）。開発者への転送は記録の作成のトリガーが行う
+ */
+const soratomoReportSky = soratomoCallable("soratomoReportSky", (uid, data) => store.reportSkyTx(db, { uid, input: data }), {
+  respond: (result) => ({ accepted: result.accepted }),
+  okLogFields: (result) => ({ reportId: result.reportId, duplicate: result.duplicate }),
+});
+
+/**
+ * 現行の版のガイドラインへの同意を記録する。{ version } → { version }
+ * 現行と違う版は outdated_guideline（details に現行の版）。記録するのは認証の uid の文書だけ（要件10.6・10.9・10.14）。
+ */
+const soratomoAgreeGuideline = soratomoCallable(
+  "soratomoAgreeGuideline",
+  (uid, data) => store.agreeGuidelineTx(db, { uid, input: data, policy: { guidelineVersion: core.GUIDELINE_VERSION } }),
+  { okLogFields: (result) => ({ version: result.version }) }
 );
 
 // MARK: - 退会の削除（release-gate 4.1）
@@ -336,6 +391,9 @@ module.exports = {
   soratomoCreateGroup,
   soratomoJoinGroup,
   soratomoRegenerateInviteCode,
+  soratomoCreateSky,
+  soratomoReportSky,
+  soratomoAgreeGuideline,
   soratomoDeleteMyData,
   onSoratomoSkyCreated,
 };
