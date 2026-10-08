@@ -1,16 +1,19 @@
 //
-// soratomo.js（Callable・退会の Callable と onSoratomoSkyCreated の配線）のテスト ⭐️
+// soratomo.js（Callable・トリガー・定期実行の配線）のテスト ⭐️
 //
 // 実行（リポジトリの根で）:
 //   JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 //     firebase emulators:exec --only firestore --project soramoyou-ios "cd functions && node --test soratomo.test.js"
 //
 // - Firestore はエミュレーターの本物を使う（トランザクション・読み書きの形まで確かめるため）
-// - 次の 4 つは require の前に Module._load を差し替えて偽物にする（pushHelpers.test.js と同じ方式）:
-//     firebase-admin/auth（getUsers でフラグを返す）・./pushHelpers（送信を記録するだけ。本物の FCM へ送らない）・
-//     firebase-functions/logger（ログを記録し、名前・キャプション・コード・トークンが出ていないかを見る）・
-//     ./soratomoStorage（画像の一覧と削除をメモリ上のパスの集合で行う。退会の削除が本番のバケットへ向かわないため）
-// - Callable とトリガーは、firebase-functions の .run() でハンドラーを直接呼ぶ
+// - 次の 5 つは require の前に Module._load を差し替える（pushHelpers.test.js と同じ方式）:
+//     firebase-admin/auth（getUsers でフラグとアカウントの有無を返す）・./pushHelpers（送信を記録するだけ。本物の FCM へ
+//     送らない）・firebase-functions/logger（ログを記録し、名前・キャプション・コード・トークンが出ていないかを見る）・
+//     ./soratomoStorage（画像の一覧と削除をメモリ上のパスの集合で行う。退会の削除が本番のバケットへ向かわないため）・
+//     ./soratomoNgWords（本物を包み、ngWordsOverride を入れた間だけ別の提供口を使う。「一度も読めていない」場面のため）
+// - グローバルの fetch も偽物にする（Module._load ではない）。通報の送り先の URL への送信を記録し、エミュレーターへの
+//   要求（文書の全消去）だけを本物に通す。それ以外の宛先へは送らない
+// - Callable とトリガーと定期実行は、firebase-functions の .run() でハンドラーを直接呼ぶ
 //
 // ⚠️ soratomoStore.test.js と soratomo.test.js は、同じエミュレーターの文書を各テストの前に全部消して使う。
 //    node --test に2つ渡すと既定では同時に走って消し合うので、--test-concurrency=1 を付ける（npm run test:emulator）。
