@@ -391,6 +391,19 @@ function validateSkyInput(data) {
   return { ok: true, value: { groupId, skyId, caption: hasCaption ? data.caption : null, width, height } };
 }
 
+// MARK: - 利用停止（公開前ゲート・release-gate 要件8.6）
+
+/**
+ * 利用者の文書の suspendedAt から、停止中かを判定する。未設定（undefined）と null 以外の値があれば停止中。
+ * 型は問わず、値があれば止める側に倒す。作成・参加・投稿の検査（soratomoStore）と、削除で利用者の文書を残すか・
+ * 停止の日時を書くかの判定（soratomoDeletion）が、この1つを使う（判定がずれると停止をすり抜けられるため）。
+ * @param {unknown} suspendedAt
+ * @returns {boolean}
+ */
+function isSuspended(suspendedAt) {
+  return suspendedAt !== undefined && suspendedAt !== null;
+}
+
 // MARK: - 通報（公開前ゲート・release-gate 要件6.6・6.7・7.2）
 
 /**
@@ -571,6 +584,7 @@ module.exports = {
   containsNgWord,
   isAutoId,
   validateSkyInput,
+  isSuspended,
   isReportReason,
   reportDocId,
   buildReportForwardPayload,

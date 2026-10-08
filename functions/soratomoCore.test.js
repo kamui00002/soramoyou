@@ -643,6 +643,18 @@ test("validateSkyInput: 要求の本文がオブジェクトでなければ拒�
 });
 
 // ============================================================
+// isSuspended（要件8.6・レビュー #2: 停止の判定を1か所にまとめる）
+// ============================================================
+
+test("isSuspended: 未設定と null だけが「停止していない」。値があれば型を問わず停止中（止める側に倒す）", () => {
+  assert.equal(core.isSuspended(undefined), false);
+  assert.equal(core.isSuspended(null), false);
+  for (const value of [{ toMillis: () => 1 }, 0, "", false, "2026-10-08", 1]) {
+    assert.equal(core.isSuspended(value), true, `${JSON.stringify(value)} は停止中`);
+  }
+});
+
+// ============================================================
 // isReportReason・reportDocId（要件6.6・6.7）
 // ============================================================
 

@@ -372,7 +372,7 @@ async function finishUserTx(db, { uid, trigger }) {
     // （停止のすり抜け）。管理（admin）も、スクリプトの検査に頼らず同じ側に倒す。アカウントを消した後は定期実行が
     // account_deleted で文書ごと消すので、要件2.3（停止の記録も消す）は数時間遅れて満たされる
     const suspendedAt = userSnap.exists ? userSnap.get("suspendedAt") : undefined;
-    const keepSuspension = trigger !== "account_deleted" && suspendedAt !== undefined && suspendedAt !== null;
+    const keepSuspension = trigger !== "account_deleted" && core.isSuspended(suspendedAt);
 
     // ここから書き込み
     if (trigger === "suspension" || keepSuspension) {
@@ -455,7 +455,7 @@ async function markSuspendedTx(db, uid) {
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(userRef);
     const current = snap.exists ? snap.get("suspendedAt") : undefined;
-    if (current !== undefined && current !== null) return;
+    if (core.isSuspended(current)) return;
     tx.set(userRef, { suspendedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
   });
 }

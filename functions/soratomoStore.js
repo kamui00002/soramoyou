@@ -117,7 +117,7 @@ function assertPolicy(policy, { needsVersion, needsNgWord }) {
  * @param {Object} user soratomoUsers/{uid} の中身（文書が無ければ {}）
  */
 function assertNotSuspended(user) {
-  if (user.suspendedAt !== undefined && user.suspendedAt !== null) throw new SoratomoDomainError("suspended");
+  if (core.isSuspended(user.suspendedAt)) throw new SoratomoDomainError("suspended");
 }
 
 /**
