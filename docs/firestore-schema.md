@@ -318,24 +318,34 @@
 
 ## そらとも（友達グループで空を共有）のコレクション ⭐️（2026-10-04・spec: `.kiro/specs/soratomo/`）
 
+公開前ゲート（2026-10-08・spec: `.kiro/specs/soratomo-release-gate/`）で、投稿の書き手・利用者の記録の項目・通報の記録・語のリストを足した。
+
 | コレクション | 文書ID | 項目 | 書き手 |
 |---|---|---|---|
 | `soratomoGroups` | 自動ID | `name`・`ownerId`・`inviteCode`・`memberCount`・`createdAt`・`lastActivityAt` | Functions |
 | `soratomoGroups/{groupId}/members` | uid | `uid`・`role`（`owner` / `member`）・`joinedAt` | Functions |
-| `soratomoGroups/{groupId}/skies` | 自動ID | `authorId`・`caption`（任意）・`width`・`height`・`createdAt`（サーバー時刻） | アプリ（作成・削除だけ） |
+| `soratomoGroups/{groupId}/skies` | 自動ID（アプリが決める） | `authorId`・`caption`（任意）・`width`・`height`・`createdAt`（サーバー時刻） | 作成は Functions（Callable の `soratomoCreateSky`）・削除はアプリ（投稿者本人だけ） |
 | `soratomoGroups/{groupId}/notifyState` | 受信者の uid | `lastSentAt`・`lastSkyId` | Functions |
 | `soratomoInviteCodes` | 招待コード | `groupId`・`createdAt` | Functions |
-| `soratomoUsers` | uid | `groupCount`・`lastCreateRequestId`・`lastCreatedGroupId`・`updatedAt` | Functions |
+| `soratomoUsers` | uid | `groupCount`・`lastCreateRequestId`・`lastCreatedGroupId`・`updatedAt`・`guidelineVersion`（同意したガイドラインの版）・`guidelineAgreedAt`（同意の日時・サーバー時刻）・`suspendedAt`（利用停止の日時・停止中だけ持つ） | Functions（同意は Callable の `soratomoAgreeGuideline`・停止と解除は運用スクリプト） |
 | `soratomoUsers/{uid}/groups` | groupId | `groupId`・`joinedAt` | Functions |
+| `soratomoReports` | `{groupId}_{skyId}_{通報者の uid}` | `groupId`・`skyId`・`authorId`（受け付けたときの実際の投稿者）・`reporterId`・`reason`（5つ）・`createdAt`・`forwardStatus`（`pending` / `sent`）・`forwardAttempts`・`forwardedAt`・`reviewedAt`・`reviewResult`（`no_violation` / `violation`） | Functions（通報の Callable・転送）・運用スクリプト（確認の結果） |
+| `soratomoConfig` | `ngWords` | `words`（NG ワードの文字列の配列・最大 5,000）・`updatedAt` | 運用スクリプト（`scripts/soratomo-ngwords.js`）だけ |
 
-- 画像は Storage の `soratomo/{groupId}/{authorId}/{skyId}/display.jpg` と `thumb.jpg`。パスは iOS の `SoratomoImagePaths` だけが作る。`skies` には画像のパスや URL の項目を持たない（ルールが拒否する）。
+- 画像は Storage の `soratomo/{groupId}/{authorId}/{skyId}/display.jpg` と `thumb.jpg`。パスは iOS の `SoratomoImagePaths` だけが作る。`skies` には画像のパスや URL の項目を持たない（`soratomoCreateSky` の入力検査が書かせない）。公開前ゲートでも Storage のパスの形と `storage.rules` は変えていない。退会と利用停止では、その人の画像を共通の削除（`functions/soratomoDeletion.js`）が消す。
+- 投稿の作成は `firestore.rules` で閉じた（`allow create: if false`）。項目・キャプション・幅と高さの検査は `functions/soratomoCore.js` の `validateSkyInput`、利用停止・メンバー・NG ワードの検査は `soratomoStore.js` の `createSkyTx` が行う。アプリから直接書けると、利用停止と NG ワードの検査を飛ばせるため（release-gate 要件 11.5）。
+- 利用者の記録（`soratomoUsers/{uid}`）は本人だけが読める（同意と利用停止の項目を含む）。書き込みはルールで拒否（release-gate 要件 8.9・10.14）。
+- 通報の記録（`soratomoReports`）と語のリスト（`soratomoConfig`）は、ルールで誰にも読み書きさせない（通報者本人も読めない・release-gate 要件 6.10・11.10）。語のリストのファイルはリポジトリに置かない（投入スクリプトがリポジトリと Git の作業ツリーの中のファイルを拒否する）。Functions は 5 分キャッシュして読む。
+- ⚠️ **G5（プライバシーポリシーとプライバシーラベル）への引き継ぎ**: 通報の記録は、通報者または投稿者が退会しても消さない（release-gate 要件 6.11）。通報が届くと、通報の記録・投稿・グループ・投稿者・通報者の**内部 ID** と理由と受け付けた時刻を、開発者の Discord（フィードバックとは別の通報専用のチャンネル）へ送る（キャプション・グループ名・表示名・招待コード・画像は送らない・要件 7.2）。ポリシーとラベルに、この保持と第三者（Discord）への送信を書く必要がある。
 - そらともの投稿は iOS では `SoratomoSky`（既存の `Post` とは別の型）。既存の画面・お気に入り・おすすめ・ウィジェット・カレンダーへは型の上で渡せない（要件 13.2〜13.4）。
 - サブコレクションに `posts` の名前を使わない。collectionGroup のクエリと `{path=**}` のルールも使わない（既存の投稿のクエリ・ルールに混ざらないため・要件 13.1）。
-- 読み書きの条件は `firestore.rules` と `storage.rules` の `soratomo` の節（クレーム `soratomoBeta` とメンバー判定）。
+- 読み書きの条件は `firestore.rules` と `storage.rules` の `soratomo` の節（クレーム `soratomoBeta` とメンバー判定）。ルールのテストは `scripts/rules_test_soratomo.py`（通常と `--mutants`）。
 - **一致させる値**（片方だけ変えると、アプリが通すものをサーバーが拒否する、またはその逆になる）。文字数はすべてコードポイントで数える。
   - 招待コードの字種・長さ・区切りの文字: iOS `SoratomoInviteCode` ⇔ Functions `soratomoCore.js`（`INVITE_ALPHABET`・`INVITE_CODE_LENGTH`・`INVITE_CODE_SEPARATORS`）
   - グループ名の上限 30: iOS `SoratomoTextRules.groupNameMax` ⇔ Functions `GROUP_NAME_MAX`
-  - キャプションの上限 100 と改行の禁止: iOS `SoratomoTextRules`（`captionMax`・`sanitizeCaption`）⇔ ルールの `isValidSoratomoCaption`
+  - キャプションの上限 100 と改行の禁止: iOS `SoratomoTextRules`（`captionMax`・`sanitizeCaption`）⇔ Functions `soratomoCore.js` の `validateSkyInput`（`CAPTION_MAX`・`CAPTION_LINE_BREAKS`）。旧ルールの `isValidSoratomoCaption` は公開前ゲートで消した
+  - 画像の幅・高さの上限 2048: iOS の表示用の画像の縮小（長辺 2048px）⇔ Functions `SKY_DIMENSION_MAX`
+  - ガイドラインの版 1: iOS の版の定数（release-gate tasks 9.5 で置く）⇔ Functions `GUIDELINE_VERSION`。版を上げると、同意し直すまで作成と参加が止まる
 
 ---
 
