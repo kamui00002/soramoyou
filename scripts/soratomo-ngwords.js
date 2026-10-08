@@ -9,13 +9,18 @@
  *
  * ■ 語のファイル
  *   1行1語の UTF-8 のテキスト。前後の空白（全角の空白を含む）を除き、空行と「#」で始まる行を飛ばし、重複を除く。
+ *   UTF-8 として正しくないバイト列（Shift_JIS・BOM つきの UTF-16 など）は、置換文字に置き換えずに拒否する
+ *   （置き換えて読むと、文字化けした語が検査を通って書かれ、元の語に一致しないまま「書いた」と出るため）。
  *   ⚠️ 語のファイルはリポジトリに置かない（要件11.10・公開リポジトリの閲覧者に読ませない）。
  *      このスクリプトは、実体のパス（シンボリックリンクをたどった先）が、このリポジトリの中か、Git の作業ツリーの中
  *      （祖先のどこかに .git がある）なら拒否する。worktree の外の本体の checkout に置いたファイルも拒否する。
  *
  * ■ 書かずに止める場合（どれも語の中身は出さない）
  *   - 語が0個（空のリストを書くと、検査が実質止まるため。空にしたいときはコンソールで行う）
- *   - 照合に使えない語がある（正規化すると空白だけになる語。提供口が文書全体を壊れたものと扱い、作成と投稿が止まるため）
+ *   - 語のファイルが UTF-8 として正しくない（上の「語のファイル」）
+ *   - 照合に使えない語がある（正規化すると空白だけになる語と、置換文字 U+FFFD・制御文字を含む文字化けした語）。
+ *     提供口（functions/soratomoNgWords.js）は、使えない語を黙って落とすので、書いたつもりの語が効かない。
+ *     全部が使えない語なら、文書全体を壊れたものと扱い、作成と投稿が止まる。どちらも書く前に止める
  *   - 5,000語を超える
  *
  * ■ 出力: 件数だけ（読んだ行・空行・コメント・重複・書いた語の数）。語の中身は、画面・ログ・エラーのどこにも出さない
@@ -93,6 +98,24 @@ function checkWordFilePath(file, { repositoryRoot = REPOSITORY_ROOT } = {}) {
 
 // MARK: - 語のファイルの読み方
 
+/** 文字化けの名残り（置換文字 U+FFFD・C0 と C1 の制御文字・DEL）。行の前後のタブは trim で除いた後に見る。 */
+const GARBLED = /[\u0000-\u001F\u007F-\u009F\uFFFD]/;
+
+/**
+ * 語のファイルを UTF-8 として厳密に読む。正しくないバイト列は置換文字に置き換えずに拒否する。
+ * 先頭の BOM は TextDecoder が除く。
+ * @param {string} file 語のファイルの実体のパス（checkWordFilePath の realPath）
+ * @returns {{ ok: true, text: string } | { ok: false, reason: "not_utf8" }}
+ */
+function readWordFile(file) {
+  const bytes = fs.readFileSync(file);
+  try {
+    return { ok: true, text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+  } catch (_err) {
+    return { ok: false, reason: "not_utf8" };
+  }
+}
+
 /**
  * 語のファイルの本文を、書く語の配列にする。前後の空白を除き、空行・「#」で始まる行を飛ばし、重複を除く（最初の1つを残す）。
  * @param {string} text
@@ -121,7 +144,8 @@ function parseWordList(text) {
 
 /**
  * 書いてよい語のリストかを確かめる。だめなら理由を返す（語の中身は返さない）。
- * - empty: 語が0個 / unusable: 正規化すると空白だけになる語がある（数を返す） / too_many: 5,000語を超える
+ * - empty: 語が0個 / unusable: 正規化すると空白だけになる語か、文字化けした語（置換文字・制御文字を含む）がある
+ *   （数を返す） / too_many: 5,000語を超える
  * @param {string[]} words parseWordList の words
  * @returns {{ ok: true, matchable: number } | { ok: false, reason: "empty"|"unusable"|"too_many", count: number }}
  *   matchable は、正規化して重複を除いた後の、照合に使える語の数（提供口と同じ prepareNgWords で数える）
@@ -129,7 +153,7 @@ function parseWordList(text) {
 function validateWordList(words) {
   if (words.length === 0) return { ok: false, reason: "empty", count: 0 };
   if (words.length > MAX_WORDS) return { ok: false, reason: "too_many", count: words.length };
-  const unusable = words.filter((word) => core.prepareNgWords([word]).length === 0).length;
+  const unusable = words.filter((word) => GARBLED.test(word) || core.prepareNgWords([word]).length === 0).length;
   if (unusable > 0) return { ok: false, reason: "unusable", count: unusable };
   return { ok: true, matchable: core.prepareNgWords(words).length };
 }
@@ -143,10 +167,12 @@ function describeRejection(result) {
       return "❌ 語のファイルがふつうのファイルでない";
     case "inside_repository":
       return "❌ 語のファイルがリポジトリか Git の作業ツリーの中にある（外に置く。シンボリックリンクの先も見ている）";
+    case "not_utf8":
+      return "❌ 語のファイルが UTF-8 として正しくない（Shift_JIS や UTF-16 なら UTF-8 で保存し直す）";
     case "empty":
       return "❌ 語が0個（空のリストは書かない）";
     case "unusable":
-      return `❌ 照合に使えない語（正規化すると空白だけになる語）が ${result.count} 個ある`;
+      return `❌ 照合に使えない語（正規化すると空白だけになる語・置換文字や制御文字を含む語）が ${result.count} 個ある`;
     case "too_many":
       return `❌ 語が ${result.count} 個で、上限の ${MAX_WORDS} を超える`;
     default:
@@ -184,7 +210,13 @@ async function main(argv) {
     process.exitCode = 1;
     return;
   }
-  const { words, stats } = parseWordList(fs.readFileSync(location.realPath, "utf8"));
+  const file = readWordFile(location.realPath);
+  if (!file.ok) {
+    console.error(describeRejection(file));
+    process.exitCode = 1;
+    return;
+  }
+  const { words, stats } = parseWordList(file.text);
   console.log(formatStats(stats, words.length));
   const validation = validateWordList(words);
   if (!validation.ok) {
@@ -230,8 +262,10 @@ module.exports = {
   REPOSITORY_ROOT,
   parseArgs,
   checkWordFilePath,
+  readWordFile,
   parseWordList,
   validateWordList,
   describeRejection,
   formatStats,
+  main,
 };

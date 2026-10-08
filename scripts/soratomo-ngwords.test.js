@@ -105,6 +105,49 @@ test("validateWordList: 正規化すると空白だけになる語があれば�
   assert.deepEqual(ng.validateWordList(["てすとごい", " ", "　"]), { ok: false, reason: "unusable", count: 2 });
 });
 
+test("validateWordList: 置換文字（U+FFFD）や制御文字を含む語は、文字化けとして数だけを返して書かない", () => {
+  // 置換文字は、別の文字コードのファイルを UTF-8 として一度読み、保存し直したときに残る。制御文字は UTF-16 などの名残り
+  for (const bad of ["てす�と", "だみ\u0000ー", "だみ\u001Fー", "だみ\u007Fー", "だみ\u0085ー", "だみ\u009Fー"]) {
+    assert.deepEqual(ng.validateWordList(["てすとごい", bad]), { ok: false, reason: "unusable", count: 1 }, JSON.stringify(bad));
+  }
+});
+
+// MARK: - readWordFile（文字コード）
+
+/** バイト列を一時ディレクトリのファイルにして、readWordFile で読む。 */
+function readBytes(name, bytes) {
+  const file = path.join(tree.outside, name);
+  fs.writeFileSync(file, bytes);
+  return ng.readWordFile(file);
+}
+
+test("readWordFile: UTF-8（BOM の有無を問わない）は本文を返す", () => {
+  assert.deepEqual(readBytes("utf8.txt", Buffer.from("てすとごい\nだみー\n", "utf8")), { ok: true, text: "てすとごい\nだみー\n" });
+  const withBom = readBytes("utf8-bom.txt", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("てすとごい\n", "utf8")]));
+  assert.equal(withBom.ok, true);
+  assert.deepEqual(ng.parseWordList(withBom.text).words, ["てすとごい"]);
+});
+
+test("readWordFile: UTF-8 として正しくないバイト列（Shift_JIS・BOM つき UTF-16）は、置き換えずに拒否する", () => {
+  // 「てすと」「だみー」の Shift_JIS（82 C4 82 B7 82 C6 / 82 BE 82 DD 81 5B）
+  const sjis = Buffer.from([0x82, 0xc4, 0x82, 0xb7, 0x82, 0xc6, 0x0a, 0x82, 0xbe, 0x82, 0xdd, 0x81, 0x5b, 0x0a]);
+  assert.deepEqual(readBytes("sjis.txt", sjis), { ok: false, reason: "not_utf8" });
+  const utf16le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("てすと\nだみー\n", "utf16le")]);
+  assert.deepEqual(readBytes("utf16le-bom.txt", utf16le), { ok: false, reason: "not_utf8" });
+  assert.match(ng.describeRejection({ ok: false, reason: "not_utf8" }), /UTF-8/);
+});
+
+test("readWordFile→parseWordList→validateWordList: BOM の無い UTF-16 は UTF-8 として読めてしまうが、制御文字で止める", () => {
+  // 「て」U+3066 は 66 30（"f0"）になり、改行の 0A 00 が NUL を残す。字の下位バイトが 0x80 未満なら UTF-8 としては
+  // 正しいので、読む段では止まらない（「ー」U+30FC の FC のように 0x80 以上を含めば、読む段で not_utf8 になる）。
+  // ⚠️ 改行の無い1行だけのファイルは NUL が残らないので見分けられない
+  const read = readBytes("utf16le-nobom.txt", Buffer.from("てすと\nだみ\n", "utf16le"));
+  assert.equal(read.ok, true);
+  const { words } = ng.parseWordList(read.text);
+  assert.equal(ng.validateWordList(words).ok, false);
+  assert.equal(ng.validateWordList(words).reason, "unusable");
+});
+
 test("describeRejection・formatStats: 件数と理由だけで、語の中身を含まない", () => {
   const messages = [
     ng.describeRejection(ng.validateWordList([])),
@@ -163,4 +206,35 @@ test("checkWordFilePath: 外に置いたシンボリックリンク（ファイ�
 test("checkWordFilePath: 無いパスと、ファイルでないもの（ディレクトリ）は拒否する", () => {
   assert.deepEqual(ng.checkWordFilePath(path.join(tree.outside, "nothing.txt")), { ok: false, reason: "not_found" });
   assert.deepEqual(ng.checkWordFilePath(tree.outside), { ok: false, reason: "not_file" });
+});
+
+// MARK: - main（--dry-run だけ。Firestore に触れない）
+
+/** main を走らせ、出力と終了コードを集める（process.exitCode は元に戻す）。 */
+async function runMain(t, argv) {
+  const out = [];
+  t.mock.method(console, "log", (...args) => out.push(args.join(" ")));
+  t.mock.method(console, "error", (...args) => out.push(args.join(" ")));
+  const before = process.exitCode;
+  try {
+    await ng.main(argv);
+    return { out, exitCode: process.exitCode };
+  } finally {
+    process.exitCode = before;
+  }
+}
+
+test("main --dry-run: UTF-8 として正しくないファイルは、数える前に止める（語の中身を出さない）", async (t) => {
+  const file = path.join(tree.outside, "main-sjis.txt");
+  fs.writeFileSync(file, Buffer.from([0x82, 0xc4, 0x82, 0xb7, 0x82, 0xc6, 0x0a]));
+  const { out, exitCode } = await runMain(t, [file, "--dry-run"]);
+  assert.equal(exitCode, 1);
+  assert.deepEqual(out, [ng.describeRejection({ ok: false, reason: "not_utf8" })]);
+});
+
+test("main --dry-run: UTF-8 のファイルは数えて、書かずに終わる", async (t) => {
+  const { out, exitCode } = await runMain(t, [tree.outsideFile, "--dry-run"]);
+  assert.equal(exitCode, undefined);
+  assert.equal(out.at(-1), "--dry-run: 書いていない");
+  assert.equal(out.join("\n").includes("てすとごい"), false);
 });
