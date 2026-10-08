@@ -250,6 +250,10 @@ async function deleteImagesByPrefix(storage, prefix, pastDeadline) {
  *   （クエリの範囲のロックには頼らない・design の「人数の正しさ」）
  * - 写しが無くても（管理スクリプトが足したグループ・再実行）失敗しない。所属数は読めた件数で代入する
  * - 利用者の文書が無ければ作らない（写しだけを消す）。利用者の文書の扱いは 3.3 の最後の手順が決める
+ * - このグループに自分のメンバーの文書があれば、写しを消さずに何もしない（レビュー #16）。手順1の後に同じグループへ
+ *   入り直していた（並行した別の削除が先に終わり、本人が同意し直して参加した等）ということで、ここで写しを消すと、
+ *   メンバーの文書と投稿が「利用者→グループ」の唯一の経路を失って残り続ける（所属数とメンバー数が食い違い、定期実行も拾えない）。
+ *   写しが残るので、呼び手（deleteSoratomoUserData）の最後の確認が見つけて、このグループをもう一度処理する
  * @param {FirebaseFirestore.Firestore} db
  * @param {{ uid: string, groupId: string }} params
  * @returns {Promise<void>}
@@ -257,9 +261,12 @@ async function deleteImagesByPrefix(storage, prefix, pastDeadline) {
 async function removeMembershipCopyTx(db, { uid, groupId }) {
   const userRef = db.collection(USERS).doc(uid);
   const copyRef = userRef.collection(USER_GROUPS).doc(groupId);
+  const memberRef = db.collection(GROUPS).doc(groupId).collection(MEMBERS).doc(uid);
   await db.runTransaction(async (tx) => {
     const userSnap = await tx.get(userRef);
     const copiesSnap = await tx.get(userRef.collection(USER_GROUPS));
+    const memberSnap = await tx.get(memberRef);
+    if (memberSnap.exists) return;
     const remaining = copiesSnap.docs.filter((doc) => doc.id !== groupId).length;
 
     // ここから書き込み

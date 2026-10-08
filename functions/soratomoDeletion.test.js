@@ -918,6 +918,46 @@ test("利用者単位: 削除の途中で参加が入って写しが増えても
   assert.equal(await userData("amy"), null);
 });
 
+test("利用者単位: 並行した別の削除が先に終わり、本人が同意し直して同じグループへ入り直しても、遅れた削除は新しい写しを黙って消さず、外し直して消し切る", async () => {
+  // レビュー #16（codex）: 削除A の手順1（g1 から外す）の後、画像を消している間に、削除B が最後まで終わり（利用者の文書も消える）、
+  // 本人が同意し直して g1 へ入り直す。A の手順4が新しい写しを黙って消すと、メンバーの文書が「利用者→グループ」の経路を失って
+  // 残り、所属数とメンバー数が食い違ったまま定期実行にも拾われない
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+    ],
+  });
+  await seedUser("amy", ["g1"]);
+  let rejoined = null;
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"), {
+    onDelete: async (count) => {
+      if (count !== 1) return;
+      const b = await deletion.deleteSoratomoUserData(
+        { db, storage: fakeStorage([]).gateway, nowMs: steadyClock() },
+        { uid: "amy", trigger: "self", deadlineMs: DEADLINE }
+      );
+      assert.equal(b.done, true, "削除B が先に終わった");
+      await store.agreeGuidelineTx(db, { uid: "amy", input: { version: core.GUIDELINE_VERSION }, policy: JOIN_POLICY });
+      rejoined = await store.joinGroupTx(db, { uid: "amy", code: "SKYAAAAA", policy: JOIN_POLICY });
+    },
+  });
+
+  const result = await deletion.deleteSoratomoUserData(
+    { db, storage: storage.gateway, nowMs: steadyClock() },
+    { uid: "amy", trigger: "self", deadlineMs: DEADLINE }
+  );
+  assert.deepEqual(rejoined, { groupId: "g1", alreadyMember: false }, "削除の途中で入り直しが通った（この場面を作れている）");
+  assert.equal(result.done, true);
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner" }, "入り直したメンバーの文書を残さない");
+  await assertGroupInvariants("g1");
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.equal(await userData("amy"), null);
+});
+
 test("利用者単位: 追加のグループIDで渡した、メンバーのいない孤児のグループの文書を消したら groupsDeleted に数える（groupsLeft は数えない）", async () => {
   await seedGroup({ groupId: "g9", ownerId: "ghost", inviteCode: "SKYAAAAA", members: [] });
   await seedSkies("g9", "ghost", ["x1"]);
