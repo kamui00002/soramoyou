@@ -208,6 +208,17 @@ test("checkWordFilePath: 無いパスと、ファイルでないもの（ディ�
   assert.deepEqual(ng.checkWordFilePath(tree.outside), { ok: false, reason: "not_file" });
 });
 
+// MARK: - 読み込み・固定している接続先（scripts/set-soratomo-beta-claim.test.js と同じ守り）
+
+test("読み込むだけでは firebase-admin を読まない（テストと --dry-run に依存を持ち込まない）", () => {
+  const loaded = Object.keys(require.cache).filter((p) => p.includes(`${path.sep}firebase-admin${path.sep}`));
+  assert.deepEqual(loaded, []);
+});
+
+test("プロジェクトは soramoyou-ios に固定している（ADC の取り違えで別プロジェクトへ書かないため）", () => {
+  assert.equal(ng.EXPECTED_PROJECT_ID, "soramoyou-ios");
+});
+
 // MARK: - main（--dry-run だけ。Firestore に触れない）
 
 /** main を走らせ、出力と終了コードを集める（process.exitCode は元に戻す）。 */

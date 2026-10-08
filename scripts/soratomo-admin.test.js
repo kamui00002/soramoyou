@@ -362,3 +362,19 @@ test("isoOf: Timestamp と Date は ISO 8601、無い・読めない値は（無
   assert.equal(admin.isoOf(new Date(Date.UTC(2026, 0, 2))), "2026-01-02T00:00:00.000Z");
   for (const v of [undefined, null, "2026-01-02", 123, new Date(Number.NaN)]) assert.equal(admin.isoOf(v), "（無い）");
 });
+
+// MARK: - 読み込み・固定している接続先（scripts/set-soratomo-beta-claim.test.js・check-soratomo-download-tokens.test.js と同じ守り）
+
+test("読み込むだけでは firebase-admin を読まない（テストと引数の確認に依存を持ち込まない）", () => {
+  const sep = require("node:path").sep;
+  const loaded = Object.keys(require.cache).filter((p) => p.includes(`${sep}firebase-admin${sep}`));
+  assert.deepEqual(loaded, []);
+});
+
+test("プロジェクトは soramoyou-ios に固定している（ADC の取り違えで別プロジェクトを消さないため）", () => {
+  assert.equal(admin.EXPECTED_PROJECT_ID, "soramoyou-ios");
+});
+
+test("バケットは soramoyou-ios.firebasestorage.app に固定している", () => {
+  assert.equal(admin.EXPECTED_BUCKET, "soramoyou-ios.firebasestorage.app");
+});
