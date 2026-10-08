@@ -21,7 +21,8 @@ enum SoratomoGroupFormMode: String, Identifiable {
 
 /// グループの作成と、招待コードでの参加のフォーム（一覧からシートで出す）
 ///
-/// 表示名の事前入力（13.2）→ 作成か参加（13.3）→ 通知の事前説明（12.2）までを、このシートの中で行う。
+/// ガイドラインへの同意（release-gate 10.4）→ 表示名の事前入力（13.2）→ 作成か参加（13.3）→ 通知の事前説明（12.2）までを、
+/// このシートの中で行う。ガイドラインで「同意しない」を選んだら `onCancel` で閉じる（一覧へ戻る・要件 10.4）。
 /// 成功したら、進む先のパスを `onCompleted` で返す（一覧がルーターのパスに入れる）。
 /// - 作成の成功: `[.timeline(groupId:), .invite(groupId:)]`（招待の画面から戻るとタイムライン）
 /// - 参加の成功（既存のメンバーだった場合も）: `[.timeline(groupId:)]`
@@ -69,10 +70,13 @@ struct SoratomoGroupFormView: View {
                 mode: mode,
                 groupService: dependencies.groupService,
                 profileService: dependencies.profileService,
+                guidelineService: dependencies.guidelineService,
                 primer: dependencies.primer,
                 isOnline: { network.isOnline },
                 currentUid: dependencies.currentUid,
-                onCompleted: onCompleted
+                onCompleted: onCompleted,
+                // 「同意しない」は、何もせずに閉じるのと同じく一覧へ戻す（同意は記録しない）
+                onDeclined: onCancel
             )
         )
     }
@@ -116,6 +120,8 @@ struct SoratomoGroupFormView: View {
                 .accessibilityLabel("準備しています")
         case let .checkFailed(message):
             checkFailedView(message: message)
+        case let .guideline(trigger):
+            guidelineView(trigger: trigger)
         case .displayName:
             SoratomoDisplayNameStep(
                 displayName: $viewModel.displayNameInput,
@@ -159,6 +165,36 @@ struct SoratomoGroupFormView: View {
         }
         .padding(DesignTokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// ガイドラインの全文と同意（release-gate 10.4・要件 10.1・10.3・10.7）
+    ///
+    /// 全文の画面は入口（10.5）と共有するので変えず、記録の失敗の文言はこのシートが上に出す。
+    private func guidelineView(trigger: SoratomoGuidelineTrigger) -> some View {
+        SoratomoGuidelineView(
+            mode: .consent(
+                trigger: trigger,
+                isAgreeing: viewModel.isProcessing,
+                onAgree: {
+                    Task { await viewModel.agreeGuideline() }
+                },
+                onDecline: {
+                    viewModel.declineGuideline()
+                }
+            )
+        )
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let errorMessage = viewModel.errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(.bar)
+                    .accessibilityLabel(errorMessage)
+            }
+        }
     }
 
     /// グループ名か招待コードの入力（13.3）
