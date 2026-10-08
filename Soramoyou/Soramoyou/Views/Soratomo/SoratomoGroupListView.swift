@@ -26,6 +26,8 @@ struct SoratomoGroupListView: View {
 
     /// 出しているフォーム（作成か参加。nil なら出していない）
     @State private var formMode: SoratomoGroupFormMode?
+    /// ガイドラインを読むだけの形で出しているか（release-gate 10.5）
+    @State private var isShowingGuideline = false
 
     /// 文字の大きさの設定（大きな文字のときはカードの中の並べ方を変える）
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -63,9 +65,22 @@ struct SoratomoGroupListView: View {
                     }
                     .accessibilityLabel("そらともを閉じる")
                 }
+                // ガイドラインを読むだけの形で開く（同意の前でも置いてよい・release-gate 10.5・要件 10.12）
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("ガイドライン") {
+                        isShowingGuideline = true
+                    }
+                    .accessibilityLabel("そらともガイドラインを読む")
+                }
             }
             // 作成と参加の 2 つの操作は、一覧の状態に関わらず常に下に出す（要件 5.5）
             .modifier(SoratomoBottomActionBar(bar: actionButtons))
+            // ガイドラインは読むだけの形（ツールバーの中ではなく、作成と参加のシートと同じ所に付ける）
+            .sheet(isPresented: $isShowingGuideline) {
+                SoratomoGuidelineView(mode: .readOnly(onClose: {
+                    isShowingGuideline = false
+                }))
+            }
             .sheet(item: $formMode) { mode in
                 SoratomoGroupFormView(
                     mode: mode,
