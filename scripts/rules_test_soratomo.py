@@ -71,9 +71,9 @@ def sky(**fields):
     return data
 
 
-def case(name, expect, uid, method, path, data=None, existing=None, claim=True):
-    """1 ケース。uid=None は未ログイン。claim=False は soratomoBeta の無い利用者（別のクレームは持つ）"""
-    return {"name": name, "expect": expect, "uid": uid, "claim": claim and uid != NOCLAIM,
+def case(name, expect, uid, method, path, data=None, existing=None):
+    """1 ケース。uid=None は未ログイン。uid=NOCLAIM は soratomoBeta の無い利用者（別のクレームは持つ）"""
+    return {"name": name, "expect": expect, "uid": uid, "claim": uid != NOCLAIM,
             "method": method, "path": path, "data": data, "existing": existing}
 
 
@@ -283,7 +283,7 @@ def evaluate(source, token):
         data=body,
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
     )
-    # --mutants は 40 回あまり呼ぶので、接続が切れるなどの一時的な失敗は 3 回まで再試行する（HTTP のエラーは再試行しない）
+    # --mutants は壊し方の数（len(MUTANTS)）だけ呼ぶので、接続が切れるなどの一時的な失敗は 3 回まで再試行する（HTTP のエラーは再試行しない）
     for attempt in range(3):
         try:
             result = json.load(urllib.request.urlopen(req, timeout=60))
