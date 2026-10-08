@@ -1,14 +1,15 @@
 //
-// soratomo.js（Callable 3本と onSoratomoSkyCreated の配線）のテスト ⭐️
+// soratomo.js（Callable・退会の Callable と onSoratomoSkyCreated の配線）のテスト ⭐️
 //
 // 実行（リポジトリの根で）:
 //   JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 //     firebase emulators:exec --only firestore --project soramoyou-ios "cd functions && node --test soratomo.test.js"
 //
 // - Firestore はエミュレーターの本物を使う（トランザクション・読み書きの形まで確かめるため）
-// - 次の 3 つは require の前に Module._load を差し替えて偽物にする（pushHelpers.test.js と同じ方式）:
+// - 次の 4 つは require の前に Module._load を差し替えて偽物にする（pushHelpers.test.js と同じ方式）:
 //     firebase-admin/auth（getUsers でフラグを返す）・./pushHelpers（送信を記録するだけ。本物の FCM へ送らない）・
-//     firebase-functions/logger（ログを記録し、名前・キャプション・コード・トークンが出ていないかを見る）
+//     firebase-functions/logger（ログを記録し、名前・キャプション・コード・トークンが出ていないかを見る）・
+//     ./soratomoStorage（画像の一覧と削除をメモリ上のパスの集合で行う。退会の削除が本番のバケットへ向かわないため）
 // - Callable とトリガーは、firebase-functions の .run() でハンドラーを直接呼ぶ
 //
 // ⚠️ soratomoStore.test.js と soratomo.test.js は、同じエミュレーターの文書を各テストの前に全部消して使う。
@@ -28,6 +29,10 @@ if (!EMULATOR_HOST || !/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(EMULATOR_HO
       " firebase emulators:exec --only firestore --project soramoyou-ios の中で実行すること。"
   );
 }
+
+// Storage の柵（二重目）: 偽のゲートウェイへの差し替えが外れても、本番のバケットへ届かないようにする。
+// 届かない宛先（ポート 9）を Storage のエミュレーターとして指しておく。エミュレーターが別に指定されていればそのまま使う。
+if (!process.env.STORAGE_EMULATOR_HOST) process.env.STORAGE_EMULATOR_HOST = "127.0.0.1:9";
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -61,12 +66,24 @@ const fakePush = {
 };
 const log = (level) => (...args) => record.logs.push({ level, args });
 const fakeLogger = { info: log("info"), warn: log("warn"), error: log("error"), debug: log("debug"), log: log("log") };
+/** Storage の画像のパス（テストごとに入れ直す）。偽のゲートウェイはここから一覧し、ここから消す。 */
+let storageFiles = new Set();
+/** soratomoStorage のゲートウェイと同じ2つの口（接頭辞は本物と同じ文字列の前方一致・404 は "absent"）。 */
+const fakeStorageGateway = {
+  async *listFiles(prefix) {
+    for (const path of [...storageFiles].filter((p) => p.startsWith(prefix)).sort()) yield path;
+  },
+  async deleteFile(path) {
+    return storageFiles.delete(path) ? "deleted" : "absent";
+  },
+};
 
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {
   if (request === "firebase-admin/auth") return { getAuth: () => fakeAuth };
   if (request === "./pushHelpers") return fakePush;
   if (request === "firebase-functions/logger") return fakeLogger;
+  if (request === "./soratomoStorage") return { createStorageGateway: () => fakeStorageGateway };
   return originalLoad.call(this, request, parent, isMain);
 };
 
@@ -107,6 +124,7 @@ test.beforeEach(async () => {
   claims = new Map();
   sendImpl = async () => "sent";
   getUsersImpl = null;
+  storageFiles = new Set();
 });
 
 test.after(async () => {
@@ -121,8 +139,12 @@ function call(name, auth, data) {
   return fns[name].run({ auth, data, rawRequest: {} });
 }
 
-/** HttpsError の code と details.reason を確かめる assert.rejects 用の判定。 */
-function httpsError(code, reason) {
+/**
+ * HttpsError の code と details.reason を確かめる assert.rejects 用の判定。
+ * expectedDetails を渡すと、details が { reason, ...expectedDetails } と完全に一致することも確かめる
+ * （理由のほかに何が利用者へ返るかを固定する。{} を渡せば「理由だけ」）。
+ */
+function httpsError(code, reason, expectedDetails) {
   return (err) => {
     assert.equal(err && err.code, code, `code が違う: ${err && err.stack}`);
     if (reason === undefined) {
@@ -130,6 +152,7 @@ function httpsError(code, reason) {
     } else {
       assert.equal(err.details && err.details.reason, reason);
     }
+    if (expectedDetails !== undefined) assert.deepEqual(err.details, { reason, ...expectedDetails });
     return true;
   };
 }
@@ -253,19 +276,22 @@ test("再発行: オーナーは新しいコード、メンバーは permission-
   assert.ok(!allLogs().includes(inviteCode), "新しい招待コードをログに出さない");
 });
 
-test("作成と参加: 方針を渡す — 同意の無い人は作成も参加もできず、語を含む名前は作られず、語と名前をログに出さない", async () => {
-  // release-gate 2.1 で配線した方針（現行のガイドラインの版・語のリストの判定）が、Callable から届いていることを見る。
-  // 拒否の code と details.reason への写像は tasks 4.1 で足す（それまでは internal）。ここでは「拒否されて何も書かない」だけを見て、
-  // code と理由は 4.5 で固定する。
+test("作成と参加: 方針を渡す — 同意の無い人は failed-precondition（consent_required・現行の版つき）、語を含む名前は invalid-argument（ng_word）で、何も書かず、語と名前をログに出さない", async () => {
+  // release-gate 2.1 で配線した方針（現行のガイドラインの版・語のリストの判定）が、Callable から届いていることと、
+  // 拒否が理由つきの HttpsError に写ること（tasks 4.1）を見る。details に載るのは理由と現行の版だけ（該当した語は載せない）。
   await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
 
-  await assert.rejects(call("soratomoCreateGroup", authOf("alice"), { name: "空の会", requestId: "r1" }));
-  await assert.rejects(call("soratomoJoinGroup", authOf("alice"), { code: "SKYAAAAA" }));
+  const consentRequired = httpsError("failed-precondition", "consent_required", { currentVersion: core.GUIDELINE_VERSION });
+  await assert.rejects(call("soratomoCreateGroup", authOf("alice"), { name: "空の会", requestId: "r1" }), consentRequired);
+  await assert.rejects(call("soratomoJoinGroup", authOf("alice"), { code: "SKYAAAAA" }), consentRequired);
   assert.equal((await db.collection("soratomoGroups").get()).size, 1, "同意が無ければ作らない");
   assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("memberCount"), 1, "同意が無ければ参加させない");
 
   await agree("alice");
-  await assert.rejects(call("soratomoCreateGroup", authOf("alice"), { name: "テストゴイの空", requestId: "r2" }));
+  await assert.rejects(
+    call("soratomoCreateGroup", authOf("alice"), { name: "テストゴイの空", requestId: "r2" }),
+    httpsError("invalid-argument", "ng_word", {})
+  );
   assert.equal((await db.collection("soratomoGroups").get()).size, 1, "語を含む名前では作らない");
 
   const created = await call("soratomoCreateGroup", authOf("alice"), { name: "空の会", requestId: "r3" });
@@ -276,6 +302,93 @@ test("作成と参加: 方針を渡す — 同意の無い人は作成も参加�
   for (const secret of ["テストゴイの空", ...NG_WORDS]) {
     assert.ok(!logs.includes(secret), `ログに「${secret}」を出さない`);
   }
+});
+
+test("作成と参加: 利用停止中の人は permission-denied（suspended）で、何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+  await db
+    .collection("soratomoUsers")
+    .doc("alice")
+    .set({ suspendedAt: Timestamp.now(), groupCount: 0, guidelineVersion: core.GUIDELINE_VERSION });
+
+  const suspended = httpsError("permission-denied", "suspended", {});
+  await assert.rejects(call("soratomoCreateGroup", authOf("alice"), { name: "空の会", requestId: "r1" }), suspended);
+  await assert.rejects(call("soratomoJoinGroup", authOf("alice"), { code: "SKYAAAAA" }), suspended);
+  assert.equal((await db.collection("soratomoGroups").get()).size, 1, "停止中は作らない");
+  assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("memberCount"), 1, "停止中は参加させない");
+});
+
+// MARK: - Callable: 退会（release-gate 4.1）
+
+/** 退会の削除の場面: グループ gdel1 にオーナーの alice とメンバーの bob。2人とも投稿1件（画像2枚ずつ）と所属の写しを持つ。 */
+const DEL_GROUP = "gdel1";
+const imagesOf = (uid, skyId) => [`soratomo/${DEL_GROUP}/${uid}/${skyId}/display.jpg`, `soratomo/${DEL_GROUP}/${uid}/${skyId}/thumb.jpg`];
+async function seedDeletionScene() {
+  await seedGroup({ groupId: DEL_GROUP, ownerId: "alice", inviteCode: "SKYDELAA", memberIds: ["alice", "bob"], name: "ひみつの空の会" });
+  const groupRef = db.collection("soratomoGroups").doc(DEL_GROUP);
+  const batch = db.batch();
+  batch.set(groupRef.collection("skies").doc("sa1"), { authorId: "alice", caption: "夕焼けがきれい", width: 1, height: 1, createdAt: Timestamp.now() });
+  batch.set(groupRef.collection("skies").doc("sb1"), { authorId: "bob", width: 1, height: 1, createdAt: Timestamp.now() });
+  for (const uid of ["alice", "bob"]) {
+    const userRef = db.collection("soratomoUsers").doc(uid);
+    batch.set(userRef, { groupCount: 1, guidelineVersion: core.GUIDELINE_VERSION });
+    batch.set(userRef.collection("groups").doc(DEL_GROUP), { groupId: DEL_GROUP, joinedAt: Timestamp.now() });
+  }
+  await batch.commit();
+  storageFiles = new Set([...imagesOf("alice", "sa1"), ...imagesOf("bob", "sb1")]);
+}
+
+/** 退会の Callable の ok のログ（1行だけのはず）の項目。 */
+function deleteOkLogs() {
+  return record.logs.filter((l) => l.level === "info" && l.args[0] === "soratomoDeleteMyData: ok").map((l) => l.args[1]);
+}
+
+test("退会: ログインが無ければ unauthenticated で、何も消さない", async () => {
+  await seedDeletionScene();
+  await assert.rejects(call("soratomoDeleteMyData", undefined, {}), httpsError("unauthenticated"));
+  assert.equal((await db.collection("soratomoUsers").doc("alice").get()).exists, true);
+  assert.equal(storageFiles.size, 4);
+});
+
+test("退会: 機能フラグのクレームが無い人（匿名を含む）・false の人も自分のデータを消し、応答は { done } だけ・ログは内部IDと件数だけ", async () => {
+  await seedDeletionScene();
+  const groupRef = db.collection("soratomoGroups").doc(DEL_GROUP);
+
+  // 匿名のログイン（クレーム無し）
+  const anonymous = { firebase: { sign_in_provider: "anonymous" } };
+  assert.deepEqual(await call("soratomoDeleteMyData", authOf("alice", anonymous), {}), { done: true });
+
+  assert.equal((await groupRef.collection("skies").doc("sa1").get()).exists, false, "退会者の投稿は消える");
+  assert.equal((await groupRef.collection("skies").doc("sb1").get()).exists, true, "ほかのメンバーの投稿は残る");
+  assert.deepEqual([...storageFiles].sort(), imagesOf("bob", "sb1").sort(), "画像は退会者の分だけ消える（偽のゲートウェイを通っている）");
+  assert.equal((await groupRef.collection("members").doc("alice").get()).exists, false);
+  const group = (await groupRef.get()).data();
+  assert.equal(group.ownerId, "bob", "オーナーを引き継ぐ");
+  assert.equal(group.memberCount, 1);
+  assert.equal((await db.collection("soratomoUsers").doc("alice").get()).exists, false, "利用者の文書も消える");
+
+  assert.deepEqual(deleteOkLogs(), [
+    { uid: "alice", done: true, skiesDeleted: 1, imagesDeleted: 2, groupsLeft: 1, ownersTransferred: 1, groupsDeleted: 0 },
+  ]);
+  const logs = allLogs();
+  for (const secret of ["ひみつの空の会", "SKYDELAA", "夕焼けがきれい"]) {
+    assert.ok(!logs.includes(secret), `ログに「${secret}」を出さない`);
+  }
+
+  // クレームが false の人の再実行（もう何も無い）: 空振りで完了し、件数は0
+  record.logs = [];
+  assert.deepEqual(await call("soratomoDeleteMyData", authOf("alice", { soratomoBeta: false }), {}), { done: true });
+  assert.deepEqual(deleteOkLogs(), [
+    { uid: "alice", done: true, skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0 },
+  ]);
+});
+
+test("退会: 関数の設定は、制限時間120秒・メモリ512MiB・既存と同じリージョン", () => {
+  // firebase deploy が読む関数の設定（onCall の選択肢がここに写る）。1回の予算45秒より長い制限時間にする（design の soratomoDeleteMyData）
+  const endpoint = fns.soratomoDeleteMyData.__endpoint;
+  assert.equal(endpoint.timeoutSeconds, 120);
+  assert.equal(endpoint.availableMemoryMb, 512);
+  assert.deepEqual(endpoint.region, ["asia-northeast1"]);
 });
 
 // MARK: - トリガー: onSoratomoSkyCreated（8.2）

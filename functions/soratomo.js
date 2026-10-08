@@ -1,15 +1,17 @@
 //
-// そらもよう Cloud Functions — 「そらとも」の配線（Callable 3本と onSoratomoSkyCreated）⭐️☁️
+// そらもよう Cloud Functions — 「そらとも」の配線（Callable 4本と onSoratomoSkyCreated）⭐️☁️
 //
 // - soratomoCreateGroup・soratomoJoinGroup・soratomoRegenerateInviteCode（tasks 8.1）:
 //   ログインと soratomoBeta のクレームを確かめ、soratomoStore.js のトランザクションを呼び、
 //   ドメインのエラー（SoratomoDomainError）を理由つきの HttpsError（code と details.reason）に写す。
 //   グループ名の検証と招待コードの正規化は、トランザクション（soratomoStore.js）の入口でも必ず通る。
+// - soratomoDeleteMyData（release-gate 4.1）: 退会の前に、本人のそらとものデータを soratomoDeletion.js の
+//   共通の削除で消す。クレームは確かめない（ログインは求める）。
 // - onSoratomoSkyCreated（tasks 8.2）: グループの新しい投稿を、投稿者以外のメンバーへ知らせる。
 //   既存の onPostCreated とは名前も対象（soratomoGroups/{groupId}/skies/{skyId}）も別。
 //
 // index.js の末尾の Object.assign(exports, require("./soratomo")) で公開する（tasks 8.3）。
-// ここで公開するのは Cloud Functions の 4 本だけにする（ほかの値を exports に混ぜない）。
+// ここで公開するのは Cloud Functions の 5 本だけにする（ほかの値を exports に混ぜない）。
 //
 // ⚠️ ログと個人情報（要件15.2・15.3）: ログに出すのは uid・groupId・skyId・結果の理由・件数だけ。
 //    グループ名・表示名・キャプション・招待コード・通知トークン・エラーの本文（文書のパスに招待コードが
@@ -27,6 +29,8 @@ const { getAuth } = require("firebase-admin/auth");
 const core = require("./soratomoCore");
 const store = require("./soratomoStore");
 const { createNgWordProvider } = require("./soratomoNgWords");
+const { createStorageGateway } = require("./soratomoStorage");
+const { deleteSoratomoUserData } = require("./soratomoDeletion");
 const { sendToTokenGrouped } = require("./pushHelpers");
 
 /** 既存の Functions と同じリージョン（index.js の setGlobalOptions と同じ値を明示する）。 */
@@ -37,13 +41,12 @@ const db = getFirestore();
 /** NGワードの語のリスト。関数のインスタンスごとに1つで、5分キャッシュする（release-gate 1.3・要件11.11）。 */
 const ngWords = createNgWordProvider({ db });
 
+/** 画像の削除に使う Storage のゲートウェイ。既定のバケットは、初めて使うときに取る（soratomoStorage.js）。 */
+const storage = createStorageGateway();
+
 // MARK: - Callable の共通部分
 
-/**
- * ドメインのエラーの理由 → HttpsError の code（design.md の API Contract）。
- * ⚠️ release-gate 2.1 で足した理由（suspended・consent_required・ng_word）と details の写しは、まだ無い。
- *    それまでは toHttpsError が internal にする。tasks 4.1 で足す。
- */
+/** ドメインのエラーの理由 → HttpsError の code（design.md の API Contract）。ここに無い理由は internal になる。 */
 const REASON_TO_CODE = Object.freeze({
   flag_off: "permission-denied",
   invalid_name: "invalid-argument",
@@ -52,50 +55,77 @@ const REASON_TO_CODE = Object.freeze({
   group_full: "resource-exhausted",
   user_limit: "resource-exhausted",
   not_owner: "permission-denied",
+  // release-gate（利用停止・同意・NGワード・投稿・通報）
+  suspended: "permission-denied",
+  consent_required: "failed-precondition",
+  ng_word: "invalid-argument",
+  invalid_input: "invalid-argument",
+  not_member: "permission-denied",
+  invalid_reason: "invalid-argument",
+  sky_not_found: "not-found",
+  self_report: "failed-precondition",
+  outdated_guideline: "failed-precondition",
 });
 
 /**
- * ログインと soratomoBeta のクレームを確かめ、呼び出し元の uid を返す（要件1.6）。
+ * ログイン（匿名を含む）と、requireFlag のときは soratomoBeta のクレームを確かめ、呼び出し元の uid を返す（要件1.6）。
  * @param {import("firebase-functions/v2/https").CallableRequest} request
+ * @param {{ requireFlag: boolean }} options
  * @returns {string}
  */
-function requireSoratomoUser(request) {
+function requireSoratomoUser(request, { requireFlag }) {
   if (!request.auth || !request.auth.uid) {
     throw new HttpsError("unauthenticated", "ログインが必要です");
   }
-  if (!request.auth.token || request.auth.token.soratomoBeta !== true) {
+  if (requireFlag && (!request.auth.token || request.auth.token.soratomoBeta !== true)) {
     throw new HttpsError("permission-denied", "flag_off", { reason: "flag_off" });
   }
   return request.auth.uid;
 }
 
 /**
- * 失敗を HttpsError に写す。理由を持つドメインのエラーは code と details.reason に、それ以外は internal にする。
+ * 失敗を HttpsError に写す。理由を持つドメインのエラーは code と details（reason と、エラーが持つ詳細）に、
+ * それ以外は internal にする。詳細は利用者へ返してよいものだけ（いまは consent_required・outdated_guideline の
+ * currentVersion。soratomoStore.SoratomoDomainError）。reason を後に置き、詳細が reason を持っていても上書きさせない。
  * @param {unknown} err
  * @returns {HttpsError}
  */
 function toHttpsError(err) {
   if (err instanceof HttpsError) return err;
   if (err instanceof store.SoratomoDomainError && REASON_TO_CODE[err.reason]) {
-    return new HttpsError(REASON_TO_CODE[err.reason], err.reason, { reason: err.reason });
+    return new HttpsError(REASON_TO_CODE[err.reason], err.reason, { ...(err.details || {}), reason: err.reason });
   }
   return new HttpsError("internal", "internal");
 }
 
 /**
- * Callable の本体を包む: クレームの確認 → 本体 → 結果のログ。失敗は HttpsError に写して投げ直す。
+ * Callable の本体を包む: ログインとクレームの確認 → 本体 → 結果のログ。失敗は HttpsError に写して投げ直す。
  * @param {string} name ログに出す Callable の名前
  * @param {(uid: string, data: Object) => Promise<Object>} body
+ * @param {{ requireFlag?: boolean, runtime?: Object, respond?: (result: Object) => Object,
+ *   okLogFields?: (result: Object, data: Object) => Object }} [options]
+ *   - requireFlag: soratomoBeta のクレームを確かめるか（既定 true）。false にしてよいのは退会の削除
+ *     （soratomoDeleteMyData）だけ。フラグを取り消された人と、一度も ON になっていない人のデータも消すため（要件1.4）。
+ *     false でもログイン（匿名を含む）は求める
+ *   - runtime: onCall の設定（timeoutSeconds・memory など）。リージョンは REGION に固定する
+ *   - respond: 本体の結果から、利用者へ返す応答を作る（既定はそのまま返す）
+ *   - okLogFields: 成功のログに uid と一緒に出す項目（既定は groupId）。内部IDと件数だけにする（要件14.2・14.3）
  */
-function soratomoCallable(name, body) {
-  return onCall({ region: REGION }, async (request) => {
+function soratomoCallable(name, body, options = {}) {
+  const {
+    requireFlag = true,
+    runtime = {},
+    respond = (result) => result,
+    okLogFields = (result, data) => ({ groupId: result.groupId || data.groupId || null }),
+  } = options;
+  return onCall({ ...runtime, region: REGION }, async (request) => {
     let uid = null;
     const data = request.data && typeof request.data === "object" ? request.data : {};
     try {
-      uid = requireSoratomoUser(request);
+      uid = requireSoratomoUser(request, { requireFlag });
       const result = await body(uid, data);
-      logger.info(`${name}: ok`, { uid, groupId: result.groupId || data.groupId || null });
-      return result;
+      logger.info(`${name}: ok`, { uid, ...okLogFields(result, data) });
+      return respond(result);
     } catch (err) {
       const httpsError = toHttpsError(err);
       const reason = (httpsError.details && httpsError.details.reason) || httpsError.code;
@@ -138,6 +168,43 @@ const soratomoJoinGroup = soratomoCallable("soratomoJoinGroup", (uid, data) =>
 /** 招待コードを再発行する（オーナーだけ）。{ groupId } → { inviteCode } */
 const soratomoRegenerateInviteCode = soratomoCallable("soratomoRegenerateInviteCode", (uid, data) =>
   store.regenerateInviteCodeTx(db, { uid, groupId: data.groupId })
+);
+
+// MARK: - 退会の削除（release-gate 4.1）
+
+/** 退会の削除の1回の予算（ミリ秒）。関数の制限時間（120秒）より短くし、残りで件数のログと応答を返す（design）。 */
+const DELETE_BUDGET_MS = 45_000;
+
+/**
+ * 本人のそらとものデータを消す。{} → { done }（アプリは退会の前に、done が true になるまで呼ぶ）。
+ * - 機能フラグのクレームを確かめない（requireFlag: false）。フラグを取り消された人と、一度も ON になっていない人
+ *   （匿名を含む）のデータも消すため（要件1.4）。そらともを使っていない人は、何も書かずに done: true（要件3.8）
+ * - 消す相手は認証の uid だけ。要求の本文は読まない（uid を書かれても使わない・要件3.5）
+ * - 1回の予算は45秒。終わらなければ done: false を返す。所属の写しが残るので、次の呼び出しが続ける（要件3.3）
+ * - 応答は done だけ。件数は利用者へ返さず、ログに内部IDと件数だけで残す（要件14.3・14.4・design の Monitoring）
+ * - 停止中の人の利用者の文書は消さずに残る（soratomoDeletion.finishUserTx）。アカウントを消した後に定期実行が消す
+ */
+const soratomoDeleteMyData = soratomoCallable(
+  "soratomoDeleteMyData",
+  (uid) =>
+    deleteSoratomoUserData(
+      { db, storage, nowMs: Date.now },
+      { uid, trigger: "self", deadlineMs: Date.now() + DELETE_BUDGET_MS }
+    ),
+  {
+    // クレームを確かめない理由: フラグを取り消された人・一度も ON になっていない人のデータも消すため（要件1.4）
+    requireFlag: false,
+    runtime: { timeoutSeconds: 120, memory: "512MiB" },
+    respond: (totals) => ({ done: totals.done }),
+    okLogFields: (totals) => ({
+      done: totals.done,
+      skiesDeleted: totals.skiesDeleted,
+      imagesDeleted: totals.imagesDeleted,
+      groupsLeft: totals.groupsLeft,
+      ownersTransferred: totals.ownersTransferred,
+      groupsDeleted: totals.groupsDeleted,
+    }),
+  }
 );
 
 // MARK: - 新着投稿の通知（8.2）
@@ -269,5 +336,6 @@ module.exports = {
   soratomoCreateGroup,
   soratomoJoinGroup,
   soratomoRegenerateInviteCode,
+  soratomoDeleteMyData,
   onSoratomoSkyCreated,
 };
