@@ -7,7 +7,11 @@
 // - 手順1（このファイルの leaveOrDeleteGroupTx・タスク 3.1）: グループ1つ分の「メンバーを外す・オーナーの引き継ぎ・
 //   グループごとの削除」をトランザクションで行う。
 // - 手順2〜4（このファイルの deleteUserDataInGroup・タスク 3.2）: 投稿と画像・通知の間引き・所属の写しを消す。
-//   時間の予算（締め切り）を、グループの前・投稿300件ごと・画像100件ごとに確かめる。利用者単位の束ねはタスク 3.3 で足す。
+//   時間の予算（締め切り）を、グループの前・投稿300件ごと・画像100件ごとに確かめる。
+// - 利用者単位（deleteSoratomoUserData・タスク 3.3）: 所属の写しと追加のグループIDの和について手順1〜4を繰り返し、
+//   最後に利用者の文書を消す（利用停止のときだけ、停止の日時と所属数0で残す）。利用停止・解除（suspendSoratomoUser・
+//   unsuspendSoratomoUser）と、投稿1件の削除（deleteSoratomoSky・開発者の運用手順から使う）もここに置く。
+// - ログは出さない。件数を返すだけで、ログは呼び手（退会の Callable・定期実行・管理スクリプト）が出す。
 // - 手順1を最初に行う理由: メンバーの文書が消えると、ルール（isSoratomoMember）で画像のアップロードが止まり、
 //   soratomoStore.createSkyTx のメンバーの確認で投稿の作成も止まる。以後の新しい投稿は増えない。
 // - 写しを最後に消す理由: 写し（soratomoUsers/{uid}/groups/{groupId}）は「利用者→グループ」の唯一の経路。
@@ -48,6 +52,12 @@ const IMAGE_CHECK_EVERY = 100;
 /** 画像を同時に消す最大の件数（design の「同時に10件まで」）。 */
 const IMAGE_DELETE_CONCURRENCY = 10;
 
+/**
+ * 削除の呼び手（design の DeletionTrigger）。本人の退会・アカウントの無い人の後始末・管理スクリプト・利用停止。
+ * 手順は同じで、suspension だけが最後の手順（利用者の文書を残す）を変える。
+ */
+const TRIGGERS = Object.freeze(["self", "account_deleted", "admin", "suspension"]);
+
 // MARK: - 下まわり
 
 /**
@@ -57,6 +67,31 @@ const IMAGE_DELETE_CONCURRENCY = 10;
  */
 function isUid(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 128 && !value.includes("/");
+}
+
+/**
+ * 削除の依存（db・Storage のゲートウェイ・時計）を確かめて返す。足りなければ TypeError（何も書く前に止める）。
+ * @param {unknown} deps
+ * @param {{ needsClock: boolean }} options needsClock: 時計（nowMs）を使うか（投稿1件の削除は締め切りを持たない）
+ * @returns {{ db: FirebaseFirestore.Firestore,
+ *   storage: import("./soratomoStorage").SoratomoStorageGateway, nowMs: () => number }}
+ */
+function assertDeps(deps, { needsClock }) {
+  const { db, storage, nowMs } = deps || {};
+  if (!db || typeof db.collection !== "function") throw new TypeError("soratomo: db が無い");
+  if (!storage || typeof storage.listFiles !== "function" || typeof storage.deleteFile !== "function") {
+    throw new TypeError("soratomo: storage（ゲートウェイ）が無い");
+  }
+  if (needsClock && typeof nowMs !== "function") throw new TypeError("soratomo: nowMs が関数でない");
+  return { db, storage, nowMs };
+}
+
+/**
+ * 締め切り（ミリ秒の時刻）が有限の数か。
+ * @param {unknown} deadlineMs
+ */
+function assertDeadline(deadlineMs) {
+  if (typeof deadlineMs !== "number" || !Number.isFinite(deadlineMs)) throw new TypeError("soratomo: deadlineMs が数値でない");
 }
 
 /**
@@ -257,15 +292,10 @@ async function removeMembershipCopyTx(db, { uid, groupId }) {
  *   （再実行で二重に数えない）
  */
 async function deleteUserDataInGroup(deps, { uid, groupId, deadlineMs }) {
-  const { db, storage, nowMs } = deps || {};
-  if (!db || typeof db.collection !== "function") throw new TypeError("soratomo: db が無い");
-  if (!storage || typeof storage.listFiles !== "function" || typeof storage.deleteFile !== "function") {
-    throw new TypeError("soratomo: storage（ゲートウェイ）が無い");
-  }
-  if (typeof nowMs !== "function") throw new TypeError("soratomo: nowMs が関数でない");
+  const { db, storage, nowMs } = assertDeps(deps, { needsClock: true });
   if (!isUid(uid)) throw new TypeError("soratomo: uid が文書IDとして使えない");
   if (!core.isAutoId(groupId)) throw new TypeError("soratomo: groupId が自動IDの形でない");
-  if (typeof deadlineMs !== "number" || !Number.isFinite(deadlineMs)) throw new TypeError("soratomo: deadlineMs が数値でない");
+  assertDeadline(deadlineMs);
 
   const pastDeadline = () => nowMs() >= deadlineMs;
   const result = {
@@ -316,10 +346,187 @@ async function deleteUserDataInGroup(deps, { uid, groupId, deadlineMs }) {
   return result;
 }
 
+// MARK: - 利用者単位の削除
+
+/**
+ * 写しがすべて消えたことを確かめて、利用者の文書を片づける（トランザクション・要件2.3・8.5）。
+ * - 利用者の文書を必ず読む。参加と作成も同じ文書を読んで書くので、ここと直列になる
+ * - 写しが1件でも残っていれば（途中で参加が入った）何も書かずに false を返し、呼び手が続ける
+ * - 写しが無ければ、suspension 以外は利用者の文書を消す（無ければ何もしない）。suspension は文書を残し、
+ *   所属数を0にそろえる（停止の日時は suspendSoratomoUser が先に書いている。ここでは触らない）
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ uid: string, trigger: string }} params
+ * @returns {Promise<boolean>} 片づけたら true
+ */
+async function finishUserTx(db, { uid, trigger }) {
+  const userRef = db.collection(USERS).doc(uid);
+  return db.runTransaction(async (tx) => {
+    const userSnap = await tx.get(userRef);
+    const copySnap = await tx.get(userRef.collection(USER_GROUPS).limit(1));
+    if (!copySnap.empty) return false;
+
+    // ここから書き込み
+    if (trigger === "suspension") {
+      if (userSnap.exists) tx.update(userRef, { groupCount: 0, updatedAt: FieldValue.serverTimestamp() });
+    } else if (userSnap.exists) {
+      tx.delete(userRef);
+    }
+    return true;
+  });
+}
+
+/**
+ * 1人のそらとものデータを消す（design の deleteSoratomoUserData・release-gate 要件1・2・3.3・3.4・3.8・8.5・14.4）。
+ * - グループは、所属の写しのグループIDと、管理スクリプトが渡す extraGroupIds の和（同じIDは1回だけ）。
+ *   写しの無い孤児のグループ（文書か子だけが残ったもの）は写しから見つからないので、管理スクリプトが渡す
+ * - 各グループで deleteUserDataInGroup（手順1〜4）を行う。1つでも未完了（締め切り）なら、その時点の件数で
+ *   done: false を返す。写しが残るので、次の呼び出しが続ける。途中の失敗は投げる
+ * - 全部を処理した後、finishUserTx で写しが空なのを確かめて利用者の文書を片づける。途中で参加が入って写しが
+ *   増えていれば、もう一度写しを読んで続ける。参加が続く限り繰り返すが、各グループの前と、写しの増加を見つけた後に
+ *   締め切りを確かめるので、予算で必ず切れる（無限には回らない）
+ * - そらともを使っていない人（匿名を含む・文書も写しも無い）は、何も書かずに done: true（3.8）
+ * - 写しの文書IDが自動IDの形でなければ deleteUserDataInGroup が TypeError を投げ、削除は失敗のまま止まる。
+ *   黙って飛ばすと、そのグループの投稿が残ったまま完了と扱うことになるため（壊れた文書を無言で落とさない）
+ * - 件数（14.4）: groupsLeft はこの実行でメンバーの文書を消したグループの数、ownersTransferred はそのうちオーナーを
+ *   引き継いだ数。groupsDeleted はこの実行でグループの文書を消した数。ふつうは groupsLeft の内訳だが、
+ *   extraGroupIds で渡したメンバーのいない孤児のグループの文書を消したときは、groupsLeft に数えずに数える
+ *   （運用の出力で「消したのに0」と見えないように）
+ * @param {{ db: FirebaseFirestore.Firestore,
+ *   storage: import("./soratomoStorage").SoratomoStorageGateway, nowMs: () => number }} deps
+ * @param {{ uid: string, trigger: "self"|"account_deleted"|"admin"|"suspension", deadlineMs: number,
+ *   extraGroupIds?: string[] }} request
+ * @returns {Promise<{ done: boolean, skiesDeleted: number, imagesDeleted: number,
+ *   groupsLeft: number, ownersTransferred: number, groupsDeleted: number }>}
+ */
+async function deleteSoratomoUserData(deps, { uid, trigger, deadlineMs, extraGroupIds = [] }) {
+  const { db, nowMs } = assertDeps(deps, { needsClock: true });
+  if (!isUid(uid)) throw new TypeError("soratomo: uid が文書IDとして使えない");
+  if (!TRIGGERS.includes(trigger)) throw new TypeError("soratomo: trigger が呼び手の4つのどれでもない");
+  assertDeadline(deadlineMs);
+  if (!Array.isArray(extraGroupIds) || !extraGroupIds.every((id) => core.isAutoId(id))) {
+    throw new TypeError("soratomo: extraGroupIds が自動IDの配列でない");
+  }
+
+  const totals = { done: false, skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0 };
+  const userRef = db.collection(USERS).doc(uid);
+  // 追加のグループIDは最初の1周だけ（未完了で返ったときは、呼び手が同じ要求で呼び直す）
+  let extras = extraGroupIds;
+  for (;;) {
+    const copies = await userRef.collection(USER_GROUPS).get();
+    const groupIds = [...new Set([...copies.docs.map((doc) => doc.id), ...extras])];
+    extras = [];
+    for (const groupId of groupIds) {
+      const r = await deleteUserDataInGroup(deps, { uid, groupId, deadlineMs });
+      totals.skiesDeleted += r.skiesDeleted;
+      totals.imagesDeleted += r.imagesDeleted;
+      if (r.removed) totals.groupsLeft += 1;
+      if (r.ownerTransferred) totals.ownersTransferred += 1;
+      if (r.groupDeleted) totals.groupsDeleted += 1;
+      if (!r.done) return totals;
+    }
+    if (await finishUserTx(db, { uid, trigger })) {
+      totals.done = true;
+      return totals;
+    }
+    // 写しが増えていた。続ける前にも締め切りを見る（写しを読み直す間にまた消えるような競合でも、空回りし続けないように）
+    if (nowMs() >= deadlineMs) return totals;
+  }
+}
+
+// MARK: - 利用停止・解除
+
+/**
+ * 利用停止の日時を書く（まだ無いときだけ。再実行で最初の日時を上書きしない）。文書が無ければ作る
+ * （そらともを使っていない人も、以後の作成・参加・投稿を止めるため・8.6）。
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {string} uid
+ */
+async function markSuspendedTx(db, uid) {
+  const userRef = db.collection(USERS).doc(uid);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    const current = snap.exists ? snap.get("suspendedAt") : undefined;
+    if (current !== undefined && current !== null) return;
+    tx.set(userRef, { suspendedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  });
+}
+
+/**
+ * 利用者を停止する（release-gate 要件8.5・8.6）。停止の日時を先に書いてから、trigger "suspension" で消す。
+ * 先に書くので、削除の途中の参加・作成・投稿は、soratomoStore の検査で suspended として拒否される。
+ * 終わると、利用者の文書は停止の日時と所属数0で残る。未完了で返ったときは、同じ呼び出しを繰り返せば続きから消える。
+ * @param {{ db: FirebaseFirestore.Firestore,
+ *   storage: import("./soratomoStorage").SoratomoStorageGateway, nowMs: () => number }} deps
+ * @param {{ uid: string, deadlineMs: number }} params
+ * @returns {Promise<{ done: boolean, skiesDeleted: number, imagesDeleted: number,
+ *   groupsLeft: number, ownersTransferred: number, groupsDeleted: number }>}
+ */
+async function suspendSoratomoUser(deps, { uid, deadlineMs }) {
+  // 停止の日時を書く前に、削除の引数を確かめる（引数の誤りで停止だけが書かれないように）
+  const { db } = assertDeps(deps, { needsClock: true });
+  if (!isUid(uid)) throw new TypeError("soratomo: uid が文書IDとして使えない");
+  assertDeadline(deadlineMs);
+
+  await markSuspendedTx(db, uid);
+  return deleteSoratomoUserData(deps, { uid, trigger: "suspension", deadlineMs });
+}
+
+/**
+ * 利用停止を解く（release-gate 要件8.8）。停止の日時だけを消し、消した投稿と所属は戻さない。
+ * 文書が無ければ何もしない（作らない）。
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ uid: string }} params
+ * @returns {Promise<void>}
+ */
+async function unsuspendSoratomoUser(db, { uid }) {
+  if (!db || typeof db.collection !== "function") throw new TypeError("soratomo: db が無い");
+  if (!isUid(uid)) throw new TypeError("soratomo: uid が文書IDとして使えない");
+  const userRef = db.collection(USERS).doc(uid);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(userRef);
+    if (!snap.exists) return;
+    tx.update(userRef, { suspendedAt: FieldValue.delete(), updatedAt: FieldValue.serverTimestamp() });
+  });
+}
+
+// MARK: - 投稿1件の削除
+
+/**
+ * 投稿1件の文書と画像（soratomo/{groupId}/{authorId}/{skyId}/ の下・display.jpg と thumb.jpg）を消す
+ * （release-gate 要件8.4・開発者の運用手順から使う）。
+ * - 画像を先に、文書を後に消す。文書を先に消すと、画像の削除が失敗した後の再実行で投稿者（画像の場所）がわからなくなる
+ * - 文書が無ければ何もしない（{ skyDeleted: false, imagesDeleted: 0 }）
+ * - 投稿者の記録が壊れていれば、推測で消さずに投げる
+ * - 通報の記録・グループの最新の投稿日時には触れない
+ * @param {{ db: FirebaseFirestore.Firestore, storage: import("./soratomoStorage").SoratomoStorageGateway }} deps
+ * @param {{ groupId: string, skyId: string }} params
+ * @returns {Promise<{ skyDeleted: boolean, imagesDeleted: number }>}
+ */
+async function deleteSoratomoSky(deps, { groupId, skyId }) {
+  const { db, storage } = assertDeps(deps, { needsClock: false });
+  if (!core.isAutoId(groupId) || !core.isAutoId(skyId)) throw new TypeError("soratomo: groupId・skyId が自動IDの形でない");
+
+  const skyRef = db.collection(GROUPS).doc(groupId).collection(SKIES).doc(skyId);
+  const snap = await skyRef.get();
+  if (!snap.exists) return { skyDeleted: false, imagesDeleted: 0 };
+  const authorId = snap.get("authorId");
+  if (!isUid(authorId)) throw new Error("soratomo: 投稿の authorId が壊れている");
+
+  // 締め切りは持たない（1件の画像は2枚だけ）
+  const images = await deleteImagesByPrefix(storage, `soratomo/${groupId}/${authorId}/${skyId}/`, () => false);
+  await skyRef.delete();
+  return { skyDeleted: true, imagesDeleted: images.deleted };
+}
+
 module.exports = {
   SKY_PAGE_SIZE,
   IMAGE_CHECK_EVERY,
   IMAGE_DELETE_CONCURRENCY,
+  TRIGGERS,
   leaveOrDeleteGroupTx,
   deleteUserDataInGroup,
+  deleteSoratomoUserData,
+  suspendSoratomoUser,
+  unsuspendSoratomoUser,
+  deleteSoratomoSky,
 };

@@ -328,7 +328,7 @@ const DEADLINE = 1_000_000;
  * @param {string[]} paths 置いておくパス
  * @param {{ ghosts?: string[], failAt?: number|null, onDelete?: (count: number) => void }} [options]
  *   ghosts: 一覧には出るが、もう無いパス（消すと "absent"）。failAt: その回数目の deleteFile で投げる。
- *   onDelete: deleteFile を呼ぶたびに、それまでの回数で呼ぶ（時計を進めるため）
+ *   onDelete: deleteFile を呼ぶたびに、それまでの回数で呼んで待つ（時計を進める・削除の途中に参加を差し込むため）
  */
 function fakeStorage(paths, { ghosts = [], failAt = null, onDelete = null } = {}) {
   const files = new Set(paths);
@@ -349,7 +349,7 @@ function fakeStorage(paths, { ghosts = [], failAt = null, onDelete = null } = {}
         // 同時に何件走るかを数えられるよう、1 回だけ順番を譲る
         await new Promise((resolve) => setImmediate(resolve));
         if (failAt !== null && call === failAt) throw new Error("偽物: わざと失敗");
-        if (onDelete) onDelete(call);
+        if (onDelete) await onDelete(call);
         return files.delete(path) ? "deleted" : "absent";
       } finally {
         state.inFlight -= 1;
@@ -790,4 +790,294 @@ test("deleteUserDataInGroup: 引数の誤りは TypeError で、何も書かな�
   }
   assert.deepEqual(await memberRoles("g1"), { amy: "member", owner: "owner" });
   assert.deepEqual(await copyIds("amy"), ["g1"]);
+});
+
+// MARK: - 利用者単位の削除・利用停止・解除・投稿1件の削除（タスク 3.3）
+
+const JOIN_POLICY = Object.freeze({ guidelineVersion: core.GUIDELINE_VERSION });
+const CREATE_POLICY = Object.freeze({ guidelineVersion: core.GUIDELINE_VERSION, containsNgWord: () => false });
+const ZERO_TOTALS = Object.freeze({ skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0 });
+
+test("利用者単位: 写しの全グループと、追加のグループIDの和について消し、最後に利用者の文書を消す。2回目は件数0", async () => {
+  // g1: amy がオーナーで bob が残る（引き継ぎ）。g2: amy が最後の1人（グループごと）。g3: 写しの無いグループ（管理が足す）
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "amy",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "amy", role: "owner", joinedAtMs: T(1) },
+      { uid: "bob", role: "member", joinedAtMs: T(2) },
+    ],
+  });
+  await seedGroup({ groupId: "g2", ownerId: "amy", inviteCode: "SKYBBBBB", members: [{ uid: "amy", role: "owner", joinedAtMs: T(1) }] });
+  await seedGroup({ groupId: "g3", ownerId: "bob", inviteCode: "SKYCCCCC", members: [{ uid: "bob", role: "owner", joinedAtMs: T(1) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedSkies("g1", "bob", ["b1"]);
+  await seedSkies("g2", "amy", ["a2", "a3"]);
+  await seedSkies("g3", "amy", ["a4"]);
+  await seedSkies("g3", "bob", ["b3"]);
+  await seedUser("amy", ["g1", "g2"]);
+  const kept = [...imagesOf("g1", "bob", "b1"), ...imagesOf("g3", "bob", "b3")].sort();
+  const storage = fakeStorage([
+    ...imagesOf("g1", "amy", "a1"),
+    ...imagesOf("g2", "amy", "a2"),
+    ...imagesOf("g2", "amy", "a3"),
+    ...imagesOf("g3", "amy", "a4"),
+    ...kept,
+  ]);
+  const deps = { db, storage: storage.gateway, nowMs: steadyClock() };
+  const request = { uid: "amy", trigger: "self", deadlineMs: DEADLINE, extraGroupIds: ["g3", "g1"] };
+
+  const result = await deletion.deleteSoratomoUserData(deps, request);
+  assert.deepEqual(result, {
+    done: true,
+    skiesDeleted: 4,
+    imagesDeleted: 8,
+    groupsLeft: 2,
+    ownersTransferred: 1,
+    groupsDeleted: 1,
+  });
+  assert.equal(await userData("amy"), null, "利用者の文書を消す（2.3）");
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.deepEqual(await skyAuthors("g1"), ["bob:b1"]);
+  assert.deepEqual(await skyAuthors("g3"), ["bob:b3"], "写しの無い追加のグループでも、退会者の投稿を消す");
+  assert.equal(await groupData("g2"), null);
+  assert.equal((await groupData("g1")).ownerId, "bob");
+  await assertGroupInvariants("g1");
+  await assertGroupInvariants("g3");
+  assert.deepEqual([...storage.files].sort(), kept);
+
+  const again = await deletion.deleteSoratomoUserData(deps, request);
+  assert.deepEqual(again, { done: true, ...ZERO_TOTALS }, "2回目は件数が0（3.4）");
+  assert.equal(await userData("amy"), null);
+  assert.deepEqual(await skyAuthors("g1"), ["bob:b1"]);
+  await assertGroupInvariants("g1");
+});
+
+test("利用者単位: そらともを使っていない人（文書も写しも無い）は、空振りで完了し、文書を作らない", async () => {
+  const storage = fakeStorage([]);
+  const result = await deletion.deleteSoratomoUserData(
+    { db, storage: storage.gateway, nowMs: steadyClock() },
+    { uid: "anon", trigger: "self", deadlineMs: DEADLINE }
+  );
+  assert.deepEqual(result, { done: true, ...ZERO_TOTALS });
+  assert.equal(await userData("anon"), null);
+  assert.equal(storage.calls, 0);
+});
+
+test("利用者単位: 削除の途中で参加が入って写しが増えても、最後の確認で見つけて続け、消し切ってから利用者の文書を消す", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+    ],
+  });
+  await seedGroup({ groupId: "g2", ownerId: "bob", inviteCode: "SKYBBBBB", members: [{ uid: "bob", role: "owner", joinedAtMs: T(1) }] });
+  await seedUser("amy", ["g1"]);
+  let joined = null;
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"), {
+    onDelete: async (count) => {
+      if (count === 1) joined = await store.joinGroupTx(db, { uid: "amy", code: "SKYBBBBB", policy: JOIN_POLICY });
+    },
+  });
+
+  const result = await deletion.deleteSoratomoUserData(
+    { db, storage: storage.gateway, nowMs: steadyClock() },
+    { uid: "amy", trigger: "self", deadlineMs: DEADLINE }
+  );
+  assert.deepEqual(joined, { groupId: "g2", alreadyMember: false }, "削除の途中で参加が通った（この場面を作れている）");
+  assert.equal(result.done, true);
+  assert.equal(result.groupsLeft, 2, "途中で入った g2 からも外す");
+  assert.deepEqual(await memberRoles("g2"), { bob: "owner" });
+  await assertGroupInvariants("g2");
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.equal(await userData("amy"), null);
+});
+
+test("利用者単位: 追加のグループIDで渡した、メンバーのいない孤児のグループの文書を消したら groupsDeleted に数える（groupsLeft は数えない）", async () => {
+  await seedGroup({ groupId: "g9", ownerId: "ghost", inviteCode: "SKYAAAAA", members: [] });
+  await seedSkies("g9", "ghost", ["x1"]);
+  const storage = fakeStorage(imagesOf("g9", "ghost", "x1"));
+  const result = await deletion.deleteSoratomoUserData(
+    { db, storage: storage.gateway, nowMs: steadyClock() },
+    { uid: "amy", trigger: "admin", deadlineMs: DEADLINE, extraGroupIds: ["g9"] }
+  );
+  assert.deepEqual(result, {
+    done: true,
+    skiesDeleted: 1,
+    imagesDeleted: 2,
+    groupsLeft: 0,
+    ownersTransferred: 0,
+    groupsDeleted: 1,
+  });
+  assert.equal(await groupData("g9"), null);
+  assert.deepEqual((await db.collection(GROUPS).doc("g9").listCollections()).map((c) => c.id), []);
+});
+
+test("利用者単位: 締め切りを過ぎたら、写しと利用者の文書を残して未完了で返し、続きで完了する", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedGroup({ groupId: "g2", ownerId: "owner", inviteCode: "SKYBBBBB", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedSkies("g2", "amy", ["a2"]);
+  await seedUser("amy", ["g1", "g2"]);
+  const storage = fakeStorage([]);
+  // 1つ目のグループの前は間に合い、1つ目の投稿のページの後で締め切りを過ぎる
+  const first = await deletion.deleteSoratomoUserData(
+    { db, storage: storage.gateway, nowMs: clockPastAfter(1) },
+    { uid: "amy", trigger: "self", deadlineMs: DEADLINE }
+  );
+  assert.equal(first.done, false);
+  assert.equal(first.skiesDeleted, 1);
+  assert.ok(await userData("amy"), "利用者の文書は残る");
+  assert.deepEqual(await copyIds("amy"), ["g1", "g2"], "写しが残るので続きから");
+
+  const second = await deletion.deleteSoratomoUserData(
+    { db, storage: storage.gateway, nowMs: steadyClock() },
+    { uid: "amy", trigger: "self", deadlineMs: DEADLINE }
+  );
+  assert.equal(second.done, true);
+  assert.equal(second.skiesDeleted, 1);
+  assert.equal(second.groupsLeft, 1, "1回目に外した g1 は数え直さない");
+  assert.equal(await userData("amy"), null);
+});
+
+test("利用停止: 停止の日時を先に書いてから消す。削除の途中の参加と作成は停止で拒否され、文書は停止の日時と所属数0で残る", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedGroup({ groupId: "g2", ownerId: "bob", inviteCode: "SKYBBBBB", members: [{ uid: "bob", role: "owner", joinedAtMs: T(1) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  const attempts = [];
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"), {
+    onDelete: async (count) => {
+      if (count !== 1) return;
+      for (const call of [
+        () => store.joinGroupTx(db, { uid: "amy", code: "SKYBBBBB", policy: JOIN_POLICY }),
+        () => store.createGroupTx(db, { uid: "amy", name: "空の会", requestId: "r1", policy: CREATE_POLICY }),
+      ]) {
+        attempts.push(await call().then(() => "ok", (err) => err.reason || err.message));
+      }
+    },
+  });
+  const deps = { db, storage: storage.gateway, nowMs: steadyClock() };
+
+  const result = await deletion.suspendSoratomoUser(deps, { uid: "amy", deadlineMs: DEADLINE });
+  assert.deepEqual(attempts, ["suspended", "suspended"], "削除の途中でも、参加と作成は停止で拒否される（8.6）");
+  assert.deepEqual(result, { done: true, skiesDeleted: 1, imagesDeleted: 2, groupsLeft: 1, ownersTransferred: 0, groupsDeleted: 0 });
+  const user = await userData("amy");
+  assert.ok(user && user.suspendedAt, "停止の日時が残る");
+  assert.equal(user.groupCount, 0);
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.deepEqual(await skyAuthors("g1"), []);
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner" });
+  await assert.rejects(
+    store.createSkyTx(db, { uid: "amy", input: { groupId: "g1", skyId: "s1", width: 1, height: 1 }, policy: { containsNgWord: () => false } }),
+    (err) => err.reason === "suspended"
+  );
+
+  // 2回目: 停止の日時を上書きせず、件数は0
+  const again = await deletion.suspendSoratomoUser(deps, { uid: "amy", deadlineMs: DEADLINE });
+  assert.deepEqual(again, { done: true, ...ZERO_TOTALS });
+  assert.equal((await userData("amy")).suspendedAt.toMillis(), user.suspendedAt.toMillis());
+});
+
+test("利用停止: そらともを使っていない人でも、停止の日時と所属数0の文書ができ、以後の作成は停止で拒否される", async () => {
+  const storage = fakeStorage([]);
+  const result = await deletion.suspendSoratomoUser({ db, storage: storage.gateway, nowMs: steadyClock() }, { uid: "newbie", deadlineMs: DEADLINE });
+  assert.deepEqual(result, { done: true, ...ZERO_TOTALS });
+  const user = await userData("newbie");
+  assert.ok(user && user.suspendedAt);
+  assert.equal(user.groupCount, 0);
+  await assert.rejects(
+    store.createGroupTx(db, { uid: "newbie", name: "空の会", requestId: "r1", policy: CREATE_POLICY }),
+    (err) => err.reason === "suspended"
+  );
+});
+
+test("解除: 停止の日時だけを消し、消した投稿と所属は戻さない。解除の後は参加できる。文書が無ければ何もしない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  const storage = fakeStorage([]);
+  await deletion.suspendSoratomoUser({ db, storage: storage.gateway, nowMs: steadyClock() }, { uid: "amy", deadlineMs: DEADLINE });
+
+  await deletion.unsuspendSoratomoUser(db, { uid: "amy" });
+  const user = await userData("amy");
+  assert.equal(user.suspendedAt, undefined, "停止の日時を消す（8.8）");
+  assert.equal(user.groupCount, 0);
+  assert.equal(user.guidelineVersion, core.GUIDELINE_VERSION, "ほかの項目（同意）は残す");
+  assert.deepEqual(await skyAuthors("g1"), [], "消した投稿は戻さない");
+  assert.deepEqual(await copyIds("amy"), [], "所属は戻さない");
+  assert.deepEqual(await store.joinGroupTx(db, { uid: "amy", code: "SKYAAAAA", policy: JOIN_POLICY }), { groupId: "g1", alreadyMember: false });
+
+  await deletion.unsuspendSoratomoUser(db, { uid: "nobody" });
+  assert.equal(await userData("nobody"), null, "文書を作らない");
+});
+
+test("投稿1件の削除: 文書と画像2枚を消し、同じ投稿者のほかの投稿と画像・通報の記録は残す。文書が無ければ何もしない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1", "a10"]);
+  await seedReport("r1", { groupId: "g1", skyId: "a1", authorId: "amy", reporterId: "owner" });
+  const kept = imagesOf("g1", "amy", "a10").sort();
+  const storage = fakeStorage([...imagesOf("g1", "amy", "a1"), ...kept]);
+  const deps = { db, storage: storage.gateway, nowMs: steadyClock() };
+
+  assert.deepEqual(await deletion.deleteSoratomoSky(deps, { groupId: "g1", skyId: "a1" }), { skyDeleted: true, imagesDeleted: 2 });
+  assert.deepEqual(await skyAuthors("g1"), ["amy:a10"]);
+  assert.deepEqual([...storage.files].sort(), kept, "隣の a10 の画像は残す");
+  assert.equal((await db.collection(REPORTS).get()).size, 1, "通報の記録には触れない");
+  assert.equal((await groupData("g1")).lastActivityAt.toMillis(), LAST_ACTIVITY.toMillis());
+
+  assert.deepEqual(await deletion.deleteSoratomoSky(deps, { groupId: "g1", skyId: "a1" }), { skyDeleted: false, imagesDeleted: 0 });
+});
+
+test("投稿1件の削除: 画像の削除が失敗したら文書を残して投げ、再実行で消し切る（画像を先・文書を後に消す）", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }] });
+  await seedSkies("g1", "owner", ["o1"]);
+  const failing = fakeStorage(imagesOf("g1", "owner", "o1"), { failAt: 1 });
+  await assert.rejects(deletion.deleteSoratomoSky({ db, storage: failing.gateway, nowMs: steadyClock() }, { groupId: "g1", skyId: "o1" }), /わざと失敗/);
+  assert.deepEqual(await skyAuthors("g1"), ["owner:o1"], "文書が残るので、再実行で投稿者がわかる");
+
+  const remaining = failing.files.size;
+  assert.equal(remaining, 1, "2枚のうち、失敗した1枚が残っている");
+  const healthy = fakeStorage([...failing.files]);
+  assert.deepEqual(await deletion.deleteSoratomoSky({ db, storage: healthy.gateway, nowMs: steadyClock() }, { groupId: "g1", skyId: "o1" }), {
+    skyDeleted: true,
+    imagesDeleted: remaining,
+  });
+  assert.deepEqual(await skyAuthors("g1"), []);
+  assert.equal(healthy.files.size, 0);
+});
+
+test("利用者単位・利用停止・解除・投稿1件: 引数の誤りは TypeError で、何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  const storage = fakeStorage([]);
+  const deps = { db, storage: storage.gateway, nowMs: steadyClock() };
+  const base = { uid: "amy", trigger: "self", deadlineMs: DEADLINE };
+  for (const [i, req] of [
+    { ...base, trigger: "other" },
+    { ...base, trigger: undefined },
+    { ...base, uid: "a/b" },
+    { ...base, deadlineMs: Number.POSITIVE_INFINITY },
+    { ...base, extraGroupIds: "g1" },
+    { ...base, extraGroupIds: ["g_1"] },
+  ].entries()) {
+    await assert.rejects(deletion.deleteSoratomoUserData(deps, req), TypeError, `削除の引数 ${i}`);
+  }
+  await assert.rejects(deletion.deleteSoratomoUserData({ db, storage: storage.gateway }, base), TypeError, "nowMs が無い");
+  await assert.rejects(deletion.suspendSoratomoUser(deps, { uid: "amy", deadlineMs: undefined }), TypeError, "停止の締め切りが無い");
+  await assert.rejects(deletion.suspendSoratomoUser({ db, nowMs: steadyClock() }, { uid: "amy", deadlineMs: DEADLINE }), TypeError, "停止のゲートウェイが無い");
+  await assert.rejects(deletion.unsuspendSoratomoUser(db, { uid: "" }), TypeError);
+  await assert.rejects(deletion.deleteSoratomoSky(deps, { groupId: "g1", skyId: "a/1" }), TypeError);
+  await assert.rejects(deletion.deleteSoratomoSky({ db }, { groupId: "g1", skyId: "a1" }), TypeError);
+
+  const user = await userData("amy");
+  assert.equal(user.suspendedAt, undefined, "停止の日時を書いていない");
+  assert.deepEqual(await copyIds("amy"), ["g1"]);
+  assert.deepEqual(await skyAuthors("g1"), ["amy:a1"]);
+  assert.deepEqual(await memberRoles("g1"), { amy: "member", owner: "owner" });
 });
