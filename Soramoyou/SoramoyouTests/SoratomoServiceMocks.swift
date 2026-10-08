@@ -298,3 +298,26 @@ final class MockSoratomoModerationService: SoratomoModerationServiceProtocol, @u
         return try fetchBlockedUserIdsResult.soratomoValue()
     }
 }
+
+// MARK: - 退会のそらとも分（release-gate 9.4）
+
+/// `SoratomoAccountDeletionServiceProtocol` のモック
+///
+/// ⚠️ 失敗の型が `SoratomoError` でないので、上の `soratomoValue()` は使わない。
+final class MockSoratomoAccountDeletionService: SoratomoAccountDeletionServiceProtocol, @unchecked Sendable {
+    // 返す結果
+    var deleteMyDataResult: Result<Void, SoratomoAccountDeletionError> = .failure(.unknown)
+    /// 呼ばれたとき、結果を返す前に流す処理（順序の確かめや、処理中で止めておくのに使う）
+    var onDeleteMyData: (@Sendable () async -> Void)?
+
+    // 呼ばれた回数
+    private(set) var deleteMyDataCallCount = 0
+
+    func deleteMyData() async throws(SoratomoAccountDeletionError) {
+        deleteMyDataCallCount += 1
+        await onDeleteMyData?()
+        if case let .failure(error) = deleteMyDataResult {
+            throw error
+        }
+    }
+}

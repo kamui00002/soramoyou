@@ -240,6 +240,33 @@ final class SettingsViewModelTests: XCTestCase {
 
     // MARK: - 退会（アカウント削除）
 
+    /// 直近の `makeDeletionSUT` が渡した、そらとも分の削除のモック
+    private var lastSoratomoDeletion: MockSoratomoAccountDeletionService?
+
+    /// 退会のテスト用の SUT
+    ///
+    /// ⚠️ 既定の引数のまま作ると、本物の Callable（soratomoDeleteMyData）と UserDefaults.standard に触れる。
+    ///    退会のテストは必ずこれで作る。そらとも分の削除は、指定しなければ成功するモックにする。
+    private func makeDeletionSUT(
+        auth: MockAuthService,
+        firestore: MockFirestoreServiceForSettings,
+        soratomoDeletion: MockSoratomoAccountDeletionService? = nil,
+        eraseReportedSkies: @escaping @MainActor (String) -> Void = { _ in }
+    ) -> SettingsViewModel {
+        let deletion = soratomoDeletion ?? {
+            let mock = MockSoratomoAccountDeletionService()
+            mock.deleteMyDataResult = .success(())
+            return mock
+        }()
+        lastSoratomoDeletion = deletion
+        return SettingsViewModel(
+            authService: auth,
+            firestoreService: firestore,
+            soratomoAccountDeletion: deletion,
+            eraseReportedSkies: eraseReportedSkies
+        )
+    }
+
     /// ⭐️ Firestore のデータ削除に失敗したら、Auth アカウントは消さない。
     ///
     /// なぜこの順序が重要か: publicProfiles / follows の rules は
@@ -251,7 +278,7 @@ final class SettingsViewModelTests: XCTestCase {
         firestore.deleteUserDataError = NSError(domain: "MockFirestoreServiceForSettings", code: -3)
         let auth = MockAuthService()
         auth.currentUserValue = User(id: "u1")
-        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+        let sut = makeDeletionSUT(auth: auth, firestore: firestore)
 
         let succeeded = await sut.performAccountDeletion()
 
@@ -266,7 +293,7 @@ final class SettingsViewModelTests: XCTestCase {
         let firestore = MockFirestoreServiceForSettings()
         let auth = MockAuthService()
         auth.currentUserValue = User(id: "u1")
-        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+        let sut = makeDeletionSUT(auth: auth, firestore: firestore)
 
         firestore.authForOrderCheck = auth
 
@@ -300,7 +327,7 @@ final class SettingsViewModelTests: XCTestCase {
         auth.currentUserValue = User(id: "u1")
         // 1 回目の Auth 削除だけ「最近ログインしていない」で失敗させる
         auth.deleteAccountErrorOnce = AuthError.requiresRecentLogin
-        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+        let sut = makeDeletionSUT(auth: auth, firestore: firestore)
 
         // 1 回目: Firestore は消えるが Auth 削除で弾かれ、再認証シートが出る
         let first = await sut.performAccountDeletion()
@@ -313,6 +340,10 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertTrue(second)
         XCTAssertEqual(firestore.deletedUserIds, ["u1", "u1"], "再認証後も Firestore 削除を必ずやり直す")
         XCTAssertEqual(auth.deleteAccountCallCount, 2)
+        XCTAssertEqual(
+            lastSoratomoDeletion?.deleteMyDataCallCount, 2,
+            "そらとも分の削除もやり直す（サーバーの削除は何度流しても同じ結果になる・要件 3.4）"
+        )
     }
 
     /// 未ログインなら Firestore も Auth も触らない。
@@ -320,7 +351,7 @@ final class SettingsViewModelTests: XCTestCase {
         let firestore = MockFirestoreServiceForSettings()
         let auth = MockAuthService()
         auth.currentUserValue = nil
-        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+        let sut = makeDeletionSUT(auth: auth, firestore: firestore)
 
         let succeeded = await sut.performAccountDeletion()
 
@@ -341,7 +372,7 @@ final class SettingsViewModelTests: XCTestCase {
         let firestore = MockFirestoreServiceForSettings()
         let auth = MockAuthService()
         auth.currentUserValue = User(id: "u1", email: "a@example.com")
-        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+        let sut = makeDeletionSUT(auth: auth, firestore: firestore)
 
         let succeeded = await sut.performAccountDeletion()
 
@@ -359,7 +390,7 @@ final class SettingsViewModelTests: XCTestCase {
         let auth = MockAuthService()
         auth.currentUserValue = User(id: "u1", email: "a@example.com")
         firestore.authForOrderCheck = auth
-        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+        let sut = makeDeletionSUT(auth: auth, firestore: firestore)
 
         let first = await sut.performAccountDeletion()
         XCTAssertFalse(first)
@@ -381,7 +412,7 @@ final class SettingsViewModelTests: XCTestCase {
         let auth = MockAuthService()
         auth.currentUserValue = User(id: "anon", email: nil)
         firestore.authForOrderCheck = auth
-        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+        let sut = makeDeletionSUT(auth: auth, firestore: firestore)
 
         let succeeded = await sut.performAccountDeletion()
 
@@ -399,7 +430,7 @@ final class SettingsViewModelTests: XCTestCase {
         let auth = MockAuthService()
         auth.currentUserValue = User(id: "u1", email: "a@example.com")
         auth.reauthenticateError = AuthError.wrongPassword
-        let sut = SettingsViewModel(authService: auth, firestoreService: firestore)
+        let sut = makeDeletionSUT(auth: auth, firestore: firestore)
 
         let succeeded = await sut.performReauthAndDelete(email: "a@example.com", password: "wrong")
 
@@ -407,5 +438,198 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertTrue(firestore.deletedUserIds.isEmpty, "再認証に失敗したらデータは消さない")
         XCTAssertFalse(auth.deleteAccountCalled, "再認証に失敗したら Auth も消さない")
         XCTAssertNotNil(sut.deleteAccountError, "失敗はユーザーに伝える")
+    }
+
+    // MARK: - 退会: そらとものデータを先に消す（release-gate 9.4）⭐️
+
+    /// 呼ぶ順の記録（クロージャの中から足す）
+    private final class CallLog: @unchecked Sendable {
+        var entries: [String] = []
+    }
+
+    /// そらとも分の削除が成功するモック。呼ばれたときに、その時点の状態を記録する
+    private func orderCheckingDeletion(
+        firestore: MockFirestoreServiceForSettings,
+        auth: MockAuthService,
+        log: CallLog
+    ) -> MockSoratomoAccountDeletionService {
+        let deletion = MockSoratomoAccountDeletionService()
+        deletion.deleteMyDataResult = .success(())
+        deletion.onDeleteMyData = { [firestore, auth, log] in
+            let state = await MainActor.run {
+                "soratomo(既存のデータ削除済み=\(!firestore.deletedUserIds.isEmpty), Auth削除済み=\(auth.deleteAccountCalled))"
+            }
+            log.entries.append(state)
+        }
+        return deletion
+    }
+
+    /// ⭐️ 匿名: そらとも分の削除 → 既存の 8 手順 → 端末の記録 → アカウントの削除、の順に呼ぶ
+    func testAnonymousDeletionRunsSoratomoFirstThenExistingStepsThenDeviceRecordsThenAuth() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let auth = MockAuthService()
+        auth.currentUserValue = User(id: "anon", email: nil)
+        firestore.authForOrderCheck = auth
+        let log = CallLog()
+        let sut = makeDeletionSUT(
+            auth: auth,
+            firestore: firestore,
+            soratomoDeletion: orderCheckingDeletion(firestore: firestore, auth: auth, log: log),
+            eraseReportedSkies: { [firestore, auth, log] uid in
+                log.entries.append("erase(\(uid), 既存のデータ削除済み=\(!firestore.deletedUserIds.isEmpty), Auth削除済み=\(auth.deleteAccountCalled))")
+            }
+        )
+
+        let succeeded = await sut.performAccountDeletion()
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(log.entries, [
+            "soratomo(既存のデータ削除済み=false, Auth削除済み=false)",
+            "erase(anon, 既存のデータ削除済み=true, Auth削除済み=false)",
+        ])
+        XCTAssertEqual(firestore.authWasDeletedBeforeFirestore, false)
+        XCTAssertTrue(auth.deleteAccountCalled)
+        XCTAssertEqual(lastSoratomoDeletion?.deleteMyDataCallCount, 1)
+    }
+
+    /// ⭐️ メール: 再認証 → そらとも分の削除 → 既存の 8 手順 → 端末の記録 → アカウントの削除
+    func testEmailDeletionRunsSoratomoAfterReauthThenExistingStepsThenDeviceRecordsThenAuth() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let auth = MockAuthService()
+        auth.currentUserValue = User(id: "u1", email: "a@example.com")
+        firestore.authForOrderCheck = auth
+        let log = CallLog()
+        let sut = makeDeletionSUT(
+            auth: auth,
+            firestore: firestore,
+            soratomoDeletion: orderCheckingDeletion(firestore: firestore, auth: auth, log: log),
+            eraseReportedSkies: { [firestore, auth, log] uid in
+                log.entries.append("erase(\(uid), 既存のデータ削除済み=\(!firestore.deletedUserIds.isEmpty), Auth削除済み=\(auth.deleteAccountCalled))")
+            }
+        )
+
+        // 退会ボタンの時点では、そらとも分も含めて何も消さない（先に本人確認）
+        let first = await sut.performAccountDeletion()
+        XCTAssertFalse(first)
+        XCTAssertEqual(lastSoratomoDeletion?.deleteMyDataCallCount, 0, "本人確認が済むまで、そらとものデータも消さない")
+
+        let second = await sut.performReauthAndDelete(email: "a@example.com", password: "pw")
+
+        XCTAssertTrue(second)
+        XCTAssertEqual(log.entries, [
+            "soratomo(既存のデータ削除済み=false, Auth削除済み=false)",
+            "erase(u1, 既存のデータ削除済み=true, Auth削除済み=false)",
+        ])
+        XCTAssertEqual(firestore.authWasDeletedBeforeFirestore, false)
+        XCTAssertTrue(auth.deleteAccountCalled)
+    }
+
+    /// ⭐️ 再認証に失敗したら、そらとものデータも消さない
+    func testEmailDeletionDoesNotCallSoratomoWhenReauthenticationFails() async {
+        let firestore = MockFirestoreServiceForSettings()
+        let auth = MockAuthService()
+        auth.currentUserValue = User(id: "u1", email: "a@example.com")
+        auth.reauthenticateError = AuthError.wrongPassword
+        let sut = makeDeletionSUT(auth: auth, firestore: firestore)
+
+        let succeeded = await sut.performReauthAndDelete(email: "a@example.com", password: "wrong")
+
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(lastSoratomoDeletion?.deleteMyDataCallCount, 0)
+    }
+
+    /// ⭐️ そらとも分の削除に失敗したら、後の手順（既存の 8 手順・端末の記録・アカウントの削除）を呼ばず、
+    /// 「アカウントの削除に失敗しました: 」に固定の文言を続けて出す（匿名・メールの両方・要件 3.2）
+    func testSoratomoDeletionFailureStopsBeforeLaterStepsOnBothEntrances() async {
+        let messages: [(SoratomoAccountDeletionError, String)] = [
+            (.network, "アカウントの削除に失敗しました: 通信できませんでした。インターネットにつながる場所でもう一度お試しください"),
+            (.incomplete, "アカウントの削除に失敗しました: 時間をおいてもう一度お試しください"),
+            (.unknown, "アカウントの削除に失敗しました: 時間をおいてもう一度お試しください"),
+        ]
+        for (failure, message) in messages {
+            for email in [nil, "a@example.com"] as [String?] {
+                let firestore = MockFirestoreServiceForSettings()
+                let auth = MockAuthService()
+                auth.currentUserValue = User(id: "u1", email: email)
+                let deletion = MockSoratomoAccountDeletionService()
+                deletion.deleteMyDataResult = .failure(failure)
+                var erased: [String] = []
+                let sut = makeDeletionSUT(
+                    auth: auth,
+                    firestore: firestore,
+                    soratomoDeletion: deletion,
+                    eraseReportedSkies: { erased.append($0) }
+                )
+
+                let succeeded: Bool
+                if email == nil {
+                    succeeded = await sut.performAccountDeletion()
+                } else {
+                    succeeded = await sut.performReauthAndDelete(email: "a@example.com", password: "pw")
+                }
+
+                let label = "\(failure) email=\(email ?? "nil")"
+                XCTAssertFalse(succeeded, label)
+                XCTAssertEqual(deletion.deleteMyDataCallCount, 1, label)
+                XCTAssertTrue(firestore.deletedUserIds.isEmpty, "既存の 8 手順を呼ばない: \(label)")
+                XCTAssertTrue(erased.isEmpty, "端末の記録を消さない: \(label)")
+                XCTAssertFalse(auth.deleteAccountCalled, "アカウントを削除しない: \(label)")
+                XCTAssertEqual(sut.deleteAccountError, message, label)
+                XCTAssertFalse(sut.isDeletingAccount, label)
+            }
+        }
+    }
+
+    /// 処理中に止めておくための仕掛け（モックの中で待ち、テストから再開する）
+    private final class Latch: @unchecked Sendable {
+        var continuation: CheckedContinuation<Void, Never>?
+        let entered: XCTestExpectation
+
+        init(entered: XCTestExpectation) {
+            self.entered = entered
+        }
+    }
+
+    /// ⭐️ 処理中に、もう一度押しても受け付けない（匿名・メールの両方・要件 3.6）
+    func testDeletionIgnoresReentryWhileInProgressOnBothEntrances() async {
+        for email in [nil, "a@example.com"] as [String?] {
+            let firestore = MockFirestoreServiceForSettings()
+            let auth = MockAuthService()
+            auth.currentUserValue = User(id: "u1", email: email)
+            let latch = Latch(entered: expectation(description: "そらとも分の削除に入った"))
+            let deletion = MockSoratomoAccountDeletionService()
+            deletion.deleteMyDataResult = .success(())
+            deletion.onDeleteMyData = { [latch] in
+                await withCheckedContinuation { continuation in
+                    latch.continuation = continuation
+                    latch.entered.fulfill()
+                }
+            }
+            let sut = makeDeletionSUT(auth: auth, firestore: firestore, soratomoDeletion: deletion)
+            let start: () async -> Bool = email == nil
+                ? { await sut.performAccountDeletion() }
+                : { await sut.performReauthAndDelete(email: "a@example.com", password: "pw") }
+
+            let first = Task { await start() }
+            await fulfillment(of: [latch.entered], timeout: 5)
+            XCTAssertTrue(sut.isDeletingAccount)
+
+            // 処理中の 2 回目（どちらの入口からでも）は何もしない
+            let againAnonymous = await sut.performAccountDeletion()
+            let againEmail = await sut.performReauthAndDelete(email: "a@example.com", password: "pw")
+            XCTAssertFalse(againAnonymous)
+            XCTAssertFalse(againEmail)
+            XCTAssertEqual(deletion.deleteMyDataCallCount, 1, "2 回目はそらとも分の削除を呼ばない")
+            XCTAssertTrue(sut.isDeletingAccount, "2 回目が処理中の表示を消さない")
+
+            latch.continuation?.resume()
+            let firstSucceeded = await first.value
+
+            let label = "email=\(email ?? "nil")"
+            XCTAssertTrue(firstSucceeded, label)
+            XCTAssertEqual(firestore.deletedUserIds, ["u1"], label)
+            XCTAssertEqual(auth.deleteAccountCallCount, 1, label)
+            XCTAssertFalse(sut.isDeletingAccount, label)
+        }
     }
 }

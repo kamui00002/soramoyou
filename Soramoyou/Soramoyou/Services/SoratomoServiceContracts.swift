@@ -298,3 +298,34 @@ protocol SoratomoModerationServiceProtocol: Sendable {
     /// ブロックの一覧（`users/{uid}.blockedUserIds`）を読む
     func fetchBlockedUserIds(uid: String) async throws(SoratomoError) -> Set<String>
 }
+
+// MARK: - 退会のそらとも分（release-gate 9.4）
+
+/// 退会のそらとも分の失敗（画面には「アカウントの削除に失敗しました: 」に続けて出す・要件 3.2）
+///
+/// 文言は固定。サーバーの文言は出さない。
+enum SoratomoAccountDeletionError: LocalizedError, Equatable, Sendable {
+    /// 通信できない・制限時間切れ
+    case network
+    /// 最大回数まで呼んでも、削除が終わらなかった
+    case incomplete
+    /// その他
+    case unknown
+
+    var errorDescription: String? {
+        switch self {
+        case .network:
+            "通信できませんでした。インターネットにつながる場所でもう一度お試しください"
+        case .incomplete, .unknown:
+            "時間をおいてもう一度お試しください"
+        }
+    }
+}
+
+/// 退会のときに、そらとものデータを消すサービス（要件 3.1・3.2）
+protocol SoratomoAccountDeletionServiceProtocol: Sendable {
+    /// Callable `soratomoDeleteMyData` を、完了（`done: true`）が返るまで呼ぶ（最大 8 回・1 回 75 秒）
+    ///
+    /// そらともを使っていない人（匿名を含む）にも呼ぶ。サーバーは消すものが無ければ完了を返す（要件 3.8）。
+    func deleteMyData() async throws(SoratomoAccountDeletionError)
+}
