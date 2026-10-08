@@ -32,6 +32,20 @@ enum SoratomoModerationNotice: Equatable {
     case skyGone
     /// 「ブロックできませんでした」
     case blockFailed
+
+    /// 画面に出す文言（タイムラインと投稿詳細で同じものを出す・失敗の文言は既存の定義を使う）
+    var userMessage: String {
+        switch self {
+        case .reportAccepted:
+            "通報を受け付けました"
+        case .reportFailed:
+            SoratomoFailedAction.report.userMessage
+        case .skyGone:
+            SoratomoError.skyGone.userMessage
+        case .blockFailed:
+            SoratomoFailedAction.block.userMessage
+        }
+    }
 }
 
 /// そらとものグループのタイムラインの ViewModel
