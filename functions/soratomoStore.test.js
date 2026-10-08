@@ -840,6 +840,172 @@ test("投稿: 方針の省略・判定が関数でないのは TypeError で、�
   assert.equal(await skyCount("g1"), 0);
 });
 
+// MARK: - 通報の受け付け（reportSkyTx・release-gate 2.3）
+
+const REPORTS = "soratomoReports";
+
+/** g1（alice がオーナー・bob と carol がメンバー）に、alice の投稿 sky1 を入れる。 */
+async function seedReportScene() {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob", "carol"] });
+  await db
+    .collection(GROUPS)
+    .doc("g1")
+    .collection("skies")
+    .doc("sky1")
+    .set({ authorId: "alice", caption: "ひみつのキャプション", width: 1080, height: 1440, createdAt: Timestamp.now() });
+}
+function reportInput(overrides = {}) {
+  return { groupId: "g1", skyId: "sky1", reason: "spam", ...overrides };
+}
+async function reportDocs() {
+  return (await db.collection(REPORTS).get()).docs;
+}
+
+test("通報: メンバーの通報を記録する。項目は ID・理由・サーバーの時刻・転送の状態だけで、投稿者は投稿の文書から取る", async () => {
+  await seedReportScene();
+  const beforeMs = Date.now();
+  // 要求に投稿者・キャプション・名前などを書いても、記録には持ち込まない（6.8・6.9）
+  const result = await store.reportSkyTx(db, {
+    uid: "bob",
+    input: reportInput({ authorId: "mallory", caption: "偽のキャプション", groupName: "偽の名前", reporterId: "mallory" }),
+  });
+  const reportId = core.reportDocId("g1", "sky1", "bob");
+  assert.deepEqual(result, { accepted: true, reportId, duplicate: false });
+
+  const docs = await reportDocs();
+  assert.equal(docs.length, 1);
+  assert.equal(docs[0].id, reportId);
+  const report = docs[0].data();
+  assert.deepEqual(Object.keys(report).sort(), [
+    "authorId",
+    "createdAt",
+    "forwardAttempts",
+    "forwardStatus",
+    "groupId",
+    "reason",
+    "reporterId",
+    "skyId",
+  ]);
+  assert.equal(report.groupId, "g1");
+  assert.equal(report.skyId, "sky1");
+  assert.equal(report.authorId, "alice", "投稿者は投稿の文書から取る（要求の値は使わない）");
+  assert.equal(report.reporterId, "bob", "通報者は認証の uid");
+  assert.equal(report.reason, "spam");
+  assert.equal(report.forwardStatus, "pending");
+  assert.equal(report.forwardAttempts, 0);
+  assert.ok(report.createdAt instanceof Timestamp);
+  assert.ok(Math.abs(report.createdAt.toMillis() - beforeMs) < 60_000, "受け付けた時刻はサーバーの時刻");
+  const text = JSON.stringify(report);
+  for (const secret of ["ひみつのキャプション", "種のグループ", "SKYAAAAA", "偽の", "mallory"]) {
+    assert.ok(!text.includes(secret), `記録に「${secret}」を含めない`);
+  }
+
+  // 通報された投稿者とほかのメンバーには何も送らない（通知の間引きの状態も書かない・5.9）。投稿も変えない
+  assert.equal((await db.collection(GROUPS).doc("g1").collection("notifyState").get()).size, 0);
+  assert.equal((await skyDoc("g1", "sky1")).caption, "ひみつのキャプション");
+  assert.equal((await db.collection(USERS).get()).size, 0);
+});
+
+test("通報: 5つの理由はどれも受け付け、それ以外は invalid_reason、ID の形の誤りは invalid_input で、何も書かない", async () => {
+  await seedReportScene();
+  for (const [i, reason] of [undefined, null, "", "SPAM", "spam ", "abuse", 1, ["spam"]].entries()) {
+    await assert.rejects(store.reportSkyTx(db, { uid: "bob", input: reportInput({ reason }) }), domainError("invalid_reason", null), `理由 ${i}`);
+  }
+  for (const [i, input] of [null, "sky1", reportInput({ groupId: "g_1" }), reportInput({ skyId: "a/b" }), reportInput({ skyId: undefined })].entries()) {
+    await assert.rejects(store.reportSkyTx(db, { uid: "bob", input }), domainError("invalid_input", null), `入力 ${i}`);
+  }
+  // ID の形の誤りを、理由の誤りより先に見る
+  await assert.rejects(store.reportSkyTx(db, { uid: "bob", input: reportInput({ groupId: "g_1", reason: "x" }) }), domainError("invalid_input", null));
+  assert.equal((await reportDocs()).length, 0);
+
+  // 5つの理由（iOS の ReportReason の rawValue と同じ）は、別の投稿への通報としてどれも受け付ける
+  for (const [i, reason] of core.REPORT_REASONS.entries()) {
+    const skyId = `s${i}`;
+    await db.collection(GROUPS).doc("g1").collection("skies").doc(skyId).set({ authorId: "alice", width: 1, height: 1, createdAt: Timestamp.now() });
+    await store.reportSkyTx(db, { uid: "bob", input: reportInput({ skyId, reason }) });
+  }
+  assert.deepEqual((await reportDocs()).map((d) => d.get("reason")).sort(), [...core.REPORT_REASONS].sort());
+});
+
+test("通報: 非メンバーは not_member、無い投稿は sky_not_found、自分の投稿は self_report で、記録を作らない", async () => {
+  await seedReportScene();
+  await assert.rejects(store.reportSkyTx(db, { uid: "dave", input: reportInput() }), domainError("not_member", null));
+  await assert.rejects(store.reportSkyTx(db, { uid: "bob", input: reportInput({ skyId: "nope" }) }), domainError("sky_not_found", null));
+  await assert.rejects(store.reportSkyTx(db, { uid: "alice", input: reportInput() }), domainError("self_report", null));
+  // 無いグループは、メンバーの文書が無いので not_member
+  await assert.rejects(store.reportSkyTx(db, { uid: "bob", input: reportInput({ groupId: "nope" }) }), domainError("not_member", null));
+  assert.equal((await reportDocs()).length, 0);
+});
+
+test("通報: 判定の順 — メンバーでない→投稿が無い→自分の投稿→記録がある", async () => {
+  await seedReportScene();
+  // 非メンバーが無い投稿を通報: not_member が先
+  await assert.rejects(store.reportSkyTx(db, { uid: "dave", input: reportInput({ skyId: "nope" }) }), domainError("not_member", null));
+  // 通報した後に投稿が消えたら、同じ人の通報は記録があっても sky_not_found
+  await store.reportSkyTx(db, { uid: "bob", input: reportInput() });
+  await db.collection(GROUPS).doc("g1").collection("skies").doc("sky1").delete();
+  await assert.rejects(store.reportSkyTx(db, { uid: "bob", input: reportInput() }), domainError("sky_not_found", null));
+  assert.equal((await reportDocs()).length, 1, "記録は消さない");
+});
+
+test("通報: 同じ人の同じ投稿への2回目は、記録を作り直さず（転送の状態も戻さず）、受け付けと同じ結果を返す", async () => {
+  await seedReportScene();
+  const first = await store.reportSkyTx(db, { uid: "bob", input: reportInput() });
+  const ref = db.collection(REPORTS).doc(first.reportId);
+  const createdAtMs = (await ref.get()).get("createdAt").toMillis();
+  // 転送が済んだ状態にしておく（2回目で pending に戻すと、二重に転送される）
+  await ref.update({ forwardStatus: "sent", forwardedAt: Timestamp.now() });
+
+  // 理由を変えた2回目も、同じ投稿なので重複として扱う
+  const second = await store.reportSkyTx(db, { uid: "bob", input: reportInput({ reason: "harassment" }) });
+  assert.equal(second.accepted, first.accepted);
+  assert.equal(second.reportId, first.reportId, "利用者へ返す部分は同じ（6.7）");
+  assert.equal(second.duplicate, true, "ログ用の印だけが違う");
+
+  const docs = await reportDocs();
+  assert.equal(docs.length, 1, "記録は1件のまま");
+  const report = docs[0].data();
+  assert.equal(report.forwardStatus, "sent");
+  assert.equal(report.reason, "spam", "最初の理由のまま");
+  assert.equal(report.createdAt.toMillis(), createdAtMs);
+});
+
+test("通報: 別の人の通報・同じ人の別の投稿への通報は、それぞれ別の記録になる", async () => {
+  await seedReportScene();
+  await db.collection(GROUPS).doc("g1").collection("skies").doc("sky2").set({ authorId: "alice", width: 1, height: 1, createdAt: Timestamp.now() });
+  await store.reportSkyTx(db, { uid: "bob", input: reportInput() });
+  await store.reportSkyTx(db, { uid: "carol", input: reportInput() });
+  await store.reportSkyTx(db, { uid: "bob", input: reportInput({ skyId: "sky2" }) });
+  assert.deepEqual(
+    (await reportDocs()).map((d) => d.id).sort(),
+    [core.reportDocId("g1", "sky1", "bob"), core.reportDocId("g1", "sky1", "carol"), core.reportDocId("g1", "sky2", "bob")].sort()
+  );
+});
+
+test("通報: 同じ通報を同時に2回送っても、記録は1件で、作ったのは1回だけ", async (t) => {
+  await seedReportScene();
+  const results = await Promise.allSettled([
+    store.reportSkyTx(db, { uid: "bob", input: reportInput() }),
+    store.reportSkyTx(db, { uid: "bob", input: reportInput() }),
+  ]);
+  const r = tally(results);
+  t.diagnostic(`成功=${r.ok} 競合=${r.contention}`);
+  assert.deepEqual(r.other, []);
+  const created = results.filter((x) => x.status === "fulfilled" && x.value.duplicate === false).length;
+  assert.equal(created, 1);
+  assert.equal((await reportDocs()).length, 1);
+});
+
+test("通報: 投稿の投稿者が壊れていたら、記録を作らずにドメインのエラーではない失敗（internal）にする", async () => {
+  await seedReportScene();
+  await db.collection(GROUPS).doc("g1").collection("skies").doc("broken").set({ width: 1, height: 1, createdAt: Timestamp.now() });
+  await assert.rejects(store.reportSkyTx(db, { uid: "bob", input: reportInput({ skyId: "broken" }) }), (err) => {
+    assert.ok(!(err instanceof store.SoratomoDomainError), "想定外の失敗（internal）として扱う");
+    return true;
+  });
+  assert.equal((await reportDocs()).length, 0);
+});
+
 // MARK: - 再発行（regenerateInviteCodeTx）
 
 test("再発行: オーナーなら新しいコードに替わり、古いコードでの参加は not_found、新しいコードでは参加できる", async () => {

@@ -13,6 +13,7 @@
 // - 作成と参加は、省略できない方針（policy: 現行のガイドラインの版・NGワードの判定）を受け取り、利用停止・同意・
 //   NGワードを確かめる（release-gate 2.1）。方針を省略すると、検査を黙って飛ばさないよう TypeError にする。
 // - 投稿の作成（createSkyTx・release-gate 2.2）もここに置く。利用停止・メンバー・NGワードを確かめてから書く。
+// - 通報の受け付け（reportSkyTx・release-gate 2.3）もここに置く。記録は soratomoReports（グループの外）に作る。
 // - テストは soratomoStore.test.js（Firestore のエミュレーターに対して直接呼ぶ）。
 //
 // ⚠️ Firestore のトランザクションは「読みを全部終えてから書く」決まり。招待コードの重なりの確認（最大5回の読み）も
@@ -36,6 +37,7 @@ const INVITE_CODES = "soratomoInviteCodes";
 const USERS = "soratomoUsers";
 const USER_GROUPS = "groups";
 const SKIES = "skies";
+const REPORTS = "soratomoReports";
 
 /** 招待コードが既存と重なったときに作り直す最大の回数（要件3.2）。 */
 const MAX_INVITE_CODE_ATTEMPTS = 5;
@@ -48,7 +50,8 @@ const REQUEST_ID_MAX = 128;
 class SoratomoDomainError extends Error {
   /**
    * @param {"flag_off"|"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner"
-   *   |"suspended"|"consent_required"|"ng_word"|"invalid_input"|"not_member"} reason
+   *   |"suspended"|"consent_required"|"ng_word"|"invalid_input"|"not_member"|"invalid_reason"|"sky_not_found"
+   *   |"self_report"} reason
    * @param {{ currentVersion: number }|null} [details] 利用者へ返してよい詳細。いまは consent_required の
    *   現行のガイドラインの版だけ（アプリが「同意が要る」と「アプリが古い」を見分けるため・release-gate 2.1）。
    *   配線が HttpsError の details に写す（tasks 4.1）。gRPC の code はここにも持たせない（上の ⚠️）。
@@ -335,6 +338,61 @@ async function createSkyTx(db, { uid, input, policy }) {
   });
 }
 
+// MARK: - 通報の受け付け
+
+/**
+ * そらとも投稿の通報を受け付けて記録する（release-gate 5.9・6.1〜6.9）。
+ * 判定の順: invalid_input（ID の形・トランザクションの前）→ invalid_reason（前）→ not_member → sky_not_found →
+ * self_report → 記録がある → 作る。
+ * - 通報者は認証の uid（6.2）。投稿者は投稿の文書の authorId から取り、要求の値は使わない（6.8）
+ * - 記録の文書IDは soratomoCore.reportDocId（groupId_skyId_reporterId）。同じ人の同じ投稿への2回目は、記録を作り直さず
+ *   （転送の状態も戻さず）、受け付けと同じ結果を返す（6.7）。作らないので、転送のトリガーも動かない
+ * - 記録の項目は ID・理由・サーバーの時刻・転送の状態の8つだけ。キャプション・グループ名・表示名・招待コード・
+ *   画像の場所は書かない（6.9）。通報者・投稿者・ほかのメンバーには何も送らない（5.9）
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ uid: string, input: unknown }} params input は要求の本文（{ groupId, skyId, reason }）
+ * @returns {Promise<{ accepted: true, reportId: string, duplicate: boolean }>}
+ *   利用者へ返すのは accepted だけにする（配線・tasks 4.2）。reportId と duplicate はログ用（design の Monitoring）
+ */
+async function reportSkyTx(db, { uid, input }) {
+  assertUid(uid);
+  const data = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  if (!core.isAutoId(data.groupId) || !core.isAutoId(data.skyId)) throw new SoratomoDomainError("invalid_input");
+  if (!core.isReportReason(data.reason)) throw new SoratomoDomainError("invalid_reason");
+  const { groupId, skyId, reason } = data;
+  const reportId = core.reportDocId(groupId, skyId, uid);
+
+  return db.runTransaction(async (tx) => {
+    const groupRef = db.collection(GROUPS).doc(groupId);
+    const reportRef = db.collection(REPORTS).doc(reportId);
+    const [memberSnap, skySnap, reportSnap] = await tx.getAll(
+      groupRef.collection(MEMBERS).doc(uid),
+      groupRef.collection(SKIES).doc(skyId),
+      reportRef
+    );
+
+    if (!memberSnap.exists) throw new SoratomoDomainError("not_member");
+    if (!skySnap.exists) throw new SoratomoDomainError("sky_not_found");
+    const authorId = skySnap.get("authorId");
+    if (!isDocumentId(authorId)) throw new Error("soratomo: 通報の対象の投稿の authorId が壊れている");
+    if (authorId === uid) throw new SoratomoDomainError("self_report");
+    if (reportSnap.exists) return { accepted: true, reportId, duplicate: true };
+
+    // ここから書き込み
+    tx.create(reportRef, {
+      groupId,
+      skyId,
+      authorId,
+      reporterId: uid,
+      reason,
+      createdAt: FieldValue.serverTimestamp(),
+      forwardStatus: "pending",
+      forwardAttempts: 0,
+    });
+    return { accepted: true, reportId, duplicate: false };
+  });
+}
+
 // MARK: - 再発行
 
 /**
@@ -406,6 +464,7 @@ module.exports = {
   createGroupTx,
   joinGroupTx,
   createSkyTx,
+  reportSkyTx,
   regenerateInviteCodeTx,
   claimNotifySlot,
 };
