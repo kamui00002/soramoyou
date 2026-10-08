@@ -557,10 +557,10 @@ service cloud.firestore {
 
     // ============================================
     // そらとも（招待制の小さなグループで空を共有する）⭐️
-    // spec: .kiro/specs/soratomo/
-    // 書き手: グループ・メンバー・招待コード・通知の間引き・利用者ごとの所属は Cloud Functions（Admin SDK）だけ。
-    //   Admin SDK はルールを通らないので、ここではクライアントからの書き込みをすべて拒否する。
-    //   アプリが書けるのは投稿（skies）の作成と削除だけ。
+    // spec: .kiro/specs/soratomo/ と .kiro/specs/soratomo-release-gate/（公開前ゲート）
+    // 書き手: グループ・メンバー・招待コード・通知の間引き・利用者ごとの所属・投稿の作成・通報の記録・語のリストは
+    //   Cloud Functions（Admin SDK）だけ。Admin SDK はルールを通らないので、ここではクライアントからの書き込みをすべて拒否する。
+    //   アプリが書けるのは投稿（skies）の削除だけ（作成は release-gate で Callable の soratomoCreateSky へ移した）。
     // collectionGroup のクエリと {path=**} のルールは使わない（既存のインデックスとルールに干渉させない。要件 13.1）。
     // テスト: scripts/rules_test_soratomo.py（許可と拒否の両方・--mutants で陽性対照）。ルールを変えたら両方を流す。
     // ============================================
@@ -581,42 +581,6 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/soratomoGroups/$(groupId)/members/$(request.auth.uid));
     }
 
-    // そらとも投稿のキャプションの検証（要件 11.11）
-    // - 無い（キーごと省略）か、1〜100 文字（Unicode のコードポイント数）の文字列
-    // - 改行類（CR・LF・U+0085・U+2028・U+2029）を含まない
-    // 長さは size() でなく、正規表現の回数指定 {1,100} で数える。
-    //   size() は UTF-16 の単位で数える（絵文字 1 つが 2）ため、アプリ（unicodeScalars.count）・
-    //   Functions（Array.from(s).length）のコードポイント数とずれる。回数指定はコードポイント単位で数える。
-    //   どちらも 2026-10-01 に Rules test API で確かめた（.kiro/specs/soratomo/research.md の要確認 1）。
-    // 改行は「含む」を探す書き方（.*[...].*）にしない。正規表現の `.` は既定で改行に一致しないため、
-    //   改行が 2 つ以上あるキャプションを取りこぼす。「禁止文字以外だけでできている」の全体一致で書く。
-    function isValidSoratomoCaption(data) {
-      return !('caption' in data)
-             || (data.caption is string
-                 && data.caption.matches('[^\\r\\n\\x{85}\\x{2028}\\x{2029}]{1,100}'));
-    }
-
-    // そらとも投稿の画像の幅・高さ（ピクセル）。1〜2048 の整数
-    // （表示用の画像は長辺 2048px 以下に縮小してから送る。要件 6.1・design.md の SoratomoImageEncoder）
-    function isValidSoratomoDimension(value) {
-      return value is int && value >= 1 && value <= 2048;
-    }
-
-    // そらとも投稿の作成時の項目の検証（要件 11.3・11.4・11.11・11.12・11.13）
-    // - 項目は 5 つだけ。画像のパスや URL の項目は持てない（画像の場所は groupId・authorId・skyId から導く）
-    // - キャプション以外の 4 つは必須
-    // - 投稿者は要求した本人。作成日時はサーバーの時刻だけ（アプリは FieldValue.serverTimestamp() で書く。
-    //   端末の時計で並び順を操作させない）
-    function isValidSoratomoSky(data) {
-      return data.keys().hasOnly(['authorId', 'caption', 'width', 'height', 'createdAt'])
-             && data.keys().hasAll(['authorId', 'width', 'height', 'createdAt'])
-             && data.authorId == request.auth.uid
-             && data.createdAt == request.time
-             && isValidSoratomoDimension(data.width)
-             && isValidSoratomoDimension(data.height)
-             && isValidSoratomoCaption(data);
-    }
-
     // グループ（名前・オーナー・招待コード・メンバー数）
     match /soratomoGroups/{groupId} {
       // 1 件ずつの取得（get）だけをメンバーに許す。招待コードもここから読む（要件 11.9）
@@ -634,13 +598,15 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // 投稿（アプリは作成と削除だけを行い、更新はしない）
+      // 投稿（アプリは読み取りと削除だけを行う。作成は Callable、更新はしない）
       match /skies/{skyId} {
         // 読み取り（タイムラインの一覧を含む）はメンバーだけ（要件 11.1・11.2）
         allow read: if isSoratomoUser() && isSoratomoMember(groupId);
-        allow create: if isSoratomoUser()
-                      && isSoratomoMember(groupId)
-                      && isValidSoratomoSky(request.resource.data);
+        // 作成は Callable（soratomoCreateSky）のトランザクションだけ（release-gate 要件 8.6・11.5）。
+        //   アプリから直接書けると、利用停止と NG ワードの検査を飛ばせてしまう。
+        //   項目・キャプション・幅と高さの検査は、旧ルールの isValidSoratomoSky から
+        //   functions/soratomoCore.js の validateSkyInput へ移した（テストは functions/soratomoCore.test.js）
+        allow create: if false;
         allow update: if false;
         // 削除は投稿者本人だけ。オーナーを含むほかのメンバーには許さない（要件 11.6・11.15）。
         // 作成と同じ allow write にまとめない（削除の要求には内容が無く、作成の条件で必ず拒否される。PR #141 と同じ型）
@@ -670,6 +636,23 @@ service cloud.firestore {
         allow read: if isSoratomoUser() && isOwner(uid);
         allow write: if false;
       }
+    }
+
+    // 次の 2 つは、ルールが無くても既定で拒否される。意図を残し、テストの陽性対照（--mutants）で
+    // パスの書き間違いを見分けられるように、すべて拒否を明示する。
+
+    // 通報の記録（文書 ID は「グループ ID_投稿 ID_通報者」・release-gate 要件 6.10）
+    // 通報の Callable（soratomoReportSky）が作り、転送のトリガーと定期実行が転送の状態を書く（どれも Admin SDK）。
+    // 通報者本人を含め、誰にも読ませず、書き換えと削除もさせない
+    match /soratomoReports/{reportId} {
+      allow read, write: if false;
+    }
+
+    // そらともの設定（語のリスト ngWords・release-gate 要件 11.10）
+    // 語のリストは Functions だけが読む。利用者に読ませない（読めると、検査をすり抜ける言い換えを探せる）。
+    // 書き込みは開発者の投入スクリプト（Admin SDK）だけ
+    match /soratomoConfig/{docId} {
+      allow read, write: if false;
     }
   }
 }
