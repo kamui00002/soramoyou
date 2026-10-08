@@ -397,3 +397,473 @@ test("summarizeNotifyOutcomes: キーは固定で、名前・キャプション�
     else assert.equal(typeof v, "number");
   }
 });
+
+// ============================================================
+// 公開前ゲート（soratomo-release-gate tasks 1.1）: 定数
+// ============================================================
+
+test("公開前ゲートの定数: 設計書（release-gate design.md soratomoCore）の値と一致する", () => {
+  assert.equal(core.SKY_DIMENSION_MAX, 2048);
+  assert.equal(core.CAPTION_MAX, 100);
+  assert.deepEqual(core.REPORT_REASONS, ["inappropriate", "spam", "harassment", "copyright", "other"]);
+});
+
+test("GUIDELINE_VERSION は 1（iOS の SoratomoGuideline.currentVersion と一致させる規則）", () => {
+  // ⚠️ ここを変えるなら iOS 側の SoratomoGuideline.currentVersion も同時に変えること。
+  //    片方だけ上げると、アプリで同意しても outdated_guideline で拒否され続ける（または古い版の同意を認める）。
+  assert.equal(core.GUIDELINE_VERSION, 1);
+});
+
+test("REPORT_REASON_LABELS: iOS の ReportReason.displayName と同じ日本語名（Discord に出す名前）", () => {
+  assert.deepEqual(core.REPORT_REASON_LABELS, {
+    inappropriate: "不適切なコンテンツ",
+    spam: "スパム・迷惑行為",
+    harassment: "嫌がらせ・誹謗中傷",
+    copyright: "著作権侵害",
+    other: "その他",
+  });
+  assert.deepEqual(Object.keys(core.REPORT_REASON_LABELS), core.REPORT_REASONS, "理由の並びと名前の表がずれている");
+});
+
+// ============================================================
+// normalizeForNgCheck・prepareNgWords・containsNgWord（要件11.2）
+// ⚠️ 実在の語はテストに書かない。ダミーの語（てすとごい・dummyng）だけを使う。
+// ============================================================
+
+/** ダミーの語（ひらがな）と、英字のダミーの語。 */
+const NG_KANA = "てすとごい";
+const NG_LATIN = "dummyng";
+
+test("normalizeForNgCheck: 全角英数→半角・大文字→小文字・カタカナ（半角カナを含む）→ひらがな", () => {
+  assert.equal(core.normalizeForNgCheck("ＡＢＣ１２３"), "abc123");
+  assert.equal(core.normalizeForNgCheck("DummyNG"), "dummyng");
+  assert.equal(core.normalizeForNgCheck("テストゴイ"), "てすとごい");
+  // 半角カナ＋半角の濁点（ｺﾞ）は NFKC で1文字（ゴ）に合成されてからひらがなになる
+  assert.equal(core.normalizeForNgCheck("ﾃｽﾄｺﾞｲ"), "てすとごい");
+  // 小書き（ァ U+30A1）・ヴ（U+30F4）・ヵヶ（U+30F5・U+30F6）・踊り字（ヽヾ）も対応するひらがなへ
+  assert.equal(core.normalizeForNgCheck("ァヴヵヶヽヾ"), "ぁゔゕゖゝゞ");
+  // 長音符（ー）・中黒（・）はカタカナの範囲外なので、そのまま残す
+  assert.equal(core.normalizeForNgCheck("テー・ト"), "てー・と");
+});
+
+test("normalizeForNgCheck: 空白と記号は取り除かない（要件11の補足）", () => {
+  assert.equal(core.normalizeForNgCheck("て す と"), "て す と");
+  assert.equal(core.normalizeForNgCheck("て-す_と!"), "て-す_と!");
+});
+
+test("prepareNgWords: 正規化し、空・空白だけ・文字列でないもの・重複を除く", () => {
+  const prepared = core.prepareNgWords(["テストゴイ", NG_KANA, "ﾃｽﾄｺﾞｲ", "ＤＵＭＭＹＮＧ", "", "  ", "　", null, 42]);
+  assert.deepEqual(prepared, [NG_KANA, NG_LATIN]);
+});
+
+test("prepareNgWords: 配列でなければ空のリスト", () => {
+  for (const raw of [undefined, null, "てすとごい", { 0: "てすとごい" }]) {
+    assert.deepEqual(core.prepareNgWords(raw), []);
+  }
+});
+
+test("containsNgWord: 全角半角・大文字小文字・ひらがなとカタカナ・半角カナの組み合わせが該当する", () => {
+  const words = core.prepareNgWords([NG_KANA, NG_LATIN]);
+  const hits = [
+    "てすとごい",
+    "テストゴイ",
+    "ﾃｽﾄｺﾞｲ",
+    "てストごイ",
+    "ﾃｽﾄごい",
+    "これはてすとごいです", // 一部に含む
+    "dummyng",
+    "DUMMYNG",
+    "ＤＵＭＭＹＮＧ", // 全角の大文字
+    "ｄｕｍｍｙｎｇ", // 全角の小文字
+    "xxDummyNgxx",
+  ];
+  for (const text of hits) {
+    assert.equal(core.containsNgWord(text, words), true, `該当すべき入力がすり抜けた: ${text}`);
+  }
+});
+
+test("containsNgWord: 語をカタカナや全角で登録しても、ひらがな・半角の入力に該当する", () => {
+  const words = core.prepareNgWords(["テストゴイ", "ＤＵＭＭＹＮＧ"]);
+  assert.equal(core.containsNgWord("てすとごい", words), true);
+  assert.equal(core.containsNgWord("dummyng", words), true);
+});
+
+test("containsNgWord: 無関係の文・間に空白を挟んだ文・濁点の無い文は該当しない", () => {
+  const words = core.prepareNgWords([NG_KANA, NG_LATIN]);
+  for (const text of ["今日の空はきれい", "夕焼けがすごい", "てすと ごい", "てすとこい", "dummy ng", ""]) {
+    assert.equal(core.containsNgWord(text, words), false, `該当してはいけない入力が該当した: ${text}`);
+  }
+});
+
+test("containsNgWord: 語が無い・空の語だけのときは、どの文も通す（全投稿の拒否にしない）", () => {
+  assert.equal(core.containsNgWord("今日の空", []), false);
+  assert.equal(core.containsNgWord("今日の空", core.prepareNgWords(["", "  "])), false);
+  // 準備を通さずに空の語を渡されても、"".includes の常に真で全部を拒否しない
+  assert.equal(core.containsNgWord("今日の空", [""]), false);
+});
+
+test("containsNgWord: 文字列でない入力（キャプション無しなど）は該当しない", () => {
+  const words = core.prepareNgWords([NG_KANA]);
+  for (const text of [undefined, null, 123, ["てすとごい"]]) {
+    assert.equal(core.containsNgWord(text, words), false);
+  }
+});
+
+// ============================================================
+// validateSkyInput（旧ルール isValidSoratomoSky と同じ条件・要件11.5）
+// 入力は scripts/rules_test_soratomo.py の作成とキャプションのケースから移した。
+// ============================================================
+
+/** 正しい入力（Callable soratomoCreateSky の要求）。groupId・skyId は Firestore の自動ID（英数字20文字）。 */
+const VALID_SKY_INPUT = {
+  groupId: "AbCdEfGhIjKlMnOpQrSt",
+  skyId: "s1",
+  caption: "夕焼け",
+  width: 1080,
+  height: 1440,
+};
+
+/** VALID_SKY_INPUT の一部を書き換えた入力（値が undefined ならキーごと消す）。 */
+function skyInput(fields) {
+  const data = { ...VALID_SKY_INPUT, ...fields };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined) delete data[key];
+  }
+  return data;
+}
+
+const EMOJI = "\u{1F600}"; // サロゲートペア（UTF-16 で 2）
+const E_ACUTE = "é"; // e＋結合文字（コードポイント 2・書記素 1）
+const MIX_100 = EMOJI.repeat(20) + E_ACUTE.repeat(20) + "あ".repeat(40); // コードポイント 100・UTF-16 120
+
+test("validateSkyInput: 正しい5項目は ok で、書く値は5つだけ", () => {
+  const result = core.validateSkyInput(VALID_SKY_INPUT);
+  assert.deepEqual(result, { ok: true, value: { ...VALID_SKY_INPUT } });
+});
+
+test("validateSkyInput: キャプションのキーが無ければ caption は null", () => {
+  const result = core.validateSkyInput(skyInput({ caption: undefined }));
+  assert.equal(result.ok, true);
+  assert.equal(result.value.caption, null);
+});
+
+test("validateSkyInput: キャプションに null を明示したら拒否（旧ルールと同じく「キーが無い」だけを許す）", () => {
+  assert.deepEqual(core.validateSkyInput(skyInput({ caption: null })), { ok: false });
+});
+
+test("validateSkyInput: 余分な項目（投稿者・作成日時・画像のパスや URL）は書く値に持ち込まない", () => {
+  const result = core.validateSkyInput(
+    skyInput({
+      authorId: "someone-else",
+      createdAt: "2026-10-01T02:59:00Z",
+      imagePath: "soratomo/g1/author/s1/display.jpg",
+      url: "https://example.com/a.jpg",
+    })
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(Object.keys(result.value).sort(), ["caption", "groupId", "height", "skyId", "width"]);
+});
+
+test("validateSkyInput: 幅・高さは 1〜2048 の整数（境界 1・2048 は通る）", () => {
+  assert.equal(core.validateSkyInput(skyInput({ width: 1, height: 2048 })).ok, true);
+  assert.equal(core.validateSkyInput(skyInput({ width: 2048, height: 1 })).ok, true);
+});
+
+test("validateSkyInput: 幅・高さの誤り（無い・0・2049・小数・文字列・負・NaN・無限大）は拒否", () => {
+  const bad = [
+    { width: undefined },
+    { height: undefined },
+    { width: 0 },
+    { width: 2049 },
+    { height: 0 },
+    { height: 2049 },
+    { width: 1080.5 },
+    { height: "1440" },
+    { width: -1 },
+    { width: Number.NaN },
+    { height: Number.POSITIVE_INFINITY },
+    { width: null },
+  ];
+  for (const fields of bad) {
+    assert.deepEqual(core.validateSkyInput(skyInput(fields)), { ok: false }, `通ってしまった: ${JSON.stringify(fields)}`);
+  }
+});
+
+test("validateSkyInput: キャプションの許可（コードポイントで100まで・タブは可）", () => {
+  const ok = [
+    MIX_100, // 絵文字 20＋結合文字 20＋かな 40（UTF-16 120）
+    "a".repeat(100),
+    EMOJI.repeat(50), // UTF-16 100
+    EMOJI.repeat(50) + "a", // コードポイント 51・UTF-16 101
+    "あ".repeat(100), // UTF-8 300 バイト
+    "a\tb",
+  ];
+  for (const caption of ok) {
+    const result = core.validateSkyInput(skyInput({ caption }));
+    assert.equal(result.ok, true, `拒否された: ${JSON.stringify(caption)}`);
+    assert.equal(result.value.caption, caption, "キャプションを書き換えずにそのまま返す");
+  }
+});
+
+test("validateSkyInput: キャプションの拒否（101・結合文字で120・空文字・数値・改行類5種）", () => {
+  const bad = [
+    MIX_100 + "a", // コードポイント 101
+    "a".repeat(101),
+    E_ACUTE.repeat(60), // 書記素 60・コードポイント 120
+    "",
+    123,
+    "a\nb", // LF
+    "a\nb\nc", // LF が 2 つ
+    "a\rb", // CR
+    "a\r\nb", // CRLF
+    "a\u0085b", // NEL
+    "a b", // LINE SEPARATOR
+    "a b", // PARAGRAPH SEPARATOR
+    "ab\n", // 末尾の LF
+  ];
+  for (const caption of bad) {
+    assert.deepEqual(core.validateSkyInput(skyInput({ caption })), { ok: false }, `通ってしまった: ${JSON.stringify(caption)}`);
+  }
+});
+
+test("validateSkyInput: groupId・skyId は英数字の自動ID（1〜64文字）だけ", () => {
+  // 「_」を許すと、通報の記録のID（{groupId}_{skyId}_{reporterId}）が別の組と同じになりうる
+  const bad = ["", "a/b", "a_b", ".", "..", "a b", "あ", "a".repeat(65), 123, null, undefined];
+  for (const id of bad) {
+    assert.deepEqual(core.validateSkyInput(skyInput({ groupId: id })), { ok: false }, `groupId が通った: ${JSON.stringify(id)}`);
+    assert.deepEqual(core.validateSkyInput(skyInput({ skyId: id })), { ok: false }, `skyId が通った: ${JSON.stringify(id)}`);
+  }
+  assert.equal(core.validateSkyInput(skyInput({ skyId: "a".repeat(64) })).ok, true);
+});
+
+test("validateSkyInput: 要求の本文がオブジェクトでなければ拒否", () => {
+  for (const data of [null, undefined, "x", 1, [VALID_SKY_INPUT]]) {
+    assert.deepEqual(core.validateSkyInput(data), { ok: false });
+  }
+});
+
+// ============================================================
+// isReportReason・reportDocId（要件6.6・6.7）
+// ============================================================
+
+test("isReportReason: 5つの理由だけを認める", () => {
+  for (const reason of ["inappropriate", "spam", "harassment", "copyright", "other"]) {
+    assert.equal(core.isReportReason(reason), true);
+  }
+  for (const value of ["Spam", "", " spam", "toString", "__proto__", "constructor", null, undefined, 1, ["spam"]]) {
+    assert.equal(core.isReportReason(value), false, `認めてしまった: ${JSON.stringify(value)}`);
+  }
+});
+
+test("reportDocId: グループID・投稿ID・通報者から1つに決まる", () => {
+  assert.equal(core.reportDocId("g1", "s1", "uidA"), "g1_s1_uidA");
+  assert.equal(core.reportDocId("g1", "s1", "uidA"), core.reportDocId("g1", "s1", "uidA"));
+  assert.notEqual(core.reportDocId("g1", "s1", "uidA"), core.reportDocId("g1", "s1", "uidB"));
+});
+
+test("reportDocId: 区切りの「_」を含む ID・文書IDに使えない通報者は TypeError（別の組と同じIDにしない）", () => {
+  // 関数が無いときの「is not a function」の TypeError で緑にならないよう、実装のメッセージの頭まで見る
+  const expected = { name: "TypeError", message: /^soratomo: reportDocId/ };
+  assert.throws(() => core.reportDocId("g_1", "s1", "uidA"), expected);
+  assert.throws(() => core.reportDocId("g1", "s_1", "uidA"), expected);
+  assert.throws(() => core.reportDocId("g1", "s1", "a/b"), expected);
+  assert.throws(() => core.reportDocId("g1", "s1", ""), expected);
+  assert.throws(() => core.reportDocId("g1", "s1", null), expected);
+});
+
+// ============================================================
+// pickNextOwner・planMembershipRemoval（要件2.1・2.2・2.5・2.6・2.7・2.9・3.4）
+// ============================================================
+
+/** メンバーの写し（参加日時はミリ秒・無いときは null）。 */
+function member(uid, joinedAtMs, role = "member") {
+  return { uid, role, joinedAtMs };
+}
+
+test("pickNextOwner: 参加日時の古い順で1人", () => {
+  assert.equal(core.pickNextOwner([member("c", 300), member("a", 200), member("b", 100)]), "b");
+});
+
+test("pickNextOwner: 参加日時が同じなら uid の昇順（メンバー一覧の並びと同じ規則）", () => {
+  // 入力の先頭（"b"）を返す実装・同点の並びを決めない実装では "b" になる
+  assert.equal(core.pickNextOwner([member("b", 100), member("a", 100), member("c", 100)]), "a");
+});
+
+test("pickNextOwner: 参加日時が無いものは最後（全員無ければ uid の昇順）", () => {
+  assert.equal(core.pickNextOwner([member("a", null), member("z", 500)]), "z");
+  assert.equal(core.pickNextOwner([member("b", null), member("a", null)]), "a");
+  // 数値でない・有限でない参加日時は「無い」と同じに扱う
+  assert.equal(core.pickNextOwner([member("a", Number.NaN), member("b", "100"), member("c", 900)]), "c");
+});
+
+test("pickNextOwner: 0人なら null・入力の配列を並べ替えない", () => {
+  assert.equal(core.pickNextOwner([]), null);
+  const members = [member("b", 100), member("a", 100)];
+  core.pickNextOwner(members);
+  assert.deepEqual(members.map((m) => m.uid), ["b", "a"]);
+});
+
+/** roleUpdates を uid の順に並べる（比べるため）。 */
+function sortedUpdates(plan) {
+  return [...plan.roleUpdates].sort((x, y) => (x.uid < y.uid ? -1 : 1));
+}
+
+test("planMembershipRemoval: 他にメンバーがいるオーナーの退会は、参加の最も古い人へ引き継ぐ", () => {
+  const plan = core.planMembershipRemoval({
+    uid: "owner",
+    ownerId: "owner",
+    members: [member("owner", 100, "owner"), member("m1", 300), member("m2", 200)],
+  });
+  assert.equal(plan.kind, "leave");
+  assert.equal(plan.removed, true);
+  assert.equal(plan.memberCount, 2);
+  assert.equal(plan.ownerId, "m2");
+  assert.equal(plan.ownerTransferred, true);
+  assert.deepEqual(sortedUpdates(plan), [{ uid: "m2", role: "owner" }]);
+});
+
+test("planMembershipRemoval: ただのメンバーの退会は、オーナーも役割も変えない", () => {
+  const plan = core.planMembershipRemoval({
+    uid: "m1",
+    ownerId: "owner",
+    members: [member("owner", 100, "owner"), member("m1", 300), member("m2", 200)],
+  });
+  assert.deepEqual(
+    { ...plan, roleUpdates: sortedUpdates(plan) },
+    { kind: "leave", removed: true, memberCount: 2, ownerId: "owner", ownerTransferred: false, roleUpdates: [] }
+  );
+});
+
+test("planMembershipRemoval: 最後の1人ならグループごと削除", () => {
+  const plan = core.planMembershipRemoval({ uid: "owner", ownerId: "owner", members: [member("owner", 100, "owner")] });
+  assert.deepEqual(plan, { kind: "delete_group", removed: true });
+});
+
+test("planMembershipRemoval: すでに外れている再実行でも、同じ整え方を返す", () => {
+  // 1回目の後の状態（m2 がオーナー・人数2）から、同じ退会をもう一度流す
+  const plan = core.planMembershipRemoval({
+    uid: "owner",
+    ownerId: "m2",
+    members: [member("m1", 300), member("m2", 200, "owner")],
+  });
+  assert.deepEqual(
+    { ...plan, roleUpdates: sortedUpdates(plan) },
+    { kind: "leave", removed: false, memberCount: 2, ownerId: "m2", ownerTransferred: false, roleUpdates: [] }
+  );
+  // メンバーが誰も残っていない再実行（グループの文書だけが残った）も、グループごと削除にする
+  assert.deepEqual(core.planMembershipRemoval({ uid: "owner", ownerId: "owner", members: [] }), {
+    kind: "delete_group",
+    removed: false,
+  });
+});
+
+test("planMembershipRemoval: 壊れた状態（オーナーの記録が残りにいない・オーナーが2人）は1人にそろえる", () => {
+  const plan = core.planMembershipRemoval({
+    uid: "m9",
+    ownerId: "ghost", // メンバーにいない
+    members: [member("m1", 300, "owner"), member("m2", 200), member("m3", 400, "owner")],
+  });
+  assert.equal(plan.kind, "leave");
+  assert.equal(plan.removed, false);
+  assert.equal(plan.memberCount, 3);
+  assert.equal(plan.ownerId, "m2");
+  assert.equal(plan.ownerTransferred, true);
+  assert.deepEqual(sortedUpdates(plan), [
+    { uid: "m1", role: "member" },
+    { uid: "m2", role: "owner" },
+    { uid: "m3", role: "member" },
+  ]);
+});
+
+test("planMembershipRemoval: オーナーの記録が文字列でなくても、残りから選び直す", () => {
+  const plan = core.planMembershipRemoval({
+    uid: "m1",
+    ownerId: undefined,
+    members: [member("m1", 100), member("m2", 200)],
+  });
+  assert.equal(plan.ownerId, "m2");
+  assert.equal(plan.ownerTransferred, true);
+  assert.deepEqual(sortedUpdates(plan), [{ uid: "m2", role: "owner" }]);
+});
+
+test("planMembershipRemoval: 人数は残りの数で決める（保存された人数に依らない）", () => {
+  const members = Array.from({ length: 20 }, (_, i) => member(`m${String(i).padStart(2, "0")}`, i));
+  const plan = core.planMembershipRemoval({ uid: "m05", ownerId: "m00", members });
+  assert.equal(plan.memberCount, 19);
+});
+
+// ============================================================
+// buildReportForwardPayload（要件7.1・7.2）
+// ============================================================
+
+/** 通報の記録（禁止の項目を、わざと混ぜてある）。 */
+function reportRecord(overrides = {}) {
+  return {
+    reportId: "g1_s1_reporterUid",
+    groupId: "g1",
+    skyId: "s1",
+    authorId: "authorUid",
+    reporterId: "reporterUid",
+    reason: "spam",
+    createdAt: { toMillis: () => Date.UTC(2026, 9, 8, 0, 0, 0) },
+    // ↓ 本文に載せてはいけない値（記録には無い項目だが、混ざっても本文に出ないことを確かめる）
+    caption: "SECRET_CAPTION",
+    groupName: "SECRET_GROUP",
+    displayName: "SECRET_NAME",
+    inviteCode: "SECRETCD",
+    imagePath: "soratomo/g1/authorUid/s1/display.jpg",
+    imageUrl: "https://example.com/secret.jpg",
+    ...overrides,
+  };
+}
+
+test("buildReportForwardPayload: ユーザー名・題名・理由（日本語の名前と値）・ID・時刻を載せる", () => {
+  const payload = core.buildReportForwardPayload(reportRecord());
+  assert.equal(payload.username, "そらとも 通報");
+  assert.equal(payload.embeds.length, 1);
+  const embed = payload.embeds[0];
+  assert.equal(embed.title, "そらともの通報が届きました");
+  assert.equal(embed.timestamp, "2026-10-08T00:00:00.000Z");
+  const fields = Object.fromEntries(embed.fields.map((f) => [f.name, f.value]));
+  assert.deepEqual(fields, {
+    理由: "スパム・迷惑行為（spam）",
+    reportId: "`g1_s1_reporterUid`",
+    groupId: "`g1`",
+    skyId: "`s1`",
+    投稿者のuid: "`authorUid`",
+    通報者のuid: "`reporterUid`",
+  });
+  // 本文の ID で誰かへの @ 通知が飛ばないようにする
+  assert.deepEqual(payload.allowed_mentions, { parse: [] });
+});
+
+test("buildReportForwardPayload: キーは決まったものだけで、キャプション・名前・コード・画像とURLが出ない（7.2）", () => {
+  const payload = core.buildReportForwardPayload(reportRecord());
+  assert.deepEqual(Object.keys(payload).sort(), ["allowed_mentions", "embeds", "username"]);
+  assert.deepEqual(Object.keys(payload.embeds[0]).sort(), ["color", "fields", "timestamp", "title"]);
+  for (const field of payload.embeds[0].fields) {
+    assert.deepEqual(Object.keys(field).sort(), ["inline", "name", "value"]);
+  }
+  const json = JSON.stringify(payload);
+  for (const secret of ["SECRET_CAPTION", "SECRET_GROUP", "SECRET_NAME", "SECRETCD", "display.jpg", "soratomo/", "http"]) {
+    assert.ok(!json.includes(secret), `本文に載せてはいけない値が出た: ${secret}`);
+  }
+});
+
+test("buildReportForwardPayload: 知らない理由は「不明」で、入力の文字列をそのまま出さない", () => {
+  const payload = core.buildReportForwardPayload(reportRecord({ reason: "<@everyone> 自由記述" }));
+  const reasonField = payload.embeds[0].fields.find((f) => f.name === "理由");
+  assert.equal(reasonField.value, "不明");
+  assert.ok(!JSON.stringify(payload).includes("everyone"));
+});
+
+test("buildReportForwardPayload: 文字列でない ID は「不明」・時刻が読めなければ timestamp を付けない", () => {
+  const payload = core.buildReportForwardPayload(reportRecord({ authorId: null, skyId: 123, createdAt: undefined }));
+  const fields = Object.fromEntries(payload.embeds[0].fields.map((f) => [f.name, f.value]));
+  assert.equal(fields.投稿者のuid, "不明");
+  assert.equal(fields.skyId, "不明");
+  assert.ok(!("timestamp" in payload.embeds[0]));
+  // 時刻はミリ秒の数値でも受け付ける
+  const withMs = core.buildReportForwardPayload(reportRecord({ createdAt: Date.UTC(2026, 0, 2, 3, 4, 5) }));
+  assert.equal(withMs.embeds[0].timestamp, "2026-01-02T03:04:05.000Z");
+});

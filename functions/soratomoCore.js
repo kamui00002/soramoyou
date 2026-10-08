@@ -56,6 +56,51 @@ const FALLBACK_NAME = "だれか";
  */
 const INVITE_CODE_SEPARATORS = /[\s\-\u2010-\u2015\u2212\uFE63\uFF0D\u30FC\uFF70]/gu;
 
+// MARK: - 定数（公開前ゲート・soratomo-release-gate）
+
+/**
+ * そらともガイドラインの現行の版（release-gate 要件10.9）。
+ * ⚠️ iOS の SoratomoGuideline.currentVersion と一致させること（両方の単体テストで値を固定している）。
+ *    片方だけ上げると、アプリで同意しても outdated_guideline で拒否され続ける（または古い版の同意を認める）。
+ */
+const GUIDELINE_VERSION = 1;
+/**
+ * 通報の理由（release-gate 要件6.6）。iOS の ReportReason の rawValue と同じ5つ。
+ * 並びは REPORT_REASON_LABELS のキーの並びと同じにする（テストで固定）。
+ */
+const REPORT_REASONS = Object.freeze(["inappropriate", "spam", "harassment", "copyright", "other"]);
+/**
+ * 通報の理由の日本語名（Discord の本文に出す・release-gate 要件7.2）。
+ * ⚠️ iOS の ReportReason.displayName と同じ文にする（通報した人が選んだ名前と、開発者が見る名前をそろえる）。
+ */
+const REPORT_REASON_LABELS = Object.freeze({
+  inappropriate: "不適切なコンテンツ",
+  spam: "スパム・迷惑行為",
+  harassment: "嫌がらせ・誹謗中傷",
+  copyright: "著作権侵害",
+  other: "その他",
+});
+/** 投稿の画像の幅・高さの上限（ピクセル）。旧ルールの isValidSoratomoDimension と同じ（release-gate 要件11.5）。 */
+const SKY_DIMENSION_MAX = 2048;
+/** 投稿のキャプションの上限（コードポイント数）。旧ルールの isValidSoratomoCaption と同じ（soratomo 要件11.11）。 */
+const CAPTION_MAX = 100;
+
+/**
+ * グループID・投稿IDの形（Firestore の自動ID＝英数字。実際は20文字だが、テストの短いIDも通すため 1〜64 文字）。
+ * 「_」を許さないのは、通報の記録のID（{groupId}_{skyId}_{reporterId}）を、別の組と同じにしないため。
+ * グループの作成（soratomoStore.createGroupTx の doc()）も、アプリの投稿ID（SoratomoSkyService.newSkyId の
+ * document().documentID）も自動IDなので、正しい要求はこの形から外れない。
+ */
+const AUTO_ID_PATTERN = /^[A-Za-z0-9]{1,64}$/;
+/** キャプションに含めてはいけない改行類（CR・LF・U+0085・U+2028・U+2029。旧ルールと同じ5種）。 */
+const CAPTION_LINE_BREAKS = /[\r\n\u0085\u2028\u2029]/u;
+/** カタカナのうち、対応するひらがながあるもの（ァ〜ヶ U+30A1〜U+30F6・ヽヾ U+30FD〜U+30FE）。 */
+const KATAKANA_WITH_HIRAGANA = /[\u30A1-\u30F6\u30FD\u30FE]/gu;
+/** カタカナとひらがなのコードポイントの差（ア U+30A2 − あ U+3042）。 */
+const KATAKANA_TO_HIRAGANA_OFFSET = 0x60;
+/** Discord の本文で、読めない値の代わりに出す語。 */
+const UNKNOWN_LABEL = "不明";
+
 // MARK: - 招待コード
 
 /**
@@ -243,6 +288,259 @@ function summarizeNotifyOutcomes(groupId, skyId, outcomes) {
   return summary;
 }
 
+// MARK: - NGワード（公開前ゲート・release-gate 要件11.2）
+//
+// ⚠️ 該当した語は、戻り値・ログ・応答のどこにも出さない（要件11.9・14.2）。ここは真偽値だけを返す。
+
+/**
+ * NGワードの照合のための正規化。語と入力の両方に同じものをかける。
+ * 順序: NFKC（全角英数→半角・半角カナ→全角カナ。半角の濁点も1文字に合成される）→ 小文字 →
+ *       カタカナ（ひらがなのあるもの）→ ひらがな。
+ * 空白と記号は取り除かない（要件11の補足。「て す と」は「てすと」と同じにしない）。
+ * @param {string} text
+ * @returns {string}
+ */
+function normalizeForNgCheck(text) {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(KATAKANA_WITH_HIRAGANA, (ch) => String.fromCodePoint(ch.codePointAt(0) - KATAKANA_TO_HIRAGANA_OFFSET));
+}
+
+/**
+ * 語のリスト（soratomoConfig/ngWords の words）を照合に使える形にする。
+ * 正規化し、文字列でないもの・空・空白だけの語・重複を除く。
+ * 空や空白だけの語を残すと「どの文にも含まれる」と判定され、すべての作成と投稿を拒否してしまうため除く。
+ * @param {unknown} rawWords
+ * @returns {string[]} 正規化済みの語（元の並びで、重複は最初の1つだけ）
+ */
+function prepareNgWords(rawWords) {
+  if (!Array.isArray(rawWords)) return [];
+  const prepared = new Set();
+  for (const raw of rawWords) {
+    if (typeof raw !== "string") continue;
+    const word = normalizeForNgCheck(raw);
+    if (word.trim().length === 0) continue;
+    prepared.add(word);
+  }
+  return [...prepared];
+}
+
+/**
+ * 入力が、語のいずれかを一部に含むか（正規化した部分一致）。
+ * @param {unknown} text グループ名やキャプション。文字列でなければ（キャプション無しなど）該当しない
+ * @param {string[]} preparedWords prepareNgWords の戻り値
+ * @returns {boolean}
+ */
+function containsNgWord(text, preparedWords) {
+  if (typeof text !== "string" || text.length === 0) return false;
+  const normalized = normalizeForNgCheck(text);
+  // 空の語は "".includes ではなく text.includes("") で常に真になる。準備を通さずに渡されても全部を拒否しない。
+  return preparedWords.some((word) => word.length > 0 && normalized.includes(word));
+}
+
+// MARK: - 投稿の入力の検査（公開前ゲート・release-gate 要件11.5）
+
+/**
+ * グループID・投稿IDの形か（英数字の自動ID）。
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isAutoId(value) {
+  return typeof value === "string" && AUTO_ID_PATTERN.test(value);
+}
+
+/**
+ * 画像の幅・高さとして正しいか（1〜2048 の整数）。旧ルールの isValidSoratomoDimension と同じ。
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isValidDimension(value) {
+  return Number.isInteger(value) && value >= 1 && value <= SKY_DIMENSION_MAX;
+}
+
+/**
+ * キャプションとして正しいか（1〜100 コードポイントの文字列で、改行類5種を含まない）。旧ルールの
+ * isValidSoratomoCaption と同じ。長さは UTF-16 の単位でなくコードポイントで数える（絵文字1つが1）。
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isValidCaption(value) {
+  if (typeof value !== "string") return false;
+  const length = codePointLength(value);
+  return length >= 1 && length <= CAPTION_MAX && !CAPTION_LINE_BREAKS.test(value);
+}
+
+/**
+ * 投稿の作成の要求（Callable soratomoCreateSky）を検査する。条件は、作成を閉じる前のルール
+ * （firestore.rules の isValidSoratomoSky）と同じ（幅と高さは 1〜2048 の整数、キャプションは無いか
+ * 1〜100 コードポイントで改行類5種を含まない）。投稿者と作成日時はサーバーが決めるので、要求からは受け取らない。
+ * - キャプションは「キーが無い」ときだけ省略を認める（旧ルールの !('caption' in data) と同じ）。null は拒否する。
+ * - 余分な項目（画像のパスや URL など）は拒否せず、書く値に持ち込まない（書く項目はサーバーが5つに固定する）。
+ * @param {unknown} data 要求の本文
+ * @returns {{ ok: true, value: { groupId: string, skyId: string, caption: string|null, width: number, height: number } }
+ *   | { ok: false }}
+ */
+function validateSkyInput(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return { ok: false };
+  const { groupId, skyId, width, height } = data;
+  if (!isAutoId(groupId) || !isAutoId(skyId)) return { ok: false };
+  if (!isValidDimension(width) || !isValidDimension(height)) return { ok: false };
+  const hasCaption = Object.prototype.hasOwnProperty.call(data, "caption");
+  if (hasCaption && !isValidCaption(data.caption)) return { ok: false };
+  return { ok: true, value: { groupId, skyId, caption: hasCaption ? data.caption : null, width, height } };
+}
+
+// MARK: - 通報（公開前ゲート・release-gate 要件6.6・6.7・7.2）
+
+/**
+ * 通報の理由として認める値か（5つ）。
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isReportReason(value) {
+  return typeof value === "string" && REPORT_REASONS.includes(value);
+}
+
+/**
+ * 通報の記録の文書ID（{groupId}_{skyId}_{reporterId}）。同じ人が同じ投稿を2回通報しても、同じ ID になる（6.7）。
+ * groupId と skyId は「_」を含まない自動IDに限るので、区切りの位置が1つに決まり、別の組と同じ ID にならない。
+ * 呼び手は先に検査しているので、ここで外れるのは実装の誤り（TypeError・配線で internal になる）。
+ * @param {string} groupId
+ * @param {string} skyId
+ * @param {string} reporterId 通報者の uid（認証から取る）
+ * @returns {string}
+ */
+function reportDocId(groupId, skyId, reporterId) {
+  if (!isAutoId(groupId) || !isAutoId(skyId)) {
+    throw new TypeError("soratomo: reportDocId の groupId・skyId が自動IDの形でない");
+  }
+  if (typeof reporterId !== "string" || reporterId.length === 0 || reporterId.length > 128 || reporterId.includes("/")) {
+    throw new TypeError("soratomo: reportDocId の reporterId が文書IDとして使えない");
+  }
+  return `${groupId}_${skyId}_${reporterId}`;
+}
+
+/**
+ * Discord の本文で、ID をコードの書式（`…`）で囲む。ID の「_」が斜体の印として読まれて消えるのを防ぎ、
+ * コピーしやすくする。文字列でない・空なら「不明」。
+ * @param {unknown} id
+ * @returns {string}
+ */
+function idField(id) {
+  return typeof id === "string" && id.length > 0 && !id.includes("`") ? `\`${id}\`` : UNKNOWN_LABEL;
+}
+
+/**
+ * 通報を Discord へ送る本文（Webhook の JSON）を組み立てる（要件7.1・7.2）。
+ * 載せるのは、理由（日本語の名前と値）・通報の記録のID・グループID・投稿ID・投稿者と通報者の uid・受け付けた時刻だけ。
+ * 記録に別の項目が混ざっていても、決まった項目だけを拾うので、キャプション・グループ名・表示名・招待コード・
+ * 画像とその URL は本文に出ない。知らない理由は入力の文字列を出さずに「不明」にする。
+ * @param {{ reportId?: unknown, groupId?: unknown, skyId?: unknown, authorId?: unknown, reporterId?: unknown,
+ *   reason?: unknown, createdAt?: unknown }} report 通報の記録（createdAt は Timestamp かミリ秒）
+ * @returns {Object}
+ */
+function buildReportForwardPayload(report) {
+  const reason = isReportReason(report.reason) ? `${REPORT_REASON_LABELS[report.reason]}（${report.reason}）` : UNKNOWN_LABEL;
+  const embed = {
+    title: "そらともの通報が届きました",
+    color: 0xd9534f, // 通報（赤系）。フィードバックの空色と見分ける
+    fields: [
+      { name: "理由", value: reason, inline: false },
+      { name: "reportId", value: idField(report.reportId), inline: false },
+      { name: "groupId", value: idField(report.groupId), inline: true },
+      { name: "skyId", value: idField(report.skyId), inline: true },
+      { name: "投稿者のuid", value: idField(report.authorId), inline: false },
+      { name: "通報者のuid", value: idField(report.reporterId), inline: false },
+    ],
+  };
+  const createdMs = toMillisOrNull(report.createdAt);
+  if (createdMs !== null) embed.timestamp = new Date(createdMs).toISOString();
+  return {
+    username: "そらとも 通報",
+    embeds: [embed],
+    // 本文の文字列から @ の通知を飛ばさない（ID だけなので通常は起きないが、念のため止めておく）
+    allowed_mentions: { parse: [] },
+  };
+}
+
+// MARK: - オーナーの決定とメンバーを外す計画（公開前ゲート・release-gate 要件2）
+
+/**
+ * 参加日時（ミリ秒）として読める値か。数値で有限のときだけ読み、それ以外は「無い」とみなす。
+ * @param {unknown} value
+ * @returns {number|null}
+ */
+function joinedAtOrNull(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * メンバーの並び: 参加日時の古い順（無いものは最後）、同じなら uid の昇順。
+ * iOS の SoratomoGroupService.sortedForMembers（メンバー一覧の並び）と同じ規則（要件2の補足）。
+ * uid は英数字なので、JS の < と Swift の < は同じ順になる。
+ * @param {{ uid: string, joinedAtMs: unknown }} a
+ * @param {{ uid: string, joinedAtMs: unknown }} b
+ * @returns {number}
+ */
+function compareByJoinOrder(a, b) {
+  const ta = joinedAtOrNull(a.joinedAtMs);
+  const tb = joinedAtOrNull(b.joinedAtMs);
+  if (ta !== tb) {
+    if (ta === null) return 1;
+    if (tb === null) return -1;
+    return ta - tb;
+  }
+  if (a.uid === b.uid) return 0;
+  return a.uid < b.uid ? -1 : 1;
+}
+
+/**
+ * 次のオーナーを1人選ぶ（要件2.5）。参加日時の古い順（無いものは最後）、同じなら uid の昇順で先頭の人。
+ * 入力の配列は並べ替えない。
+ * @param {Array<{ uid: string, role?: string, joinedAtMs: unknown }>} members
+ * @returns {string|null} 0人なら null
+ */
+function pickNextOwner(members) {
+  if (members.length === 0) return null;
+  return [...members].sort(compareByJoinOrder)[0].uid;
+}
+
+/**
+ * 退会者をグループから外す計画を立てる（要件2.1・2.2・2.5・2.6・2.7・2.9・3.4）。書き込みは呼び手
+ * （soratomoDeletion のトランザクション）が行う。招待コードには触れない（2.7）。
+ * - 残りが0人: グループごと削除（delete_group）
+ * - 残りがいる: 人数を残りの数にし（数え直して代入・2.11）、オーナーが残りにいなければ選び直し（2.5）、
+ *   残りの全員の役割を「オーナー1人・ほかは member」にそろえる更新を返す（2.6）。更新は変わる人の分だけ。
+ * - 退会者がすでにメンバーでない再実行でも、同じ整え方を返す（removed が false になるだけ・3.4）。
+ * @param {{ uid: string, ownerId: unknown, members: Array<{ uid: string, role?: string, joinedAtMs: unknown }> }} args
+ *   members はトランザクションで読んだメンバーの全文書（退会者を含んでいてもよい）
+ * @returns {{ kind: "delete_group", removed: boolean }
+ *   | { kind: "leave", removed: boolean, memberCount: number, ownerId: string, ownerTransferred: boolean,
+ *       roleUpdates: Array<{ uid: string, role: "owner"|"member" }> }}
+ */
+function planMembershipRemoval({ uid, ownerId, members }) {
+  const removed = members.some((m) => m.uid === uid);
+  const remaining = members.filter((m) => m.uid !== uid);
+  if (remaining.length === 0) return { kind: "delete_group", removed };
+
+  const ownerStays = typeof ownerId === "string" && remaining.some((m) => m.uid === ownerId);
+  const nextOwnerId = ownerStays ? ownerId : pickNextOwner(remaining);
+  const roleUpdates = [];
+  for (const m of remaining) {
+    const role = m.uid === nextOwnerId ? "owner" : "member";
+    if (m.role !== role) roleUpdates.push({ uid: m.uid, role });
+  }
+  return {
+    kind: "leave",
+    removed,
+    memberCount: remaining.length,
+    ownerId: nextOwnerId,
+    ownerTransferred: nextOwnerId !== ownerId,
+    roleUpdates,
+  };
+}
+
 module.exports = {
   INVITE_ALPHABET,
   INVITE_CODE_LENGTH,
@@ -262,4 +560,20 @@ module.exports = {
   classifyRecipient,
   decideThrottle,
   summarizeNotifyOutcomes,
+  // 公開前ゲート（soratomo-release-gate）
+  GUIDELINE_VERSION,
+  REPORT_REASONS,
+  REPORT_REASON_LABELS,
+  SKY_DIMENSION_MAX,
+  CAPTION_MAX,
+  normalizeForNgCheck,
+  prepareNgWords,
+  containsNgWord,
+  isAutoId,
+  validateSkyInput,
+  isReportReason,
+  reportDocId,
+  buildReportForwardPayload,
+  pickNextOwner,
+  planMembershipRemoval,
 };
