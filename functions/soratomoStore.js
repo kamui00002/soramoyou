@@ -14,6 +14,7 @@
 //   NGワードを確かめる（release-gate 2.1）。方針を省略すると、検査を黙って飛ばさないよう TypeError にする。
 // - 投稿の作成（createSkyTx・release-gate 2.2）もここに置く。利用停止・メンバー・NGワードを確かめてから書く。
 // - 通報の受け付け（reportSkyTx・release-gate 2.3）もここに置く。記録は soratomoReports（グループの外）に作る。
+// - ガイドラインへの同意の記録（agreeGuidelineTx・release-gate 2.4）もここに置く。soratomoUsers/{uid} に merge で書く。
 // - テストは soratomoStore.test.js（Firestore のエミュレーターに対して直接呼ぶ）。
 //
 // ⚠️ Firestore のトランザクションは「読みを全部終えてから書く」決まり。招待コードの重なりの確認（最大5回の読み）も
@@ -51,9 +52,10 @@ class SoratomoDomainError extends Error {
   /**
    * @param {"flag_off"|"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner"
    *   |"suspended"|"consent_required"|"ng_word"|"invalid_input"|"not_member"|"invalid_reason"|"sky_not_found"
-   *   |"self_report"} reason
-   * @param {{ currentVersion: number }|null} [details] 利用者へ返してよい詳細。いまは consent_required の
-   *   現行のガイドラインの版だけ（アプリが「同意が要る」と「アプリが古い」を見分けるため・release-gate 2.1）。
+   *   |"self_report"|"outdated_guideline"} reason
+   * @param {{ currentVersion: number }|null} [details] 利用者へ返してよい詳細。いまは consent_required と
+   *   outdated_guideline の現行のガイドラインの版だけ（アプリが「同意が要る」と「アプリが古い」を見分けるため・
+   *   release-gate 2.1・2.4）。
    *   配線が HttpsError の details に写す（tasks 4.1）。gRPC の code はここにも持たせない（上の ⚠️）。
    */
   constructor(reason, details = null) {
@@ -393,6 +395,40 @@ async function reportSkyTx(db, { uid, input }) {
   });
 }
 
+// MARK: - ガイドラインへの同意の記録
+
+/**
+ * そらともガイドラインへの同意を記録する（release-gate 10.6・10.9・10.14）。
+ * 判定の順: 方針（TypeError）→ invalid_input（版が整数でない・トランザクションの前）→
+ * outdated_guideline（現行の版と違う。古い版も、新しすぎる版も）→ 記録。
+ * - 書くのは認証の uid の文書だけ（要求に uid を書かせない）。項目は同意した版・サーバー時刻の同意日時・更新日時の3つで、
+ *   merge で書き、所属数・所属の写し・作成の要求IDなどの既存の項目は壊さない
+ * - 拒否では何も書かない（文書の無い人に文書を作らない）。outdated_guideline には現行の版を details に付ける
+ *   （アプリが「アプリが古い」を案内するため）
+ * - 利用者の文書を読んでから書くトランザクションにする。退会の削除の最後の確認（同じ文書を読んで消す）と直列にするため
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ uid: string, input: unknown, policy: { guidelineVersion: number } }} params
+ *   input は要求の本文（{ version }）。policy は省略できない（assertPolicy）
+ * @returns {Promise<{ version: number }>}
+ */
+async function agreeGuidelineTx(db, { uid, input, policy }) {
+  assertUid(uid);
+  assertPolicy(policy, { needsVersion: true, needsNgWord: false });
+  const version = input && typeof input === "object" && !Array.isArray(input) ? input.version : undefined;
+  if (!Number.isInteger(version)) throw new SoratomoDomainError("invalid_input");
+  if (version !== policy.guidelineVersion) {
+    throw new SoratomoDomainError("outdated_guideline", { currentVersion: policy.guidelineVersion });
+  }
+
+  const userRef = db.collection(USERS).doc(uid);
+  return db.runTransaction(async (tx) => {
+    await tx.get(userRef);
+    const now = FieldValue.serverTimestamp();
+    tx.set(userRef, { guidelineVersion: version, guidelineAgreedAt: now, updatedAt: now }, { merge: true });
+    return { version };
+  });
+}
+
 // MARK: - 再発行
 
 /**
@@ -465,6 +501,7 @@ module.exports = {
   joinGroupTx,
   createSkyTx,
   reportSkyTx,
+  agreeGuidelineTx,
   regenerateInviteCodeTx,
   claimNotifySlot,
 };

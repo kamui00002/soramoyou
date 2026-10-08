@@ -1006,6 +1006,113 @@ test("通報: 投稿の投稿者が壊れていたら、記録を作らずにド
   assert.equal((await reportDocs()).length, 0);
 });
 
+// MARK: - ガイドラインへの同意の記録（agreeGuidelineTx・release-gate 2.4）
+
+/** 同意の記録に渡す方針（現行のガイドラインの版だけ）。 */
+const AGREE_POLICY = Object.freeze({ guidelineVersion: core.GUIDELINE_VERSION });
+
+test("同意の記録: 現行の版なら、版・サーバー時刻の同意日時・更新日時を書き、所属数などの既存の項目を壊さない", async () => {
+  const userRef = db.collection(USERS).doc("alice");
+  await seedMemberships("alice", 3);
+  await userRef.set({ lastCreateRequestId: "req-1", lastCreatedGroupId: "g9" }, { merge: true });
+  const beforeMs = Date.now();
+
+  const result = await store.agreeGuidelineTx(db, { uid: "alice", input: { version: core.GUIDELINE_VERSION }, policy: AGREE_POLICY });
+  assert.deepEqual(result, { version: core.GUIDELINE_VERSION });
+
+  const user = (await userRef.get()).data();
+  assert.equal(user.guidelineVersion, core.GUIDELINE_VERSION);
+  assert.ok(user.guidelineAgreedAt instanceof Timestamp);
+  assert.ok(Math.abs(user.guidelineAgreedAt.toMillis() - beforeMs) < 60_000, "同意日時はサーバーの時刻");
+  assert.ok(user.updatedAt instanceof Timestamp);
+  assert.equal(user.groupCount, 3, "所属数を残す");
+  assert.equal(user.lastCreateRequestId, "req-1");
+  assert.equal(user.lastCreatedGroupId, "g9");
+  assert.equal(await userGroupDocCount("alice"), 3, "所属の写しを残す");
+
+  // 記録した後は、作成と参加が通る
+  await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "r1", policy: POLICY });
+});
+
+test("同意の記録: 文書の無い人（初めての人）も記録でき、作成・参加の同意として効く", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+  await store.agreeGuidelineTx(db, { uid: "carol", input: { version: core.GUIDELINE_VERSION }, policy: AGREE_POLICY });
+  const user = (await db.collection(USERS).doc("carol").get()).data();
+  assert.equal(user.guidelineVersion, core.GUIDELINE_VERSION);
+  assert.equal(user.groupCount, undefined, "所属数は書かない");
+  assert.deepEqual(await store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA", policy: POLICY }), { groupId: "g1", alreadyMember: false });
+});
+
+test("同意の記録: 古い版・新しすぎる版は outdated_guideline（details に現行の版）で、何も書かない", async () => {
+  await seedMemberships("alice", 2);
+  const details = { currentVersion: core.GUIDELINE_VERSION };
+  for (const version of [core.GUIDELINE_VERSION - 1, core.GUIDELINE_VERSION + 1]) {
+    await assert.rejects(
+      store.agreeGuidelineTx(db, { uid: "alice", input: { version }, policy: AGREE_POLICY }),
+      domainError("outdated_guideline", details),
+      `版 ${version}`
+    );
+    await assert.rejects(
+      store.agreeGuidelineTx(db, { uid: "nodoc", input: { version }, policy: AGREE_POLICY }),
+      domainError("outdated_guideline", details),
+      `版 ${version}`
+    );
+  }
+  const user = (await db.collection(USERS).doc("alice").get()).data();
+  assert.equal(user.guidelineVersion, undefined, "古い版を現行の版として記録しない");
+  assert.equal(user.guidelineAgreedAt, undefined);
+  assert.equal(user.groupCount, 2);
+  assert.equal((await db.collection(USERS).doc("nodoc").get()).exists, false, "拒否では文書を作らない");
+
+  // 版を上げたら、前の版での同意の要求は outdated（記録済みの前の版も書き換えない）
+  await agree("bob");
+  const bumped = { guidelineVersion: core.GUIDELINE_VERSION + 1 };
+  await assert.rejects(
+    store.agreeGuidelineTx(db, { uid: "bob", input: { version: core.GUIDELINE_VERSION }, policy: bumped }),
+    domainError("outdated_guideline", { currentVersion: core.GUIDELINE_VERSION + 1 })
+  );
+  assert.equal((await db.collection(USERS).doc("bob").get()).get("guidelineVersion"), core.GUIDELINE_VERSION);
+});
+
+test("同意の記録: 版が整数でない（文字列・小数・無い・null）・本文が無いのは invalid_input で、何も書かない", async () => {
+  const inputs = [
+    { version: String(core.GUIDELINE_VERSION) },
+    { version: core.GUIDELINE_VERSION + 0.5 },
+    { version: null },
+    {},
+    null,
+    "1",
+    [core.GUIDELINE_VERSION],
+  ];
+  for (const [i, input] of inputs.entries()) {
+    await assert.rejects(store.agreeGuidelineTx(db, { uid: "alice", input, policy: AGREE_POLICY }), domainError("invalid_input", null), `入力 ${i}`);
+  }
+  assert.equal((await db.collection(USERS).get()).size, 0);
+});
+
+test("同意の記録: 書くのは認証の uid の文書だけ（要求に uid を書いても、ほかの人の文書には書かない）", async () => {
+  await store.agreeGuidelineTx(db, {
+    uid: "alice",
+    input: { version: core.GUIDELINE_VERSION, uid: "mallory", guidelineVersion: 99, groupCount: 10 },
+    policy: AGREE_POLICY,
+  });
+  assert.equal((await db.collection(USERS).doc("mallory").get()).exists, false);
+  const user = (await db.collection(USERS).doc("alice").get()).data();
+  assert.deepEqual(Object.keys(user).sort(), ["guidelineAgreedAt", "guidelineVersion", "updatedAt"], "要求のほかの項目を持ち込まない");
+  assert.equal(user.guidelineVersion, core.GUIDELINE_VERSION);
+});
+
+test("同意の記録: 方針の省略・版が整数でない方針は TypeError で、何も書かない", async () => {
+  for (const [i, policy] of [undefined, null, {}, { guidelineVersion: "1" }, { guidelineVersion: 0 }].entries()) {
+    await assert.rejects(
+      store.agreeGuidelineTx(db, { uid: "alice", input: { version: core.GUIDELINE_VERSION }, policy }),
+      TypeError,
+      `方針 ${i}`
+    );
+  }
+  assert.equal((await db.collection(USERS).get()).size, 0);
+});
+
 // MARK: - 再発行（regenerateInviteCodeTx）
 
 test("再発行: オーナーなら新しいコードに替わり、古いコードでの参加は not_found、新しいコードでは参加できる", async () => {
