@@ -238,3 +238,35 @@ final class MockSoratomoProfileService: SoratomoProfileServiceProtocol, @uncheck
         try setNotifySoratomoResult.soratomoValue()
     }
 }
+
+// MARK: - 通報とブロック（release-gate 9.2）
+
+/// `SoratomoModerationServiceProtocol` のモック
+///
+/// ⚠️ 本物と違い、ブロックが成功しても `.userBlocked` を送らない（呼ばれた引数を記録するだけ）。
+final class MockSoratomoModerationService: SoratomoModerationServiceProtocol, @unchecked Sendable {
+    // 返す結果
+    var reportResult: Result<Void, SoratomoError> = .failure(.unknown)
+    var blockResult: Result<Void, SoratomoError> = .failure(.unknown)
+    var fetchBlockedUserIdsResult: Result<Set<String>, SoratomoError> = .failure(.unknown)
+
+    // 呼ばれた引数
+    private(set) var reportCalls: [(groupId: String, skyId: String, reason: ReportReason)] = []
+    private(set) var blockCalls: [(uid: String, authorId: String)] = []
+    private(set) var fetchBlockedUserIdsCalls: [String] = []
+
+    func report(groupId: String, skyId: String, reason: ReportReason) async throws(SoratomoError) {
+        reportCalls.append((groupId, skyId, reason))
+        try reportResult.soratomoValue()
+    }
+
+    func block(uid: String, authorId: String) async throws(SoratomoError) {
+        blockCalls.append((uid, authorId))
+        try blockResult.soratomoValue()
+    }
+
+    func fetchBlockedUserIds(uid: String) async throws(SoratomoError) -> Set<String> {
+        fetchBlockedUserIdsCalls.append(uid)
+        return try fetchBlockedUserIdsResult.soratomoValue()
+    }
+}

@@ -258,3 +258,21 @@ protocol SoratomoProfileServiceProtocol: Sendable {
     /// そらとも通知のオン・オフを保存する（`users/{uid}.notifySoratomo` だけを更新）
     func setNotifySoratomo(uid: String, enabled: Bool) async throws(SoratomoError)
 }
+
+// MARK: - 通報とブロック（release-gate 9.2）
+
+/// 通報とブロックのサービス
+///
+/// - 失敗はすべて `SoratomoError` に写して投げる。サーバーの文言は画面に出さない。
+/// - ブロックが保存されたら、既存のブロックの通知（`.userBlocked`）を送る。失敗したら送らない（要件 9.9）。
+/// - 通報されたこと・ブロックされたことを、相手やほかのメンバーに知らせない（要件 5.9・9.10）。
+protocol SoratomoModerationServiceProtocol: Sendable {
+    /// 投稿を通報する（Callable `soratomoReportSky`・20 秒）。同じ投稿の 2 回目も成功で返る（要件 6.7）
+    func report(groupId: String, skyId: String, reason: ReportReason) async throws(SoratomoError)
+
+    /// 投稿者をブロックする（`users/{uid}.blockedUserIds` に足す。圏外では `.network` で失敗し、端末内に積まれない）
+    func block(uid: String, authorId: String) async throws(SoratomoError)
+
+    /// ブロックの一覧（`users/{uid}.blockedUserIds`）を読む
+    func fetchBlockedUserIds(uid: String) async throws(SoratomoError) -> Set<String>
+}
