@@ -77,6 +77,22 @@ const app = initializeApp({ projectId: PROJECT_ID });
 const fns = require("./soratomo");
 Module._load = originalLoad;
 const db = getFirestore(app);
+const core = require("./soratomoCore");
+
+/**
+ * 語のリスト（soratomoConfig/ngWords）に入れるダミーの語（実在の語は書かない・release-gate の「進め方の約束」）。
+ * ⚠️ soratomo.js の語のリストの提供口はモジュールの中に1つで、5分キャッシュする。各テストの前に文書を全部消しても
+ *    キャッシュは残るので、どのテストでも同じ中身を入れ直す（中身を変えると、テストの順で結果が変わる）。
+ *    「文書が無いときは internal」のテスト（tasks 4.5）は、この形では書けない。4.5 で提供口を差し替える口を考える。
+ */
+const NG_WORDS = ["てすとごい"];
+
+/** 利用者が現行の版のガイドラインに同意した状態を入れる（release-gate 2.1）。ほかの項目は merge で残す。 */
+async function agree(...uids) {
+  for (const uid of uids) {
+    await db.collection("soratomoUsers").doc(uid).set({ guidelineVersion: core.GUIDELINE_VERSION }, { merge: true });
+  }
+}
 
 // MARK: - 下ごしらえ
 
@@ -84,6 +100,7 @@ test.beforeEach(async () => {
   const url = `http://${EMULATOR_HOST}/emulator/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
   const res = await fetch(url, { method: "DELETE" });
   assert.equal(res.ok, true, `エミュレーターの文書を消せなかった: HTTP ${res.status}`);
+  await db.collection("soratomoConfig").doc("ngWords").set({ words: NG_WORDS });
   record.sends = [];
   record.logs = [];
   record.getUsersCalls = [];
@@ -169,6 +186,7 @@ test("Callable: 3本とも、クレームが無い・true でなければ permis
 // MARK: - Callable: 作成・参加・再発行（8.1）
 
 test("作成: 結果を返し、ログには uid と groupId だけを出す（名前・コードを出さない）", async () => {
+  await agree("alice");
   const result = await call("soratomoCreateGroup", authOf("alice"), { name: "ひみつの空の会", requestId: "r1" });
   assert.deepEqual(Object.keys(result).sort(), ["groupId", "inviteCode", "memberCount", "name"]);
   assert.equal(result.name, "ひみつの空の会");
@@ -186,7 +204,7 @@ test("作成: 名前が不正なら invalid-argument（invalid_name）、所属1
     call("soratomoCreateGroup", authOf("alice"), { name: "  ", requestId: "r1" }),
     httpsError("invalid-argument", "invalid_name")
   );
-  await db.collection("soratomoUsers").doc("alice").set({ groupCount: 10 });
+  await db.collection("soratomoUsers").doc("alice").set({ groupCount: 10, guidelineVersion: core.GUIDELINE_VERSION });
   await assert.rejects(
     call("soratomoCreateGroup", authOf("alice"), { name: "空の会", requestId: "r2" }),
     httpsError("resource-exhausted", "user_limit")
@@ -203,6 +221,7 @@ test("参加: 成功と既存のメンバー、形の誤り・不在・満員・
   await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
   const full = Array.from({ length: 20 }, (_, i) => `m${i}`);
   await seedGroup({ groupId: "full", ownerId: "m0", inviteCode: "SKYFULLA", memberIds: full });
+  await agree("bob");
 
   assert.deepEqual(await call("soratomoJoinGroup", authOf("bob"), { code: "sky-aaaaa" }), { groupId: "g1", alreadyMember: false });
   assert.deepEqual(await call("soratomoJoinGroup", authOf("bob"), { code: "SKYAAAAA" }), { groupId: "g1", alreadyMember: true });
@@ -210,7 +229,7 @@ test("参加: 成功と既存のメンバー、形の誤り・不在・満員・
   await assert.rejects(call("soratomoJoinGroup", authOf("bob"), { code: "SKY" }), httpsError("invalid-argument", "invalid_format"));
   await assert.rejects(call("soratomoJoinGroup", authOf("bob"), { code: "SKYBBBBB" }), httpsError("not-found", "not_found"));
   await assert.rejects(call("soratomoJoinGroup", authOf("bob"), { code: "SKYFULLA" }), httpsError("resource-exhausted", "group_full"));
-  await db.collection("soratomoUsers").doc("carol").set({ groupCount: 10 });
+  await db.collection("soratomoUsers").doc("carol").set({ groupCount: 10, guidelineVersion: core.GUIDELINE_VERSION });
   await assert.rejects(call("soratomoJoinGroup", authOf("carol"), { code: "SKYAAAAA" }), httpsError("resource-exhausted", "user_limit"));
 
   assert.ok(!allLogs().includes("SKYAAAAA"), "招待コードをログに出さない");
@@ -232,6 +251,31 @@ test("再発行: オーナーは新しいコード、メンバーは permission-
   assert.notEqual(inviteCode, "SKYAAAAA");
   assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("inviteCode"), inviteCode);
   assert.ok(!allLogs().includes(inviteCode), "新しい招待コードをログに出さない");
+});
+
+test("作成と参加: 方針を渡す — 同意の無い人は作成も参加もできず、語を含む名前は作られず、語と名前をログに出さない", async () => {
+  // release-gate 2.1 で配線した方針（現行のガイドラインの版・語のリストの判定）が、Callable から届いていることを見る。
+  // 拒否の code と details.reason への写像は tasks 4.1 で足す（それまでは internal）。ここでは「拒否されて何も書かない」だけを見て、
+  // code と理由は 4.5 で固定する。
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+
+  await assert.rejects(call("soratomoCreateGroup", authOf("alice"), { name: "空の会", requestId: "r1" }));
+  await assert.rejects(call("soratomoJoinGroup", authOf("alice"), { code: "SKYAAAAA" }));
+  assert.equal((await db.collection("soratomoGroups").get()).size, 1, "同意が無ければ作らない");
+  assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("memberCount"), 1, "同意が無ければ参加させない");
+
+  await agree("alice");
+  await assert.rejects(call("soratomoCreateGroup", authOf("alice"), { name: "テストゴイの空", requestId: "r2" }));
+  assert.equal((await db.collection("soratomoGroups").get()).size, 1, "語を含む名前では作らない");
+
+  const created = await call("soratomoCreateGroup", authOf("alice"), { name: "空の会", requestId: "r3" });
+  assert.equal(created.name, "空の会", "同意があり語を含まない名前なら作る（現行の版が届いている）");
+  assert.deepEqual(await call("soratomoJoinGroup", authOf("alice"), { code: "SKYAAAAA" }), { groupId: "g1", alreadyMember: false });
+
+  const logs = allLogs();
+  for (const secret of ["テストゴイの空", ...NG_WORDS]) {
+    assert.ok(!logs.includes(secret), `ログに「${secret}」を出さない`);
+  }
 });
 
 // MARK: - トリガー: onSoratomoSkyCreated（8.2）

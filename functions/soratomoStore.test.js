@@ -16,6 +16,7 @@
 //    確かめてから、正しい実装で通す。壊し方は handoffs の「壊し方_7.json」にある。
 //
 // ⚠️ package.json の lint / test への登録は tasks 8.3 で行う（エミュレーターが要るので、登録の形も 8.3 で決める）。
+// ⚠️ release-gate 2.1 から、作成と参加には方針（POLICY）が要り、作成・参加する人には同意（agree）が要る。
 //
 
 "use strict";
@@ -46,6 +47,18 @@ const db = getFirestore(app);
 const GROUPS = "soratomoGroups";
 const CODES = "soratomoInviteCodes";
 const USERS = "soratomoUsers";
+
+/**
+ * 作成と参加に渡す方針（release-gate 2.1）。現行のガイドラインの版と、どの名前も該当しない NGワードの判定。
+ * 同意の判定は「利用者の文書の版が、この版と等しいか」なので、作成・参加する人は agree() で同意を入れておく。
+ */
+const POLICY = Object.freeze({ guidelineVersion: core.GUIDELINE_VERSION, containsNgWord: () => false });
+
+/** ダミーの語（実在の語は書かない・tasks の「進め方の約束」）で作った NGワードの判定つきの方針。 */
+const NG_POLICY = Object.freeze({
+  guidelineVersion: core.GUIDELINE_VERSION,
+  containsNgWord: (text) => core.containsNgWord(text, core.prepareNgWords(["てすとごい"])),
+});
 
 // MARK: - 下ごしらえ
 
@@ -99,13 +112,28 @@ async function seedGroup({ groupId, ownerId, inviteCode, memberIds }) {
   await batch.commit();
 }
 
-/** 利用者がすでに n 個のグループに所属している状態（所属数と所属の写し）を入れる。 */
+/**
+ * 利用者がすでに n 個のグループに所属している状態（所属数と所属の写し）を入れる。
+ * agree() で入れた同意を消さないよう merge で書く（release-gate 2.1 で同意が要るようになった）。
+ */
 async function seedMemberships(uid, n) {
   const batch = db.batch();
   const userRef = db.collection(USERS).doc(uid);
-  batch.set(userRef, { groupCount: n, updatedAt: Timestamp.now() });
+  batch.set(userRef, { groupCount: n, updatedAt: Timestamp.now() }, { merge: true });
   for (let i = 0; i < n; i++) {
     batch.set(userRef.collection("groups").doc(`filler-${i}`), { groupId: `filler-${i}`, joinedAt: Timestamp.now() });
+  }
+  await batch.commit();
+}
+
+/**
+ * 利用者が現行の版のガイドラインに同意した状態を入れる（release-gate 2.1）。所属数などほかの項目は merge で残す。
+ * @param {...string} uids
+ */
+async function agree(...uids) {
+  const batch = db.batch();
+  for (const uid of uids) {
+    batch.set(db.collection(USERS).doc(uid), { guidelineVersion: core.GUIDELINE_VERSION, guidelineAgreedAt: Timestamp.now() }, { merge: true });
   }
   await batch.commit();
 }
@@ -129,11 +157,15 @@ async function userGroupDocCount(uid) {
   return (await db.collection(USERS).doc(uid).collection("groups").get()).size;
 }
 
-/** ドメインのエラー（理由つき）であることを確かめる assert.rejects 用の判定。 */
-function domainError(reason) {
+/**
+ * ドメインのエラー（理由つき）であることを確かめる assert.rejects 用の判定。
+ * details を渡したときは、利用者へ返す詳細（release-gate 2.1・consent_required の currentVersion）も確かめる。
+ */
+function domainError(reason, details) {
   return (err) => {
     assert.ok(err instanceof store.SoratomoDomainError, `SoratomoDomainError ではない: ${err && err.stack}`);
     assert.equal(err.reason, reason);
+    if (details !== undefined) assert.deepEqual(err.details, details);
     return true;
   };
 }
@@ -173,7 +205,8 @@ function scriptedRandom(values) {
 // MARK: - 作成（createGroupTx）
 
 test("作成: 作成者をオーナーかつ最初のメンバーにし、所属数・所属の写し・招待コードをそろえて作る", async () => {
-  const result = await store.createGroupTx(db, { uid: "alice", name: "  空の会  ", requestId: "req-1" });
+  await agree("alice");
+  const result = await store.createGroupTx(db, { uid: "alice", name: "  空の会  ", requestId: "req-1", policy: POLICY });
 
   assert.equal(result.name, "空の会", "前後の空白を除いた名前で作る");
   assert.equal(result.memberCount, 1);
@@ -207,10 +240,10 @@ test("作成: 作成者をオーナーかつ最初のメンバーにし、所属
 });
 
 test("作成: 名前が空白だけ・31文字なら invalid_name で、何も書かない", async () => {
-  await assert.rejects(store.createGroupTx(db, { uid: "alice", name: " 　 ", requestId: "r1" }), domainError("invalid_name"));
+  await assert.rejects(store.createGroupTx(db, { uid: "alice", name: " 　 ", requestId: "r1", policy: POLICY }), domainError("invalid_name"));
   const cloud = String.fromCodePoint(0x1f324);
   await assert.rejects(
-    store.createGroupTx(db, { uid: "alice", name: cloud.repeat(31), requestId: "r2" }),
+    store.createGroupTx(db, { uid: "alice", name: cloud.repeat(31), requestId: "r2", policy: POLICY }),
     domainError("invalid_name")
   );
   assert.equal((await db.collection(GROUPS).get()).size, 0);
@@ -218,29 +251,32 @@ test("作成: 名前が空白だけ・31文字なら invalid_name で、何も�
 });
 
 test("作成: 絵文字を含む30文字の名前は通る（コードポイントで数える）", async () => {
+  await agree("alice");
   const cloud = String.fromCodePoint(0x1f324);
-  const result = await store.createGroupTx(db, { uid: "alice", name: cloud.repeat(30), requestId: "r1" });
+  const result = await store.createGroupTx(db, { uid: "alice", name: cloud.repeat(30), requestId: "r1", policy: POLICY });
   assert.equal((await groupData(result.groupId)).name, cloud.repeat(30));
 });
 
 test("作成: 同じ要求IDの再送では前回のグループを返し、2つ目を作らない（冪等）", async () => {
-  const first = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1" });
-  const again = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1" });
+  await agree("alice");
+  const first = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1", policy: POLICY });
+  const again = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1", policy: POLICY });
   assert.deepEqual(again, first);
   assert.equal((await db.collection(GROUPS).get()).size, 1);
   assert.equal((await db.collection(CODES).get()).size, 1);
   assert.equal(await userGroupCount("alice"), 1);
   assert.equal(await userGroupDocCount("alice"), 1);
 
-  const other = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-2" });
+  const other = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-2", policy: POLICY });
   assert.notEqual(other.groupId, first.groupId, "別の要求IDなら新しく作る");
   assert.equal(await userGroupCount("alice"), 2);
 });
 
 test("作成: 同じ要求IDを同時に2回送っても、グループは1つだけ", async () => {
+  await agree("alice");
   const results = await Promise.allSettled([
-    store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1" }),
-    store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1" }),
+    store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1", policy: POLICY }),
+    store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1", policy: POLICY }),
   ]);
   const t = tally(results);
   assert.deepEqual(t.other, []);
@@ -250,32 +286,35 @@ test("作成: 同じ要求IDを同時に2回送っても、グループは1つ�
 });
 
 test("作成: 所属が9個なら作れ、10個なら user_limit で何も書かない", async () => {
+  await agree("alice");
   await seedMemberships("alice", 9);
-  await store.createGroupTx(db, { uid: "alice", name: "10個目", requestId: "r1" });
+  await store.createGroupTx(db, { uid: "alice", name: "10個目", requestId: "r1", policy: POLICY });
   assert.equal(await userGroupCount("alice"), 10);
   assert.equal(await userGroupDocCount("alice"), 10);
 
-  await assert.rejects(store.createGroupTx(db, { uid: "alice", name: "11個目", requestId: "r2" }), domainError("user_limit"));
+  await assert.rejects(store.createGroupTx(db, { uid: "alice", name: "11個目", requestId: "r2", policy: POLICY }), domainError("user_limit"));
   assert.equal(await userGroupCount("alice"), 10);
   assert.equal(await userGroupDocCount("alice"), 10);
   assert.equal((await db.collection(GROUPS).get()).size, 1);
 });
 
 test("作成: 招待コードが既存と重なれば作り直す", async () => {
+  await agree("alice");
   await seedGroup({ groupId: "g-old", ownerId: "bob", inviteCode: "AAAAAAAA", memberIds: ["bob"] });
   // 先の8回は "A"（＝既存と重なる）、そのあとは "B" を返す
   const random = scriptedRandom([0, 0, 0, 0, 0, 0, 0, 0, 1]);
-  const result = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "r1" }, { randomInt: random });
+  const result = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "r1", policy: POLICY }, { randomInt: random });
   assert.equal(result.inviteCode, "BBBBBBBB");
   assert.equal((await db.collection(CODES).doc("AAAAAAAA").get()).get("groupId"), "g-old", "既存のコードは書き換えない");
   assert.equal((await db.collection(CODES).doc("BBBBBBBB").get()).get("groupId"), result.groupId);
 });
 
 test("作成: 招待コードが5回続けて重なれば、ドメインのエラーではない失敗で終え、何も書かない", async () => {
+  await agree("alice");
   await seedGroup({ groupId: "g-old", ownerId: "bob", inviteCode: "AAAAAAAA", memberIds: ["bob"] });
   const random = scriptedRandom([0]);
   await assert.rejects(
-    store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "r1" }, { randomInt: random }),
+    store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "r1", policy: POLICY }, { randomInt: random }),
     (err) => {
       assert.ok(!(err instanceof store.SoratomoDomainError), "想定外の失敗（internal）として扱う");
       return true;
@@ -283,12 +322,13 @@ test("作成: 招待コードが5回続けて重なれば、ドメインのエ�
   );
   assert.equal(random.calls, 5 * core.INVITE_CODE_LENGTH, "作り直しは最大5回");
   assert.equal((await db.collection(GROUPS).get()).size, 1, "種のグループだけ");
-  assert.equal((await db.collection(USERS).get()).size, 0);
+  assert.equal(await userGroupCount("alice"), undefined, "所属数を書かない（同意の文書だけが残る）");
+  assert.equal(await userGroupDocCount("alice"), 0);
 });
 
 test("作成: 要求IDが文字列でなければ、ドメインのエラーではない失敗にする", async () => {
-  await assert.rejects(store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "" }), TypeError);
-  await assert.rejects(store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: 1 }), TypeError);
+  await assert.rejects(store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "", policy: POLICY }), TypeError);
+  await assert.rejects(store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: 1, policy: POLICY }), TypeError);
   assert.equal((await db.collection(GROUPS).get()).size, 0);
 });
 
@@ -297,8 +337,9 @@ test("作成: 要求IDが文字列でなければ、ドメインのエラーで�
 test("参加: メンバーの文書・メンバー数・所属の写し・所属数が、そろって増える", async () => {
   await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
   await seedMemberships("carol", 2);
+  await agree("carol");
 
-  const result = await store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA" });
+  const result = await store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA", policy: POLICY });
   assert.deepEqual(result, { groupId: "g1", alreadyMember: false });
 
   const member = (await db.collection(GROUPS).doc("g1").collection("members").doc("carol").get()).data();
@@ -313,38 +354,46 @@ test("参加: メンバーの文書・メンバー数・所属の写し・所属
   assert.equal((await db.collection("users").get()).size, 0, "利用者の文書（users）には書かない");
 });
 
-test("参加: 初めての利用者（soratomoUsers の文書が無い）でも所属数1で作られる", async () => {
+// release-gate 2.1 から、soratomoUsers の文書が無い人は同意が無いので参加できない（consent_required）。
+// 「初めての利用者」は、同意だけを持ち所属数の項目が無い文書の人になった。
+test("参加: 所属数の項目が無い利用者（同意だけの文書）でも、所属数1で作られる", async () => {
   await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
-  await store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA" });
+  await agree("carol");
+  await store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA", policy: POLICY });
   assert.equal(await userGroupCount("carol"), 1);
   assert.equal(await userGroupDocCount("carol"), 1);
 });
 
 test("参加: 小文字・ハイフン・全角の入力も正規化して照合する", async () => {
   await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
-  const result = await store.joinGroupTx(db, { uid: "carol", code: "sky-aａaaa" });
+  await agree("carol");
+  const result = await store.joinGroupTx(db, { uid: "carol", code: "sky-aａaaa", policy: POLICY });
   assert.equal(result.groupId, "g1");
 });
 
 test("参加: 形が違うコードは invalid_format、無いコードは not_found", async () => {
   await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
-  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKY" }), domainError("invalid_format"));
-  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKY0AAAA" }), domainError("invalid_format"));
-  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKYBBBBB" }), domainError("not_found"));
+  await agree("carol");
+  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKY", policy: POLICY }), domainError("invalid_format"));
+  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKY0AAAA", policy: POLICY }), domainError("invalid_format"));
+  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKYBBBBB", policy: POLICY }), domainError("not_found"));
   assert.equal((await groupData("g1")).memberCount, 1);
-  assert.equal((await db.collection(USERS).get()).size, 0);
+  assert.equal(await userGroupCount("carol"), undefined, "所属数を書かない（同意の文書だけが残る）");
+  assert.equal(await userGroupDocCount("carol"), 0);
 });
 
 test("参加: コードの文書が残っていても、グループの今のコードでなければ not_found", async () => {
   await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+  await agree("carol");
   await db.collection(CODES).doc("SKYPASTA").set({ groupId: "g1", createdAt: Timestamp.now() });
-  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKYPASTA" }), domainError("not_found"));
+  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKYPASTA", policy: POLICY }), domainError("not_found"));
   assert.equal((await groupData("g1")).memberCount, 1);
 });
 
 test("参加: 19人のグループへの1人の参加は通り、20人になる", async () => {
   await seedGroup({ groupId: "g1", ownerId: "m00", inviteCode: "SKYAAAAA", memberIds: memberIds(19) });
-  await store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA" });
+  await agree("carol");
+  await store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA", policy: POLICY });
   assert.equal((await groupData("g1")).memberCount, 20);
   assert.equal(await memberDocCount("g1"), 20);
 });
@@ -353,10 +402,11 @@ test("参加: 20人のグループは group_full、所属10個の人は user_lim
   await seedGroup({ groupId: "full", ownerId: "m00", inviteCode: "SKYFULLA", memberIds: memberIds(20) });
   await seedGroup({ groupId: "g2", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
   await seedMemberships("busy", 10);
+  await agree("carol", "busy");
 
-  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKYFULLA" }), domainError("group_full"));
-  await assert.rejects(store.joinGroupTx(db, { uid: "busy", code: "SKYAAAAA" }), domainError("user_limit"));
-  await assert.rejects(store.joinGroupTx(db, { uid: "busy", code: "SKYFULLA" }), domainError("user_limit"));
+  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKYFULLA", policy: POLICY }), domainError("group_full"));
+  await assert.rejects(store.joinGroupTx(db, { uid: "busy", code: "SKYAAAAA", policy: POLICY }), domainError("user_limit"));
+  await assert.rejects(store.joinGroupTx(db, { uid: "busy", code: "SKYFULLA", policy: POLICY }), domainError("user_limit"));
 
   assert.equal((await groupData("full")).memberCount, 20);
   assert.equal((await groupData("g2")).memberCount, 1);
@@ -367,7 +417,8 @@ test("参加: 20人のグループは group_full、所属10個の人は user_lim
 test("参加: 既存のメンバーの再参加は、上限とは無関係に「既存のメンバー」の印つきの成功で、何も増やさない", async () => {
   await seedGroup({ groupId: "full", ownerId: "m00", inviteCode: "SKYFULLA", memberIds: memberIds(20) });
   await seedMemberships("m05", 10);
-  const result = await store.joinGroupTx(db, { uid: "m05", code: "SKYFULLA" });
+  await agree("m05");
+  const result = await store.joinGroupTx(db, { uid: "m05", code: "SKYFULLA", policy: POLICY });
   assert.deepEqual(result, { groupId: "full", alreadyMember: true });
   assert.equal((await groupData("full")).memberCount, 20);
   assert.equal(await memberDocCount("full"), 20);
@@ -378,7 +429,8 @@ test("参加: 既存のメンバーの再参加は、上限とは無関係に「
 test("同時の参加: 19人のグループへ25人が同時に参加しても、20人を超えない", async (t) => {
   await seedGroup({ groupId: "g1", ownerId: "m00", inviteCode: "SKYAAAAA", memberIds: memberIds(19) });
   const joiners = Array.from({ length: 25 }, (_, i) => `j${String(i).padStart(2, "0")}`);
-  const results = await Promise.allSettled(joiners.map((uid) => store.joinGroupTx(db, { uid, code: "SKYAAAAA" })));
+  await agree(...joiners);
+  const results = await Promise.allSettled(joiners.map((uid) => store.joinGroupTx(db, { uid, code: "SKYAAAAA", policy: POLICY })));
   const r = tally(results);
   t.diagnostic(`成功=${r.ok} 理由=${JSON.stringify(r.reasons)} 競合=${r.contention}`);
 
@@ -398,8 +450,9 @@ test("同時の参加: 所属9個の人が25のグループへ同時に参加し
   const groups = Array.from({ length: 25 }, (_, i) => ({ groupId: `g${i}`, code: seedCode(i) }));
   for (const g of groups) await seedGroup({ groupId: g.groupId, ownerId: `o${g.groupId}`, inviteCode: g.code, memberIds: [`o${g.groupId}`] });
   await seedMemberships("dave", 9);
+  await agree("dave");
 
-  const results = await Promise.allSettled(groups.map((g) => store.joinGroupTx(db, { uid: "dave", code: g.code })));
+  const results = await Promise.allSettled(groups.map((g) => store.joinGroupTx(db, { uid: "dave", code: g.code, policy: POLICY })));
   const r = tally(results);
   t.diagnostic(`成功=${r.ok} 理由=${JSON.stringify(r.reasons)} 競合=${r.contention}`);
 
@@ -415,10 +468,210 @@ test("同時の参加: 所属9個の人が25のグループへ同時に参加し
   assert.equal(joined, 1, "メンバー数が増えたグループも1つだけ");
 });
 
+// MARK: - 利用停止・同意・NGワード（release-gate 2.1）
+
+/** グループ g1（オーナー1人・コード SKYAAAAA）が、種のまま変わっていないことを確かめる。 */
+async function assertG1Untouched() {
+  assert.equal((await groupData("g1")).memberCount, 1);
+  assert.equal(await memberDocCount("g1"), 1);
+}
+
+test("方針: 省略・形の誤りは、検査を黙って飛ばさないよう TypeError で、何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+  await agree("alice", "carol");
+  const never = () => false;
+  const badPolicies = [
+    undefined,
+    null,
+    {},
+    { containsNgWord: never }, // 版が無い
+    { guidelineVersion: String(core.GUIDELINE_VERSION), containsNgWord: never },
+    { guidelineVersion: 1.5, containsNgWord: never },
+    { guidelineVersion: 0, containsNgWord: never },
+  ];
+  // 作成はグループ名を検査するので、NGワードの判定も要る
+  const badForCreate = [
+    ...badPolicies,
+    { guidelineVersion: core.GUIDELINE_VERSION },
+    { guidelineVersion: core.GUIDELINE_VERSION, containsNgWord: "てすとごい" },
+  ];
+  for (const [i, policy] of badForCreate.entries()) {
+    await assert.rejects(store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: `r${i}`, policy }), TypeError, `作成 ${i}`);
+  }
+  for (const [i, policy] of badPolicies.entries()) {
+    await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA", policy }), TypeError, `参加 ${i}`);
+  }
+  assert.equal((await db.collection(GROUPS).get()).size, 1, "種のグループだけ");
+  await assertG1Untouched();
+  assert.equal(await userGroupCount("alice"), undefined);
+  assert.equal(await userGroupCount("carol"), undefined);
+
+  // 参加は NGワードを検査しない（語のリストが読めなくても参加は止めない・design の API Contract）ので、版だけの方針で通る
+  const joined = await store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA", policy: { guidelineVersion: core.GUIDELINE_VERSION } });
+  assert.deepEqual(joined, { groupId: "g1", alreadyMember: false });
+});
+
+test("利用停止: 作成も参加も suspended で、何も書かず、停止の項目と所属数は残る", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+  const suspendedAt = Timestamp.fromMillis(Date.UTC(2026, 9, 1));
+  await seedMemberships("sam", 2);
+  await agree("sam");
+  await db.collection(USERS).doc("sam").set({ suspendedAt }, { merge: true });
+
+  await assert.rejects(
+    store.createGroupTx(db, { uid: "sam", name: "空の会", requestId: "r1", policy: POLICY }),
+    domainError("suspended", null)
+  );
+  await assert.rejects(store.joinGroupTx(db, { uid: "sam", code: "SKYAAAAA", policy: POLICY }), domainError("suspended", null));
+
+  assert.equal((await db.collection(GROUPS).get()).size, 1, "種のグループだけ");
+  await assertG1Untouched();
+  // 拒否では何も書かないので、停止の項目（suspendedAt）は消えない。所属数の merge は成功のときだけ書く
+  const user = (await db.collection(USERS).doc("sam").get()).data();
+  assert.equal(user.suspendedAt.toMillis(), suspendedAt.toMillis());
+  assert.equal(user.groupCount, 2);
+  assert.equal(user.guidelineVersion, core.GUIDELINE_VERSION);
+  assert.equal(await userGroupDocCount("sam"), 2);
+});
+
+test("判定の順: 利用停止は同意より先（同意が無くても、古い版でも suspended）", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+  const suspendedAt = Timestamp.now();
+  await db.collection(USERS).doc("sam").set({ suspendedAt });
+  await db.collection(USERS).doc("old").set({ suspendedAt, guidelineVersion: core.GUIDELINE_VERSION - 1 });
+
+  for (const uid of ["sam", "old"]) {
+    await assert.rejects(
+      store.createGroupTx(db, { uid, name: "空の会", requestId: "r1", policy: POLICY }),
+      domainError("suspended", null),
+      uid
+    );
+    await assert.rejects(store.joinGroupTx(db, { uid, code: "SKYAAAAA", policy: POLICY }), domainError("suspended", null), uid);
+  }
+  await assertG1Untouched();
+});
+
+test("同意: 文書が無い・版が無い・古い版・新しすぎる版・文字列の版は consent_required で、details に現行の版を付ける", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+  const cases = {
+    nodoc: null,
+    noversion: { groupCount: 0 },
+    old: { guidelineVersion: core.GUIDELINE_VERSION - 1 },
+    newer: { guidelineVersion: core.GUIDELINE_VERSION + 1 },
+    text: { guidelineVersion: String(core.GUIDELINE_VERSION) },
+  };
+  for (const [uid, data] of Object.entries(cases)) {
+    if (data) await db.collection(USERS).doc(uid).set(data);
+  }
+  const details = { currentVersion: core.GUIDELINE_VERSION };
+  for (const uid of Object.keys(cases)) {
+    await assert.rejects(
+      store.createGroupTx(db, { uid, name: "空の会", requestId: "r1", policy: POLICY }),
+      domainError("consent_required", details),
+      uid
+    );
+    await assert.rejects(
+      store.joinGroupTx(db, { uid, code: "SKYAAAAA", policy: POLICY }),
+      domainError("consent_required", details),
+      uid
+    );
+    assert.equal(await userGroupDocCount(uid), 0, uid);
+  }
+  assert.equal((await db.collection(GROUPS).get()).size, 1, "種のグループだけ");
+  await assertG1Untouched();
+  assert.equal((await db.collection(USERS).doc("nodoc").get()).exists, false, "拒否では利用者の文書を作らない");
+
+  // 現行の版は方針から取る（版を上げたら、前の版の同意は認めない・要件10.9）
+  await agree("alice");
+  const bumped = { guidelineVersion: core.GUIDELINE_VERSION + 1, containsNgWord: () => false };
+  await assert.rejects(
+    store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "r1", policy: bumped }),
+    domainError("consent_required", { currentVersion: core.GUIDELINE_VERSION + 1 })
+  );
+  await assert.rejects(
+    store.joinGroupTx(db, { uid: "alice", code: "SKYAAAAA", policy: bumped }),
+    domainError("consent_required", { currentVersion: core.GUIDELINE_VERSION + 1 })
+  );
+});
+
+test("判定の順: 同意は、招待コードの有無と既存のメンバーより先。停止中の既存のメンバーも suspended", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner", "m01", "m02"] });
+  const details = { currentVersion: core.GUIDELINE_VERSION };
+  // 同意の無い人は、無いコードでも not_found より先に consent_required
+  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKYBBBBB", policy: POLICY }), domainError("consent_required", details));
+  // 同意の無い既存のメンバーは、「既存のメンバー」の成功より先に consent_required
+  await assert.rejects(store.joinGroupTx(db, { uid: "m02", code: "SKYAAAAA", policy: POLICY }), domainError("consent_required", details));
+  // 停止中の既存のメンバーは suspended
+  await agree("m01");
+  await db.collection(USERS).doc("m01").set({ suspendedAt: Timestamp.now() }, { merge: true });
+  await assert.rejects(store.joinGroupTx(db, { uid: "m01", code: "SKYAAAAA", policy: POLICY }), domainError("suspended", null));
+  assert.equal((await groupData("g1")).memberCount, 3);
+});
+
+test("NGワード: グループ名に語を含めば（全角半角・ひらがなとカタカナの違いも同一視して）ng_word で、何も書かない", async () => {
+  await agree("alice");
+  for (const [i, name] of ["テストゴイの空", "空のてすとごい会", "ﾃｽﾄｺﾞｲ"].entries()) {
+    await assert.rejects(
+      store.createGroupTx(db, { uid: "alice", name, requestId: `r${i}`, policy: NG_POLICY }),
+      domainError("ng_word", null),
+      `名前 ${i}`
+    );
+  }
+  assert.equal((await db.collection(GROUPS).get()).size, 0);
+  assert.equal((await db.collection(CODES).get()).size, 0);
+  assert.equal(await userGroupCount("alice"), undefined);
+  assert.equal(await userGroupDocCount("alice"), 0);
+
+  // 無関係の名前は、同じ方針で通る
+  const created = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "r9", policy: NG_POLICY });
+  assert.equal((await groupData(created.groupId)).name, "空の会");
+});
+
+test("判定の順: 同じ要求IDの再送は NGワードより先、NGワードは所属数の上限より先", async () => {
+  await agree("alice");
+  const first = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1", policy: POLICY });
+  // 再送は、語の判定がすべてに該当しても前回のグループを返す（語のリストを変えた後の送り直しで、作れたものを失わない）
+  const always = { guidelineVersion: core.GUIDELINE_VERSION, containsNgWord: () => true };
+  assert.deepEqual(await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1", policy: always }), first);
+  assert.equal((await db.collection(GROUPS).get()).size, 1);
+
+  // 所属10個の人の、語を含む名前は user_limit より先に ng_word
+  await seedMemberships("busy", 10);
+  await agree("busy");
+  await assert.rejects(
+    store.createGroupTx(db, { uid: "busy", name: "テストゴイの会", requestId: "r1", policy: NG_POLICY }),
+    domainError("ng_word")
+  );
+  await assert.rejects(
+    store.createGroupTx(db, { uid: "busy", name: "空の会", requestId: "r2", policy: NG_POLICY }),
+    domainError("user_limit")
+  );
+});
+
+test("merge: 所属数の項目が無い利用者（同意だけ）でも作成・参加で所属数1になり、同意の版と同意日時は消えない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+  const agreedAt = Timestamp.fromMillis(Date.UTC(2026, 9, 8));
+  for (const uid of ["alice", "carol"]) {
+    await db.collection(USERS).doc(uid).set({ guidelineVersion: core.GUIDELINE_VERSION, guidelineAgreedAt: agreedAt });
+  }
+
+  await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "r1", policy: POLICY });
+  await store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA", policy: POLICY });
+
+  for (const uid of ["alice", "carol"]) {
+    const user = (await db.collection(USERS).doc(uid).get()).data();
+    assert.equal(user.groupCount, 1, uid);
+    assert.equal(user.guidelineVersion, core.GUIDELINE_VERSION, uid);
+    assert.equal(user.guidelineAgreedAt.toMillis(), agreedAt.toMillis(), uid);
+    assert.equal(await userGroupDocCount(uid), 1, uid);
+  }
+});
+
 // MARK: - 再発行（regenerateInviteCodeTx）
 
 test("再発行: オーナーなら新しいコードに替わり、古いコードでの参加は not_found、新しいコードでは参加できる", async () => {
   await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner", "m01"] });
+  await agree("carol");
 
   const { inviteCode } = await store.regenerateInviteCodeTx(db, { uid: "owner", groupId: "g1" });
   assert.notEqual(inviteCode, "SKYAAAAA");
@@ -427,8 +680,8 @@ test("再発行: オーナーなら新しいコードに替わり、古いコー
   assert.equal((await db.collection(CODES).doc("SKYAAAAA").get()).exists, false, "古いコードの文書を消す");
   assert.equal((await db.collection(CODES).doc(inviteCode).get()).get("groupId"), "g1");
 
-  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA" }), domainError("not_found"));
-  const joined = await store.joinGroupTx(db, { uid: "carol", code: inviteCode });
+  await assert.rejects(store.joinGroupTx(db, { uid: "carol", code: "SKYAAAAA", policy: POLICY }), domainError("not_found"));
+  const joined = await store.joinGroupTx(db, { uid: "carol", code: inviteCode, policy: POLICY });
   assert.equal(joined.groupId, "g1");
 });
 

@@ -26,6 +26,7 @@ const { getFirestore } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 const core = require("./soratomoCore");
 const store = require("./soratomoStore");
+const { createNgWordProvider } = require("./soratomoNgWords");
 const { sendToTokenGrouped } = require("./pushHelpers");
 
 /** 既存の Functions と同じリージョン（index.js の setGlobalOptions と同じ値を明示する）。 */
@@ -33,9 +34,16 @@ const REGION = "asia-northeast1";
 
 const db = getFirestore();
 
+/** NGワードの語のリスト。関数のインスタンスごとに1つで、5分キャッシュする（release-gate 1.3・要件11.11）。 */
+const ngWords = createNgWordProvider({ db });
+
 // MARK: - Callable の共通部分
 
-/** ドメインのエラーの理由 → HttpsError の code（design.md の API Contract）。 */
+/**
+ * ドメインのエラーの理由 → HttpsError の code（design.md の API Contract）。
+ * ⚠️ release-gate 2.1 で足した理由（suspended・consent_required・ng_word）と details の写しは、まだ無い。
+ *    それまでは toHttpsError が internal にする。tasks 4.1 で足す。
+ */
 const REASON_TO_CODE = Object.freeze({
   flag_off: "permission-denied",
   invalid_name: "invalid-argument",
@@ -105,14 +113,26 @@ function soratomoCallable(name, body) {
 
 // MARK: - Callable 3本（8.1）
 
-/** グループを作る。{ name, requestId } → { groupId, name, inviteCode, memberCount } */
-const soratomoCreateGroup = soratomoCallable("soratomoCreateGroup", (uid, data) =>
-  store.createGroupTx(db, { uid, name: data.name, requestId: data.requestId })
+/**
+ * グループを作る。{ name, requestId } → { groupId, name, inviteCode, memberCount }
+ * 方針として、現行のガイドラインの版と語のリストの判定を渡す（release-gate 2.1）。語のリストが一度も読めていなければ
+ * matcher() が失敗し、internal で止まる（検査を飛ばさない・要件11.5）。
+ */
+const soratomoCreateGroup = soratomoCallable("soratomoCreateGroup", async (uid, data) =>
+  store.createGroupTx(db, {
+    uid,
+    name: data.name,
+    requestId: data.requestId,
+    policy: { guidelineVersion: core.GUIDELINE_VERSION, containsNgWord: await ngWords.matcher() },
+  })
 );
 
-/** 招待コードで参加する。{ code } → { groupId, alreadyMember } */
+/**
+ * 招待コードで参加する。{ code } → { groupId, alreadyMember }
+ * 方針は現行のガイドラインの版だけ（参加は NGワードを検査しないので、語のリストが読めなくても止めない）。
+ */
 const soratomoJoinGroup = soratomoCallable("soratomoJoinGroup", (uid, data) =>
-  store.joinGroupTx(db, { uid, code: data.code })
+  store.joinGroupTx(db, { uid, code: data.code, policy: { guidelineVersion: core.GUIDELINE_VERSION } })
 );
 
 /** 招待コードを再発行する（オーナーだけ）。{ groupId } → { inviteCode } */

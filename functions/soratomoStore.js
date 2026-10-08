@@ -10,6 +10,8 @@
 // - 失敗は理由（reason）を持つ SoratomoDomainError で投げる。HttpsError への写像は配線（soratomo.js・tasks 8.1）が行う。
 //   SoratomoDomainError 以外の失敗（コードの空きが見つからない・引数の型の誤り・Firestore の失敗）は想定外として internal にする。
 // - 利用者の文書（users）には書かない。表示名や通知設定は users にあるが、ここでは読みも書きもしない。
+// - 作成と参加は、省略できない方針（policy: 現行のガイドラインの版・NGワードの判定）を受け取り、利用停止・同意・
+//   NGワードを確かめる（release-gate 2.1）。方針を省略すると、検査を黙って飛ばさないよう TypeError にする。
 // - テストは soratomoStore.test.js（Firestore のエミュレーターに対して直接呼ぶ）。
 //
 // ⚠️ Firestore のトランザクションは「読みを全部終えてから書く」決まり。招待コードの重なりの確認（最大5回の読み）も
@@ -42,11 +44,18 @@ const REQUEST_ID_MAX = 128;
 
 /** 理由つきの失敗。配線（soratomo.js）が HttpsError の code と details.reason に写す。 */
 class SoratomoDomainError extends Error {
-  /** @param {"flag_off"|"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner"} reason */
-  constructor(reason) {
+  /**
+   * @param {"flag_off"|"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner"
+   *   |"suspended"|"consent_required"|"ng_word"} reason
+   * @param {{ currentVersion: number }|null} [details] 利用者へ返してよい詳細。いまは consent_required の
+   *   現行のガイドラインの版だけ（アプリが「同意が要る」と「アプリが古い」を見分けるため・release-gate 2.1）。
+   *   配線が HttpsError の details に写す（tasks 4.1）。gRPC の code はここにも持たせない（上の ⚠️）。
+   */
+  constructor(reason, details = null) {
     super(`soratomo: ${reason}`);
     this.name = "SoratomoDomainError";
     this.reason = reason;
+    this.details = details;
   }
 }
 
@@ -74,6 +83,40 @@ function isDocumentId(value) {
  */
 function assertUid(uid) {
   if (!isDocumentId(uid)) throw new TypeError("soratomo: uid が文書IDとして使えない");
+}
+
+/**
+ * 作成と参加の方針を確かめる（release-gate 2.1）。省略や形の誤りは、検査を黙って飛ばさないよう TypeError
+ * （配線では internal）にする。
+ * - guidelineVersion: 現行のガイドラインの版（1以上の整数）。作成と参加の両方に要る
+ * - containsNgWord: グループ名の NGワードの判定。作成にだけ要る。参加は NGワードを検査しないので求めない
+ *   （求めると、語のリストが読めないときに参加まで止まる。design の API Contract で参加は語のリストに依存しない）
+ * @param {unknown} policy
+ * @param {{ needsNgWord: boolean }} options
+ */
+function assertPolicy(policy, { needsNgWord }) {
+  if (!policy || typeof policy !== "object") throw new TypeError("soratomo: policy が無い");
+  if (!Number.isInteger(policy.guidelineVersion) || policy.guidelineVersion < 1) {
+    throw new TypeError("soratomo: policy.guidelineVersion が1以上の整数でない");
+  }
+  if (needsNgWord && typeof policy.containsNgWord !== "function") {
+    throw new TypeError("soratomo: policy.containsNgWord が関数でない");
+  }
+}
+
+/**
+ * 利用停止と同意を、この順で確かめる（release-gate 8.6・10.9・10.10）。作成と参加のトランザクションの中で呼ぶ。
+ * - 利用停止: suspendedAt に null 以外の値があれば停止中（停止中だけ持つ項目。型は問わず、値があれば止める側に倒す）
+ * - 同意: guidelineVersion が現行の版と等しいときだけ認める。古い版も、現行より新しい版も認めない
+ * 利用停止を先に見るのは、停止中の人に同意の全文を出しても作成・参加はできないため（アプリは停止の案内を出す）。
+ * @param {Object} user soratomoUsers/{uid} の中身（文書が無ければ {}）
+ * @param {number} guidelineVersion 現行のガイドラインの版（方針から）
+ */
+function assertNotSuspendedAndAgreed(user, guidelineVersion) {
+  if (user.suspendedAt !== undefined && user.suspendedAt !== null) throw new SoratomoDomainError("suspended");
+  if (user.guidelineVersion !== guidelineVersion) {
+    throw new SoratomoDomainError("consent_required", { currentVersion: guidelineVersion });
+  }
 }
 
 /**
@@ -107,15 +150,21 @@ async function pickUnusedInviteCode(tx, db, randomInt) {
 
 /**
  * グループを作る（要件2.4・2.5・3.1・3.2・3.13）。作成者はオーナーかつ最初のメンバーになる。
- * - 同じ要求IDの再送では、前回作ったグループを返す（冪等。タイムアウトの後の再試行で2つ目を作らない）
+ * 判定の順（release-gate 2.1）: invalid_name（トランザクションの前）→ suspended → consent_required →
+ * 同じ要求IDの再送 → ng_word → user_limit。
+ * - 同じ要求IDの再送では、前回作ったグループを返す（冪等。タイムアウトの後の再試行で2つ目を作らない）。
+ *   NGワードより先に見るので、語のリストを変えた後の送り直しでも、作れたグループを失わない
  * - 所属がすでに10個なら user_limit
  * @param {FirebaseFirestore.Firestore} db
- * @param {{ uid: string, name: unknown, requestId: unknown }} params
+ * @param {{ uid: string, name: unknown, requestId: unknown,
+ *   policy: { guidelineVersion: number, containsNgWord: (text: string) => boolean } }} params
+ *   policy は省略できない（assertPolicy）
  * @param {{ randomInt?: (max: number) => number }} [options] テストでだけ使う
  * @returns {Promise<{ groupId: string, name: string, inviteCode: string, memberCount: number }>}
  */
-async function createGroupTx(db, { uid, name, requestId }, { randomInt } = {}) {
+async function createGroupTx(db, { uid, name, requestId, policy }, { randomInt } = {}) {
   assertUid(uid);
+  assertPolicy(policy, { needsNgWord: true });
   const validated = core.validateGroupName(name);
   if (!validated.ok) throw new SoratomoDomainError("invalid_name");
   if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > REQUEST_ID_MAX) {
@@ -127,6 +176,8 @@ async function createGroupTx(db, { uid, name, requestId }, { randomInt } = {}) {
     const userSnap = await tx.get(userRef);
     const user = userSnap.exists ? userSnap.data() : {};
 
+    assertNotSuspendedAndAgreed(user, policy.guidelineVersion);
+
     // 冪等: 前回と同じ要求IDなら、前回のグループをこのトランザクションの中で読んで返す
     if (user.lastCreateRequestId === requestId && isDocumentId(user.lastCreatedGroupId)) {
       const previous = await tx.get(db.collection(GROUPS).doc(user.lastCreatedGroupId));
@@ -135,6 +186,9 @@ async function createGroupTx(db, { uid, name, requestId }, { randomInt } = {}) {
         return { groupId: previous.id, name: g.name, inviteCode: g.inviteCode, memberCount: g.memberCount };
       }
     }
+
+    // 該当した語は、どこにも出さない（理由だけ・要件11.9）
+    if (policy.containsNgWord(validated.name)) throw new SoratomoDomainError("ng_word");
 
     const groupCount = countOf(user.groupCount);
     if (groupCount >= core.MAX_GROUPS_PER_USER) throw new SoratomoDomainError("user_limit");
@@ -169,33 +223,41 @@ async function createGroupTx(db, { uid, name, requestId }, { randomInt } = {}) {
 
 /**
  * 招待コードでグループに参加する（要件4.5〜4.8）。
- * 判定の順: コードの不在 → 既存のメンバー → 所属10個 → 満員20人。
+ * 判定の順（release-gate 2.1）: invalid_format（トランザクションの前）→ suspended → consent_required →
+ * コードの不在 → 既存のメンバー → 所属10個 → 満員20人。
+ * 利用停止と同意は、コードの有無と既存のメンバーより先に見る（停止中や同意の無い既存のメンバーも成功にしない）。
  * 既存のメンバーなら、上限とは無関係に alreadyMember: true の成功で返し、何も増やさない（要件4.8）。
  * メンバーの文書・メンバー数・所属の写し・所属数は、同じトランザクションでそろって増やす（要件11.8）。
  * @param {FirebaseFirestore.Firestore} db
- * @param {{ uid: string, code: unknown }} params
+ * @param {{ uid: string, code: unknown, policy: { guidelineVersion: number } }} params
+ *   policy は省略できない（assertPolicy）。参加は NGワードを検査しないので containsNgWord は使わない
  * @returns {Promise<{ groupId: string, alreadyMember: boolean }>}
  */
-async function joinGroupTx(db, { uid, code }) {
+async function joinGroupTx(db, { uid, code, policy }) {
   assertUid(uid);
+  assertPolicy(policy, { needsNgWord: false });
   const normalized = core.normalizeInviteCode(code);
   if (normalized === null) throw new SoratomoDomainError("invalid_format");
 
   return db.runTransaction(async (tx) => {
-    const codeSnap = await tx.get(db.collection(INVITE_CODES).doc(normalized));
+    const userRef = db.collection(USERS).doc(uid);
+    const [codeSnap, userSnap] = await tx.getAll(db.collection(INVITE_CODES).doc(normalized), userRef);
+    const user = userSnap.exists ? userSnap.data() : {};
+
+    assertNotSuspendedAndAgreed(user, policy.guidelineVersion);
+
     const groupId = codeSnap.exists ? codeSnap.get("groupId") : null;
     if (!isDocumentId(groupId)) throw new SoratomoDomainError("not_found");
 
     const groupRef = db.collection(GROUPS).doc(groupId);
     const memberRef = groupRef.collection(MEMBERS).doc(uid);
-    const userRef = db.collection(USERS).doc(uid);
-    const [groupSnap, memberSnap, userSnap] = await tx.getAll(groupRef, memberRef, userRef);
+    const [groupSnap, memberSnap] = await tx.getAll(groupRef, memberRef);
 
     // コードの文書が残っていても、グループの今のコードでなければ無効（再発行の後の古いコード・要件3.10）
     if (!groupSnap.exists || groupSnap.get("inviteCode") !== normalized) throw new SoratomoDomainError("not_found");
     if (memberSnap.exists) return { groupId, alreadyMember: true };
 
-    const groupCount = countOf(userSnap.exists ? userSnap.get("groupCount") : 0);
+    const groupCount = countOf(user.groupCount);
     if (groupCount >= core.MAX_GROUPS_PER_USER) throw new SoratomoDomainError("user_limit");
     const memberCount = countOf(groupSnap.get("memberCount"));
     if (memberCount >= core.MAX_MEMBERS) throw new SoratomoDomainError("group_full");
