@@ -1348,3 +1348,45 @@ test("利用停止の後: 作成・参加・投稿が停止を理由に拒否さ
   assert.equal((await userData("amy")).groupCount, 2);
   assert.deepEqual(await copyIds("amy"), [created.groupId, "g2"].sort());
 });
+
+// MARK: - 停止中の人の記録（セキュリティの指摘への対応）
+
+test("停止中の人: 本人の退会の削除（self）や管理の削除（admin）では停止の記録を消さない。アカウントの無い人の後始末だけが消す", async () => {
+  const deps = { db, storage: fakeStorage([]).gateway, nowMs: steadyClock() };
+  for (const trigger of ["self", "admin"]) {
+    const uid = `sus${trigger}`;
+    await seedGroup({ groupId: `g${trigger}`, ownerId: "owner", inviteCode: trigger === "self" ? "SKYAAAAA" : "SKYBBBBB", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid, role: "member", joinedAtMs: T(2) }] });
+    await seedUser(uid, [`g${trigger}`]);
+    await deletion.suspendSoratomoUser(deps, { uid, deadlineMs: DEADLINE });
+    const suspendedAt = (await userData(uid)).suspendedAt.toMillis();
+    // 停止の後にまた所属が増えた場合も含めて、削除を流す（停止中は参加できないので、写しは管理の都合で直接入れる）
+    await db.collection(USERS).doc(uid).collection("groups").doc(`g${trigger}`).set({ groupId: `g${trigger}`, joinedAt: Timestamp.now() });
+
+    const result = await deletion.deleteSoratomoUserData(deps, { uid, trigger, deadlineMs: DEADLINE });
+    assert.equal(result.done, true);
+    const user = await userData(uid);
+    assert.ok(user, `${trigger}: 停止中の人の文書は残る（アカウントを消さずに呼ぶと、停止が解けてしまうため）`);
+    assert.equal(user.suspendedAt.toMillis(), suspendedAt, `${trigger}: 停止の日時は変わらない`);
+    assert.equal(user.groupCount, 0);
+    assert.deepEqual(await copyIds(uid), []);
+    // 同意し直しても、作成は停止で拒否される
+    await store.agreeGuidelineTx(db, { uid, input: { version: core.GUIDELINE_VERSION }, policy: JOIN_POLICY });
+    await assert.rejects(
+      store.createGroupTx(db, { uid, name: "空の会", requestId: "r1", policy: CREATE_POLICY }),
+      (err) => err.reason === "suspended",
+      `${trigger}: 削除の後も停止のまま`
+    );
+  }
+});
+
+test("停止中の人: アカウントの無い人の後始末（account_deleted）は停止の記録ごと消す。停止していない人の self は従来どおり消す", async () => {
+  const deps = { db, storage: fakeStorage([]).gateway, nowMs: steadyClock() };
+  await deletion.suspendSoratomoUser(deps, { uid: "gone", deadlineMs: DEADLINE });
+  assert.ok((await userData("gone")).suspendedAt);
+  assert.equal((await deletion.deleteSoratomoUserData(deps, { uid: "gone", trigger: "account_deleted", deadlineMs: DEADLINE })).done, true);
+  assert.equal(await userData("gone"), null, "要件2.3: アカウントが無くなったら、停止の記録も消す");
+
+  await seedUser("plain", []);
+  assert.equal((await deletion.deleteSoratomoUserData(deps, { uid: "plain", trigger: "self", deadlineMs: DEADLINE })).done, true);
+  assert.equal(await userData("plain"), null);
+});

@@ -354,6 +354,8 @@ async function deleteUserDataInGroup(deps, { uid, groupId, deadlineMs }) {
  * - 写しが1件でも残っていれば（途中で参加が入った）何も書かずに false を返し、呼び手が続ける
  * - 写しが無ければ、suspension 以外は利用者の文書を消す（無ければ何もしない）。suspension は文書を残し、
  *   所属数を0にそろえる（停止の日時は suspendSoratomoUser が先に書いている。ここでは触らない）
+ * - ただし停止中（suspendedAt がある）の人の文書は、account_deleted 以外では消さずに suspension と同じく残す
+ *   （本人の退会の削除をアカウントを消さずに呼んで、停止を解くことを防ぐ）
  * @param {FirebaseFirestore.Firestore} db
  * @param {{ uid: string, trigger: string }} params
  * @returns {Promise<boolean>} 片づけたら true
@@ -365,8 +367,15 @@ async function finishUserTx(db, { uid, trigger }) {
     const copySnap = await tx.get(userRef.collection(USER_GROUPS).limit(1));
     if (!copySnap.empty) return false;
 
+    // 停止中の人の文書は、アカウントの無い人の後始末（account_deleted）のときだけ消す。本人の退会の削除（self）は
+    // アカウントを消さずにも呼べるので、ここで消すと停止の記録が消えて、同意し直せば作成・参加・投稿ができてしまう
+    // （停止のすり抜け）。管理（admin）も、スクリプトの検査に頼らず同じ側に倒す。アカウントを消した後は定期実行が
+    // account_deleted で文書ごと消すので、要件2.3（停止の記録も消す）は数時間遅れて満たされる
+    const suspendedAt = userSnap.exists ? userSnap.get("suspendedAt") : undefined;
+    const keepSuspension = trigger !== "account_deleted" && suspendedAt !== undefined && suspendedAt !== null;
+
     // ここから書き込み
-    if (trigger === "suspension") {
+    if (trigger === "suspension" || keepSuspension) {
       if (userSnap.exists) tx.update(userRef, { groupCount: 0, updatedAt: FieldValue.serverTimestamp() });
     } else if (userSnap.exists) {
       tx.delete(userRef);
