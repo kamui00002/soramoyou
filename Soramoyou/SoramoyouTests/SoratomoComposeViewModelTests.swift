@@ -364,45 +364,78 @@ final class SoratomoComposeViewModelTests: XCTestCase {
         XCTAssertEqual(log.events, [.postFailed(stage: .save, reason: .permission)])
     }
 
-    func testUncertainSaveThatExistsOnServerIsTreatedAsSuccess() async {
-        skyService.createSkyResult = .failure(.network)
-        skyService.skyExistsOnServerResult = .success(true)
+    // MARK: - 結果が確定しない失敗の送り直し（release-gate 10.3・要件 11.8）
+
+    func testUncertainSaveIsRetriedOnceWithSameDraftAndSucceeds() async {
+        skyService.createSkyResultQueue = [.failure(.network), .success(())]
         let viewModel = makeViewModel()
         await fillInput(viewModel)
 
         await viewModel.submit()
 
-        XCTAssertEqual(skyService.skyExistsOnServerCalls.count, 1)
-        XCTAssertEqual(skyService.skyExistsOnServerCalls.first?.skyId, "sky-1")
+        // 同じ投稿 ID（同じ draft）で 1 回だけ送り直す。サーバーへの有無の確かめは使わない
+        XCTAssertEqual(skyService.createSkyCalls.map(\.skyId), ["sky-1", "sky-1"])
+        XCTAssertEqual(skyService.createSkyCalls.first, skyService.createSkyCalls.last)
+        XCTAssertEqual(skyService.newSkyIdCalls.count, 1)
+        XCTAssertTrue(skyService.skyExistsOnServerCalls.isEmpty)
         XCTAssertTrue(imageStore.deleteCalls.isEmpty)
         XCTAssertEqual(viewModel.phase, .finished)
         XCTAssertEqual(log.events, [.postCreated(hasCaption: true, durationMs: 0)])
     }
 
-    func testUncertainSaveThatIsMissingOnServerDeletesImages() async {
-        skyService.createSkyResult = .failure(.network)
-        skyService.skyExistsOnServerResult = .success(false)
+    func testRetryRejectedForCertainDeletesImages() async {
+        skyService.createSkyResultQueue = [.failure(.network), .failure(.suspended)]
         let viewModel = makeViewModel()
         await fillInput(viewModel)
 
         await viewModel.submit()
 
-        XCTAssertEqual(imageStore.deleteCalls.count, 1)
+        // 送り直しが確定した拒否なら、画像を消して失敗（その拒否の文言）
+        XCTAssertEqual(skyService.createSkyCalls.count, 2)
+        XCTAssertEqual(imageStore.deleteCalls, [SoratomoImagePaths(groupId: "g1", authorId: "me", skyId: "sky-1")])
+        XCTAssertEqual(viewModel.phase, .failed(message: SoratomoError.suspended.userMessage))
+        XCTAssertEqual(viewModel.caption, "夕焼け")
+        XCTAssertNotNil(viewModel.photoData)
+        XCTAssertEqual(log.events, [.postFailed(stage: .save, reason: .unknown)])
+    }
+
+    func testRetryStillUncertainKeepsImagesAndDoesNotRetryAgain() async {
+        skyService.createSkyResult = .failure(.network)
+        let viewModel = makeViewModel()
+        await fillInput(viewModel)
+
+        await viewModel.submit()
+
+        // 送り直しは 1 回だけ。また確定しなければ、投稿があるかもしれないので画像は消さない
+        XCTAssertEqual(skyService.createSkyCalls.count, 2)
+        XCTAssertTrue(imageStore.deleteCalls.isEmpty)
+        XCTAssertTrue(skyService.skyExistsOnServerCalls.isEmpty)
+        XCTAssertEqual(viewModel.phase, .failed(message: SoratomoError.network.userMessage))
+        XCTAssertEqual(viewModel.caption, "夕焼け")
+        XCTAssertNotNil(viewModel.photoData)
         XCTAssertEqual(log.events, [.postFailed(stage: .save, reason: .network)])
     }
 
-    func testUncertainSaveThatCannotBeVerifiedKeepsImages() async {
-        skyService.createSkyResult = .failure(.network)
-        skyService.skyExistsOnServerResult = .failure(.network)
+    // MARK: - NGワード（release-gate 10.3・要件 11.7〜11.9・15.2）
+
+    func testNgWordDeletesImagesKeepsInputAndDoesNotRetry() async {
+        skyService.createSkyResult = .failure(.ngWord)
         let viewModel = makeViewModel()
         await fillInput(viewModel)
+        let photo = viewModel.photoData
 
         await viewModel.submit()
 
-        // 投稿があるかもしれないので、画像は消さない
-        XCTAssertTrue(imageStore.deleteCalls.isEmpty)
-        XCTAssertEqual(viewModel.phase, .failed(message: SoratomoError.network.userMessage))
-        XCTAssertEqual(log.events, [.postFailed(stage: .save, reason: .network)])
+        // 確定した拒否なので送り直さず、アップロード済みの画像を消す
+        XCTAssertEqual(skyService.createSkyCalls.count, 1)
+        XCTAssertEqual(imageStore.deleteCalls, [SoratomoImagePaths(groupId: "g1", authorId: "me", skyId: "sky-1")])
+        // 「使えない言葉が含まれています」を出し、どの語かは示さない。写真とキャプションは残す
+        XCTAssertEqual(viewModel.phase, .failed(message: "使えない言葉が含まれています"))
+        XCTAssertEqual(viewModel.photoData, photo)
+        XCTAssertNotNil(viewModel.previewImage)
+        XCTAssertEqual(viewModel.caption, "夕焼け")
+        XCTAssertTrue(viewModel.canSubmit)
+        XCTAssertEqual(log.events, [.postFailed(stage: .save, reason: .ngWord)])
     }
 
     // MARK: - 事前確認

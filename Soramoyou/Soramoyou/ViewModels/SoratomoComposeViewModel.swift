@@ -345,8 +345,8 @@ final class SoratomoComposeViewModel: ObservableObject {
         do {
             try await skyService.createSky(draft)
         } catch {
-            // 失敗の記録は handleSaveFailure の中で行う（サーバーにあった＝成功のときは記録しない）
-            guard await handleSaveFailure(error, paths: paths, skyId: skyId) else { return }
+            // 失敗の記録は handleSaveFailure の中で行う（送り直しで成功したときは記録しない）
+            guard await handleSaveFailure(error, draft: draft, paths: paths) else { return }
         }
 
         // 完了（新しい投稿はタイムラインの監視で先頭に届く・要件 6.8）
@@ -380,31 +380,37 @@ final class SoratomoComposeViewModel: ObservableObject {
 
     // MARK: - Private: 保存の失敗
 
-    /// 保存の失敗の後始末をする
+    /// 保存の失敗の後始末をする（release-gate 10.3・要件 11.7〜11.9）
     ///
-    /// - `.network` の失敗は、保存の結果が確定していないことがある。サーバーで投稿の有無を確かめ、
-    ///   あれば成功として扱う。無ければ画像を消して失敗にする。確かめられなければ、画像を残して失敗にする
-    ///   （画像の無い投稿よりも、取り残しの画像を選ぶ・design.md「投稿と通知」）
-    /// - それ以外の失敗は、画像を消してから失敗にする（要件 6.9）
+    /// - `.network` の失敗は、保存の結果が確定していないことがある。同じ draft（同じ投稿 ID）で 1 回だけ送り直す。
+    ///   同じ投稿者の同じ投稿 ID はサーバーが成功で返すので、元の呼び出しが届いていても 1 件になる。
+    ///   - 送り直しが成功したら成功として扱う
+    ///   - 送り直しも確定しなければ、画像を残して失敗にする（画像の無い投稿よりも、取り残しの画像を選ぶ）
+    ///   - 送り直しが確定した拒否なら、下の確定した拒否と同じに扱う
+    /// - 確定した拒否（NGワード・利用停止・メンバーでない・権限なしなど）は、画像を消してから失敗にする。
+    ///   NGワードの文言は該当した語を含めない。写真とキャプションは残る（`.failed` は入力を消さない）
+    /// - ⚠️ サーバーに有無を確かめる（`skyExistsOnServer`）方式は使わない。関数の実行中に「無い」と読み、
+    ///   画像を消した後で投稿だけが作られうるため（design.md「投稿と通知」）
     /// - Returns: 成功として扱ってよければ true
-    private func handleSaveFailure(_ error: SoratomoError, paths: SoratomoImagePaths, skyId: String) async -> Bool {
+    private func handleSaveFailure(_ error: SoratomoError, draft: SoratomoSkyDraft, paths: SoratomoImagePaths) async -> Bool {
+        var finalError = error
         if error == .network {
             do {
-                if try await skyService.skyExistsOnServer(groupId: groupId, skyId: skyId) {
-                    return true
-                }
-            } catch let verificationError {
-                // 確かめられなかった。投稿があるかもしれないので、画像は消さない。
-                // 計測の reason は保存の失敗（error）で出し、確かめの失敗は別の文脈で記録する
-                SoratomoError.record(error, context: "soratomo.createSky")
-                SoratomoError.record(verificationError, context: "soratomo.skyExistsOnServer")
-                fail(stage: .save, error: error)
+                try await skyService.createSky(draft)
+                return true
+            } catch let retryError {
+                finalError = retryError
+            }
+            if finalError == .network {
+                // また確定しなかった。投稿があるかもしれないので、画像は消さない
+                SoratomoError.record(finalError, context: "soratomo.createSky")
+                fail(stage: .save, error: finalError)
                 return false
             }
         }
-        SoratomoError.record(error, context: "soratomo.createSky")
+        SoratomoError.record(finalError, context: "soratomo.createSky")
         _ = await imageStore.delete(paths)
-        fail(stage: .save, error: error)
+        fail(stage: .save, error: finalError)
         return false
     }
 

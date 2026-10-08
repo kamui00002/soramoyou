@@ -106,6 +106,8 @@ final class MockSoratomoGroupService: SoratomoGroupServiceProtocol, @unchecked S
 final class MockSoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Sendable {
     // 返す結果
     var createSkyResult: Result<Void, SoratomoError> = .failure(.unknown)
+    /// `createSky` が呼ばれた順に返す結果（空になったら `createSkyResult` を返す・送り直しのテスト用）
+    var createSkyResultQueue: [Result<Void, SoratomoError>] = []
     var skyExistsOnServerResult: Result<Bool, SoratomoError> = .failure(.unknown)
     var deleteSkyResult: Result<Void, SoratomoError> = .failure(.unknown)
     /// `countTodaySkies` が返す件数（nil = 数えられなかった）
@@ -163,7 +165,8 @@ final class MockSoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Senda
 
     func createSky(_ draft: SoratomoSkyDraft) async throws(SoratomoError) {
         createSkyCalls.append(draft)
-        try createSkyResult.soratomoValue()
+        let result = createSkyResultQueue.isEmpty ? createSkyResult : createSkyResultQueue.removeFirst()
+        try result.soratomoValue()
     }
 
     func skyExistsOnServer(groupId: String, skyId: String) async throws(SoratomoError) -> Bool {
