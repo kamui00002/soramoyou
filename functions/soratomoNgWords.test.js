@@ -143,6 +143,35 @@ test("words が配列でない壊れた文書も、一度も読めていない�
   await assert.rejects(provider.matcher(), NgWordsUnavailableError);
 });
 
+test("words に文字列でない要素が混ざっていたら、一部だけ使わずに壊れた文書として失敗する（レビュー #11）", async () => {
+  for (const words of [[NG_KANA, { w: "x" }], [1, 2], [null]]) {
+    await NG_DOC.set({ words });
+    const provider = createNgWordProvider({ db, logger: fakeLogger() });
+    await assert.rejects(provider.matcher(), NgWordsUnavailableError, JSON.stringify(words));
+  }
+});
+
+test("words が空でないのに使える語が1つも無ければ（空・空白だけ）、壊れた文書として失敗する（レビュー #11）", async () => {
+  await NG_DOC.set({ words: ["", "  "] });
+  const provider = createNgWordProvider({ db, logger: fakeLogger() });
+  await assert.rejects(provider.matcher(), NgWordsUnavailableError);
+});
+
+test("読み直しで壊れた文書になっていたら、古いリストで検査を続け、壊れていることを warn で出す（レビュー #11）", async () => {
+  await NG_DOC.set({ words: [NG_KANA] });
+  const clock = fakeClock();
+  const logger = fakeLogger();
+  const provider = createNgWordProvider({ db, nowMs: clock.nowMs, logger });
+  await provider.matcher();
+
+  await NG_DOC.set({ words: [{ w: "x" }] });
+  clock.advance(NG_WORDS_TTL_MS + 1000);
+  const matches = await provider.matcher();
+  assert.equal(matches(NG_KANA), true, "古いリストで検査していない（空のリストで通してしまう）");
+  const stale = logger.calls.find((c) => c.message === "soratomoNgWords: stale");
+  assert.ok(stale && stale.fields.kind === "malformed", "壊れていることを warn で出していない");
+});
+
 test("一度も読めていないときに読み取りが失敗したら、失敗として返す", async () => {
   await NG_DOC.set({ words: [NG_KANA] });
   const wrapped = wrappedDb();

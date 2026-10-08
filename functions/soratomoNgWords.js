@@ -64,7 +64,12 @@ function createNgWordProvider({ db, ttlMs = NG_WORDS_TTL_MS, nowMs = Date.now, l
     if (!snap.exists) throw new NgWordsUnavailableError("missing");
     const raw = snap.get("words");
     if (!Array.isArray(raw)) throw new NgWordsUnavailableError("malformed");
+    // 要素に文字列でないものが混ざる・空でないのに使える語が0個（空・空白だけ）も壊れた文書として扱う。
+    // prepareNgWords はそれらを黙って落とすので、ここで止めないと検査が弱まるか、空のリストで全部通ってしまう
+    // （確かめられないときは閉じる・レビュー #11）。空の配列だけは「語が無い」として通す
+    if (!raw.every((word) => typeof word === "string")) throw new NgWordsUnavailableError("malformed");
     const words = core.prepareNgWords(raw);
+    if (raw.length > 0 && words.length === 0) throw new NgWordsUnavailableError("malformed");
     cache = { words, loadedAtMs: nowMs() };
     logger.info("soratomoNgWords: loaded", { count: words.length, elapsedMs: nowMs() - startedMs });
   }
