@@ -8,7 +8,7 @@
 // ⚠️ ほかのエミュレーターのテストと同じく、各テストの前にエミュレーターの文書を全部消す。
 //    node --test に複数のファイルを渡すときは --test-concurrency=1 を付ける。
 // ⚠️ 本番へ書く事故の柵は soratomoStore.test.js と同じ（エミュレーターを指していなければ firebase-admin を読む前に止める）。
-// ⚠️ package.json の lint / test:emulator への登録は release-gate のタスク 7 で行う。
+// ⚠️ package.json の test:emulator に登録してある（soratomoDeletion.js は lint にも）。
 // ⚠️ 画像は偽のゲートウェイ（fakeStorage・メモリ上・接頭辞は本物と同じ文字列の前方一致）で消す。途中の失敗と時計は
 //    偽物で作る。本物のゲートウェイは soratomoStorage.emulator.test.js で Storage のエミュレーターに対して確かめた（要確認2）。
 //

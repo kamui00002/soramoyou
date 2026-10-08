@@ -5,7 +5,7 @@
 //
 // 引数の解釈・delete-user の Auth の検査・出力に内部ID以外が混ざらないこと・review-report の順序を、偽の db・auth・
 // 共通の削除で確かめる（本番には触れない）。Firestore のパスとクエリが本物で動くかは soratomo-admin.emulator.test.js。
-// ⚠️ package.json の test への登録は release-gate のタスク 7 で行う。
+// ⚠️ package.json の test に登録してある（functions で npm test）。
 //
 
 "use strict";
@@ -22,8 +22,11 @@ const REPORTER = "reporterUid";
 const REPORT_ID = `${G}_${S}_${REPORTER}`;
 const NOW = 1_800_000_000_000;
 
-/** 出力に混ざってはいけない目印（キャプション・グループ名・表示名・招待コード・画像のURL）。 */
-const SECRETS = ["ひみつのキャプション", "ひみつのグループ名", "ひみつの表示名", "SECRETCODE", "https://example.invalid/img"];
+/**
+ * 出力に混ざってはいけない目印（キャプション・グループ名・表示名・招待コード）。
+ * 投稿の文書に画像の URL の項目は無い（画像は Storage のパスで持ち、show-report はそのパスを出す）ので、目印も置かない。
+ */
+const SECRETS = ["ひみつのキャプション", "ひみつのグループ名", "ひみつの表示名", "SECRETCODE"];
 
 /** Firestore の Timestamp のように見える値。 */
 const ts = (ms) => ({ toMillis: () => ms });

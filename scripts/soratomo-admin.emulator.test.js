@@ -12,7 +12,7 @@
 //   本物のゲートウェイは functions/soratomoStorage.emulator.test.js で確かめた（要確認2）
 // ⚠️ 各テストの前に、エミュレーターの文書を全部消す。
 // ⚠️ 本番へ書く事故の柵: エミュレーターを指していなければ、firebase-admin を読む前に止める（functions の各テストと同じ）。
-// ⚠️ package.json の test:emulator への登録は release-gate のタスク 7 で行う。
+// ⚠️ package.json の test:emulator に登録してある（functions で npm run test:emulator）。
 //
 
 "use strict";

@@ -14,7 +14,7 @@
 //    404 は code が数値の 404 のエラー）を真似ている。形の根拠は soratomoStorage.js の冒頭コメントと、
 //    エミュレーターのテストでの実測を参照。
 //
-// ⚠️ package.json の lint / test への登録は tasks 7 で行う。
+// ⚠️ package.json の test に登録してある（soratomoStorage.js は lint にも）。
 //
 
 "use strict";

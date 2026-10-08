@@ -9,7 +9,7 @@
 // ⚠️ 本番へ書く事故の柵: soratomoStore.test.js と同じ。FIRESTORE_EMULATOR_HOST がエミュレーターを
 //    指していなければ、firebase-admin を読み込む前に止める（skip にはしない）。
 // ⚠️ 読み直しの失敗は、本物の db を包んだ偽物（get が投げる）で作る。時刻は偽の時計で進める。
-// ⚠️ package.json の lint / test:emulator への登録は tasks 7 で行う。
+// ⚠️ package.json の test:emulator に登録してある（soratomoNgWords.js は lint にも）。
 //
 
 "use strict";

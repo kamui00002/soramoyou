@@ -26,7 +26,7 @@
 //    それに合わせる。403・429・500・通信エラー（code が無い・文字列）は "absent" にせず、同じエラーのまま投げ直す
 //    （権限や一時的な失敗を「もう無かった」と取り違えると、画像が残ったまま削除済みと扱われる）。
 //
-// ⚠️ package.json の lint / test への登録は tasks 7 で行う（エミュレーターのテストは Java が要るので、登録の形もそこで決める）。
+// ⚠️ package.json の lint に登録してある。テストは test（soratomoStorage.test.js）と test:emulator（soratomoStorage.emulator.test.js）。
 //
 
 "use strict";
