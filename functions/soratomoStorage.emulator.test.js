@@ -7,6 +7,8 @@
 //     "cd functions && node --test soratomoStorage.emulator.test.js"
 //   （リポジトリ根の firebase.json は Storage を 9199 に置く。ほかのエミュレーターが 9199 を使っているときは、
 //    ポートを変えた最小の firebase.json を --config で渡す。）
+//   npm run test:emulator（release-gate tasks 7 で登録）からは --project soramoyou-ios で起きる（バケットはエミュレーターの上の
+//   soramoyou-ios.appspot.com）。その経路では下の demo- の柵は効かず、本番に触れないことは FIREBASE_STORAGE_EMULATOR_HOST の柵が守る。
 //
 // ⚠️ 本番へ書く事故の柵: この Mac の firebase-admin は資格情報を持っている。FIREBASE_STORAGE_EMULATOR_HOST が
 //    無いと、firebase-admin は本番のバケットへ書いてしまう。そこで、エミュレーター（127.0.0.1・localhost・[::1]）を
