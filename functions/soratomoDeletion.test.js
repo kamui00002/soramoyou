@@ -24,6 +24,27 @@
 //     これに依存する。確かめどころは実機の退会（tasks 16.1）の「最後のメンバーの退会」の後に、本番のデータで
 //     グループの下が空かを読むこと（GO の後。2026-10-08 時点の 16.1 の手順には、この読み取りはまだ書いていない）
 //
+// ■ 要確認3（design.md「トランザクションの中のメンバーのクエリと、参加の同時実行」・同じ版で実測）
+//   テスト「要確認3: …」: 19人のグループから退会者を消す削除と、ほかの人2人の参加・退会者自身の別のグループへの参加・
+//   退会者の投稿の作成を、手順1の直前を合図に回ごとに 0〜38ms ずらして発火し、20回並べた。どの回も、人数＝メンバーの件数で
+//   20人以下・所属数＝写しの件数で10個以下・退会者の投稿と文書が残らない。分布は1回の例で参加の成功 39/40・退会者自身の参加の
+//   成功 10/20・投稿の作成 3/20（片側に寄っていない＝競合の場面を作れている）。
+//   - エミュレーターは、競合したトランザクションを ABORTED（SDK が再試行する）でなく INVALID_ARGUMENT
+//     「Transaction is invalid or closed」で返すことがあり、SDK は再試行しない。20回のうち 1〜5 回、削除の手順4か
+//     最後の確認の写しのクエリ（退会者自身の参加と利用者の文書を取り合う所）で起きた。テストは、この2種だけを「競合による失敗」
+//     として数えて続きを流す（本番なら Callable の失敗＝アプリの再試行に当たる）。本番が同じ形で返すかは確かめていない
+//   - 陽性対照: 人数を1減らす実装は赤（統合テストを含む3件）。手順1の読み（グループの文書とメンバーのクエリ）をトランザクションの
+//     外に出した実装は、この並べ方では検出できなかった（読みと書きの隙間は数ミリ秒で、20回のどれも隙間に参加が落ちなかった。
+//     runTransaction を包んで直前に参加を通す形も試したが、外で読む実装の読みも渡す関数の中にあるので区別できず、残していない）。
+//     手順4の読みを外に出した実装も緑だが、これは設計どおりの自己修復（最後の確認が増えた写しを見つけ、手順4が数え直す）による
+//   - コードの審査（読んで書く文書）: 手順1は groupRef とメンバーのクエリを読み、groupRef を更新か削除・自分のメンバーを削除。
+//     joinGroupTx は codeRef・userRef・groupRef・memberRef を読み、memberRef・groupRef・userRef・写しを書く。
+//     createGroupTx は userRef（と招待コード）を読み、userRef・写しを書く。createSkyTx は userRef・memberRef・skyRef を読み、
+//     skyRef を作る。手順4と最後の確認は userRef と写しのクエリを読み、写し・userRef を書く。
+//     → 人数は「手順1と参加が groupRef を両方読んで書く」、所属数は「手順4・最後の確認と参加・作成が userRef を両方読んで書く」、
+//     投稿は「手順1が退会者のメンバーの文書をクエリで読んで消し、作成がそれを読む」ことで直列になる（Admin SDK はトランザクションで
+//     読んだ文書にロックを置く前提。本番のロックがエミュレーターと同じかは文書では確かめられない）
+//
 
 "use strict";
 
@@ -1080,4 +1101,250 @@ test("利用者単位・利用停止・解除・投稿1件: 引数の誤りは T
   assert.deepEqual(await copyIds("amy"), ["g1"]);
   assert.deepEqual(await skyAuthors("g1"), ["amy:a1"]);
   assert.deepEqual(await memberRoles("g1"), { amy: "member", owner: "owner" });
+});
+
+// MARK: - 削除のエミュレーターのテスト（タスク 3.4・要確認3）
+
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+/** 回ごとに別の招待コード（3文字の頭＋回の番号）。 */
+const codeFor = (head, i) => `${head}AAA${CODE_ALPHABET[i % 32]}${CODE_ALPHABET[Math.floor(i / 32) % 32]}`;
+/** 想定内の拒否の理由（同時実行の並べ方で起きうるもの）。 */
+const EXPECTED_REJECTIONS = new Set(["group_full", "not_member", "consent_required", "user_limit"]);
+
+/** 退会の後の確認に使う、グループ1つの中身（投稿・メンバー・人数・オーナー・通知の間引き）。 */
+async function groupSnapshot(groupId) {
+  return {
+    group: await groupData(groupId),
+    skies: await skyAuthors(groupId),
+    roles: await memberRoles(groupId),
+    notify: await notifyIds(groupId),
+  };
+}
+
+test("統合: 3つのグループ（引き継ぎ・ただのメンバー・最後の1人）と取り残しの画像。途中の失敗・締め切りの後も続きで消し切り、2回目は変わらない", async () => {
+  // gA: amy がオーナー。参加の古い bob へ引き継ぐ
+  await seedGroup({
+    groupId: "gA",
+    ownerId: "amy",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "amy", role: "owner", joinedAtMs: T(1) },
+      { uid: "bob", role: "member", joinedAtMs: T(2) },
+      { uid: "carl", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  // gB: amy はただのメンバー。人数が 9 にずれている（数え直して 2 にする）
+  await seedGroup({
+    groupId: "gB",
+    ownerId: "owner",
+    inviteCode: "SKYBBBBB",
+    memberCount: 9,
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+      { uid: "dan", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  // gC: amy が最後の1人。前のメンバー old の投稿と通知の間引きが残っている
+  await seedGroup({ groupId: "gC", ownerId: "amy", inviteCode: "SKYCCCCC", members: [{ uid: "amy", role: "owner", joinedAtMs: T(1) }] });
+  await seedSkies("gA", "amy", ["a1"]);
+  await seedSkies("gA", "bob", ["b1"]);
+  await seedSkies("gB", "amy", ["a2"]);
+  await seedSkies("gB", "owner", ["o2"]);
+  await seedSkies("gC", "amy", ["a3"]);
+  await seedSkies("gC", "old", ["x3"]);
+  await seedNotify("gA", ["amy", "bob"]);
+  await seedNotify("gB", ["amy", "owner"]);
+  await seedNotify("gC", ["amy", "old"]);
+  await seedUser("amy", ["gA", "gB", "gC"]);
+  await seedReport("r1", { groupId: "gA", skyId: "a1", authorId: "amy", reporterId: "bob" });
+  await seedReport("r2", { groupId: "gA", skyId: "b1", authorId: "bob", reporterId: "amy" });
+  const kept = [...imagesOf("gA", "bob", "b1"), ...imagesOf("gB", "owner", "o2")].sort();
+  const all = [
+    ...imagesOf("gA", "amy", "a1"),
+    "soratomo/gA/amy/orphan1/display.jpg",
+    ...imagesOf("gB", "amy", "a2"),
+    "soratomo/gB/amy/orphan2/thumb.jpg",
+    ...imagesOf("gC", "amy", "a3"),
+    ...imagesOf("gC", "old", "x3"),
+    ...kept,
+  ];
+  const request = { uid: "amy", trigger: "self", deadlineMs: DEADLINE };
+
+  // 1回目: 3件目の画像の削除で失敗する
+  const failing = fakeStorage(all, { failAt: 3 });
+  await assert.rejects(deletion.deleteSoratomoUserData({ db, storage: failing.gateway, nowMs: steadyClock() }, request), /わざと失敗/);
+  assert.ok(await userData("amy"), "失敗の後も利用者の文書は残る");
+  assert.ok((await copyIds("amy")).length >= 1, "失敗の後も写しが残る");
+
+  // 2回目: 2つ目のグループに入った後で締め切りを過ぎる
+  const files = fakeStorage([...failing.files]);
+  const second = await deletion.deleteSoratomoUserData({ db, storage: files.gateway, nowMs: clockPastAfter(2) }, request);
+  assert.equal(second.done, false);
+  assert.ok((await copyIds("amy")).length >= 1, "未完了の後も写しが残る");
+
+  // 3回目: 消し切る
+  const third = await deletion.deleteSoratomoUserData({ db, storage: files.gateway, nowMs: steadyClock() }, request);
+  assert.equal(third.done, true);
+
+  // 消えるもの
+  assert.equal(await userData("amy"), null);
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.equal(await groupData("gC"), null);
+  assert.deepEqual((await db.collection(GROUPS).doc("gC").listCollections()).map((c) => c.id), []);
+  assert.equal((await db.collection(CODES).doc("SKYCCCCC").get()).exists, false);
+  // 残るもの（ほかのメンバーの投稿と画像・通報の記録）
+  assert.deepEqual([...files.files].sort(), kept);
+  const a = await groupSnapshot("gA");
+  assert.deepEqual(a.skies, ["bob:b1"]);
+  assert.deepEqual(a.roles, { bob: "owner", carl: "member" });
+  assert.deepEqual(a.notify, ["bob"]);
+  assert.equal(a.group.inviteCode, "SKYAAAAA", "引き継いでもコードは変えない");
+  const b = await groupSnapshot("gB");
+  assert.deepEqual(b.skies, ["owner:o2"]);
+  assert.equal(b.group.memberCount, 2, "ずれた人数（9）から、残りの数で代入する");
+  assert.deepEqual(b.notify, ["owner"]);
+  await assertGroupInvariants("gA");
+  await assertGroupInvariants("gB");
+  assert.equal((await db.collection(REPORTS).get()).size, 2);
+
+  // 4回目: 状態も件数も変わらない（3.4）
+  const before = { a: await groupSnapshot("gA"), b: await groupSnapshot("gB"), files: [...files.files].sort() };
+  const fourth = await deletion.deleteSoratomoUserData({ db, storage: files.gateway, nowMs: steadyClock() }, request);
+  assert.deepEqual(fourth, { done: true, ...ZERO_TOTALS });
+  assert.deepEqual({ a: await groupSnapshot("gA"), b: await groupSnapshot("gB"), files: [...files.files].sort() }, before);
+  assert.equal(await userData("amy"), null);
+});
+
+test("要確認3: 退会の削除と、参加（ほかの人2人と退会者自身）・投稿の作成を20回並べても、人数・所属数がずれず、退会者の投稿が残らない", async (t) => {
+  const tally = { joinOk: 0, joinFull: 0, selfJoinOk: 0, selfJoinRejected: 0, skyCreated: 0, skyRejected: 0, deletionRetried: 0 };
+  const unexpected = [];
+  const contentionSites = [];
+  for (let i = 0; i < 20; i += 1) {
+    const g = `c${i}`;
+    const h = `h${i}`;
+    const amy = `amy${i}`;
+    const carol = `carol${i}`;
+    const dave = `dave${i}`;
+    // 1人分の空きがある19人のグループから amy が抜ける（満員にすると、手順1の読みと書きの隙間に届いた参加が必ず
+    // group_full で弾かれ、ずれが起きうる場面が消える）。2人とも入っても20人以下になる
+    const fillers = Array.from({ length: 17 }, (_, k) => ({ uid: `f${i}x${k}`, role: "member", joinedAtMs: T(10 + k) }));
+    await seedGroup({
+      groupId: g,
+      ownerId: `o${i}`,
+      inviteCode: codeFor("CCC", i),
+      members: [{ uid: `o${i}`, role: "owner", joinedAtMs: T(1) }, { uid: amy, role: "member", joinedAtMs: T(2) }, ...fillers],
+    });
+    await seedGroup({ groupId: h, ownerId: `p${i}`, inviteCode: codeFor("HHH", i), members: [{ uid: `p${i}`, role: "owner", joinedAtMs: T(1) }] });
+    await seedSkies(g, amy, ["a1"]);
+    await seedUser(amy, [g]);
+    await seedUser(carol, []);
+    await seedUser(dave, []);
+    const storage = fakeStorage(imagesOf(g, amy, "a1"));
+
+    // 手順1のトランザクションの直前（グループの前の締め切りの確認）を合図に、参加と作成を待たずに発火させる。
+    // 合図からの遅れを回ごとに 0〜38ms ずらす（同時に投げるだけだと、毎回手順1より先に終わって競合の場面にならなかった）
+    let racers = null;
+    const settle = (p) => p.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }));
+    const later = (ms, fn) => new Promise((resolve) => setTimeout(resolve, ms)).then(fn);
+    const delay = i * 2;
+    const nowMs = () => {
+      if (racers === null) {
+        racers = [
+          settle(later(delay, () => store.joinGroupTx(db, { uid: carol, code: codeFor("CCC", i), policy: JOIN_POLICY }))),
+          settle(later(delay, () => store.joinGroupTx(db, { uid: dave, code: codeFor("CCC", i), policy: JOIN_POLICY }))),
+          settle(later(delay, () => store.joinGroupTx(db, { uid: amy, code: codeFor("HHH", i), policy: JOIN_POLICY }))),
+          settle(
+            later(delay, () =>
+              store.createSkyTx(db, { uid: amy, input: { groupId: g, skyId: `s${i}`, width: 1, height: 1 }, policy: { containsNgWord: () => false } })
+            )
+          ),
+        ];
+      }
+      return 0;
+    };
+    const deps = { db, storage: storage.gateway, nowMs };
+    let result = await settle(deletion.deleteSoratomoUserData(deps, { uid: amy, trigger: "self", deadlineMs: DEADLINE }));
+    assert.ok(racers, "手順1の前に参加と作成を発火できた");
+    const [carolJoin, daveJoin, selfJoin, sky] = await Promise.all(racers);
+    if (!result.ok) {
+      // 削除のトランザクションの競合（本番なら Callable の失敗＝アプリの再試行に当たる）。数えてから続きを流す。
+      // 競合と認めるのは ABORTED（10）と、エミュレーターが競合で返す INVALID_ARGUMENT（3）の
+      // 「Transaction is invalid or closed」だけ。ほかは想定外として赤にする
+      const e = result.error;
+      const contention = e.code === 10 || (e.code === 3 && /Transaction is invalid or closed/.test(e.message));
+      if (contention) {
+        tally.deletionRetried += 1;
+        const frame = (e.stack || "").split("\n").find((line) => line.includes("soratomoDeletion.js")) || "(場所不明)";
+        contentionSites.push(`回 ${i}: code ${e.code} ${frame.trim()}`);
+      } else {
+        unexpected.push(`回 ${i} 削除: ${e.code} ${e.message}`);
+      }
+      result = await settle(deletion.deleteSoratomoUserData({ db, storage: storage.gateway, nowMs: steadyClock() }, { uid: amy, trigger: "self", deadlineMs: DEADLINE }));
+    }
+    assert.ok(result.ok && result.value.done, `回 ${i}: 削除が完了する`);
+
+    for (const [name, r] of [["carol", carolJoin], ["dave", daveJoin], ["self", selfJoin], ["sky", sky]]) {
+      if (!r.ok && !EXPECTED_REJECTIONS.has(r.error.reason)) unexpected.push(`回 ${i} ${name}: ${r.error.reason || r.error.code} ${r.error.message}`);
+    }
+    tally.joinOk += [carolJoin, daveJoin].filter((r) => r.ok).length;
+    tally.joinFull += [carolJoin, daveJoin].filter((r) => !r.ok && r.error.reason === "group_full").length;
+    if (selfJoin.ok) tally.selfJoinOk += 1;
+    else tally.selfJoinRejected += 1;
+    if (sky.ok) tally.skyCreated += 1;
+    else tally.skyRejected += 1;
+
+    // 人数＝メンバーの件数で20以下・オーナーはちょうど1人（2.11）
+    for (const groupId of [g, h]) {
+      const group = await groupData(groupId);
+      const roles = await memberRoles(groupId);
+      assert.equal(group.memberCount, Object.keys(roles).length, `回 ${i} ${groupId}: 人数がメンバーの件数と等しい`);
+      assert.ok(group.memberCount <= core.MAX_MEMBERS, `回 ${i} ${groupId}: 20人以下`);
+      assert.equal(roles[amy], undefined, `回 ${i} ${groupId}: 退会者はメンバーでない`);
+      await assertGroupInvariants(groupId);
+    }
+    // 所属数＝写しの件数で10以下（文書が無ければ写しも無い）
+    for (const uid of [amy, carol, dave]) {
+      const user = await userData(uid);
+      const copies = await copyIds(uid);
+      if (user === null) assert.deepEqual(copies, [], `回 ${i} ${uid}: 文書が無ければ写しも無い`);
+      else {
+        assert.equal(user.groupCount, copies.length, `回 ${i} ${uid}: 所属数が写しの件数と等しい`);
+        assert.ok(user.groupCount <= core.MAX_GROUPS_PER_USER, `回 ${i} ${uid}: 10個以下`);
+      }
+    }
+    assert.equal(await userData(amy), null, `回 ${i}: 退会者の文書は残らない`);
+    assert.deepEqual((await skyAuthors(g)).filter((s) => s.startsWith(`${amy}:`)), [], `回 ${i}: 退会者の投稿が残らない`);
+  }
+  t.diagnostic(`要確認3の分布 ${JSON.stringify(tally)}`);
+  if (contentionSites.length > 0) t.diagnostic(`削除の競合 ${JSON.stringify(contentionSites)}`);
+  if (unexpected.length > 0) t.diagnostic(`想定外 ${JSON.stringify(unexpected)}`);
+  assert.deepEqual(unexpected, [], "想定外の失敗（トランザクションの競合の使い切りなど）が無い");
+});
+
+test("利用停止の後: 作成・参加・投稿が停止を理由に拒否され、解除の後は作成と参加が通る", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedGroup({ groupId: "g2", ownerId: "bob", inviteCode: "SKYBBBBB", members: [{ uid: "bob", role: "owner", joinedAtMs: T(1) }] });
+  await seedUser("amy", ["g1"]);
+  const deps = { db, storage: fakeStorage([]).gateway, nowMs: steadyClock() };
+  assert.equal((await deletion.suspendSoratomoUser(deps, { uid: "amy", deadlineMs: DEADLINE })).done, true);
+  const user = await userData("amy");
+  assert.ok(user.suspendedAt);
+  assert.equal(user.groupCount, 0);
+  assert.deepEqual(await copyIds("amy"), []);
+
+  const suspended = (err) => err.reason === "suspended";
+  await assert.rejects(store.createGroupTx(db, { uid: "amy", name: "空の会", requestId: "r1", policy: CREATE_POLICY }), suspended);
+  await assert.rejects(store.joinGroupTx(db, { uid: "amy", code: "SKYBBBBB", policy: JOIN_POLICY }), suspended);
+  await assert.rejects(
+    store.createSkyTx(db, { uid: "amy", input: { groupId: "g2", skyId: "s1", width: 1, height: 1 }, policy: { containsNgWord: () => false } }),
+    suspended
+  );
+
+  await deletion.unsuspendSoratomoUser(db, { uid: "amy" });
+  const created = await store.createGroupTx(db, { uid: "amy", name: "空の会", requestId: "r2", policy: CREATE_POLICY });
+  assert.equal(created.memberCount, 1);
+  assert.deepEqual(await store.joinGroupTx(db, { uid: "amy", code: "SKYBBBBB", policy: JOIN_POLICY }), { groupId: "g2", alreadyMember: false });
+  assert.equal((await userData("amy")).groupCount, 2);
+  assert.deepEqual(await copyIds("amy"), [created.groupId, "g2"].sort());
 });
