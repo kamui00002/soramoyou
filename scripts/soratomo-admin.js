@@ -29,6 +29,7 @@
  *   内部ID（uid・グループID・投稿ID・通報の記録のID）と件数・理由・時刻・状態だけを出す。
  *   キャプション・グループ名・表示名・招待コード・画像・メールアドレスは出さない。記録の値がIDの形に合わないときは
  *   値を出さずに「（壊れた値）」と出す。エラーは code（無ければ名前）だけを出す（本文に資格情報のパスなどが入るため）。
+ *   ただし、自前の「soratomo: 」で始まるエラー（functions/soratomo*.js の固定の文言。利用者の値を含まない）は本文を出す。
  *
  * ■ 認証: Application Default Credentials（ADC）。鍵ファイルはリポジトリに置かない。
  *   1. gcloud auth application-default login
@@ -590,10 +591,21 @@ async function main(argv) {
   process.exitCode = exitCode;
 }
 
+/**
+ * 失敗を1行の理由にする。自前の「soratomo: 」で始まるエラー（固定の文言で、利用者の値を含まない）は本文を、
+ * それ以外は code（無ければ名前）だけを返す（本文に資格情報のパスなどが入りうるため）。
+ * 自前のエラーは TypeError などの名前だけでは何が起きたか分からないので、本文を出す。
+ * @param {unknown} err
+ * @returns {string}
+ */
+function describeError(err) {
+  if (err instanceof Error && err.message.startsWith("soratomo: ")) return err.message;
+  return (err && (err.code || err.name)) || "不明なエラー";
+}
+
 if (require.main === module) {
   main(process.argv.slice(2)).catch((err) => {
-    // エラーの本文（資格情報のパスなど）をそのまま出さず、code（無ければ名前）だけにする。
-    console.error(`❌ 失敗しました: ${(err && (err.code || err.name)) || "不明なエラー"}`);
+    console.error(`❌ 失敗しました: ${describeError(err)}`);
     process.exitCode = 1;
   });
 }
@@ -621,5 +633,6 @@ module.exports = {
   run,
   findEmulatorEnv,
   functionsRequire,
+  describeError,
   main,
 };

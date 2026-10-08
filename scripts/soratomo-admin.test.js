@@ -541,3 +541,21 @@ test("firebase-admin は functions/ から解決する（共通の削除のモ�
   const source = require("node:fs").readFileSync(path.join(__dirname, "soratomo-admin.js"), "utf8");
   assert.doesNotMatch(source, /\brequire\(\s*["']firebase-admin/);
 });
+
+// MARK: - 失敗の出し方（D18）
+
+test("describeError: 自前の soratomo: のエラーは本文を、それ以外は code（無ければ名前）だけを出す", () => {
+  assert.equal(admin.describeError(new TypeError("soratomo: uid が文書IDとして使えない")), "soratomo: uid が文書IDとして使えない");
+  assert.equal(admin.describeError(new Error("soratomo: 投稿の authorId が壊れている")), "soratomo: 投稿の authorId が壊れている");
+  // 本文に資格情報のパスなどが入りうるので、自前でないエラーの本文は出さない
+  const secretPath = "/Users/someone/.config/gcloud/application_default_credentials.json";
+  assert.equal(admin.describeError(Object.assign(new Error(`ENOENT: ${secretPath}`), { code: "ENOENT" })), "ENOENT");
+  assert.equal(admin.describeError(new RangeError(`読めない: ${secretPath}`)), "RangeError");
+  assert.equal(admin.describeError(new Error("xsoratomo: 先頭でない")), "Error");
+  for (const value of [null, undefined, "soratomo: 文字列", {}]) assert.equal(admin.describeError(value), "不明なエラー");
+});
+
+test("main の失敗は describeError を通して出す", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "soratomo-admin.js"), "utf8");
+  assert.match(source, /console\.error\(`❌ 失敗しました: \$\{describeError\(err\)\}`\)/);
+});
