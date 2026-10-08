@@ -86,11 +86,11 @@ struct ContentView: View {
                 RecommendationManager.shared.clearOnSignOut()
                 // そらとも（友達グループで空を共有）も同じ理由で消す ⭐️ tasks 14.1
                 // 通知の保留の行き先と画面の経路・フラグの判定・画像のキャッシュ・表示名とアイコンの保持・投稿の覚え
+                // ・ブロックの一覧と通報の記録のメモリ（release-gate 9.6。端末の通報の記録は残す）
                 SoratomoRouter.shared.clearOnSignOut()
                 soratomoGate.reset()
                 SoratomoImageCache.clear()
-                SoratomoDependencies.live.profileStore.clear()
-                SoratomoDependencies.live.skyLookup.clear()
+                SoratomoDependencies.live.clearSessionState()
             }
         }
         // そらともの機能フラグを、ログインが確定するたびに評価する ⭐️ tasks 14.1
