@@ -101,12 +101,31 @@ globalThis.fetch = async (url, init) => {
   throw new Error(`テストから外へ送らない: ${String(url).slice(0, 30)}`);
 };
 
+/**
+ * 語のリストの提供口の差し替え（release-gate 4.5）。soratomo.js の提供口はモジュールに1つで5分キャッシュするため、
+ * 「一度も読めていない」場面はそのままでは作れない。soratomo.js が作る提供口を包み、ngWordsOverride を入れた間だけ
+ * そちらの matcher() を使う（本体の exports は増やさない）。realCreateNgWordProvider は本物の作り方（新しい提供口を作る）。
+ */
+let ngWordsOverride = null;
+let realCreateNgWordProvider = null;
+
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {
   if (request === "firebase-admin/auth") return { getAuth: () => fakeAuth };
   if (request === "./pushHelpers") return fakePush;
   if (request === "firebase-functions/logger") return fakeLogger;
   if (request === "./soratomoStorage") return { createStorageGateway: () => fakeStorageGateway };
+  if (request === "./soratomoNgWords") {
+    const real = originalLoad.call(this, request, parent, isMain);
+    realCreateNgWordProvider = real.createNgWordProvider;
+    return {
+      ...real,
+      createNgWordProvider: (deps) => {
+        const shared = real.createNgWordProvider(deps);
+        return { matcher: () => (ngWordsOverride || shared).matcher() };
+      },
+    };
+  }
   return originalLoad.call(this, request, parent, isMain);
 };
 
@@ -123,7 +142,7 @@ const core = require("./soratomoCore");
  * 語のリスト（soratomoConfig/ngWords）に入れるダミーの語（実在の語は書かない・release-gate の「進め方の約束」）。
  * ⚠️ soratomo.js の語のリストの提供口はモジュールの中に1つで、5分キャッシュする。各テストの前に文書を全部消しても
  *    キャッシュは残るので、どのテストでも同じ中身を入れ直す（中身を変えると、テストの順で結果が変わる）。
- *    「文書が無いときは internal」のテスト（tasks 4.5）は、この形では書けない。4.5 で提供口を差し替える口を考える。
+ *    「文書が無いときは internal」のテスト（tasks 4.5）は、ngWordsOverride に新しい提供口を入れて書く。
  */
 const NG_WORDS = ["てすとごい"];
 
@@ -150,6 +169,7 @@ test.beforeEach(async () => {
   storageFiles = new Set();
   record.webhooks = [];
   webhookImpl = async () => ({ ok: true, status: 204 });
+  ngWordsOverride = null;
 });
 
 test.after(async () => {
@@ -912,4 +932,182 @@ test("定期実行: 6時間ごと・制限時間540秒・メモリ512MiB・同�
   assert.equal(endpoint.maxInstances, 1);
   assert.deepEqual(endpoint.secretEnvironmentVariables, [{ key: "DISCORD_REPORT_WEBHOOK_URL" }]);
   assert.deepEqual(endpoint.region, ["asia-northeast1"]);
+});
+
+// MARK: - Callable の拒否と要確認6（release-gate 4.5）
+
+test("退会: 要求の本文に他人の uid を書いても、消すのは認証の uid だけ（要件3.5）", async () => {
+  await seedDeletionScene();
+  const groupRef = db.collection("soratomoGroups").doc(DEL_GROUP);
+
+  // そらともを使っていない carol が alice を指定しても、carol の空振りで終わる
+  assert.deepEqual(await call("soratomoDeleteMyData", authOf("carol", {}), { uid: "alice", targetUid: "alice" }), { done: true });
+  // メンバーの bob が alice を指定しても、消えるのは bob だけ
+  assert.deepEqual(await call("soratomoDeleteMyData", authOf("bob", {}), { uid: "alice" }), { done: true });
+
+  assert.equal((await db.collection("soratomoUsers").doc("alice").get()).exists, true);
+  assert.equal((await groupRef.collection("skies").doc("sa1").get()).exists, true);
+  assert.equal((await groupRef.collection("members").doc("alice").get()).exists, true);
+  assert.equal((await db.collection("soratomoUsers").doc("bob").get()).exists, false);
+  assert.equal((await groupRef.collection("skies").doc("sb1").get()).exists, false);
+  assert.deepEqual([...storageFiles].sort(), imagesOf("alice", "sa1").sort());
+  assert.deepEqual(
+    deleteOkLogs().map((l) => l.uid),
+    ["carol", "bob"]
+  );
+});
+
+test("投稿: メンバーでない人は not_member、停止中の人は suspended、入力の誤りは invalid_input で、どれも作らない。投稿者は認証の uid", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "carol"] });
+  await db.collection("soratomoUsers").doc("carol").set({ suspendedAt: Timestamp.now(), groupCount: 0 });
+  const valid = { groupId: "g1", skyId: "s1", caption: "夕焼けがきれい", width: 1080, height: 1440 };
+
+  await assert.rejects(call("soratomoCreateSky", authOf("bob"), valid), httpsError("permission-denied", "not_member", {}));
+  await assert.rejects(call("soratomoCreateSky", authOf("carol"), valid), httpsError("permission-denied", "suspended", {}));
+  const invalids = [
+    { ...valid, width: 0 },
+    { ...valid, height: 2049 },
+    { ...valid, width: 1.5 },
+    { ...valid, caption: "" },
+    { ...valid, caption: "改行\nあり" },
+    { ...valid, caption: "あ".repeat(101) },
+    { ...valid, skyId: undefined },
+    { ...valid, groupId: "g/1" },
+  ];
+  for (const input of invalids) {
+    await assert.rejects(call("soratomoCreateSky", authOf("alice"), input), httpsError("invalid-argument", "invalid_input", {}));
+  }
+  assert.equal((await db.collection("soratomoGroups").doc("g1").collection("skies").get()).size, 0, "拒否では作らない");
+
+  // 要求に投稿者を書いても、投稿者は認証の uid になる
+  await call("soratomoCreateSky", authOf("alice"), { ...valid, authorId: "carol" });
+  assert.equal((await db.collection("soratomoGroups").doc("g1").collection("skies").doc("s1").get()).get("authorId"), "alice");
+});
+
+test("語のリスト: 一度も読めていなければ、投稿と作成は internal で何も作らない。入力の誤りは語のリストより先に invalid_input、参加は通る", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner", "alice"] });
+  await agree("alice", "bob");
+  await db.collection("soratomoConfig").doc("ngWords").delete();
+  ngWordsOverride = realCreateNgWordProvider({ db });
+
+  await assert.rejects(
+    call("soratomoCreateSky", authOf("alice"), { groupId: "g1", skyId: "s1", width: 1, height: 1 }),
+    httpsError("internal")
+  );
+  await assert.rejects(
+    call("soratomoCreateSky", authOf("alice"), { groupId: "g1", skyId: "s1", width: 0, height: 1 }),
+    httpsError("invalid-argument", "invalid_input", {})
+  );
+  await assert.rejects(call("soratomoCreateGroup", authOf("alice"), { name: "空の会", requestId: "r1" }), httpsError("internal"));
+  assert.deepEqual(await call("soratomoJoinGroup", authOf("bob"), { code: "SKYAAAAA" }), { groupId: "g1", alreadyMember: false });
+
+  assert.equal((await db.collection("soratomoGroups").doc("g1").collection("skies").get()).size, 0);
+  assert.equal((await db.collection("soratomoGroups").get()).size, 1);
+  assert.equal(logFieldsOf("soratomoCreateSky: internal").length, 1);
+});
+
+test("通報: メンバーでない（not_member）・投稿が無い（sky_not_found）・自分の投稿（self_report）・理由の誤り（invalid_reason）・ID の形の誤り（invalid_input）は、記録を作らない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob"] });
+  await db
+    .collection("soratomoGroups")
+    .doc("g1")
+    .collection("skies")
+    .doc("s1")
+    .set({ authorId: "alice", width: 1, height: 1, createdAt: Timestamp.now() });
+  const input = { groupId: "g1", skyId: "s1", reason: "spam" };
+
+  await assert.rejects(call("soratomoReportSky", authOf("carol"), input), httpsError("permission-denied", "not_member", {}));
+  await assert.rejects(
+    call("soratomoReportSky", authOf("bob"), { ...input, skyId: "s9" }),
+    httpsError("not-found", "sky_not_found", {})
+  );
+  await assert.rejects(call("soratomoReportSky", authOf("alice"), input), httpsError("failed-precondition", "self_report", {}));
+  for (const reason of ["abuse", undefined, "SPAM"]) {
+    await assert.rejects(
+      call("soratomoReportSky", authOf("bob"), { ...input, reason }),
+      httpsError("invalid-argument", "invalid_reason", {})
+    );
+  }
+  await assert.rejects(
+    call("soratomoReportSky", authOf("bob"), { ...input, groupId: "g/1" }),
+    httpsError("invalid-argument", "invalid_input", {})
+  );
+  assert.equal((await db.collection("soratomoReports").get()).size, 0);
+});
+
+test("通報: 通報者は認証の uid、投稿者は投稿の文書から取り、要求に書いた値を使わない（要件6.2・6.8）。記録は8項目だけ", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob"] });
+  await db
+    .collection("soratomoGroups")
+    .doc("g1")
+    .collection("skies")
+    .doc("s1")
+    .set({ authorId: "alice", caption: "夕焼けがきれい", width: 1, height: 1, createdAt: Timestamp.now() });
+
+  await call("soratomoReportSky", authOf("bob"), { groupId: "g1", skyId: "s1", reason: "other", reporterId: "mallory", authorId: "eve" });
+  const reports = await db.collection("soratomoReports").get();
+  assert.equal(reports.size, 1);
+  assert.equal(reports.docs[0].id, core.reportDocId("g1", "s1", "bob"));
+  const report = reports.docs[0].data();
+  assert.deepEqual(Object.keys(report).sort(), [
+    "authorId",
+    "createdAt",
+    "forwardAttempts",
+    "forwardStatus",
+    "groupId",
+    "reason",
+    "reporterId",
+    "skyId",
+  ]);
+  assert.equal(report.reporterId, "bob");
+  assert.equal(report.authorId, "alice");
+});
+
+test("同意: 版が整数でなければ invalid-argument（invalid_input）、新しすぎる版も outdated_guideline で、何も書かない", async () => {
+  for (const version of ["1", 1.5, undefined, null]) {
+    await assert.rejects(
+      call("soratomoAgreeGuideline", authOf("alice"), { version }),
+      httpsError("invalid-argument", "invalid_input", {})
+    );
+  }
+  await assert.rejects(
+    call("soratomoAgreeGuideline", authOf("alice"), { version: core.GUIDELINE_VERSION + 1 }),
+    httpsError("failed-precondition", "outdated_guideline", { currentVersion: core.GUIDELINE_VERSION })
+  );
+  assert.equal((await db.collection("soratomoUsers").doc("alice").get()).exists, false);
+});
+
+test("要確認6: Callable で作った投稿でも、新着通知の宛先・本文・まとめ指定・集計と、グループの最新の活動時刻の更新は、クライアントが作った投稿と同じ", async () => {
+  // 比べる相手は「トリガー: 投稿者を除いたメンバーを分類し…」（クライアントが文書を直接作った形・postSky）の期待値
+  await seedScene();
+  assert.deepEqual(
+    await call("soratomoCreateSky", authOf("poster"), { groupId: "g1", skyId: "s1", caption: "夕焼けがきれい", width: 1080, height: 1440 }),
+    { skyId: "s1", created: true }
+  );
+  record.logs = [];
+  await runTrigger("s1");
+
+  assert.deepEqual(record.sends.map((s) => s.uid).sort(), ["a", "f"]);
+  for (const s of record.sends) {
+    assert.equal(s.token, `tok-${s.uid}`);
+    assert.deepEqual(s.notification, { title: "ひみつの空の会", body: "ソラミさんが空を投稿しました「夕焼けがきれい」" });
+    assert.deepEqual(s.data, { type: "soratomoPost", groupId: "g1", postId: "s1" });
+    assert.deepEqual(s.grouping, { threadId: "soratomo-g1", collapseId: "soratomo-g1" });
+  }
+  assert.deepEqual(summaryLog(), {
+    groupId: "g1",
+    skyId: "s1",
+    sent: 2,
+    throttled: 0,
+    duplicate: 0,
+    noToken: 1,
+    sendFailed: 0,
+    prefOff: 1,
+    blocked: 1,
+    flagOff: 1,
+  });
+  const createdAt = (await db.collection("soratomoGroups").doc("g1").collection("skies").doc("s1").get()).get("createdAt");
+  assert.ok(createdAt instanceof Timestamp, "Callable の作成日時もサーバーの時刻（Timestamp）");
+  assert.ok(createdAt.toMillis() > OLD.toMillis());
+  assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("lastActivityAt").toMillis(), createdAt.toMillis());
 });
