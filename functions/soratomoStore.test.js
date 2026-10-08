@@ -272,6 +272,28 @@ test("作成: 同じ要求IDの再送では前回のグループを返し、2つ
   assert.equal(await userGroupCount("alice"), 2);
 });
 
+test("作成: 前回のグループのメンバーでなくなっていたら、同じ要求IDでも前回のグループ（今の招待コード）を返さず、新しく作る", async () => {
+  // レビュー #9: 停止と解除の後の状態。前回の要求IDと作ったグループの記録は利用者の文書に残るが、もうメンバーではない
+  // （オーナーは bob に移り、コードは再発行済み）。ここで前回のグループを返すと、外されたグループに入り直せてしまう（要件8.8）
+  await seedGroup({ groupId: "g1", ownerId: "bob", inviteCode: "SKYNEWCD", memberIds: ["bob"] });
+  await db.collection("soratomoUsers").doc("alice").set({
+    guidelineVersion: core.GUIDELINE_VERSION,
+    groupCount: 0,
+    lastCreateRequestId: "req-1",
+    lastCreatedGroupId: "g1",
+  });
+
+  const result = await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1", policy: POLICY });
+  assert.notEqual(result.groupId, "g1", "外されたグループを返さない");
+  assert.notEqual(result.inviteCode, "SKYNEWCD", "外されたグループの今の招待コードを返さない");
+  assert.equal((await db.collection(GROUPS).doc("g1").collection("members").doc("alice").get()).exists, false);
+  assert.equal((await db.collection(GROUPS).doc(result.groupId).get()).get("ownerId"), "alice");
+  assert.equal(await userGroupCount("alice"), 1);
+
+  // 新しく作ったグループを前回の記録として書き直すので、その後の再送は新しいグループを返す
+  assert.deepEqual(await store.createGroupTx(db, { uid: "alice", name: "空の会", requestId: "req-1", policy: POLICY }), result);
+});
+
 test("作成: 同じ要求IDを同時に2回送っても、グループは1つだけ", async () => {
   await agree("alice");
   const results = await Promise.allSettled([

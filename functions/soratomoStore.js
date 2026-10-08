@@ -168,7 +168,10 @@ async function pickUnusedInviteCode(tx, db, randomInt) {
  * 判定の順（release-gate 2.1）: invalid_name（トランザクションの前）→ suspended → consent_required →
  * 同じ要求IDの再送 → ng_word → user_limit。
  * - 同じ要求IDの再送では、前回作ったグループを返す（冪等。タイムアウトの後の再試行で2つ目を作らない）。
- *   NGワードより先に見るので、語のリストを変えた後の送り直しでも、作れたグループを失わない
+ *   NGワードより先に見るので、語のリストを変えた後の送り直しでも、作れたグループを失わない。
+ *   ただし、いまもそのグループのメンバーのときだけ返す。利用停止の削除は利用者の文書（前回の要求IDの記録）を残すので、
+ *   解除の後に同じ要求IDを送ると、外されたグループの今の招待コードを取り戻せてしまう（要件8.8・レビュー #9）。
+ *   メンバーでなければ、ふつうの作成に進む
  * - 所属がすでに10個なら user_limit
  * @param {FirebaseFirestore.Firestore} db
  * @param {{ uid: string, name: unknown, requestId: unknown,
@@ -193,10 +196,12 @@ async function createGroupTx(db, { uid, name, requestId, policy }, { randomInt }
 
     assertNotSuspendedAndAgreed(user, policy.guidelineVersion);
 
-    // 冪等: 前回と同じ要求IDなら、前回のグループをこのトランザクションの中で読んで返す
+    // 冪等: 前回と同じ要求IDなら、前回のグループと自分のメンバーの文書をこのトランザクションの中で読み、
+    // いまもメンバーなら前回のグループを返す
     if (user.lastCreateRequestId === requestId && isDocumentId(user.lastCreatedGroupId)) {
-      const previous = await tx.get(db.collection(GROUPS).doc(user.lastCreatedGroupId));
-      if (previous.exists) {
+      const previousRef = db.collection(GROUPS).doc(user.lastCreatedGroupId);
+      const [previous, previousMember] = await tx.getAll(previousRef, previousRef.collection(MEMBERS).doc(uid));
+      if (previous.exists && previousMember.exists) {
         const g = previous.data();
         return { groupId: previous.id, name: g.name, inviteCode: g.inviteCode, memberCount: g.memberCount };
       }
