@@ -1111,3 +1111,33 @@ test("要確認6: Callable で作った投稿でも、新着通知の宛先・�
   assert.ok(createdAt.toMillis() > OLD.toMillis());
   assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("lastActivityAt").toMillis(), createdAt.toMillis());
 });
+
+// MARK: - 定期実行の仕事Aの組（release-gate 4.6）
+
+test("定期実行の仕事A: 100件ずつ問い合わせ、失敗した組だけを飛ばす（ほかの組のアカウントの無い人は消す）", async () => {
+  // アカウントの無い150人（利用者の文書だけ）。1回目の問い合わせ（100人）だけ失敗させる
+  const uids = Array.from({ length: 150 }, (_, i) => `u${String(i).padStart(3, "0")}`);
+  for (let i = 0; i < uids.length; i += 100) {
+    const batch = db.batch();
+    for (const uid of uids.slice(i, i + 100)) batch.set(db.collection("soratomoUsers").doc(uid), { groupCount: 0 });
+    await batch.commit();
+  }
+  let lookups = 0;
+  getUsersImpl = async (identifiers) => {
+    lookups += 1;
+    if (lookups === 1) throw new Error("auth の失敗");
+    return { users: [], notFound: identifiers };
+  };
+  await runHousekeeping();
+
+  assert.deepEqual(
+    record.getUsersCalls.map((c) => c.length),
+    [100, 50]
+  );
+  const [failedBatch, okBatch] = record.getUsersCalls;
+  const remaining = new Set((await db.collection("soratomoUsers").get()).docs.map((d) => d.id));
+  assert.deepEqual([...remaining].sort(), [...failedBatch].sort(), "失敗した組の人だけが残る");
+  for (const uid of okBatch) assert.ok(!remaining.has(uid), `${uid} は消える`);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: sweep"), [{ scanned: 50, missingAuth: 50, completed: 50, unfinished: 0 }]);
+  assert.equal(logFieldsOf("soratomoHousekeeping: lookup_failed")[0].count, 100);
+});
