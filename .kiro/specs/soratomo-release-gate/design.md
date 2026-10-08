@@ -477,7 +477,7 @@ flowchart TD
 async function deleteSoratomoSky(deps, { groupId, skyId }) {}
 ```
 - Preconditions: `uid`は文書IDとして使える文字列。呼び手が本人・Authの無い人・開発者の指定のいずれかであることは、呼び手が保証する（3.5）。
-- Postconditions（`done: true`）: 元の各グループで、`uid`のメンバーの文書・`authorId == uid`の投稿・`soratomo/{groupId}/{uid}/`以下の画像・`notifyState/{uid}`が無い。`uid`が最後のメンバーだったグループは、文書・子・招待コード・`soratomo/{groupId}/`以下の画像が無い。`suspension`以外では`soratomoUsers/{uid}`と写しが無い。`suspension`では`soratomoUsers/{uid}`が`suspendedAt`と`groupCount: 0`を持って残る。
+- Postconditions（`done: true`）: 元の各グループで、`uid`のメンバーの文書・`authorId == uid`の投稿・`soratomo/{groupId}/{uid}/`以下の画像・`notifyState/{uid}`が無い。`uid`が最後のメンバーだったグループは、文書・子・招待コード・`soratomo/{groupId}/`以下の画像が無い。`suspension`以外では`soratomoUsers/{uid}`と写しが無い。`suspension`では`soratomoUsers/{uid}`が`suspendedAt`と`groupCount: 0`を持って残る。停止中（`suspendedAt`あり）の人は、`account_deleted`以外の呼び手でも`soratomoUsers/{uid}`を`groupCount: 0`で残す（アカウントを消さずに本人の削除だけを呼んで、停止を解くことを防ぐ・fdf6496）。停止の記録は、アカウントの削除の後に`soratomoHousekeeping`の`account_deleted`が消すので、要件2.3は最大で約6時間遅れて満たされる（4.4のテストで確認）。
 - Invariants: 各トランザクションの後で、`memberCount`はメンバーの件数と等しく20以下。`groupCount`は写しの件数と等しく10以下。残ったグループのオーナーはちょうど1人（`ownerId`とメンバーの`role`が一致）。
 - 件数の定義（14.4）: `groupsLeft`はこの実行でメンバーの文書を消したグループの数。`ownersTransferred`と`groupsDeleted`はその内訳。`imagesDeleted`は実際に消したファイルの数。
 
