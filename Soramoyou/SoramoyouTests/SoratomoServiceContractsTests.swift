@@ -159,6 +159,22 @@ final class SoratomoServiceContractsTests: XCTestCase {
         XCTAssertEqual(received, [0])
     }
 
+    func testSkyObservationReachesOnlyLiveObservation() {
+        // 投稿 1 件の監視（release-gate 9.3）も、protocol 越しに渡した @MainActor のコールバックが、止めた後には届かないこと
+        let mock = MockSoratomoSkyService()
+        let service: any SoratomoSkyServiceProtocol = mock
+        var received: [Result<SoratomoSkyPresence, SoratomoError>] = []
+        let token = service.observeSky(groupId: "g1", skyId: "s1") { received.append($0) }
+
+        mock.emitSky(.success(.present))
+        token.cancel()
+        mock.emitSky(.success(.gone))
+
+        XCTAssertEqual(received, [.success(.present)])
+        XCTAssertEqual(mock.observeSkyCalls.map(\.skyId), ["s1"])
+        XCTAssertEqual(mock.cancelledSkyIndexes, [0])
+    }
+
     func testImageStoreMockReportsProgressAndDeleteOutcome() async {
         let mock = MockSoratomoImageStore()
         let store: any SoratomoImageStoreProtocol = mock

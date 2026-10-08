@@ -2,36 +2,95 @@
 //  SoratomoSkyService.swift
 //  Soramoyou
 //
-//  そらとも（友達グループで空を共有）の投稿のサービス ⭐️
-//  タイムラインの監視と、投稿データの作成・削除・日次件数・サーバーでの存在確認
-//  （tasks 11.2・design.md の SoratomoSkyService）。
+//  そらとも（友達グループで空を共有）の投稿のサービス ⭐️☁️
+//  タイムラインと投稿 1 件の監視と、投稿データの作成・削除・日次件数・サーバーでの存在確認
+//  （tasks 11.2・design.md の SoratomoSkyService・release-gate 9.3）。
+//
+//  - 作成は Callable `soratomoCreateSky`（制限時間 20 秒）。NGワード・利用停止・メンバーの確かめはサーバーが行う
+//    （ルールの `skies` の `create` は閉じた・release-gate の決定事項 1）。同じ投稿 ID の送り直しは、サーバーが成功で返す
+//  - 投稿 1 件の監視は、サーバーで確かめた不在だけを「もう無い」として届ける（要件 1.7）
 //
 //  ⚠️ このサービスが扱うのは投稿の「データ」（Firestore の `soratomoGroups/{groupId}/skies/{skyId}`）だけ。
 //     画像（Storage）は SoratomoImageStore（tasks 11.4）が扱う。
 //  ⚠️ 計測（SoratomoAnalytics.log）はここでは呼ばない。画面の ViewModel（tasks 13.x）の責務。
+//     作成の失敗の記録（SoratomoError.record）も、呼び出し側（SoratomoComposeViewModel の handleSaveFailure）が行う。
 //  ⚠️ 上限を 20・40・60 と伸ばす操作や、引き下げて更新したときに 20 へ戻す操作は ViewModel の責務。
 //     このサービスは `limit` を受け取って、その件数の監視を 1 本張るだけ。
 //
 
 import FirebaseFirestore
+import FirebaseFunctions
 import Foundation
 
-/// そらともの投稿のサービス（`SoratomoSkyServiceProtocol` の Firestore 実装）
+// MARK: - Functions の窓口（テストで差し替える）
+
+/// 投稿の作成の Callable の窓口
 ///
-/// - 作成と削除は、読み取りの無いトランザクション（`set` / `delete` だけ）で行う。
+/// `SoratomoSkyService` は、この窓口が投げたエラーを `SoratomoError` に写すことを受け持つ。
+/// 窓口は `SoratomoError` へ写さず、元のエラーのまま投げる（形は `SoratomoModerationDataSource` と同じ）。
+protocol SoratomoSkyDataSource: Sendable {
+    /// Callable を呼んで、戻り値（デコード済みの JSON）を返す
+    /// - Parameters:
+    ///   - name: Callable の名前
+    ///   - payload: 送る値
+    ///   - timeout: 制限時間（秒）
+    func callCallable(_ name: String, payload: [String: Any], timeout: TimeInterval) async throws -> Any
+}
+
+/// 記録（非致命エラー）に残す、投稿のサービスの想定外（ID も中身も持たない）
+private enum SoratomoSkyServiceFailure: LocalizedError {
+    /// 作成の Callable の戻り値が、決めた形（`{ skyId, created }`）でなかった
+    case malformedCreateResponse
+    /// 投稿 1 件の監視に、結果もエラーも届かなかった
+    case missingSnapshot
+
+    var errorDescription: String? {
+        switch self {
+        case .malformedCreateResponse:
+            "soratomo: 投稿の作成の戻り値の形が違う"
+        case .missingSnapshot:
+            "soratomo: 投稿の監視に結果もエラーも無い"
+        }
+    }
+}
+
+/// そらともの投稿のサービス（`SoratomoSkyServiceProtocol` の Firestore・Functions 実装）
+///
+/// - 作成は Callable `soratomoCreateSky` で行う（窓口 `SoratomoSkyDataSource` 経由）。失敗は
+///   `SoratomoGroupService.mapCallableError` で写す（通信・制限時間切れは `.network`、NGワードは `.ngWord` など）。
+/// - 削除は、読み取りの無いトランザクション（`delete` だけ）で行う。
 ///   書き込み用のバッチと違い、トランザクションは端末内に積まれない。オフラインでは失敗する
-///   （Firestore の仕様: 「トランザクションはオンラインで行う」）ので、投稿や削除が後から勝手に実行されない（要件 12.3）。
-/// - Firestore のエラーは `SoratomoError.fromFirestore` で写す（読み取り・監視は `.read`、作成・削除は `.write`）。
+///   （Firestore の仕様: 「トランザクションはオンラインで行う」）ので、削除が後から勝手に実行されない（要件 12.3）。
+/// - Firestore のエラーは `SoratomoError.fromFirestore` で写す（読み取り・監視は `.read`、削除は `.write`）。
 /// - `Firestore` には Sendable の印が付いていないが、Firestore の API はスレッドセーフなので `@unchecked` にする。
 final class SoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Sendable {
     // MARK: - Properties
 
-    /// Firestore（テストや別の環境では差し替えられる）
-    private let db: Firestore
+    /// 投稿の作成の Callable の名前（functions/soratomo.js の `exports` と同じ）
+    static let createCallableName = "soratomoCreateSky"
 
-    /// - Parameter db: 使う Firestore
-    init(db: Firestore = Firestore.firestore()) {
-        self.db = db
+    /// 差し替えた Firestore（nil なら、使うときに既定の Firestore を引く）
+    private let injectedDb: Firestore?
+    /// 作成の Callable の窓口
+    private let dataSource: any SoratomoSkyDataSource
+
+    /// 使う Firestore
+    ///
+    /// 作るときではなく使うときに引く。単体テストで、Firestore に触れずにサービスを作れるようにするため
+    /// （`Firestore.firestore()` は同じインスタンスを返すので、毎回引いても同じものを使う）。
+    private var db: Firestore {
+        injectedDb ?? Firestore.firestore()
+    }
+
+    /// - Parameters:
+    ///   - db: 使う Firestore。既定（nil）は `Firestore.firestore()`
+    ///   - dataSource: 作成の Callable の窓口。既定は本物（呼ばれたときに初めて Firebase を使う）
+    init(
+        db: Firestore? = nil,
+        dataSource: any SoratomoSkyDataSource = SoratomoSkyFirebaseDataSource()
+    ) {
+        injectedDb = db
+        self.dataSource = dataSource
     }
 
     // MARK: - SoratomoSkyServiceProtocol
@@ -111,26 +170,101 @@ final class SoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Sendable 
         }
     }
 
-    /// 投稿を作る（作成日時はサーバーの時刻）
+    /// 投稿 1 件を監視する（release-gate 9.3・要件 1.7）
     ///
-    /// 読み取りの無いトランザクションで `set` だけを行う（オフラインでは失敗し、端末内に積まれない）。
-    /// `unavailable`・期限切れは `.network` になるが、サーバーには届いている可能性がある。
-    /// 呼び出し側は `skyExistsOnServer` で確かめてから成否を決めること。
+    /// - 結果の決め方は `resolveObservedSky`（キャッシュだけの不在は届けない・権限の拒否は `.notMember`）。
+    /// - ⚠️ `includeMetadataChanges: true` で監視する。キャッシュだけの不在を捨てるので、`false` だと
+    ///   キャッシュの「無い」の後にサーバーが同じ「無い」を返しても中身が変わらず 2 回目が届かない。
+    ///   そのままでは削除された投稿を開いたとき、いつまでも `.gone` が届かない（`observeTimeline` と同じ理由）。
+    /// - 結果は、届いた順に 1 本の列（AsyncStream）へ積み、メインアクターの 1 つの Task が順に `onChange` へ渡す
+    ///   （`observeGroup` と同じ形。結果ごとに Task を作ると、「ある」と「無い」の順序が入れ替わりうるため）。
+    /// - 札が止められたら、Firestore の監視を外し、まだ届いていない結果は捨てる。
+    /// - ⚠️ `onChange` は札が止まるまで保持する。`onChange` の中で `self` を強く捕まえないこと（`observeGroup` と同じ）。
+    /// - Returns: 監視の札。持っている間だけ監視が続く
+    func observeSky(
+        groupId: String,
+        skyId: String,
+        onChange: @escaping @MainActor (Result<SoratomoSkyPresence, SoratomoError>) -> Void
+    ) -> SoratomoListenerToken {
+        // 結果の列（作った直後に、列へ積む口を取り出す）
+        var capturedContinuation: AsyncStream<Result<SoratomoSkyPresence, SoratomoError>>.Continuation?
+        let stream = AsyncStream<Result<SoratomoSkyPresence, SoratomoError>> { capturedContinuation = $0 }
+        let continuation = capturedContinuation
+
+        // 列から順に取り出して、メインアクターで渡す Task
+        let consumer = Task { @MainActor in
+            for await result in stream {
+                // 札が止められた後に積まれていた結果は、渡さない
+                if Task.isCancelled { break }
+                onChange(result)
+            }
+        }
+
+        // 文書 ID に使えない文字列では、Firestore が異常終了する。監視は張らずに「メンバーでない」を返す
+        // （`observeTimeline`・`observeGroup` と同じ扱い。Firestore には触れない）
+        guard SoratomoSkyService.isUsableDocumentId(groupId),
+              SoratomoSkyService.isUsableDocumentId(skyId)
+        else {
+            continuation?.yield(.failure(.notMember))
+            continuation?.finish()
+            return SoratomoListenerToken {
+                consumer.cancel()
+            }
+        }
+
+        let registration = skiesCollection(groupId: groupId)
+            .document(skyId)
+            .addSnapshotListener(includeMetadataChanges: true) { snapshot, error in
+                guard let result = SoratomoSkyService.resolveObservedSky(
+                    exists: snapshot?.exists,
+                    isFromCache: snapshot?.metadata.isFromCache ?? false,
+                    error: error
+                ) else {
+                    // キャッシュだけの不在は届けない（つながれば、サーバーの結果が届く）
+                    return
+                }
+                // 想定外の失敗だけ記録する（権限の拒否・通信は想定内）。ID・中身は残さない
+                if case .failure(.unknown) = result {
+                    SoratomoError.record(error ?? SoratomoSkyServiceFailure.missingSnapshot, context: "soratomo.observeSky")
+                }
+                continuation?.yield(result)
+            }
+
+        return SoratomoListenerToken {
+            registration.remove()
+            continuation?.finish()
+            consumer.cancel()
+        }
+    }
+
+    /// 投稿を作る（Callable `soratomoCreateSky`・20 秒）
+    ///
+    /// - 送る値は `makeCreatePayload`。投稿者は認証の uid、作成日時はサーバーの時刻（サーバーが決める）。
+    /// - 失敗は `SoratomoGroupService.mapCallableError` で写す（NGワードは `.ngWord`、利用停止は `.suspended`、
+    ///   メンバーでないは `.notMember`、通信・制限時間切れは `.network`、入力の誤りは `.unknown`）。
+    ///   失敗の記録は呼び出し側が行う（同じ失敗を二重に記録しない）。
+    /// - `.network` は、サーバーには届いている可能性がある。同じ draft で送り直せば、サーバーは 1 件だけ作って成功で返す
+    ///   （送り直すのは呼び出し側。`skyExistsOnServer` での確かめは、関数の実行中に「無い」と読みうるので使わない）。
+    /// - 成功の戻り値の形が違っても、失敗にはしない（記録だけ残す）。サーバーが成功を返すのは、文書を作った後
+    ///   （または同じ人の文書があったとき）だけなので、失敗にすると呼び出し側が画像を消し、画像の無い投稿が残る。
     func createSky(_ draft: SoratomoSkyDraft) async throws(SoratomoError) {
         guard SoratomoSkyService.isUsableDocumentId(draft.groupId),
               SoratomoSkyService.isUsableDocumentId(draft.skyId)
         else {
             throw SoratomoError.unknown
         }
-        let reference = skiesCollection(groupId: draft.groupId).document(draft.skyId)
-        let fields = SoratomoSkyService.makeCreateFields(for: draft)
+        let response: Any
         do {
-            _ = try await db.runTransaction { transaction, _ -> Any? in
-                transaction.setData(fields, forDocument: reference)
-                return nil
-            }
+            response = try await dataSource.callCallable(
+                Self.createCallableName,
+                payload: Self.makeCreatePayload(for: draft),
+                timeout: SoratomoGroupService.callTimeout
+            )
         } catch {
-            throw SoratomoError.fromFirestore(error, access: .write)
+            throw SoratomoGroupService.mapCallableError(error)
+        }
+        if !Self.isCreateResponse(response, skyId: draft.skyId) {
+            SoratomoError.record(SoratomoSkyServiceFailure.malformedCreateResponse, context: "soratomo.createSky.response")
         }
     }
 
@@ -216,8 +350,9 @@ final class SoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Sendable 
 // MARK: - Firestore に触らない部分（単体テストの対象）
 
 extension SoratomoSkyService {
-    /// Firestore の投稿の項目名（firestore.rules の `isValidSoratomoSky` と一致させる）
+    /// Firestore の投稿の項目名（functions/soratomoStore.js の `createSkyTx` が書く項目と一致させる）
     ///
+    /// 読み取り（`decodeSky`）と日次件数の集計で使う。作成で送る値の名前も同じ（`makeCreatePayload`）。
     /// ⚠️ アプリの `SoratomoSky.pixelWidth` / `pixelHeight` は、Firestore では `width` / `height`。
     enum Field {
         static let authorId = "authorId"
@@ -371,26 +506,71 @@ extension SoratomoSkyService {
         !id.isEmpty && !id.contains("/")
     }
 
-    /// 投稿の作成で書く項目を作る
+    /// 投稿の作成の Callable に送る値を作る（release-gate 9.3）
     ///
-    /// firestore.rules の `isValidSoratomoSky` に合わせる:
-    /// 項目は `authorId`・`caption`・`width`・`height`・`createdAt` の 5 つだけ。
-    /// `caption` 以外は必須で、`createdAt` はサーバーの時刻（`request.time` と等しいときだけ通る）。
+    /// functions/soratomoCore.js の `validateSkyInput` に合わせる:
+    /// 項目は `groupId`・`skyId`・`width`・`height` と、あれば `caption` だけ。
+    /// 投稿者（認証の uid）と作成日時（サーバーの時刻）はサーバーが決めるので送らない（端末の時計で並び順を操作させない）。
     /// - Parameter draft: 保存する投稿の中身
-    /// - Returns: 書き込む項目。キャプションが無い（または空の）ときは `caption` ごと省く
-    static func makeCreateFields(for draft: SoratomoSkyDraft) -> [String: Any] {
-        var fields: [String: Any] = [
-            Field.authorId: draft.authorId,
+    /// - Returns: 送る値。キャプションが無い（または空の）ときは `caption` ごと省く
+    static func makeCreatePayload(for draft: SoratomoSkyDraft) -> [String: Any] {
+        var payload: [String: Any] = [
+            "groupId": draft.groupId,
+            "skyId": draft.skyId,
             Field.width: draft.pixelWidth,
             Field.height: draft.pixelHeight,
-            // 端末の時計で並び順を操作させないため、サーバーの時刻にする
-            Field.createdAt: FieldValue.serverTimestamp(),
         ]
-        // ルールは「項目が無い」か「1〜100 文字」だけを通す。空の文字列を書くと拒否される
+        // 検査は「項目が無い」か「1〜100 文字で改行類を含まない」だけを通す。空の文字列を送ると invalid_input で拒否される
         if let caption = draft.caption, !caption.isEmpty {
-            fields[Field.caption] = caption
+            payload[Field.caption] = caption
         }
-        return fields
+        return payload
+    }
+
+    /// 作成の Callable の戻り値が `{ skyId: 送った投稿 ID, created: 真偽 }` か
+    static func isCreateResponse(_ response: Any, skyId: String) -> Bool {
+        guard let object = response as? [String: Any],
+              object["skyId"] as? String == skyId,
+              object["created"] is Bool
+        else {
+            return false
+        }
+        return true
+    }
+
+    /// 投稿 1 件の監視の 1 回分を、届ける結果に変える（release-gate 9.3・要件 1.7）
+    ///
+    /// | 監視の結果 | 届ける結果 |
+    /// |---|---|
+    /// | エラー | `SoratomoError.fromFirestore(_:access: .read)`（権限の拒否・不在は `.notMember`、通信は `.network`） |
+    /// | 文書がある（キャッシュの結果を含む） | `.present` |
+    /// | 文書が無い（サーバーで確かめた結果） | `.gone` |
+    /// | 文書が無い（端末のキャッシュだけの結果） | 届けない（nil） |
+    /// | 結果もエラーも無い | `.unknown`（起きない想定） |
+    ///
+    /// - Important: オフラインで開いた・まだ端末に写しが無い投稿は「無い」として届く（エラーにならない）。
+    ///   これを `.gone` にすると、通信できないだけで「この投稿は表示できなくなりました」になる。
+    ///   監視は続くので、つながればサーバーの結果が届く。
+    /// - Parameters:
+    ///   - exists: 文書があるか（監視の結果が無ければ nil）
+    ///   - isFromCache: 端末のキャッシュだけから作った結果か
+    ///   - error: 監視のエラー
+    /// - Returns: 届ける結果。届けないときは nil
+    static func resolveObservedSky(
+        exists: Bool?,
+        isFromCache: Bool,
+        error: Error?
+    ) -> Result<SoratomoSkyPresence, SoratomoError>? {
+        if let error {
+            return .failure(SoratomoError.fromFirestore(error, access: .read))
+        }
+        guard let exists else {
+            return .failure(.unknown)
+        }
+        if exists {
+            return .success(.present)
+        }
+        return isFromCache ? nil : .success(.gone)
     }
 
     /// 変換に失敗した文書をログに残す（既定の `onFailure`）
@@ -452,5 +632,24 @@ extension SoratomoSkyService {
             cancelled = true
             lock.unlock()
         }
+    }
+}
+
+// MARK: - 本物の窓口
+
+/// 投稿の作成の Callable（asia-northeast1）の本物の窓口
+///
+/// 状態を持たない（呼ばれるたびに `Functions` を引く）。アプリの外（単体テスト）で
+/// `SoratomoSkyService()` を作っても、呼ばない限り Firebase に触れない。
+struct SoratomoSkyFirebaseDataSource: SoratomoSkyDataSource {
+    private var functions: Functions {
+        Functions.functions(region: SoratomoGroupService.region)
+    }
+
+    func callCallable(_ name: String, payload: [String: Any], timeout: TimeInterval) async throws -> Any {
+        let callable = functions.httpsCallable(name)
+        callable.timeoutInterval = timeout
+        let result = try await callable.call(payload)
+        return result.data
     }
 }

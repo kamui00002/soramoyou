@@ -167,11 +167,22 @@ struct SoratomoTimelineSnapshot: Equatable, Sendable {
     let mayHaveMore: Bool
 }
 
-/// 投稿のサービス（タイムラインの監視と、投稿の作成・削除・日次件数）
+/// 投稿 1 件の監視の結果（release-gate 9.3・要件 1.7）
+enum SoratomoSkyPresence: Equatable, Sendable {
+    /// 投稿がある（端末のキャッシュの結果を含む）
+    case present
+    /// 投稿がもう無い（サーバーで確かめた不在だけ。キャッシュだけの不在では届けない）
+    case gone
+}
+
+/// 投稿のサービス（タイムラインと投稿 1 件の監視と、投稿の作成・削除・日次件数）
 ///
-/// - 作成と削除は書き込みだけのトランザクションで行う。オフラインでは `.network` で失敗し、端末内に積まれない。
-/// - `.network` で終わった作成・削除は、結果が確定していないことがある。成否は `skyExistsOnServer` で確かめる。
-/// - `observeTimeline` の `onChange` はメインアクターで呼ぶ。
+/// - 作成は Callable `soratomoCreateSky`（20 秒）で行う。同じ draft（同じ投稿 ID）を送り直しても、
+///   サーバーは 1 件だけ作って成功で返す。`.network` で終わった作成は結果が確定していないことがあるが、
+///   成否は同じ draft で送り直して確かめる（`skyExistsOnServer` は使わない・design.md の「投稿の作成」）。
+/// - 削除は書き込みだけのトランザクションで行う。オフラインでは `.network` で失敗し、端末内に積まれない。
+///   `.network` で終わった削除は、結果が確定していないことがある。成否は `skyExistsOnServer` で確かめる。
+/// - `observeTimeline`・`observeSky` の `onChange` はメインアクターで呼ぶ。
 protocol SoratomoSkyServiceProtocol: Sendable {
     /// 新しい投稿 ID を作る（通信しない）
     func newSkyId(groupId: String) -> String
@@ -184,10 +195,21 @@ protocol SoratomoSkyServiceProtocol: Sendable {
         onChange: @escaping @MainActor (Result<SoratomoTimelineSnapshot, SoratomoError>) -> Void
     ) -> SoratomoListenerToken
 
-    /// 投稿を作る（作成日時はサーバーの時刻）
+    /// 投稿 1 件を監視する（release-gate 9.3）
+    ///
+    /// サーバーで確かめた不在だけを `.gone` で届ける（キャッシュだけの不在は届けない）。
+    /// メンバーでなくなって読めなくなったら `.failure(.notMember)` を届ける。
+    /// - Returns: 監視の札。持っている間だけ監視が続く
+    func observeSky(
+        groupId: String,
+        skyId: String,
+        onChange: @escaping @MainActor (Result<SoratomoSkyPresence, SoratomoError>) -> Void
+    ) -> SoratomoListenerToken
+
+    /// 投稿を作る（Callable `soratomoCreateSky`・20 秒。投稿者は認証の uid、作成日時はサーバーの時刻）
     func createSky(_ draft: SoratomoSkyDraft) async throws(SoratomoError)
 
-    /// 投稿がサーバーにあるかを、キャッシュを使わずに確かめる（結果が確定しない失敗の後に使う）
+    /// 投稿がサーバーにあるかを、キャッシュを使わずに確かめる（削除の結果が確定しない失敗の後に使う）
     func skyExistsOnServer(groupId: String, skyId: String) async throws(SoratomoError) -> Bool
 
     /// 投稿を削除する（画像は消さない。画像は `SoratomoImageStoreProtocol.delete` で消す）

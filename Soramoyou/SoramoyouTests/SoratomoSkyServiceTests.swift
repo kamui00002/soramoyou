@@ -2,20 +2,39 @@
 //  SoratomoSkyServiceTests.swift
 //  SoramoyouTests
 //
-//  そらとも投稿のサービス（SoratomoSkyService）の、Firestore に触らない部分のテスト ⭐️（tasks 11.2）
+//  そらとも投稿のサービス（SoratomoSkyService）の、Firestore に触らない部分のテスト ⭐️（tasks 11.2・release-gate 9.3）
 //
 //  確かめるもの: 文書の項目 → SoratomoSky の変換と壊れた 1 件の読み飛ばし、続きの有無の判定、
-//  投稿の作成で書く項目の組み立て（firestore.rules の isValidSoratomoSky に合わせた形）。
+//  投稿の作成で送る値（functions/soratomoCore.js の validateSkyInput に合わせた形）と、作成の Callable の失敗の写し、
+//  投稿 1 件の監視の結果の決め方（存在・不在・権限）。
 //  ⚠️ Firestore への実際の読み書き（トランザクションがオフラインで失敗して積まれないこと・
 //     監視の isFromCache・count()）は、単体テストでは確かめられない。実機かシミュレータで確かめる。
+//  ⚠️ 作成の Callable には接続しない。窓口（SoratomoSkyDataSource）を偽物に差し替える。
 //
 //  項目名は、本番のコードの定数（SoratomoSkyService.Field）を使わず、文字列で書いている。
-//  定数の打ち間違いを、テストで見つけるため（ルールの項目名と一致させる）。
+//  定数の打ち間違いを、テストで見つけるため（Functions が書く項目名・受け取る項目名と一致させる）。
 //
 
 import FirebaseFirestore
+import FirebaseFunctions
 @testable import Soramoyou
 import XCTest
+
+// MARK: - 偽物
+
+/// 作成の Callable の窓口の偽物（呼ばれた引数を記録し、決めた結果を返す）
+private final class FakeSkyDataSource: SoratomoSkyDataSource, @unchecked Sendable {
+    /// 返す結果（既定はサーバーが新しく作ったときの戻り値）
+    var callResult: Result<Any, Error> = .success(["skyId": "sky1", "created": true])
+
+    /// 呼ばれた引数
+    private(set) var callCalls: [(name: String, payload: [String: Any], timeout: TimeInterval)] = []
+
+    func callCallable(_ name: String, payload: [String: Any], timeout: TimeInterval) async throws -> Any {
+        callCalls.append((name, payload, timeout))
+        return try callResult.get()
+    }
+}
 
 final class SoratomoSkyServiceTests: XCTestCase {
     // MARK: - テスト用のデータ
@@ -184,44 +203,195 @@ final class SoratomoSkyServiceTests: XCTestCase {
         XCTAssertFalse(SoratomoSkyService.isUsableDocumentId("a/b"))
     }
 
-    // MARK: - 投稿の作成で書く項目
+    // MARK: - 投稿の作成で送る値（release-gate 9.3）
 
-    func testCreateFieldsHasExactlyTheFiveRuleKeysWithCaption() {
-        let fields = SoratomoSkyService.makeCreateFields(for: draft(caption: "夕焼け"))
-        // firestore.rules の hasOnly(['authorId','caption','width','height','createdAt'])
-        XCTAssertEqual(Set(fields.keys), ["authorId", "caption", "width", "height", "createdAt"])
+    func testCreatePayloadHasExactlyTheInputKeysWithCaption() {
+        let payload = SoratomoSkyService.makeCreatePayload(for: draft(caption: "夕焼け"))
+        // functions/soratomoCore.js の validateSkyInput が読む項目だけ。
+        // 投稿者（認証の uid）と作成日時（サーバーの時刻）はサーバーが決めるので送らない
+        XCTAssertEqual(Set(payload.keys), ["groupId", "skyId", "caption", "width", "height"])
+        XCTAssertEqual(payload["caption"] as? String, "夕焼け")
     }
 
-    func testCreateFieldsIncludesCaptionWhenPresent() {
-        let fields = SoratomoSkyService.makeCreateFields(for: draft(caption: "夕焼け"))
-        XCTAssertEqual(fields["caption"] as? String, "夕焼け")
+    func testCreatePayloadMapsDraftValuesToInputNames() {
+        let payload = SoratomoSkyService.makeCreatePayload(for: draft(caption: nil))
+        XCTAssertEqual(payload["groupId"] as? String, "g1")
+        XCTAssertEqual(payload["skyId"] as? String, "sky1")
+        // アプリの pixelWidth / pixelHeight は、Functions では width / height
+        XCTAssertEqual(payload["width"] as? Int, 2048)
+        XCTAssertEqual(payload["height"] as? Int, 1536)
     }
 
-    func testCreateFieldsOmitsCaptionWhenNil() {
-        let fields = SoratomoSkyService.makeCreateFields(for: draft(caption: nil))
-        // 項目ごと省く（null も空文字も、ルールの isValidSoratomoCaption が拒否する）
-        XCTAssertNil(fields["caption"])
-        XCTAssertEqual(Set(fields.keys), ["authorId", "width", "height", "createdAt"])
+    func testCreatePayloadOmitsCaptionWhenNil() {
+        let payload = SoratomoSkyService.makeCreatePayload(for: draft(caption: nil))
+        // 項目ごと省く（項目があると、validateSkyInput は 1〜100 文字の文字列しか通さない）
+        XCTAssertNil(payload["caption"])
+        XCTAssertEqual(Set(payload.keys), ["groupId", "skyId", "width", "height"])
     }
 
-    func testCreateFieldsOmitsEmptyCaption() {
-        let fields = SoratomoSkyService.makeCreateFields(for: draft(caption: ""))
-        XCTAssertNil(fields["caption"])
+    func testCreatePayloadOmitsEmptyCaption() {
+        let payload = SoratomoSkyService.makeCreatePayload(for: draft(caption: ""))
+        // 空の文字列を送ると invalid_input で拒否される
+        XCTAssertNil(payload["caption"])
+        XCTAssertEqual(Set(payload.keys), ["groupId", "skyId", "width", "height"])
     }
 
-    func testCreateFieldsMapsDraftValuesToRuleNames() {
-        let fields = SoratomoSkyService.makeCreateFields(for: draft(caption: nil))
-        XCTAssertEqual(fields["authorId"] as? String, "author1")
-        // アプリの pixelWidth / pixelHeight は、Firestore では width / height
-        XCTAssertEqual(fields["width"] as? Int, 2048)
-        XCTAssertEqual(fields["height"] as? Int, 1536)
+    // MARK: - 投稿の作成（Callable soratomoCreateSky・release-gate 9.3）
+
+    func testCreateSkyCallsCreateCallableWithPayloadAndTwentySeconds() async throws {
+        let (service, dataSource) = makeService()
+
+        try await service.createSky(draft(caption: "夕焼け"))
+
+        XCTAssertEqual(dataSource.callCalls.count, 1)
+        let call = try XCTUnwrap(dataSource.callCalls.first)
+        XCTAssertEqual(call.name, "soratomoCreateSky")
+        XCTAssertEqual(call.timeout, 20)
+        XCTAssertEqual(call.payload as NSDictionary, SoratomoSkyService.makeCreatePayload(for: draft(caption: "夕焼け")) as NSDictionary)
     }
 
-    func testCreateFieldsUsesServerTimestampForCreatedAt() {
-        let fields = SoratomoSkyService.makeCreateFields(for: draft(caption: nil))
-        // FieldValue.serverTimestamp() は共有の 1 つのインスタンスを返すので、同一かどうかで確かめられる。
-        // 端末の時刻（Timestamp・Date）や別の FieldValue（delete など）だと、ルールの createdAt == request.time で拒否される
-        XCTAssertTrue((fields["createdAt"] as? FieldValue) === FieldValue.serverTimestamp())
+    func testCreateSkySucceedsWhenServerCreatedOrAlreadyHadTheSameSky() async throws {
+        // 同じ投稿 ID の送り直しは、サーバーが created: false の成功で返す（1 件で済む）
+        for created in [true, false] {
+            let (service, dataSource) = makeService()
+            dataSource.callResult = .success(["skyId": "sky1", "created": created])
+
+            try await service.createSky(draft(caption: nil))
+
+            XCTAssertEqual(dataSource.callCalls.count, 1, "created=\(created) でも送り直さない（送り直しは呼び出し側の責務）")
+        }
+    }
+
+    func testCreateSkyTreatsUnexpectedSuccessResponseAsSuccess() async throws {
+        // サーバーが成功を返したのは、文書を作った（または同じ人の文書があった）後だけ。
+        // 戻り値の形が違うだけで失敗にすると、呼び出し側が画像を消し、画像の無い投稿が残ってしまう
+        let responses: [Any] = ["unexpected", ["skyId": "other", "created": true], ["skyId": "sky1"]]
+        for response in responses {
+            let (service, dataSource) = makeService()
+            dataSource.callResult = .success(response)
+
+            try await service.createSky(draft(caption: nil))
+
+            XCTAssertEqual(dataSource.callCalls.count, 1)
+        }
+    }
+
+    func testCreateSkyMapsCallableFailures() async {
+        // (Callable の失敗, 写した種類)
+        let cases: [(NSError, SoratomoError)] = [
+            (functionsError(.invalidArgument, reason: "ng_word"), .ngWord),
+            (functionsError(.permissionDenied, reason: "suspended"), .suspended),
+            (functionsError(.permissionDenied, reason: "not_member"), .notMember),
+            (functionsError(.permissionDenied, reason: "flag_off"), .flagOff),
+            // 入力の誤りはアプリの不具合なので、利用者向けの種類を作らない
+            (functionsError(.invalidArgument, reason: "invalid_input"), .unknown),
+            // 結果が確定しない失敗（サーバーには届いた可能性がある）
+            (functionsError(.unavailable), .network),
+            (functionsError(.deadlineExceeded), .network),
+            (NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet), .network),
+            (functionsError(.unauthenticated), .permissionDenied),
+            (functionsError(.internal), .unknown),
+        ]
+        for (callableError, expected) in cases {
+            let (service, dataSource) = makeService()
+            dataSource.callResult = .failure(callableError)
+            do {
+                try await service.createSky(draft(caption: nil))
+                XCTFail("\(callableError) は失敗するはず")
+            } catch {
+                XCTAssertEqual(error, expected, "\(callableError)")
+            }
+        }
+    }
+
+    func testCreateSkyWithUnusableIdsFailsWithoutCalling() async {
+        for (groupId, skyId) in [("", "sky1"), ("g1", "a/b")] {
+            let (service, dataSource) = makeService()
+            let unusableDraft = SoratomoSkyDraft(
+                groupId: groupId, skyId: skyId, authorId: "author1", caption: nil,
+                pixelWidth: 2048, pixelHeight: 1536
+            )
+            do {
+                try await service.createSky(unusableDraft)
+                XCTFail("失敗するはず")
+            } catch {
+                XCTAssertEqual(error, .unknown)
+            }
+            XCTAssertTrue(dataSource.callCalls.isEmpty)
+        }
+    }
+
+    func testIsCreateResponseChecksSkyIdAndCreated() {
+        XCTAssertTrue(SoratomoSkyService.isCreateResponse(["skyId": "sky1", "created": true], skyId: "sky1"))
+        XCTAssertTrue(SoratomoSkyService.isCreateResponse(["skyId": "sky1", "created": false], skyId: "sky1"))
+        XCTAssertFalse(SoratomoSkyService.isCreateResponse(["skyId": "other", "created": true], skyId: "sky1"))
+        XCTAssertFalse(SoratomoSkyService.isCreateResponse(["skyId": "sky1"], skyId: "sky1"))
+        XCTAssertFalse(SoratomoSkyService.isCreateResponse(["skyId": "sky1", "created": "true"], skyId: "sky1"))
+        XCTAssertFalse(SoratomoSkyService.isCreateResponse("unexpected", skyId: "sky1"))
+    }
+
+    // MARK: - 投稿 1 件の監視（release-gate 9.3・要件 1.7）
+
+    func testResolveObservedSkyIsPresentWhenDocumentExists() {
+        // キャッシュの結果でも、あるものはある
+        for isFromCache in [true, false] {
+            let result = SoratomoSkyService.resolveObservedSky(exists: true, isFromCache: isFromCache, error: nil)
+            XCTAssertEqual(result, .success(.present), "isFromCache=\(isFromCache)")
+        }
+    }
+
+    func testResolveObservedSkyIsGoneOnlyWhenServerConfirmsAbsence() {
+        let result = SoratomoSkyService.resolveObservedSky(exists: false, isFromCache: false, error: nil)
+        XCTAssertEqual(result, .success(.gone))
+    }
+
+    func testResolveObservedSkyIgnoresAbsenceOnlyFromCache() {
+        // オフラインで開いた・まだ端末に写しが無い投稿は「無い」として届く。これを「もう無い」にしない
+        // （監視は続くので、つながればサーバーの結果が届く）
+        let result = SoratomoSkyService.resolveObservedSky(exists: false, isFromCache: true, error: nil)
+        XCTAssertNil(result)
+    }
+
+    func testResolveObservedSkyIsNotMemberWhenPermissionIsLost() {
+        // メンバーでなくなると、ルールが読み取りを拒否する
+        let result = SoratomoSkyService.resolveObservedSky(
+            exists: nil, isFromCache: false, error: firestoreError(.permissionDenied)
+        )
+        XCTAssertEqual(result, .failure(.notMember))
+    }
+
+    func testResolveObservedSkyMapsOtherErrorsAsRead() {
+        XCTAssertEqual(
+            SoratomoSkyService.resolveObservedSky(exists: nil, isFromCache: false, error: firestoreError(.unavailable)),
+            .failure(.network)
+        )
+        XCTAssertEqual(
+            SoratomoSkyService.resolveObservedSky(exists: nil, isFromCache: false, error: firestoreError(.internal)),
+            .failure(.unknown)
+        )
+    }
+
+    func testResolveObservedSkyWithoutSnapshotOrErrorIsUnknown() {
+        // 起きない想定。起きても「もう無い」とは決めない
+        let result = SoratomoSkyService.resolveObservedSky(exists: nil, isFromCache: false, error: nil)
+        XCTAssertEqual(result, .failure(.unknown))
+    }
+
+    @MainActor
+    func testObserveSkyWithUnusableIdsDeliversNotMember() async {
+        // 空文字や「/」でパスを作ると Firestore が異常終了するので、監視を張らずに「メンバーでない」を返す
+        let (service, _) = makeService()
+        let delivered = expectation(description: "結果が届く")
+        var received: [Result<SoratomoSkyPresence, SoratomoError>] = []
+
+        let token = service.observeSky(groupId: "a/b", skyId: "sky1") { result in
+            received.append(result)
+            delivered.fulfill()
+        }
+        await fulfillment(of: [delivered], timeout: 5)
+        token.cancel()
+
+        XCTAssertEqual(received, [.failure(.notMember)])
     }
 
     // MARK: - ヘルパー
@@ -231,5 +401,25 @@ final class SoratomoSkyServiceTests: XCTestCase {
             groupId: "g1", skyId: "sky1", authorId: "author1", caption: caption,
             pixelWidth: 2048, pixelHeight: 1536
         )
+    }
+
+    /// 窓口を偽物にしたサービス（Firestore は差し替えない。作るだけでは Firestore に触れない）
+    private func makeService() -> (SoratomoSkyService, FakeSkyDataSource) {
+        let dataSource = FakeSkyDataSource()
+        return (SoratomoSkyService(dataSource: dataSource), dataSource)
+    }
+
+    /// Callable が返す失敗（サーバーが理由を付けるときは `details["reason"]` に入れる）
+    private func functionsError(_ code: FunctionsErrorCode, reason: String? = nil) -> NSError {
+        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: "サーバーの文言（画面に出さない）"]
+        if let reason {
+            userInfo[FunctionsErrorDetailsKey] = ["reason": reason]
+        }
+        return NSError(domain: FunctionsErrorDomain, code: code.rawValue, userInfo: userInfo)
+    }
+
+    /// Firestore が返す失敗
+    private func firestoreError(_ code: FirestoreErrorCode.Code) -> NSError {
+        NSError(domain: FirestoreErrorDomain, code: code.rawValue)
     }
 }

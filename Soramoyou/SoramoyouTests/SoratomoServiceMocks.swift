@@ -120,9 +120,15 @@ final class MockSoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Senda
     private(set) var countTodaySkiesCalls: [(groupId: String, authorId: String, since: Date)] = []
     /// 止められた監視の番号（`observeTimelineCalls` の添字）
     private(set) var cancelledTimelineIndexes: Set<Int> = []
+    /// 投稿 1 件の監視の呼び出し（release-gate 9.3）
+    private(set) var observeSkyCalls: [(groupId: String, skyId: String)] = []
+    /// 止められた投稿 1 件の監視の番号（`observeSkyCalls` の添字）
+    private(set) var cancelledSkyIndexes: Set<Int> = []
 
     /// 監視の受け手（`observeTimelineCalls` と同じ添字）
     private var timelineObservers: [@MainActor (Result<SoratomoTimelineSnapshot, SoratomoError>) -> Void] = []
+    /// 投稿 1 件の監視の受け手（`observeSkyCalls` と同じ添字）
+    private var skyObservers: [@MainActor (Result<SoratomoSkyPresence, SoratomoError>) -> Void] = []
 
     func newSkyId(groupId: String) -> String {
         newSkyIdCalls.append(groupId)
@@ -139,6 +145,19 @@ final class MockSoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Senda
         timelineObservers.append(onChange)
         return SoratomoListenerToken { [weak self] in
             self?.cancelledTimelineIndexes.insert(index)
+        }
+    }
+
+    func observeSky(
+        groupId: String,
+        skyId: String,
+        onChange: @escaping @MainActor (Result<SoratomoSkyPresence, SoratomoError>) -> Void
+    ) -> SoratomoListenerToken {
+        let index = observeSkyCalls.count
+        observeSkyCalls.append((groupId, skyId))
+        skyObservers.append(onChange)
+        return SoratomoListenerToken { [weak self] in
+            self?.cancelledSkyIndexes.insert(index)
         }
     }
 
@@ -169,6 +188,15 @@ final class MockSoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Senda
             return
         }
         timelineObservers[index](result)
+    }
+
+    /// いちばん新しい、止められていない投稿 1 件の監視に結果を届ける（無ければ何もしない）
+    @MainActor
+    func emitSky(_ result: Result<SoratomoSkyPresence, SoratomoError>) {
+        guard let index = skyObservers.indices.last(where: { !cancelledSkyIndexes.contains($0) }) else {
+            return
+        }
+        skyObservers[index](result)
     }
 }
 
