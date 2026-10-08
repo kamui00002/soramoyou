@@ -1,5 +1,5 @@
 //
-// そらもよう Cloud Functions — 「そらとも」の配線（Callable 7本と onSoratomoSkyCreated）⭐️☁️
+// そらもよう Cloud Functions — 「そらとも」の配線（Callable 7本・トリガー2本・定期実行1本）⭐️☁️
 //
 // - soratomoCreateGroup・soratomoJoinGroup・soratomoRegenerateInviteCode（tasks 8.1）:
 //   ログインと soratomoBeta のクレームを確かめ、soratomoStore.js のトランザクションを呼び、
