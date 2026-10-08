@@ -4,6 +4,7 @@
 //
 //  そらとものグループのサービス（SoratomoGroupService）のテスト ⭐️（tasks 11.1）
 //  - Callable のエラーの写し（flag_off・invalid_name・invalid_format・not_found・group_full・user_limit・not_owner・通信）
+//    と、release-gate 8 で足した理由（ng_word・suspended・consent_required・outdated_guideline・sky_not_found・not_member）
 //  - グループ一覧の並び順（最新の活動時刻の新しい順・最大 10 件）
 //  - Callable の戻り値・グループ・メンバーの文書の読み取り
 //  - グループの監視の 1 回分の結果の決め方（権限の拒否・不在・キャッシュだけの結果）
@@ -40,6 +41,15 @@ final class SoratomoGroupServiceTests: XCTestCase {
             userInfo[FunctionsErrorDetailsKey] = ["reason": reason]
         }
         return NSError(domain: FunctionsErrorDomain, code: code.rawValue, userInfo: userInfo)
+    }
+
+    /// Callable が返す、理由のほかに詳細も持つ失敗（release-gate の consent_required・outdated_guideline の `currentVersion`）
+    private func functionsError(_ code: FunctionsErrorCode, details: [String: Any]) -> NSError {
+        NSError(
+            domain: FunctionsErrorDomain,
+            code: code.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "サーバーの文言（画面に出さない）", FunctionsErrorDetailsKey: details]
+        )
     }
 
     /// Firestore が返す失敗
@@ -194,6 +204,45 @@ final class SoratomoGroupServiceTests: XCTestCase {
             SoratomoGroupService.mapCallableError(NSError(domain: "other", code: 1)),
             .unknown
         )
+    }
+
+    // MARK: - Callable のエラーの写し（release-gate 8・design.md の「エラーと計測」の表）
+
+    func testMapCallableError_releaseGateReasons() {
+        let app = SoratomoGuideline.currentVersion
+        // code は functions/soratomo.js の REASON_TO_CODE のとおり。種類を決めるのは details の reason
+        let table: [(code: FunctionsErrorCode, details: [String: Any], expected: SoratomoError)] = [
+            (.invalidArgument, ["reason": "ng_word"], .ngWord),
+            (.permissionDenied, ["reason": "suspended"], .suspended),
+            (.notFound, ["reason": "sky_not_found"], .skyGone),
+            // 理由が無ければ code の permission-denied から .permissionDenied になるので、理由で .notMember にする
+            (.permissionDenied, ["reason": "not_member"], .notMember),
+            // 同意が必要: サーバーの版がアプリと同じ（か小さい・無い・形が違う）なら全文を出す。大きければアプリが古い
+            (.failedPrecondition, ["reason": "consent_required", "currentVersion": app], .consentRequired),
+            (.failedPrecondition, ["reason": "consent_required", "currentVersion": app - 1], .consentRequired),
+            (.failedPrecondition, ["reason": "consent_required"], .consentRequired),
+            (.failedPrecondition, ["reason": "consent_required", "currentVersion": "\(app + 1)"], .consentRequired),
+            (.failedPrecondition, ["reason": "consent_required", "currentVersion": app + 1], .outdatedApp),
+            // 本物の details は JSON から読んだ NSNumber で届く
+            (.failedPrecondition, ["reason": "consent_required", "currentVersion": NSNumber(value: app + 1)], .outdatedApp),
+            // 同意の版が古い: サーバーの版がアプリより大きいときだけアプリが古い。それ以外は不明
+            (.failedPrecondition, ["reason": "outdated_guideline", "currentVersion": app + 1], .outdatedApp),
+            (.failedPrecondition, ["reason": "outdated_guideline", "currentVersion": NSNumber(value: app + 1)], .outdatedApp),
+            (.failedPrecondition, ["reason": "outdated_guideline", "currentVersion": app], .unknown),
+            (.failedPrecondition, ["reason": "outdated_guideline", "currentVersion": app - 1], .unknown),
+            (.failedPrecondition, ["reason": "outdated_guideline"], .unknown),
+            // 種類を作らない理由（code から .unknown にし、既存の「うまくいきませんでした…」を出す）
+            (.invalidArgument, ["reason": "invalid_input"], .unknown),
+            (.invalidArgument, ["reason": "invalid_reason"], .unknown),
+            (.failedPrecondition, ["reason": "self_report"], .unknown),
+        ]
+        for row in table {
+            XCTAssertEqual(
+                SoratomoGroupService.mapCallableError(functionsError(row.code, details: row.details)),
+                row.expected,
+                "\(row.details)"
+            )
+        }
     }
 
     // MARK: - Callable の戻り値

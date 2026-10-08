@@ -2,9 +2,10 @@
 //  SoratomoErrorTests.swift
 //  SoramoyouTests
 //
-//  そらともの失敗の文言（SoratomoError.userMessage）のテスト ⭐️（tasks 10.2）
+//  そらともの失敗の文言（SoratomoError.userMessage）のテスト ⭐️（tasks 10.2・release-gate 8）
 //
 //  期待値は design.md の Error Categories の表を写したもの。
+//  release-gate で足した文言は .kiro/specs/soratomo-release-gate/design.md の「エラーと計測」の表（12.1 で利用者が確認する下書き）。
 //
 
 @testable import Soramoyou
@@ -27,6 +28,12 @@ final class SoratomoErrorTests: XCTestCase {
             .imageUnreadable: "この写真は使えません。別の写真を選んでください",
             .imageTooLarge: "この写真は大きすぎて送れません",
             .displayNameInvalid: "表示名は1〜20文字で入力してください",
+            // release-gate 8（design.md の「エラーと計測」の表）。NGワードの文言に該当した語を入れない（要件 11.9）
+            .ngWord: "使えない言葉が含まれています",
+            .suspended: "そらともの利用が停止されています。設定の『お問い合わせ』からご連絡ください",
+            .consentRequired: "そらともガイドラインへの同意が必要です",
+            .outdatedApp: "アプリを最新の版にアップデートしてください",
+            .skyGone: "この投稿はもうありません",
             .flagOff: generic,
             .notOwner: generic,
             .permissionDenied: generic,
@@ -56,6 +63,10 @@ final class SoratomoErrorTests: XCTestCase {
             .regenerateInviteCode: "招待コードを再発行できませんでした",
             .deleteSky: "削除できませんでした",
             .saveDisplayName: "表示名を保存できませんでした",
+            // release-gate 8（要件 5.6・9.9・10.7）
+            .report: "通報を送信できませんでした",
+            .block: "ブロックできませんでした",
+            .agreeGuideline: "同意を記録できませんでした",
         ]
         XCTAssertEqual(Set(expected.keys), Set(SoratomoFailedAction.allCases))
         for action in SoratomoFailedAction.allCases {

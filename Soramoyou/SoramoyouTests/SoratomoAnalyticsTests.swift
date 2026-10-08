@@ -2,9 +2,10 @@
 //  SoratomoAnalyticsTests.swift
 //  SoramoyouTests
 //
-//  そらともの計測（SoratomoEvent・SoratomoScreen と理由の写し方）のテスト ⭐️（tasks 10.2）
+//  そらともの計測（SoratomoEvent・SoratomoScreen と理由の写し方）のテスト ⭐️（tasks 10.2・release-gate 8）
 //
 //  期待値は requirements.md の要件 14 の表を写したもの。表を変えたら、ここも同時に変えること。
+//  release-gate で足したものは .kiro/specs/soratomo-release-gate/requirements.md の要件 15 の表を写したもの。
 //
 
 @testable import Soramoyou
@@ -59,13 +60,39 @@ final class SoratomoAnalyticsTests: XCTestCase {
         XCTAssertEqual(Set(table.map(\.name)).count, 17)
     }
 
+    // MARK: - release-gate の 4 イベントの名前とパラメータ（release-gate 要件 15.1 の表）
+
+    /// release-gate 要件 15.1 の表の 4 イベント（1 つずつ値を入れた例）と、期待する名前・パラメータ
+    private let releaseGateTable: [(event: SoratomoEvent, name: String, parameters: [String: SoratomoAnalyticsValue])] = [
+        (
+            .reportSubmitted(reason: .harassment, source: .timeline), "soratomo_report_submitted",
+            ["report_reason": .value("harassment"), "source": .value("timeline")]
+        ),
+        (.reportFailed(.notFound), "soratomo_report_failed", ["reason": .value("not_found")]),
+        (.userBlocked(source: .detail), "soratomo_user_blocked", ["source": .value("detail")]),
+        (
+            .guidelineResult(choice: .decline, trigger: .entry, version: 1), "soratomo_guideline_result",
+            ["choice": .value("decline"), "trigger": .value("entry"), "version": .int(1)]
+        ),
+    ]
+
+    func testReleaseGateEventsHaveFixedNamesAndParameters() {
+        XCTAssertEqual(releaseGateTable.count, 4)
+        for row in releaseGateTable {
+            XCTAssertEqual(row.event.name, row.name)
+            XCTAssertEqual(row.event.parameters, row.parameters, "\(row.name) のパラメータが表と違う")
+        }
+        // 既存の 17 個と合わせても名前は重複しない
+        XCTAssertEqual(Set((table + releaseGateTable).map(\.name)).count, 21)
+    }
+
     func testNamesAndParameterKeysAreLowerSnakeCase() {
         // 要件 14.2: 英小文字のスネークケース。そらとものイベントは soratomo_ で始める
         let pattern = try! NSRegularExpression(pattern: "^[a-z]+(_[a-z]+)*$")
         func isSnakeCase(_ text: String) -> Bool {
             pattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
         }
-        for row in table {
+        for row in table + releaseGateTable {
             XCTAssertTrue(row.name.hasPrefix("soratomo_"), row.name)
             XCTAssertTrue(isSnakeCase(row.name), row.name)
             for key in row.event.parameters.keys {
@@ -79,16 +106,22 @@ final class SoratomoAnalyticsTests: XCTestCase {
     func testEnumValuesMatchRequirementTable() {
         XCTAssertEqual(
             SoratomoCreateFailReason.allCases.map(\.rawValue),
-            ["user_limit", "invalid_name", "network", "flag_off", "unknown"]
+            ["user_limit", "invalid_name", "network", "flag_off", "unknown", "ng_word", "suspended", "consent_required"]
         )
         XCTAssertEqual(
             SoratomoJoinFailReason.allCases.map(\.rawValue),
-            ["invalid_format", "not_found", "group_full", "user_limit", "network", "flag_off", "unknown"]
+            [
+                "invalid_format", "not_found", "group_full", "user_limit", "network", "flag_off", "unknown",
+                "suspended", "consent_required",
+            ]
         )
         XCTAssertEqual(SoratomoPostFailStage.allCases.map(\.rawValue), ["precheck", "image", "upload", "save"])
         XCTAssertEqual(
             SoratomoPostFailReason.allCases.map(\.rawValue),
-            ["offline", "daily_limit", "network", "unreadable", "too_large", "permission", "timeout", "background", "unknown"]
+            [
+                "offline", "daily_limit", "network", "unreadable", "too_large", "permission", "timeout", "background",
+                "unknown", "ng_word",
+            ]
         )
         XCTAssertEqual(SoratomoInviteShareMethod.allCases.map(\.rawValue), ["share_sheet", "copy"])
         XCTAssertEqual(SoratomoRegenerateFailReason.allCases.map(\.rawValue), ["not_owner", "network", "unknown"])
@@ -101,14 +134,26 @@ final class SoratomoAnalyticsTests: XCTestCase {
             SoratomoNotificationOpenResult.allCases.map(\.rawValue),
             ["opened", "not_member", "flag_off", "signed_out"]
         )
+        // release-gate 要件 15.1 の表の値（通報の理由は既存のルートの通報と同じ 5 つ・要件 5.3）
+        XCTAssertEqual(
+            ReportReason.allCases.map(\.rawValue),
+            ["inappropriate", "spam", "harassment", "copyright", "other"]
+        )
+        XCTAssertEqual(SoratomoModerationSource.allCases.map(\.rawValue), ["detail", "timeline"])
+        XCTAssertEqual(SoratomoReportFailReason.allCases.map(\.rawValue), ["network", "not_found", "unknown"])
+        XCTAssertEqual(SoratomoGuidelineChoice.allCases.map(\.rawValue), ["agree", "decline"])
+        XCTAssertEqual(SoratomoGuidelineTrigger.allCases.map(\.rawValue), ["create", "join", "entry"])
     }
 
-    // MARK: - 画面名（要件 14.5）
+    // MARK: - 画面名（要件 14.5・release-gate 要件 15.3）
 
-    func testSixScreenNames() {
+    func testScreenNames() {
         XCTAssertEqual(
             SoratomoScreen.allCases.map(\.rawValue),
-            ["そらともグループ一覧", "そらともタイムライン", "そらとも投稿", "そらとも招待", "そらともメンバー一覧", "そらとも投稿詳細"]
+            [
+                "そらともグループ一覧", "そらともタイムライン", "そらとも投稿", "そらとも招待", "そらともメンバー一覧", "そらとも投稿詳細",
+                "そらともガイドライン",
+            ]
         )
     }
 
@@ -129,7 +174,11 @@ final class SoratomoAnalyticsTests: XCTestCase {
 
     func testCreateFailReasonMapping() {
         assertMapping(
-            [.userLimit: .userLimit, .invalidName: .invalidName, .network: .network, .flagOff: .flagOff],
+            [
+                .userLimit: .userLimit, .invalidName: .invalidName, .network: .network, .flagOff: .flagOff,
+                // release-gate 要件 15.2。アプリが古いときも、サーバーが拒否した理由は consent_required
+                .ngWord: .ngWord, .suspended: .suspended, .consentRequired: .consentRequired, .outdatedApp: .consentRequired,
+            ],
             unknown: SoratomoCreateFailReason.unknown,
             SoratomoCreateFailReason.init
         )
@@ -140,6 +189,8 @@ final class SoratomoAnalyticsTests: XCTestCase {
             [
                 .invalidFormat: .invalidFormat, .notFound: .notFound, .groupFull: .groupFull,
                 .userLimit: .userLimit, .network: .network, .flagOff: .flagOff,
+                // release-gate 要件 15.2。参加には NG ワードの検査が無い（ng_word は作成と投稿だけ）
+                .suspended: .suspended, .consentRequired: .consentRequired, .outdatedApp: .consentRequired,
             ],
             unknown: SoratomoJoinFailReason.unknown,
             SoratomoJoinFailReason.init
@@ -168,10 +219,21 @@ final class SoratomoAnalyticsTests: XCTestCase {
                     .network: .network, .dailyLimit: .dailyLimit, .imageUnreadable: .unreadable,
                     .imageTooLarge: .tooLarge, .permissionDenied: .permission, .uploadTimeout: .timeout,
                     .backgroundExpired: .background,
+                    // release-gate 要件 15.2
+                    .ngWord: .ngWord,
                 ],
                 unknown: SoratomoPostFailReason.unknown
             ) { SoratomoPostFailReason(stage: stage, error: $0) }
         }
+    }
+
+    func testReportFailReasonMapping() {
+        // release-gate 要件 15.1: 投稿がもう無いときは not_found
+        assertMapping(
+            [.network: .network, .skyGone: .notFound],
+            unknown: SoratomoReportFailReason.unknown,
+            SoratomoReportFailReason.init
+        )
     }
 
     func testPostFailReasonOfflineOnlyAtPrecheck() {
