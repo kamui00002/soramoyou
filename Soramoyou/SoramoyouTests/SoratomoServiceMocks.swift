@@ -277,6 +277,8 @@ final class MockSoratomoModerationService: SoratomoModerationServiceProtocol, @u
     var reportResult: Result<Void, SoratomoError> = .failure(.unknown)
     var blockResult: Result<Void, SoratomoError> = .failure(.unknown)
     var fetchBlockedUserIdsResult: Result<Set<String>, SoratomoError> = .failure(.unknown)
+    /// 通報が呼ばれたとき、結果を返す前に流す処理（処理中で止めておくのに使う・release-gate 10.1）
+    var onReport: (@Sendable () async -> Void)?
 
     // 呼ばれた引数
     private(set) var reportCalls: [(groupId: String, skyId: String, reason: ReportReason)] = []
@@ -285,6 +287,7 @@ final class MockSoratomoModerationService: SoratomoModerationServiceProtocol, @u
 
     func report(groupId: String, skyId: String, reason: ReportReason) async throws(SoratomoError) {
         reportCalls.append((groupId, skyId, reason))
+        await onReport?()
         try reportResult.soratomoValue()
     }
 

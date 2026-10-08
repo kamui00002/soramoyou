@@ -71,7 +71,10 @@ struct SoratomoTimelineView: View {
                 reportAccessible: { [weak router] id in router?.reportAccessible(groupId: id) },
                 reportNotAccessible: { [weak router] id in router?.reportNotAccessible(groupId: id) },
                 rememberSkies: { skies in skyLookup.remember(skies) },
-                forgetSky: { groupId, skyId in skyLookup.forget(groupId: groupId, skyId: skyId) }
+                forgetSky: { groupId, skyId in skyLookup.forget(groupId: groupId, skyId: skyId) },
+                moderationService: dependencies.moderationService,
+                blockedAuthors: dependencies.blockedAuthors,
+                reportedSkies: dependencies.reportedSkies
             )
         )
     }
@@ -123,7 +126,7 @@ struct SoratomoTimelineView: View {
             .task {
                 // 投稿詳細が同じ ViewModel で削除できるように、いま開いているタイムラインとして知らせる
                 dependencies.activeTimelineViewModel = viewModel
-                viewModel.start()
+                await viewModel.start()
             }
             // 投稿者の表示名とアイコンを、まだ持っていない分だけ取りに行く
             .task(id: authorIds) {
