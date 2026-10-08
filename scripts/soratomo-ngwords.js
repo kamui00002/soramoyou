@@ -30,8 +30,11 @@
  *   接続先は EXPECTED_PROJECT_ID（soramoyou-ios）に固定している。
  *
  * ■ 実行方法（リポジトリ直下で）
- *     node scripts/soratomo-ngwords.js <語のファイル> --dry-run                                  # 数えるだけ（Firestore に触れない）
- *     NODE_PATH=functions/node_modules node scripts/soratomo-ngwords.js <語のファイル>          # 書いて読み返す
+ *   firebase-admin は functions/ の依存を、functions/ を起点に解決する（functions で npm install 済みであること。NODE_PATH は要らない）。
+ *     node scripts/soratomo-ngwords.js <語のファイル> --dry-run      # 数えるだけ（Firestore に触れない）
+ *     node scripts/soratomo-ngwords.js <語のファイル>                # 書いて読み返す
+ *   ⚠️ 書く前に、エミュレーターを指す環境変数（名前が _EMULATOR_HOST で終わるもの）が1つでもあれば止める
+ *      （本番専用のスクリプト。scripts/soratomo-admin.js と同じ柵。--dry-run は Firestore に触れないので止めない）。
  *   ⚠️ 本番への投入は tasks 14.2 で、利用者の GO を取ってから行う。
  *
  * ■ テスト: node --test scripts/soratomo-ngwords.test.js（firebase-admin 非依存。本番には触れない。語はダミーだけ）
@@ -41,6 +44,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { createRequire } = require("node:module");
 const core = require("../functions/soratomoCore");
 
 // MARK: - 定数
@@ -51,6 +55,8 @@ const EXPECTED_PROJECT_ID = "soramoyou-ios";
 const MAX_WORDS = 5000;
 /** このスクリプトのリポジトリの根（scripts/ の1つ上）。 */
 const REPOSITORY_ROOT = path.resolve(__dirname, "..");
+/** functions/ を起点にした require。firebase-admin はこれで読む（main の中でだけ。NODE_PATH に頼らない）。 */
+const functionsRequire = createRequire(path.join(REPOSITORY_ROOT, "functions", "package.json"));
 
 const USAGE = "使い方: node scripts/soratomo-ngwords.js <語のファイル> [--dry-run]";
 
@@ -193,6 +199,18 @@ function formatStats(stats, wordCount) {
 // MARK: - 本体
 
 /**
+ * エミュレーターを指す環境変数（名前が _EMULATOR_HOST で終わり、値が空でないもの）の名前を並べる
+ * （scripts/soratomo-admin.js の findEmulatorEnv と同じ）。
+ * @param {Record<string, string|undefined>} env
+ * @returns {string[]} 名前の昇順
+ */
+function findEmulatorEnv(env) {
+  return Object.keys(env)
+    .filter((name) => name.endsWith("_EMULATOR_HOST") && env[name])
+    .sort();
+}
+
+/**
  * 本体。firebase-admin はここでだけ読み込む（テストと --dry-run に依存を持ち込まないため）。
  * @param {string[]} argv
  */
@@ -229,9 +247,16 @@ async function main(argv) {
     console.log("--dry-run: 書いていない");
     return;
   }
+  const emulatorEnv = findEmulatorEnv(process.env);
+  if (emulatorEnv.length > 0) {
+    // 値（ホストとポート）は出さず、名前だけ
+    console.error(`❌ エミュレーターを指す環境変数があるので書かずに止めた（本番専用のスクリプト。外してから実行する）: ${emulatorEnv.join(" ")}`);
+    process.exitCode = 1;
+    return;
+  }
 
-  const { initializeApp, applicationDefault } = require("firebase-admin/app");
-  const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+  const { initializeApp, applicationDefault } = functionsRequire("firebase-admin/app");
+  const { getFirestore, FieldValue } = functionsRequire("firebase-admin/firestore");
   const { NG_WORDS_COLLECTION, NG_WORDS_DOC } = require("../functions/soratomoNgWords");
   const app = initializeApp({ credential: applicationDefault(), projectId: EXPECTED_PROJECT_ID });
   const ref = getFirestore(app).collection(NG_WORDS_COLLECTION).doc(NG_WORDS_DOC);
@@ -267,5 +292,7 @@ module.exports = {
   validateWordList,
   describeRejection,
   formatStats,
+  findEmulatorEnv,
+  functionsRequire,
   main,
 };

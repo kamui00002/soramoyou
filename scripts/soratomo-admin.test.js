@@ -378,3 +378,76 @@ test("プロジェクトは soramoyou-ios に固定している（ADC の取り�
 test("バケットは soramoyou-ios.firebasestorage.app に固定している", () => {
   assert.equal(admin.EXPECTED_BUCKET, "soramoyou-ios.firebasestorage.app");
 });
+
+// MARK: - main の冒頭の環境の確認（D5・D6）
+
+test("findEmulatorEnv: 名前が _EMULATOR_HOST で終わり、値が空でない環境変数の名前だけを並べる", () => {
+  const env = {
+    FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080",
+    FIREBASE_AUTH_EMULATOR_HOST: "",
+    STORAGE_EMULATOR_HOST: "http://127.0.0.1:9199",
+    FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:9199",
+    PATH: "/usr/bin",
+    EMULATOR_HOST_NOTE: "x",
+  };
+  assert.deepEqual(admin.findEmulatorEnv(env), ["FIREBASE_STORAGE_EMULATOR_HOST", "FIRESTORE_EMULATOR_HOST", "STORAGE_EMULATOR_HOST"]);
+  assert.deepEqual(admin.findEmulatorEnv({ PATH: "/usr/bin" }), []);
+});
+
+/**
+ * firebase-admin を読もうとしたら、その場で投げる。柵が外れたときに、ネットワークへ出る前（再試行で固まる前）に赤にするため。
+ * createRequire の require も Module._load を通る。差し替えはテストの終わりに戻る（t.mock）。
+ */
+function forbidFirebaseAdmin(t) {
+  const Module = require("node:module");
+  const original = Module._load;
+  t.mock.method(Module, "_load", function load(request, ...rest) {
+    if (String(request).startsWith("firebase-admin")) throw new Error("test: firebase-admin を読もうとした（柵が効いていない）");
+    return original.call(this, request, ...rest);
+  });
+}
+
+test("main: エミュレーターを指す環境変数が1つでもあれば、firebase-admin を読まずに止める（名前だけを出す）", async (t) => {
+  // Auth だけエミュレーター・Firestore は本番という混在だと、delete-user の「アカウントが無い」が本番の削除に直結する。
+  // 柵が外れても本番へ届かないよう、宛先はすべて閉じたポート・資格情報は存在しないファイルにしておく
+  const env = {
+    FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9",
+    FIRESTORE_EMULATOR_HOST: "127.0.0.1:9",
+    FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:9",
+    GOOGLE_APPLICATION_CREDENTIALS: "/nonexistent/soratomo-admin-test.json",
+  };
+  forbidFirebaseAdmin(t);
+  const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, env);
+  const out = [];
+  t.mock.method(console, "log", (...args) => out.push(args.join(" ")));
+  t.mock.method(console, "error", (...args) => out.push(args.join(" ")));
+  const before = process.exitCode;
+  try {
+    await admin.main(["delete-user", "orphanUid"]);
+    assert.equal(process.exitCode, 1);
+  } finally {
+    process.exitCode = before;
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+  assert.equal(out.length, 1);
+  assert.match(out[0], /FIREBASE_AUTH_EMULATOR_HOST FIREBASE_STORAGE_EMULATOR_HOST FIRESTORE_EMULATOR_HOST/);
+  assert.equal(out[0].includes("127.0.0.1"), false);
+  const sep = require("node:path").sep;
+  assert.deepEqual(Object.keys(require.cache).filter((p) => p.includes(`${sep}firebase-admin${sep}`)), []);
+});
+
+test("firebase-admin は functions/ から解決する（共通の削除のモジュールと同じ実体。FieldValue の取り違えを防ぐ）", () => {
+  const path = require("node:path");
+  const { createRequire } = require("node:module");
+  const fromDeletion = createRequire(require.resolve("../functions/soratomoDeletion"));
+  for (const name of ["firebase-admin/app", "firebase-admin/firestore", "firebase-admin/auth", "firebase-admin/storage"]) {
+    assert.equal(admin.functionsRequire.resolve(name), fromDeletion.resolve(name), name);
+  }
+  // main の中で素の require（NODE_PATH 頼み）で firebase-admin を読んでいない
+  const source = require("node:fs").readFileSync(path.join(__dirname, "soratomo-admin.js"), "utf8");
+  assert.doesNotMatch(source, /\brequire\(\s*["']firebase-admin/);
+});

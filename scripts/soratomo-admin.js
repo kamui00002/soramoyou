@@ -37,8 +37,12 @@
  *   接続先は EXPECTED_PROJECT_ID（soramoyou-ios）と EXPECTED_BUCKET に固定している（ADC の既定に頼らない）。
  *
  * ■ 実行方法（リポジトリ直下で）
- *   firebase-admin は functions/ の依存を借りる（functions で npm install 済みであること）。
- *     NODE_PATH=functions/node_modules node scripts/soratomo-admin.js <コマンド> ...
+ *   firebase-admin は functions/ の依存を借りる（functions で npm install 済みであること）。functions/ を起点に解決するので、
+ *   共通の削除のモジュール（functions/soratomoDeletion.js）と同じ実体になる（NODE_PATH は要らない）。
+ *     node scripts/soratomo-admin.js <コマンド> ...
+ *   ⚠️ エミュレーターを指す環境変数（名前が _EMULATOR_HOST で終わるもの）が1つでもあれば、何もせずに止める。
+ *      Auth だけエミュレーター・Firestore は本番という混在だと、delete-user の「アカウントが無い」の判定が
+ *      本番のデータの削除に直結するため（エミュレーターでの確かめは soratomo-admin.emulator.test.js で cmd* を直接呼ぶ）。
  *   ⚠️ 本番に対する実行は、利用者の GO を取ってから行う（読み取りだけの find-orphans・show-report・list-unforwarded を含む）。
  *
  * ■ 作り（scripts/set-soratomo-beta-claim.js と同じ）
@@ -54,6 +58,8 @@
 
 "use strict";
 
+const path = require("node:path");
+const { createRequire } = require("node:module");
 const core = require("../functions/soratomoCore");
 
 // MARK: - 定数
@@ -62,6 +68,13 @@ const core = require("../functions/soratomoCore");
 const EXPECTED_PROJECT_ID = "soramoyou-ios";
 /** 画像のバケット（scripts/check-soratomo-download-tokens.js と同じ。バケット名は秘密ではない）。 */
 const EXPECTED_BUCKET = "soramoyou-ios.firebasestorage.app";
+
+/**
+ * functions/ を起点にした require。firebase-admin はこれで読む（main の中でだけ）。
+ * 素の require は NODE_PATH 次第で別の firebase-admin を拾い、共通の削除のモジュールが持つ FieldValue と
+ * db の実体が食い違って、削除の途中で失敗しうるため。
+ */
+const functionsRequire = createRequire(path.join(__dirname, "..", "functions", "package.json"));
 
 /** コレクションの名前（functions/soratomoStore.js・soratomoDeletion.js と同じ）。 */
 const GROUPS = "soratomoGroups";
@@ -519,6 +532,17 @@ function run(deps, parsed) {
 // MARK: - 本体
 
 /**
+ * エミュレーターを指す環境変数（名前が _EMULATOR_HOST で終わり、値が空でないもの）の名前を並べる。
+ * @param {Record<string, string|undefined>} env
+ * @returns {string[]} 名前の昇順
+ */
+function findEmulatorEnv(env) {
+  return Object.keys(env)
+    .filter((name) => name.endsWith("_EMULATOR_HOST") && env[name])
+    .sort();
+}
+
+/**
  * 本体。firebase-admin と共通の削除のモジュールはここでだけ読み込む。
  * @param {string[]} argv
  */
@@ -529,11 +553,18 @@ async function main(argv) {
     process.exitCode = 2;
     return;
   }
+  const emulatorEnv = findEmulatorEnv(process.env);
+  if (emulatorEnv.length > 0) {
+    // 値（ホストとポート）は出さず、名前だけ
+    console.error(`❌ エミュレーターを指す環境変数があるので止めた（本番専用のスクリプト。外してから実行する）: ${emulatorEnv.join(" ")}`);
+    process.exitCode = 1;
+    return;
+  }
 
-  const { initializeApp, applicationDefault } = require("firebase-admin/app");
-  const { getFirestore, FieldValue } = require("firebase-admin/firestore");
-  const { getAuth } = require("firebase-admin/auth");
-  const { getStorage } = require("firebase-admin/storage");
+  const { initializeApp, applicationDefault } = functionsRequire("firebase-admin/app");
+  const { getFirestore, FieldValue } = functionsRequire("firebase-admin/firestore");
+  const { getAuth } = functionsRequire("firebase-admin/auth");
+  const { getStorage } = functionsRequire("firebase-admin/storage");
   const deletion = require("../functions/soratomoDeletion");
   const { createStorageGateway } = require("../functions/soratomoStorage");
 
@@ -582,4 +613,7 @@ module.exports = {
   cmdUnsuspend,
   cmdListUnforwarded,
   run,
+  findEmulatorEnv,
+  functionsRequire,
+  main,
 };

@@ -249,3 +249,58 @@ test("main --dry-run: UTF-8 のファイルは数えて、書かずに終わる"
   assert.equal(out.at(-1), "--dry-run: 書いていない");
   assert.equal(out.join("\n").includes("てすとごい"), false);
 });
+
+/**
+ * firebase-admin を読もうとしたら、その場で投げる。柵が外れたときに、ネットワークへ出る前（再試行で固まる前）に赤にするため。
+ * createRequire の require も Module._load を通る。差し替えはテストの終わりに戻る（t.mock）。
+ */
+function forbidFirebaseAdmin(t) {
+  const Module = require("node:module");
+  const original = Module._load;
+  t.mock.method(Module, "_load", function load(request, ...rest) {
+    if (String(request).startsWith("firebase-admin")) throw new Error("test: firebase-admin を読もうとした（柵が効いていない）");
+    return original.call(this, request, ...rest);
+  });
+}
+
+test("main: エミュレーターを指す環境変数があれば、書く直前で firebase-admin を読まずに止める（名前だけを出す）", async (t) => {
+  // 柵が外れても本番へ届かないよう、宛先は閉じたポート・資格情報は存在しないファイルにしておく
+  const env = { FIRESTORE_EMULATOR_HOST: "127.0.0.1:9", GOOGLE_APPLICATION_CREDENTIALS: "/nonexistent/soratomo-ngwords-test.json" };
+  forbidFirebaseAdmin(t);
+  const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, env);
+  let result;
+  try {
+    result = await runMain(t, [tree.outsideFile]);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+  assert.equal(result.exitCode, 1);
+  assert.match(result.out.at(-1), /エミュレーター.*FIRESTORE_EMULATOR_HOST$/);
+  assert.equal(result.out.join("\n").includes("127.0.0.1"), false);
+  assert.deepEqual(Object.keys(require.cache).filter((p) => p.includes(`${path.sep}firebase-admin${path.sep}`)), []);
+});
+
+test("main --dry-run: エミュレーターを指す環境変数があっても、Firestore に触れないので数えて終わる", async (t) => {
+  const saved = process.env.FIRESTORE_EMULATOR_HOST;
+  process.env.FIRESTORE_EMULATOR_HOST = "127.0.0.1:9";
+  try {
+    const { out, exitCode } = await runMain(t, [tree.outsideFile, "--dry-run"]);
+    assert.equal(exitCode, undefined);
+    assert.equal(out.at(-1), "--dry-run: 書いていない");
+  } finally {
+    if (saved === undefined) delete process.env.FIRESTORE_EMULATOR_HOST;
+    else process.env.FIRESTORE_EMULATOR_HOST = saved;
+  }
+});
+
+test("firebase-admin は functions/ から解決し、素の require（NODE_PATH 頼み）で読まない", () => {
+  const { createRequire } = require("node:module");
+  const fromFunctions = createRequire(require.resolve("../functions/soratomoNgWords"));
+  assert.equal(ng.functionsRequire.resolve("firebase-admin/firestore"), fromFunctions.resolve("firebase-admin/firestore"));
+  const source = fs.readFileSync(path.join(__dirname, "soratomo-ngwords.js"), "utf8");
+  assert.doesNotMatch(source, /\brequire\(\s*["']firebase-admin/);
+});
