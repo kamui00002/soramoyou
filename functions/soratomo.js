@@ -13,9 +13,11 @@
 //   既存の onPostCreated とは名前も対象（soratomoGroups/{groupId}/skies/{skyId}）も別。
 // - onSoratomoReportCreated（release-gate 4.3）: 通報の記録を、開発者の Discord（フィードバックとは別の送り先）へ
 //   ID・理由・時刻だけで送る。失敗は記録の状態で追い、例外を投げない。
+// - soratomoHousekeeping（release-gate 4.4）: 6時間ごとの定期実行。仕事A＝Auth のアカウントが無い人のデータを
+//   共通の削除で消す。仕事B＝転送に失敗した通報を送り直す。
 //
 // index.js の末尾の Object.assign(exports, require("./soratomo")) で公開する（tasks 8.3）。
-// ここで公開するのは Cloud Functions の 9 本だけにする（ほかの値を exports に混ぜない）。
+// ここで公開するのは Cloud Functions の 10 本だけにする（ほかの値を exports に混ぜない）。
 //
 // ⚠️ ログと個人情報（要件15.2・15.3）: ログに出すのは uid・groupId・skyId・結果の理由・件数だけ。
 //    グループ名・表示名・キャプション・招待コード・通知トークン・エラーの本文（文書のパスに招待コードが
@@ -27,6 +29,7 @@
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
@@ -466,6 +469,119 @@ const onSoratomoReportCreated = onDocumentCreated(
   }
 );
 
+// MARK: - 後始末と再送の定期実行（release-gate 4.4）
+
+/** 仕事Aの締め切り（開始からのミリ秒）。関数の制限時間（540秒）より短くし、仕事Bの時間を残す。 */
+const SWEEP_BUDGET_MS = 480_000;
+/** getUsers に1回で渡す uid の数（Admin SDK の上限が100）。 */
+const AUTH_LOOKUP_BATCH = 100;
+/** 仕事Bが1回に読む未送信の通報の数。 */
+const REFORWARD_LIMIT = 20;
+/** 作成からこの時間を過ぎた未送信の通報だけを送り直す（作成のトリガーが送っている途中のものに重ねないため）。 */
+const REFORWARD_MIN_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * 仕事A: Auth のアカウントが無いのに、そらとものデータが残っている人を消す（要件4.1）。
+ * - soratomoUsers を listDocuments で集める（利用者の文書が無く、所属の写しだけが残った親も含む）
+ * - 100件ずつ getUsers に問い合わせ、成功した応答の notFound に入っていた uid だけを、共通の削除（account_deleted）で消す。
+ *   問い合わせが失敗した組は飛ばす（失敗を「アカウントが無い」と読むと、アカウントのある人のデータを消してしまう）。
+ *   notFound は、問い合わせた組の中の uid に限って使う（それ以外の値を消す相手にしない）
+ * - account_deleted は、停止中の人の文書も消す（要件2.3 の「停止の記録も消す」を、アカウントを消した後にここで満たす）
+ * - 1人の削除の失敗で残りを止めない。締め切りを過ぎたら、残りは次の実行に回す（共通の削除は冪等で、写しが残る限り続く）
+ * - ログ: 1人ごとに soratomoDeletion: summary（内部IDと件数だけ・要件14.4）
+ * @param {number} deadlineMs
+ * @returns {Promise<{ scanned: number, missingAuth: number, completed: number, unfinished: number }>}
+ *   scanned は問い合わせに成功した数、unfinished は missingAuth のうち消し終わらなかった数（失敗・締め切りを含む）
+ */
+async function sweepUsersWithoutAccount(deadlineMs) {
+  const trigger = "account_deleted";
+  const summary = { scanned: 0, missingAuth: 0, completed: 0, unfinished: 0 };
+  const uids = (await db.collection("soratomoUsers").listDocuments()).map((ref) => ref.id);
+  for (let i = 0; i < uids.length && Date.now() < deadlineMs; i += AUTH_LOOKUP_BATCH) {
+    const batch = uids.slice(i, i + AUTH_LOOKUP_BATCH);
+    let missing;
+    try {
+      const { notFound } = await getAuth().getUsers(batch.map((uid) => ({ uid })));
+      const notFoundUids = new Set(notFound.map((identifier) => identifier && identifier.uid));
+      missing = batch.filter((uid) => notFoundUids.has(uid));
+    } catch (err) {
+      logger.warn("soratomoHousekeeping: lookup_failed", {
+        count: batch.length,
+        errorName: err && err.name,
+        errorCode: err && err.code,
+      });
+      continue;
+    }
+    summary.scanned += batch.length;
+    summary.missingAuth += missing.length;
+    for (const uid of missing) {
+      if (Date.now() >= deadlineMs) {
+        summary.unfinished += 1;
+        continue;
+      }
+      try {
+        const totals = await deleteSoratomoUserData({ db, storage, nowMs: Date.now }, { uid, trigger, deadlineMs });
+        logger.info("soratomoDeletion: summary", { uid, trigger, ...totals });
+        if (totals.done) summary.completed += 1;
+        else summary.unfinished += 1;
+      } catch (err) {
+        logger.error("soratomoDeletion: failed", { uid, trigger, errorName: err && err.name, errorCode: err && err.code });
+        summary.unfinished += 1;
+      }
+    }
+  }
+  return summary;
+}
+
+/**
+ * 仕事B: 転送の状態が未送信の通報を最大20件読み、作成から10分を過ぎたものだけを送り直す（要件7.5）。
+ * 状態の単一項目のクエリにして複合インデックスを増やさず、年齢はメモリ上で見る（skyMotionPurchase のリコンサイラと同じ）。
+ * 作成日時が読めない記録は古いものとして送り直す（いつまでも埋もれさせない）。
+ * @param {string} webhookUrl
+ * @returns {Promise<{ attempted: number, sent: number }>}
+ */
+async function reforwardPendingReports(webhookUrl) {
+  const snap = await db.collection("soratomoReports").where("forwardStatus", "==", "pending").limit(REFORWARD_LIMIT).get();
+  const cutoffMs = Date.now() - REFORWARD_MIN_AGE_MS;
+  const result = { attempted: 0, sent: 0 };
+  for (const doc of snap.docs) {
+    const createdMs = millisOf(doc.get("createdAt"));
+    if (createdMs !== null && createdMs > cutoffMs) continue;
+    result.attempted += 1;
+    if ((await forwardReport(doc.ref, webhookUrl)) === "sent") result.sent += 1;
+  }
+  return result;
+}
+
+/**
+ * 6時間ごとの後始末と再送（design の soratomoHousekeeping）。同時に1つだけ動く（maxInstances: 1）。
+ * 仕事A→仕事Bの順に、別々の try で囲む（片方の失敗で他方を止めない）。仕事Aは締め切りを持ち、仕事Bの時間を残す。
+ * 6時間ごとなので、Auth の削除から最悪6時間で拾い、途中で止まっても24時間の間に4回の機会がある（要件4.1）。
+ */
+const soratomoHousekeeping = onSchedule(
+  {
+    schedule: "every 6 hours",
+    region: REGION,
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    secrets: [DISCORD_REPORT_WEBHOOK_URL],
+  },
+  async () => {
+    const startedMs = Date.now();
+    try {
+      logger.info("soratomoHousekeeping: sweep", await sweepUsersWithoutAccount(startedMs + SWEEP_BUDGET_MS));
+    } catch (err) {
+      logger.error("soratomoHousekeeping: sweep_failed", { errorName: err && err.name, errorCode: err && err.code });
+    }
+    try {
+      logger.info("soratomoHousekeeping: reforward", await reforwardPendingReports(DISCORD_REPORT_WEBHOOK_URL.value()));
+    } catch (err) {
+      logger.error("soratomoHousekeeping: reforward_failed", { errorName: err && err.name, errorCode: err && err.code });
+    }
+  }
+);
+
 module.exports = {
   soratomoCreateGroup,
   soratomoJoinGroup,
@@ -476,4 +592,5 @@ module.exports = {
   soratomoDeleteMyData,
   onSoratomoSkyCreated,
   onSoratomoReportCreated,
+  soratomoHousekeeping,
 };

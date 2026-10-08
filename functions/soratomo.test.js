@@ -769,3 +769,147 @@ test("転送: 送信済みの記録は送らない（同じ作成のイベント
   assert.equal(record.webhooks.length, 1, "いまの記録が送信済みなので送らない");
   assert.equal((await snap.ref.get()).get("forwardAttempts"), 0);
 });
+
+// MARK: - 定期実行: soratomoHousekeeping（release-gate 4.4）
+
+/** 作成から ageMs 前の通報の記録を直接入れる（定期実行の仕事Bの対象を作る）。 */
+async function seedReportRecord(reportId, { ageMs, forwardStatus = "pending" }) {
+  await db.collection("soratomoReports").doc(reportId).set({
+    groupId: "g1",
+    skyId: "s1",
+    authorId: "alice",
+    reporterId: "bob",
+    reason: "spam",
+    createdAt: Timestamp.fromMillis(Date.now() - ageMs),
+    forwardStatus,
+    forwardAttempts: 0,
+  });
+}
+
+/** 1人ぶんの所属（メンバーの文書・所属の写し・投稿1件と画像2枚）を入れる。withUserDoc が false なら利用者の文書を作らない。 */
+async function seedMembership(uid, groupId, skyId, { withUserDoc = true } = {}) {
+  const groupRef = db.collection("soratomoGroups").doc(groupId);
+  const userRef = db.collection("soratomoUsers").doc(uid);
+  const batch = db.batch();
+  batch.set(groupRef.collection("skies").doc(skyId), { authorId: uid, width: 1, height: 1, createdAt: Timestamp.now() });
+  if (withUserDoc) batch.set(userRef, { groupCount: 1, guidelineVersion: core.GUIDELINE_VERSION });
+  batch.set(userRef.collection("groups").doc(groupId), { groupId, joinedAt: Timestamp.now() });
+  await batch.commit();
+  for (const name of ["display.jpg", "thumb.jpg"]) storageFiles.add(`soratomo/${groupId}/${uid}/${skyId}/${name}`);
+}
+
+/**
+ * 仕事Aの場面。アカウントがあるのは alice（クレームあり）と erin（クレーム無し）だけ。
+ * - gh1: オーナーの alice とメンバーの carol（アカウント無し）。2人とも投稿1件
+ * - gh2: dave（アカウント無し）だけ。dave は利用者の文書が無く、所属の写しだけが残っている（文書の無い親）
+ * - erin: 利用者の文書だけ / frank（アカウント無し）: 利用停止中の文書だけ（所属数0）
+ */
+async function seedSweepScene() {
+  await seedGroup({ groupId: "gh1", ownerId: "alice", inviteCode: "SKYGHONE", memberIds: ["alice", "carol"] });
+  await seedGroup({ groupId: "gh2", ownerId: "dave", inviteCode: "SKYGHTWO", memberIds: ["dave"] });
+  await seedMembership("alice", "gh1", "sa1");
+  await seedMembership("carol", "gh1", "sc1");
+  await seedMembership("dave", "gh2", "sd1", { withUserDoc: false });
+  await db.collection("soratomoUsers").doc("erin").set({ groupCount: 0, guidelineVersion: core.GUIDELINE_VERSION });
+  await db.collection("soratomoUsers").doc("frank").set({ groupCount: 0, suspendedAt: Timestamp.now() });
+  claims = new Map([
+    ["alice", ON],
+    ["erin", {}],
+  ]);
+}
+
+function runHousekeeping() {
+  return fns.soratomoHousekeeping.run({ scheduleTime: new Date().toISOString() });
+}
+
+const bySummaryUid = (a, b) => (a.uid < b.uid ? -1 : 1);
+
+test("定期実行の仕事A: アカウントの無い人（文書の無い親・停止中を含む）だけを account_deleted で消し、1人ごとと実行ごとの要約を出す", async () => {
+  await seedSweepScene();
+  await runHousekeeping();
+
+  // アカウントのある人は残る
+  assert.equal((await db.collection("soratomoUsers").doc("alice").get()).exists, true);
+  assert.equal((await db.collection("soratomoUsers").doc("erin").get()).exists, true);
+  assert.equal((await db.collection("soratomoGroups").doc("gh1").collection("skies").doc("sa1").get()).exists, true);
+  // アカウントの無い人は消える（carol: メンバーを外す / dave: 最後の1人なのでグループごと / frank: 停止中の文書も）
+  assert.equal((await db.collection("soratomoUsers").doc("carol").get()).exists, false);
+  assert.equal((await db.collection("soratomoGroups").doc("gh1").collection("skies").doc("sc1").get()).exists, false);
+  const gh1 = (await db.collection("soratomoGroups").doc("gh1").get()).data();
+  assert.equal(gh1.memberCount, 1);
+  assert.equal(gh1.ownerId, "alice");
+  assert.equal((await db.collection("soratomoGroups").doc("gh2").get()).exists, false);
+  assert.equal((await db.collection("soratomoUsers").doc("dave").collection("groups").get()).size, 0);
+  assert.equal((await db.collection("soratomoUsers").doc("frank").get()).exists, false, "停止中でもアカウントが無ければ文書ごと消す（要件2.3）");
+  assert.deepEqual([...storageFiles].sort(), ["soratomo/gh1/alice/sa1/display.jpg", "soratomo/gh1/alice/sa1/thumb.jpg"]);
+
+  assert.deepEqual([...record.getUsersCalls[0]].sort(), ["alice", "carol", "dave", "erin", "frank"]);
+  const zero = { skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0 };
+  assert.deepEqual(logFieldsOf("soratomoDeletion: summary").sort(bySummaryUid), [
+    { uid: "carol", trigger: "account_deleted", done: true, ...zero, skiesDeleted: 1, imagesDeleted: 2, groupsLeft: 1 },
+    { uid: "dave", trigger: "account_deleted", done: true, ...zero, skiesDeleted: 1, imagesDeleted: 2, groupsLeft: 1, groupsDeleted: 1 },
+    { uid: "frank", trigger: "account_deleted", done: true, ...zero },
+  ]);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: sweep"), [{ scanned: 5, missingAuth: 3, completed: 3, unfinished: 0 }]);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: reforward"), [{ attempted: 0, sent: 0 }]);
+});
+
+test("定期実行の仕事A: 問い合わせが失敗した組は何も消さない（失敗を「アカウントが無い」と読まない）。仕事Bは続ける", async () => {
+  await seedSweepScene();
+  await seedReportRecord("rold", { ageMs: 11 * 60 * 1000 });
+  getUsersImpl = async () => {
+    throw new Error("auth の失敗");
+  };
+  await runHousekeeping();
+
+  for (const uid of ["alice", "carol", "erin", "frank"]) {
+    assert.equal((await db.collection("soratomoUsers").doc(uid).get()).exists, true, `${uid} の文書は残る`);
+  }
+  assert.equal((await db.collection("soratomoGroups").doc("gh2").get()).exists, true);
+  assert.equal(storageFiles.size, 6);
+  assert.deepEqual(logFieldsOf("soratomoDeletion: summary"), []);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: sweep"), [{ scanned: 0, missingAuth: 0, completed: 0, unfinished: 0 }]);
+  assert.equal(logFieldsOf("soratomoHousekeeping: lookup_failed")[0].count, 5);
+  assert.equal(record.webhooks.length, 1, "仕事Bは止まらない");
+});
+
+test("定期実行の仕事B: 作成から10分を過ぎた未送信の通報だけを送り直し、10分未満と送信済みは送らない", async () => {
+  await seedReportRecord("rold", { ageMs: 11 * 60 * 1000 });
+  await seedReportRecord("rnew", { ageMs: 60 * 1000 });
+  await seedReportRecord("rsent", { ageMs: 11 * 60 * 1000, forwardStatus: "sent" });
+  await runHousekeeping();
+
+  assert.equal(record.webhooks.length, 1);
+  assert.ok(JSON.stringify(record.webhooks[0].body).includes("rold"));
+  assert.equal((await db.collection("soratomoReports").doc("rold").get()).get("forwardStatus"), "sent");
+  assert.equal((await db.collection("soratomoReports").doc("rnew").get()).get("forwardStatus"), "pending");
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: reforward"), [{ attempted: 1, sent: 1 }]);
+});
+
+test("定期実行: 仕事Aが例外で止まっても、仕事Bは動く", async () => {
+  await seedReportRecord("rold", { ageMs: 11 * 60 * 1000 });
+  const originalCollection = db.collection;
+  // soratomo.js も同じ Firestore（既定のアプリ）を使うので、ここで差し替えると仕事Aの一覧が失敗する
+  db.collection = function (name) {
+    if (name === "soratomoUsers") return { listDocuments: async () => Promise.reject(new Error("一覧の失敗")) };
+    return originalCollection.call(this, name);
+  };
+  try {
+    await runHousekeeping();
+  } finally {
+    db.collection = originalCollection;
+  }
+  assert.equal(logFieldsOf("soratomoHousekeeping: sweep_failed").length, 1);
+  assert.equal(record.webhooks.length, 1, "仕事Bは止まらない");
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: reforward"), [{ attempted: 1, sent: 1 }]);
+});
+
+test("定期実行: 6時間ごと・制限時間540秒・メモリ512MiB・同時に1つ・通報の送り先の秘密の値を渡す", () => {
+  const endpoint = fns.soratomoHousekeeping.__endpoint;
+  assert.equal(endpoint.scheduleTrigger.schedule, "every 6 hours");
+  assert.equal(endpoint.timeoutSeconds, 540);
+  assert.equal(endpoint.availableMemoryMb, 512);
+  assert.equal(endpoint.maxInstances, 1);
+  assert.deepEqual(endpoint.secretEnvironmentVariables, [{ key: "DISCORD_REPORT_WEBHOOK_URL" }]);
+  assert.deepEqual(endpoint.region, ["asia-northeast1"]);
+});
