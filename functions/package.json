@@ -7,9 +7,9 @@
     "node": "22"
   },
   "scripts": {
-    "lint": "node --check index.js && node --check recommendationCore.js && node --check skyMotion.js && node --check skyMotionCore.js && node --check skyMotionPurchase.js && node --check skyMotionPurchaseVerify.js && node --check soratomoCore.js && node --check soratomoStore.js && node --check soratomo.js",
-    "test": "node --test recommendationCore.test.js skyMotionCore.test.js skyMotionPurchaseVerify.test.js soratomoCore.test.js pushHelpers.test.js ../scripts/set-soratomo-beta-claim.test.js ../scripts/check-soratomo-download-tokens.test.js",
-    "test:emulator": "firebase emulators:exec --only firestore --project soramoyou-ios 'node --test --test-concurrency=1 soratomoStore.test.js soratomo.test.js'",
+    "lint": "node --check index.js && node --check recommendationCore.js && node --check skyMotion.js && node --check skyMotionCore.js && node --check skyMotionPurchase.js && node --check skyMotionPurchaseVerify.js && node --check soratomoCore.js && node --check soratomoStore.js && node --check soratomo.js && node --check soratomoDeletion.js && node --check soratomoNgWords.js && node --check soratomoStorage.js && node --check ../scripts/soratomo-admin.js && node --check ../scripts/soratomo-ngwords.js",
+    "test": "node --test recommendationCore.test.js skyMotionCore.test.js skyMotionPurchaseVerify.test.js soratomoCore.test.js pushHelpers.test.js soratomoStorage.test.js ../scripts/set-soratomo-beta-claim.test.js ../scripts/check-soratomo-download-tokens.test.js ../scripts/soratomo-admin.test.js ../scripts/soratomo-ngwords.test.js",
+    "test:emulator": "firebase emulators:exec --only firestore,storage --project soramoyou-ios 'NODE_PATH=node_modules node --test --test-concurrency=1 soratomoStore.test.js soratomo.test.js soratomoDeletion.test.js soratomoNgWords.test.js soratomoStorage.emulator.test.js ../scripts/soratomo-admin.emulator.test.js'",
     "deploy": "firebase deploy --only functions --project soramoyou-ios",
     "logs": "firebase functions:log --project soramoyou-ios"
   },

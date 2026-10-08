@@ -228,7 +228,7 @@
   - 本番への投入は14.2で、利用者のGOを取ってから行う
   - _Requirements: 11.10, 11.11_
 
-- [ ] 7. Functions・ルール・スクリプトをまとめて登録し、サーバー側のテストをすべて通す
+- [x] 7. Functions・ルール・スクリプトをまとめて登録し、サーバー側のテストをすべて通す
   - 前提: 1〜6
   - Functionsの公開を、新しい6本を足して計10本にする（既存の `Object.assign(exports, require("./soratomo"))` はそのまま使う）。ヘッダーのコメントの本数は13.2で直す
   - lint・test・test:emulatorに、新しいファイルとテスト（コアの追加・削除・Storage・語のリスト・管理スクリプト・語の投入スクリプト）を登録する。test:emulatorはfirestoreとstorageの両方を起こす形にする
