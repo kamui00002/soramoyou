@@ -321,3 +321,26 @@ final class MockSoratomoAccountDeletionService: SoratomoAccountDeletionServicePr
         }
     }
 }
+
+// MARK: - ガイドラインへの同意（release-gate 9.5）
+
+/// `SoratomoGuidelineServiceProtocol` のモック
+final class MockSoratomoGuidelineService: SoratomoGuidelineServiceProtocol, @unchecked Sendable {
+    // 返す結果
+    var fetchConsentStatusResult: Result<SoratomoConsentStatus, SoratomoError> = .failure(.unknown)
+    var agreeResult: Result<Void, SoratomoError> = .failure(.unknown)
+
+    // 呼ばれた引数
+    private(set) var fetchConsentStatusCalls: [String] = []
+    private(set) var agreeCalls: [Int] = []
+
+    func fetchConsentStatus(uid: String) async throws(SoratomoError) -> SoratomoConsentStatus {
+        fetchConsentStatusCalls.append(uid)
+        return try fetchConsentStatusResult.soratomoValue()
+    }
+
+    func agree(version: Int) async throws(SoratomoError) {
+        agreeCalls.append(version)
+        try agreeResult.soratomoValue()
+    }
+}

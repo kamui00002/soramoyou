@@ -329,3 +329,16 @@ protocol SoratomoAccountDeletionServiceProtocol: Sendable {
     /// そらともを使っていない人（匿名を含む）にも呼ぶ。サーバーは消すものが無ければ完了を返す（要件 3.8）。
     func deleteMyData() async throws(SoratomoAccountDeletionError)
 }
+
+// MARK: - ガイドラインへの同意（release-gate 9.5）
+
+/// 同意の状態を読む口と、同意を記録する口
+///
+/// - 失敗はすべて `SoratomoError` に写して投げる。サーバーの文言は画面に出さない。
+protocol SoratomoGuidelineServiceProtocol: Sendable {
+    /// 同意の状態（`soratomoUsers/{uid}` の同意した版と所属数）を読む。文書が無ければ「未同意・所属 0」
+    func fetchConsentStatus(uid: String) async throws(SoratomoError) -> SoratomoConsentStatus
+
+    /// 同意を記録する（Callable `soratomoAgreeGuideline`・20 秒）
+    func agree(version: Int) async throws(SoratomoError)
+}
