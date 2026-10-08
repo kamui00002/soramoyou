@@ -12,6 +12,7 @@
 // - 利用者の文書（users）には書かない。表示名や通知設定は users にあるが、ここでは読みも書きもしない。
 // - 作成と参加は、省略できない方針（policy: 現行のガイドラインの版・NGワードの判定）を受け取り、利用停止・同意・
 //   NGワードを確かめる（release-gate 2.1）。方針を省略すると、検査を黙って飛ばさないよう TypeError にする。
+// - 投稿の作成（createSkyTx・release-gate 2.2）もここに置く。利用停止・メンバー・NGワードを確かめてから書く。
 // - テストは soratomoStore.test.js（Firestore のエミュレーターに対して直接呼ぶ）。
 //
 // ⚠️ Firestore のトランザクションは「読みを全部終えてから書く」決まり。招待コードの重なりの確認（最大5回の読み）も
@@ -34,6 +35,7 @@ const NOTIFY_STATE = "notifyState";
 const INVITE_CODES = "soratomoInviteCodes";
 const USERS = "soratomoUsers";
 const USER_GROUPS = "groups";
+const SKIES = "skies";
 
 /** 招待コードが既存と重なったときに作り直す最大の回数（要件3.2）。 */
 const MAX_INVITE_CODE_ATTEMPTS = 5;
@@ -46,7 +48,7 @@ const REQUEST_ID_MAX = 128;
 class SoratomoDomainError extends Error {
   /**
    * @param {"flag_off"|"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner"
-   *   |"suspended"|"consent_required"|"ng_word"} reason
+   *   |"suspended"|"consent_required"|"ng_word"|"invalid_input"|"not_member"} reason
    * @param {{ currentVersion: number }|null} [details] 利用者へ返してよい詳細。いまは consent_required の
    *   現行のガイドラインの版だけ（アプリが「同意が要る」と「アプリが古い」を見分けるため・release-gate 2.1）。
    *   配線が HttpsError の details に写す（tasks 4.1）。gRPC の code はここにも持たせない（上の ⚠️）。
@@ -86,17 +88,17 @@ function assertUid(uid) {
 }
 
 /**
- * 作成と参加の方針を確かめる（release-gate 2.1）。省略や形の誤りは、検査を黙って飛ばさないよう TypeError
+ * 作成・参加・投稿の方針を確かめる（release-gate 2.1・2.2）。省略や形の誤りは、検査を黙って飛ばさないよう TypeError
  * （配線では internal）にする。
- * - guidelineVersion: 現行のガイドラインの版（1以上の整数）。作成と参加の両方に要る
- * - containsNgWord: グループ名の NGワードの判定。作成にだけ要る。参加は NGワードを検査しないので求めない
+ * - guidelineVersion: 現行のガイドラインの版（1以上の整数）。同意を確かめる作成と参加に要る（投稿は同意を確かめない）
+ * - containsNgWord: NGワードの判定。グループ名を検査する作成と、キャプションを検査する投稿に要る。参加は求めない
  *   （求めると、語のリストが読めないときに参加まで止まる。design の API Contract で参加は語のリストに依存しない）
  * @param {unknown} policy
- * @param {{ needsNgWord: boolean }} options
+ * @param {{ needsVersion: boolean, needsNgWord: boolean }} options
  */
-function assertPolicy(policy, { needsNgWord }) {
+function assertPolicy(policy, { needsVersion, needsNgWord }) {
   if (!policy || typeof policy !== "object") throw new TypeError("soratomo: policy が無い");
-  if (!Number.isInteger(policy.guidelineVersion) || policy.guidelineVersion < 1) {
+  if (needsVersion && (!Number.isInteger(policy.guidelineVersion) || policy.guidelineVersion < 1)) {
     throw new TypeError("soratomo: policy.guidelineVersion が1以上の整数でない");
   }
   if (needsNgWord && typeof policy.containsNgWord !== "function") {
@@ -105,15 +107,23 @@ function assertPolicy(policy, { needsNgWord }) {
 }
 
 /**
+ * 利用停止を確かめる（release-gate 8.6）。作成・参加・投稿のトランザクションの中で、ほかの判定より先に呼ぶ。
+ * suspendedAt に null 以外の値があれば停止中（停止中だけ持つ項目。型は問わず、値があれば止める側に倒す）。
+ * @param {Object} user soratomoUsers/{uid} の中身（文書が無ければ {}）
+ */
+function assertNotSuspended(user) {
+  if (user.suspendedAt !== undefined && user.suspendedAt !== null) throw new SoratomoDomainError("suspended");
+}
+
+/**
  * 利用停止と同意を、この順で確かめる（release-gate 8.6・10.9・10.10）。作成と参加のトランザクションの中で呼ぶ。
- * - 利用停止: suspendedAt に null 以外の値があれば停止中（停止中だけ持つ項目。型は問わず、値があれば止める側に倒す）
  * - 同意: guidelineVersion が現行の版と等しいときだけ認める。古い版も、現行より新しい版も認めない
  * 利用停止を先に見るのは、停止中の人に同意の全文を出しても作成・参加はできないため（アプリは停止の案内を出す）。
  * @param {Object} user soratomoUsers/{uid} の中身（文書が無ければ {}）
  * @param {number} guidelineVersion 現行のガイドラインの版（方針から）
  */
 function assertNotSuspendedAndAgreed(user, guidelineVersion) {
-  if (user.suspendedAt !== undefined && user.suspendedAt !== null) throw new SoratomoDomainError("suspended");
+  assertNotSuspended(user);
   if (user.guidelineVersion !== guidelineVersion) {
     throw new SoratomoDomainError("consent_required", { currentVersion: guidelineVersion });
   }
@@ -164,7 +174,7 @@ async function pickUnusedInviteCode(tx, db, randomInt) {
  */
 async function createGroupTx(db, { uid, name, requestId, policy }, { randomInt } = {}) {
   assertUid(uid);
-  assertPolicy(policy, { needsNgWord: true });
+  assertPolicy(policy, { needsVersion: true, needsNgWord: true });
   const validated = core.validateGroupName(name);
   if (!validated.ok) throw new SoratomoDomainError("invalid_name");
   if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > REQUEST_ID_MAX) {
@@ -235,7 +245,7 @@ async function createGroupTx(db, { uid, name, requestId, policy }, { randomInt }
  */
 async function joinGroupTx(db, { uid, code, policy }) {
   assertUid(uid);
-  assertPolicy(policy, { needsNgWord: false });
+  assertPolicy(policy, { needsVersion: true, needsNgWord: false });
   const normalized = core.normalizeInviteCode(code);
   if (normalized === null) throw new SoratomoDomainError("invalid_format");
 
@@ -270,6 +280,58 @@ async function joinGroupTx(db, { uid, code, policy }) {
     tx.create(userRef.collection(USER_GROUPS).doc(groupId), { groupId, joinedAt: now });
 
     return { groupId, alreadyMember: false };
+  });
+}
+
+// MARK: - 投稿の作成
+
+/**
+ * そらとも投稿の文書を作る（release-gate 8.6・11.1・11.4・11.5）。投稿の作成はこの関数だけが行う
+ * （ルールの skies の create は閉じる・tasks 5）。どのクライアントの要求もここを通る。
+ * 判定の順: invalid_input（トランザクションの前）→ suspended → not_member → 既存の文書 → ng_word → 作成。
+ * - 同意は確かめない（投稿は拒否しない・決定事項14・要件10の補足）
+ * - 既存の文書が同じ投稿者なら created: false の成功で返す（同じ投稿IDの送り直しが1件で済む）。NGワードより先に
+ *   見るので、語のリストを変えた後の送り直しでも、作れた投稿を失敗にしない。違う投稿者なら想定外の失敗（internal）
+ * - メンバーの文書を読むので、退会の削除（メンバーの文書を消す手順）とは直列になる（design の「共通の削除の手順」）
+ * - 書く項目は旧ルール（isValidSoratomoSky）と同じ5つ。投稿者は認証の uid、作成日時はサーバーの時刻にする。
+ *   キャプションが無ければ項目ごと省く（null を書くと、アプリの decodeSky が壊れた文書として扱う）
+ * - NGワードで拒否した投稿は文書を作らないので、onSoratomoSkyCreated は発火せず、通知も送られない（要件11.4）
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ uid: string, input: unknown, policy: { containsNgWord: (text: string) => boolean } }} params
+ *   input は要求の本文（soratomoCore.validateSkyInput で確かめる）。policy は省略できない（assertPolicy）
+ * @returns {Promise<{ skyId: string, created: boolean }>}
+ */
+async function createSkyTx(db, { uid, input, policy }) {
+  assertUid(uid);
+  assertPolicy(policy, { needsVersion: false, needsNgWord: true });
+  const validated = core.validateSkyInput(input);
+  if (!validated.ok) throw new SoratomoDomainError("invalid_input");
+  const { groupId, skyId, caption, width, height } = validated.value;
+
+  return db.runTransaction(async (tx) => {
+    const groupRef = db.collection(GROUPS).doc(groupId);
+    const skyRef = groupRef.collection(SKIES).doc(skyId);
+    const [userSnap, memberSnap, skySnap] = await tx.getAll(
+      db.collection(USERS).doc(uid),
+      groupRef.collection(MEMBERS).doc(uid),
+      skyRef
+    );
+
+    assertNotSuspended(userSnap.exists ? userSnap.data() : {});
+    if (!memberSnap.exists) throw new SoratomoDomainError("not_member");
+    if (skySnap.exists) {
+      if (skySnap.get("authorId") === uid) return { skyId, created: false };
+      // 投稿IDはアプリが作る自動IDなので、別の人と重なるのは異常。上書きせずに止める（ID はログに出さない）
+      throw new Error("soratomo: 同じ投稿IDの文書が別の投稿者で既にある");
+    }
+    // 該当した語は、どこにも出さない（理由だけ・要件11.9）。キャプションが無ければ検査しない
+    if (caption !== null && policy.containsNgWord(caption)) throw new SoratomoDomainError("ng_word");
+
+    // ここから書き込み
+    const sky = { authorId: uid, width, height, createdAt: FieldValue.serverTimestamp() };
+    if (caption !== null) sky.caption = caption;
+    tx.create(skyRef, sky);
+    return { skyId, created: true };
   });
 }
 
@@ -343,6 +405,7 @@ module.exports = {
   SoratomoDomainError,
   createGroupTx,
   joinGroupTx,
+  createSkyTx,
   regenerateInviteCodeTx,
   claimNotifySlot,
 };

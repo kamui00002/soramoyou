@@ -667,6 +667,179 @@ test("merge: 所属数の項目が無い利用者（同意だけ）でも作成�
   }
 });
 
+// MARK: - 投稿の作成（createSkyTx・release-gate 2.2）
+
+/** 投稿の作成に渡す方針（NGワードの判定だけ。投稿は同意を確かめないので版は要らない）。 */
+const SKY_POLICY = Object.freeze({ containsNgWord: () => false });
+
+/** 投稿の作成の要求の本文（Callable soratomoCreateSky の data と同じ形）。 */
+function skyInput(overrides = {}) {
+  return { groupId: "g1", skyId: "sky1", caption: "夕焼けがきれい", width: 1080, height: 1440, ...overrides };
+}
+async function skyDoc(groupId, skyId) {
+  const snap = await db.collection(GROUPS).doc(groupId).collection("skies").doc(skyId).get();
+  return snap.exists ? snap.data() : null;
+}
+async function skyCount(groupId) {
+  return (await db.collection(GROUPS).doc(groupId).collection("skies").get()).size;
+}
+
+test("投稿: メンバーなら、旧ルールと同じ5項目で作り、作成日時はサーバーの時刻にする（同意は確かめない）", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob"] });
+  // bob は soratomoUsers の文書が無い（同意も無い）。投稿は拒否しない（決定事項14）
+  const beforeMs = Date.now();
+  // 要求に余分な項目（画像の URL・投稿者・作成日時）があっても、書く値に持ち込まない
+  const result = await store.createSkyTx(db, {
+    uid: "bob",
+    input: skyInput({ imageUrl: "https://example.invalid/x.jpg", authorId: "mallory", createdAt: Timestamp.fromMillis(0) }),
+    policy: SKY_POLICY,
+  });
+  assert.deepEqual(result, { skyId: "sky1", created: true });
+
+  const sky = await skyDoc("g1", "sky1");
+  assert.deepEqual(Object.keys(sky).sort(), ["authorId", "caption", "createdAt", "height", "width"]);
+  assert.equal(sky.authorId, "bob", "投稿者は認証の uid（要求の値は使わない）");
+  assert.equal(sky.caption, "夕焼けがきれい");
+  assert.equal(sky.width, 1080);
+  assert.equal(sky.height, 1440);
+  assert.ok(sky.createdAt instanceof Timestamp);
+  assert.ok(Math.abs(sky.createdAt.toMillis() - beforeMs) < 60_000, "作成日時はサーバーの時刻（要求の 0 ではない）");
+  assert.equal((await db.collection(USERS).doc("bob").get()).exists, false, "利用者の文書を作らない");
+});
+
+test("投稿: キャプションが無ければ項目ごと省き（null を書かない）、null は invalid_input", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  const input = skyInput();
+  delete input.caption;
+  await store.createSkyTx(db, { uid: "alice", input, policy: SKY_POLICY });
+  const sky = await skyDoc("g1", "sky1");
+  // アプリの decodeSky は、キャプションの項目があって文字列でなければ壊れた文書として扱う
+  assert.equal(Object.prototype.hasOwnProperty.call(sky, "caption"), false);
+  assert.deepEqual(Object.keys(sky).sort(), ["authorId", "createdAt", "height", "width"]);
+
+  await assert.rejects(
+    store.createSkyTx(db, { uid: "alice", input: skyInput({ skyId: "sky2", caption: null }), policy: SKY_POLICY }),
+    domainError("invalid_input", null)
+  );
+  assert.equal(await skyCount("g1"), 1);
+});
+
+test("投稿: 入力の誤りは invalid_input で、何も書かない（検査は soratomoCore.validateSkyInput）", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  const bad = [
+    null,
+    "sky",
+    skyInput({ groupId: "g_1" }),
+    skyInput({ skyId: "a/b" }),
+    skyInput({ width: 0 }),
+    skyInput({ height: 2049 }),
+    skyInput({ width: 1.5 }),
+    skyInput({ height: "1440" }),
+    skyInput({ caption: "" }),
+    skyInput({ caption: "あ".repeat(101) }),
+    skyInput({ caption: "一行目\n二行目" }),
+  ];
+  for (const [i, input] of bad.entries()) {
+    await assert.rejects(store.createSkyTx(db, { uid: "alice", input, policy: SKY_POLICY }), domainError("invalid_input", null), `入力 ${i}`);
+  }
+  assert.equal(await skyCount("g1"), 0);
+});
+
+test("投稿: 非メンバーは not_member、利用停止中は suspended（停止がメンバーより先）で、何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob"] });
+  const suspendedAt = Timestamp.now();
+  await db.collection(USERS).doc("bob").set({ suspendedAt, groupCount: 1 });
+  await db.collection(USERS).doc("dave").set({ suspendedAt });
+
+  await assert.rejects(store.createSkyTx(db, { uid: "carol", input: skyInput(), policy: SKY_POLICY }), domainError("not_member", null));
+  await assert.rejects(store.createSkyTx(db, { uid: "bob", input: skyInput(), policy: SKY_POLICY }), domainError("suspended", null));
+  // 停止中で非メンバー: 停止を先に見る
+  await assert.rejects(store.createSkyTx(db, { uid: "dave", input: skyInput(), policy: SKY_POLICY }), domainError("suspended", null));
+  // 無いグループへの投稿も、メンバーの文書が無いので not_member
+  await assert.rejects(
+    store.createSkyTx(db, { uid: "alice", input: skyInput({ groupId: "nope" }), policy: SKY_POLICY }),
+    domainError("not_member", null)
+  );
+  assert.equal(await skyCount("g1"), 0);
+  assert.equal(await skyCount("nope"), 0);
+  assert.equal((await db.collection(USERS).doc("bob").get()).get("suspendedAt").toMillis(), suspendedAt.toMillis());
+});
+
+test("投稿: キャプションに語を含めば ng_word で、文書を作らない（作成のトリガーが発火せず通知も送られない）", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  for (const [i, caption] of ["テストゴイな空", "ﾃｽﾄｺﾞｲ", "きょうはてすとごい"].entries()) {
+    await assert.rejects(
+      store.createSkyTx(db, { uid: "alice", input: skyInput({ skyId: `ng${i}`, caption }), policy: NG_POLICY }),
+      domainError("ng_word", null),
+      `キャプション ${i}`
+    );
+  }
+  assert.equal(await skyCount("g1"), 0);
+
+  // 無関係のキャプションと、キャプション無しは同じ方針で通る
+  await store.createSkyTx(db, { uid: "alice", input: skyInput({ skyId: "ok1", caption: "青い空" }), policy: NG_POLICY });
+  const noCaption = skyInput({ skyId: "ok2" });
+  delete noCaption.caption;
+  await store.createSkyTx(db, { uid: "alice", input: noCaption, policy: NG_POLICY });
+  assert.equal(await skyCount("g1"), 2);
+});
+
+test("投稿: 同じ投稿IDの送り直しは created: false の成功で、文書は1件のまま（NGワードより先に見る）", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  const first = await store.createSkyTx(db, { uid: "alice", input: skyInput(), policy: SKY_POLICY });
+  assert.deepEqual(first, { skyId: "sky1", created: true });
+  const createdAt = (await skyDoc("g1", "sky1")).createdAt.toMillis();
+
+  assert.deepEqual(await store.createSkyTx(db, { uid: "alice", input: skyInput(), policy: SKY_POLICY }), { skyId: "sky1", created: false });
+  // 語のリストを変えた後の送り直しでも、作れた投稿を失敗にしない
+  const always = { containsNgWord: () => true };
+  assert.deepEqual(await store.createSkyTx(db, { uid: "alice", input: skyInput(), policy: always }), { skyId: "sky1", created: false });
+
+  assert.equal(await skyCount("g1"), 1);
+  assert.equal((await skyDoc("g1", "sky1")).createdAt.toMillis(), createdAt, "書き直さない");
+});
+
+test("投稿: 同じ投稿IDを同時に2回送っても、文書は1件で、作ったのは1回だけ", async (t) => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  const results = await Promise.allSettled([
+    store.createSkyTx(db, { uid: "alice", input: skyInput(), policy: SKY_POLICY }),
+    store.createSkyTx(db, { uid: "alice", input: skyInput(), policy: SKY_POLICY }),
+  ]);
+  const r = tally(results);
+  t.diagnostic(`成功=${r.ok} 競合=${r.contention}`);
+  assert.deepEqual(r.other, []);
+  const created = results.filter((x) => x.status === "fulfilled" && x.value.created === true).length;
+  assert.equal(created, 1, "created: true は1回だけ");
+  assert.equal(await skyCount("g1"), 1);
+});
+
+test("投稿: 判定の順 — メンバーでなくなった人の送り直しは、既存の文書より先に not_member", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob"] });
+  await store.createSkyTx(db, { uid: "bob", input: skyInput(), policy: SKY_POLICY });
+  await db.collection(GROUPS).doc("g1").collection("members").doc("bob").delete();
+  await assert.rejects(store.createSkyTx(db, { uid: "bob", input: skyInput(), policy: SKY_POLICY }), domainError("not_member", null));
+});
+
+test("投稿: 同じ投稿IDの文書が別の投稿者のものなら、ドメインのエラーではない失敗（internal）で、書き換えない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob"] });
+  await store.createSkyTx(db, { uid: "alice", input: skyInput(), policy: SKY_POLICY });
+  await assert.rejects(store.createSkyTx(db, { uid: "bob", input: skyInput({ caption: "上書き" }), policy: SKY_POLICY }), (err) => {
+    assert.ok(!(err instanceof store.SoratomoDomainError), "想定外の失敗（internal）として扱う");
+    return true;
+  });
+  const sky = await skyDoc("g1", "sky1");
+  assert.equal(sky.authorId, "alice");
+  assert.equal(sky.caption, "夕焼けがきれい");
+});
+
+test("投稿: 方針の省略・判定が関数でないのは TypeError で、何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  for (const [i, policy] of [undefined, null, {}, { guidelineVersion: core.GUIDELINE_VERSION }, { containsNgWord: "てすとごい" }].entries()) {
+    await assert.rejects(store.createSkyTx(db, { uid: "alice", input: skyInput(), policy }), TypeError, `方針 ${i}`);
+  }
+  assert.equal(await skyCount("g1"), 0);
+});
+
 // MARK: - 再発行（regenerateInviteCodeTx）
 
 test("再発行: オーナーなら新しいコードに替わり、古いコードでの参加は not_found、新しいコードでは参加できる", async () => {
