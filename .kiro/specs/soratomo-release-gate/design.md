@@ -656,7 +656,7 @@ function createNgWordProvider({ db, ttlMs, nowMs }) {}
 
 ### 運用: 管理スクリプト
 
-既存の`scripts/set-soratomo-beta-claim.js`と同じ作り（ADC・接続先を`soramoyou-ios`に固定・`NODE_PATH=functions/node_modules`・`main`の外は純関数でテスト）。削除は`functions/soratomoDeletion.js`を読み込み、同じ実装を使う。出力は内部IDと件数だけ。
+既存の`scripts/set-soratomo-beta-claim.js`と同じ作り（ADC・接続先を`soramoyou-ios`に固定・`main`の外は純関数でテスト）。firebase-adminは`functions/`を起点に解決する（`createRequire`。共通の削除のモジュールと同じ実体にそろえ、`NODE_PATH`に頼らない）。削除は`functions/soratomoDeletion.js`を読み込み、同じ実装を使う。出力は内部IDと件数だけ。名前が`_EMULATOR_HOST`で終わる環境変数が1つでもあれば、`main`は何もせずに止める（Authだけエミュレーター・Firestoreは本番という混在で、`delete-user`の「アカウントが無い」の判定が本番の削除に直結するため。語の投入は書く直前で止め、`--dry-run`は止めない）。
 
 | コマンド | 要件 | 動き |
 |----------|------|------|
@@ -668,7 +668,7 @@ function createNgWordProvider({ db, ttlMs, nowMs }) {}
 | `soratomo-admin.js suspend <uid>` | 8.2, 8.5 | `suspendedAt`を書き、`trigger: "suspension"`で消す |
 | `soratomo-admin.js unsuspend <uid>` | 8.8 | `suspendedAt`を消す |
 | `soratomo-admin.js list-unforwarded` | 7.5 | `forwardStatus == "pending"`の記録のIDと失敗の回数を並べる |
-| `soratomo-ngwords.js <file>` | 11.10, 11.11 | リポジトリの中のパスなら拒否する（実体のパスで比べる）。1行1語で読み、前後の空白・空行・`#`の行を除き、重複を除いて`soratomoConfig/ngWords`に書く。出力は語の数だけ |
+| `soratomo-ngwords.js <file> [--dry-run]` | 11.10, 11.11 | リポジトリの中か、祖先に`.git`のあるGitの作業ツリーの中のパスなら拒否する（シンボリックリンクをたどった実体のパスで比べる）。UTF-8として厳密に読み（正しくないバイト列は置き換えずに拒否）、1行1語で前後の空白・空行・`#`の行・重複を除く。語が0個・照合に使えない語（正規化すると空白だけの語、置換文字や制御文字を含む語）がある・5,000語を超えるときは書かない。`--dry-run`は数えるだけで書かない。書いたら読み返して一致を確かめる（前のリストは置き換える）。出力は件数だけ |
 
 - 8.1の24時間の確認は運用の手順。Discordで通報に気づいたら`show-report`で場所を出し、コンソールで中身を見て、`review-report`で結果を残す。
 
