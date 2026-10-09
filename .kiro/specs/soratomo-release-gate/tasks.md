@@ -470,13 +470,15 @@
   - 結果（2026-10-09 10時台・利用者のGOを取って実行）: Discordのサーバー「notify」に、プライベートのチャンネル `#そらとも-通報`（フィードバックとは別・見えるのは開発者だけ）とWebhook「そらとも通報」を作った（利用者のGOのもとでClaude in Chromeで操作。ログインは利用者）。URLは画面に出さずクリップボードへコピーし、値を出さずに形（`https://discord.com/api/webhooks/数字/文字列`）・長さ121・末尾の改行なしを確かめた
   - 入れ方は、利用者の選択で、対話の入力欄の代わりに `pbpaste | tr -d '\n' | firebase functions:secrets:set DISCORD_REPORT_WEBHOOK_URL --project soramoyou-ios --data-file=-`（値はパイプの中だけ・引数と出力に出ない）。`functions:secrets:get` で Version 1・ENABLED を確かめ（値は読まない）、クリップボードを空にした。届くかどうかの確かめは16.2（通報がこのチャンネルに届くこと）
 
-- [ ] 14.4 Functionsをデプロイする（ユーザーのGOを取ってから実行）
+- [x] 14.4 Functionsをデプロイする（ユーザーのGOを取ってから実行）
   - 前提: 14.1, 14.2, 14.3
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 14.1の、mainを取り込んだブランチからデプロイする。コマンドは `firebase deploy --only functions --project soramoyou-ios`。本番にあってソースに無い関数の削除を尋ねられたら、消さない
   - 出力で、既存の関数が削除やリージョンの変更の対象になっていないこと、新しいCallable 4本・トリガー1本・定期実行1本が作られたことを確かめる
   - Functionsだけを先に出すと、1.13のベータの人（クレームのある開発者とテスト用アカウント）の作成と参加が、同意の記録が無いため「うまくいきませんでした」になる（想定どおり。投稿と閲覧は続く）。一般の利用者には影響しない
   - _Requirements: 1.4, 4.1, 7.1, 10.10, 11.5_
+  - 結果（2026-10-09 09:46開始・利用者のGOを取って実行）: `3f5e82d`（origin/mainから遅れ0）から `firebase deploy --only functions --project soramoyou-ios --non-interactive`（削除が要る場合に質問せず止まるよう `--non-interactive` を付けた）→ exit 0・Deploy complete。ログで create 6本（soratomoCreateSky・soratomoReportSky・soratomoAgreeGuideline・soratomoDeleteMyData・onSoratomoReportCreated・soratomoHousekeeping）・update 15本・削除なし。secretの読み取り権限はデプロイがcomputeのサービスアカウントに付けた
+  - デプロイの前後で `functions:list` の名前・リージョン・ランタイムを比べ、追加6行・削除0行・合計21本・すべて asia-northeast1 / nodejs22 を確かめた。事前に、本番の15本がすべてソースにあること・新しい6本のregionと通報の2本のsecretsの宣言・`npm run lint` を確かめた
 
 - [ ] 14.5 Callableと定期実行を確かめる（要確認4・7。ユーザーのGOを取ってから実行）
   - 前提: 14.4
