@@ -507,7 +507,7 @@
   - `0dce8c7`（origin/mainから遅れ0）から `nohup nice -n 19 ~/.claude/scripts/xcode-testflight-upload.sh Soramoyou/Soramoyou.xcodeproj Soramoyou --no-bump` → ARCHIVE・EXPORT・UPLOAD SUCCEEDED（10:07〜10:12・Delivery UUID `71234eec…`・ExportOptions.plistはworktreeに写し済みのもの）。IPAのInfo.plistは1.14.0 / 111で、作業ツリーに未コミットの変更なし
   - App Store Connectで build 111（版1.14.0）が VALID（10:16）・内部テストの状態 IN_BETA_TESTING・自動通知 ON。ベータのグループは内部テストの1つ（全buildを受け取る設定・テスター1人）。暗号化の申告は pbxproj の `ITSAppUsesNonExemptEncryption = NO`
 
-- [ ] 16. 実機で確かめる（2台・クレームのある2アカウント。利用者の操作が要る）
+- [x] 16. 実機で確かめる（2台・クレームのある2アカウント。利用者の操作が要る）
 
 - [x] 16.1 退会を確かめる（利用者の操作が要る）
   - 前提: 15
@@ -598,7 +598,7 @@
       - 確かめた範囲: 全角と半角（ＺＱ と zq）・大文字と小文字・カタカナとひらがな。半角カナは実機で試していない（`functions/soratomoCore.js` の照合では当たる）
       - 外した後: 235語・ハッシュ頭 `ec36758d7ffb`（足す前と一致・21:00:39）
 
-- [ ] 16.4 古い版・定期実行・退会直後のトークンを確かめる（要確認8。利用者の操作が要る）
+- [x] 16.4 古い版・定期実行・退会直後のトークンを確かめる（要確認8。利用者の操作が要る）
   - 前提: 14.5
   - 利用者の操作が要る。`find-orphans` など本番への実行は、GOを取ってから行う
   - 1.13の端末での操作（作成・参加・投稿・退会）は、ルールのデプロイ（17）より前に済ませる。デプロイの後は1.13の投稿が失敗するため、「1.13の投稿が通る」ことを見られなくなる。定期実行を待つ確認（6時間以内）は、17の後に回してよい
@@ -624,6 +624,11 @@
     - 退会の後の本番（06:56）: S4 の Auth と `users` は無く、`soratomoUsers` と所属の写し2件、「空」の S4 の投稿と画像、「S4しけん」のグループ・メンバー・招待コードの対応表は残った（予想どおり）。`find-orphans --deep`（07:01）: 調べた uid 2人・アカウントの無い uid 1人＝S4・データの残るグループ「空」「S4しけん」
     - 要確認8（1回目）: iPad（1.14・S4 のログインのまま）で、退会から9分後の 06:58:42 に「空」への投稿が `soratomoCreateSky: ok`（uid S4）で通り、Storage の S4 の画像も 2→4個になった（消えたアカウントの ID トークンで Callable と Storage のルールが通る）。参加は、1.14 が参加の前に表示名を `users/S4` に保存しようとして、1.13 の退会がその文書を消していたため画面の中で止まり（「利用者の文書がありません」の分岐）、関数は呼ばれていない。iPad の ID トークンは 06:24:07〜06:32:39 の間に出たもので、07:24〜07:33 に切れる見込み
     - 取り違え（記録だけ）: 06:55 の「空」への投稿は iPhone の S3 のもので（ログの uid が S3・S4 の画像は増えていない）、利用者に確かめて iPad でやり直した
+  - 結果・要確認8 の2回目と定期実行（2026-10-10 07:39〜08:54・本番への実行と読み取りは利用者のGOを取って実行）
+    - 要確認8（2回目）: ID トークンの期限（07:24〜07:33）の後の 07:39 ごろ、iPad はログアウトされていて、`soratomo4@gmail.com` でのログインも失敗した（利用者の目視）。06:59 より後の S4 の `soratomoCreateSky`・`soratomoJoinGroup` のログは無く（07:11 の S3 だけ）、Storage の S4 の画像は4個のまま。消えたアカウントで Callable と Storage のルールが通るのは、端末に残った ID トークンの期限まで（この回は退会から9分後に通り、期限の後はアプリがログアウトした）。要件どおり、その間に作られたもの（06:58 の投稿と画像2個）も定期実行が拾った（下）。設計は変えない
+    - 定期実行: 次の予定（10:00）を待たず、Cloud Scheduler の `firebase-schedule-soratomoHousekeeping-asia-northeast1` を REST の `:run` で手動で1回起こした（08:52:41・ジョブは `every 6 hours`・ENABLED）。ログは 08:52:46 に `soratomoDeletion: summary`（trigger account_deleted・uid S4・skiesDeleted 2・imagesDeleted 4・groupsLeft 2・groupsDeleted 1・ownersTransferred 0・done true）と `soratomoHousekeeping: sweep`（scanned 2・missingAuth 1・completed 1・unfinished 0）。件数は退会の後に数えた残り（「空」の S4 の投稿2件・画像4個、「S4しけん」）と一致
+    - 定期実行の後（08:53）: `find-orphans --deep` は調べた uid 1人（S3）・アカウントの無い uid 0人。「空」はオーナー S3・1人・members S3・skies は S3 の3件だけ・Storage の S4 の画像0個。「S4しけん」はグループの文書と招待コードの対応表が 404・skies/members/notifyState・Storage が0。S4 の `soratomoUsers` と所属の写しも無い
+    - 片づけ: `~/dev/soratomo-gate-tools/state.json` に保存した招待コードは消した。会話には「空」と「解除テスト」の招待コードが残っている（テスト用のグループ。必要なら S3 が再発行する）
 
 - [x] 17. ルールを本番へ出す（ユーザーのGOを取ってから実行）
   - 前提: 15, 16.1, 16.2, 16.3, 16.4の1.13での操作（定期実行を待つ確認は含めない）
