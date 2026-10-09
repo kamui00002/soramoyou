@@ -441,7 +441,7 @@
 
 ## (h) 本番への反映（Functionsまで）
 
-- [ ] 14. 本番へ反映する（Functionsまで。すべてユーザーのGOを取ってから）
+- [x] 14. 本番へ反映する（Functionsまで。すべてユーザーのGOを取ってから）
 
 - [x] 14.1 出す前の確認と、アカウントの無いデータの件数の確認（ユーザーのGOを取ってから実行）
   - 前提: 7, 11.2
@@ -480,13 +480,18 @@
   - 結果（2026-10-09 09:46開始・利用者のGOを取って実行）: `3f5e82d`（origin/mainから遅れ0）から `firebase deploy --only functions --project soramoyou-ios --non-interactive`（削除が要る場合に質問せず止まるよう `--non-interactive` を付けた）→ exit 0・Deploy complete。ログで create 6本（soratomoCreateSky・soratomoReportSky・soratomoAgreeGuideline・soratomoDeleteMyData・onSoratomoReportCreated・soratomoHousekeeping）・update 15本・削除なし。secretの読み取り権限はデプロイがcomputeのサービスアカウントに付けた
   - デプロイの前後で `functions:list` の名前・リージョン・ランタイムを比べ、追加6行・削除0行・合計21本・すべて asia-northeast1 / nodejs22 を確かめた。事前に、本番の15本がすべてソースにあること・新しい6本のregionと通報の2本のsecretsの宣言・`npm run lint` を確かめた
 
-- [ ] 14.5 Callableと定期実行を確かめる（要確認4・7。ユーザーのGOを取ってから実行）
+- [x] 14.5 Callableと定期実行を確かめる（要確認4・7。ユーザーのGOを取ってから実行）
   - 前提: 14.4
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 要確認4: 新しいCallable（退会・投稿・通報・同意）を、未ログインと匿名で呼ぶ。公開呼び出しが許可されていて、関数まで届き、期待した理由（未ログインなど）で返ること。失敗したら、呼び出し元の設定を見直す（変える前に利用者に相談する）
   - 要確認7: 最初の定期実行のログで、一覧の取得の時間と費用、要約（走査数・アカウントの無い数・完了数・未完了数）を確かめる。次の実行を待つか、Cloud Schedulerから手動で1回実行する。長ければ走査を分ける
   - 14.1で数えた残りが、初回の実行の後に0になっていること（`find-orphans`）
   - _Requirements: 1.4, 4.1, 14.4_
+  - 結果 要確認4（2026-10-09 10:00・利用者のGOを取って実行）: 4本（soratomoDeleteMyData・soratomoCreateSky・soratomoReportSky・soratomoAgreeGuideline）に、認証の無い `POST https://asia-northeast1-soramoyou-ios.cloudfunctions.net/<名前>`（本文 `{"data":{}}`）を1回ずつ送り、4本とも HTTP 401・`{"error":{"message":"ログインが必要です","status":"UNAUTHENTICATED"}}`。この文言は関数のコード（`requireSoratomoUser`）だけが返すもので、公開呼び出しの許可が無ければ Cloud Run が 403 で止める。関数のログにも4本とも `<名前>: rejected`・reason unauthenticated・uid null が出た（Cloud Run の要求のログは401）。本番のデータには何も書いていない
+  - 匿名は本番で再現できない（利用者の判断で、そう記録する）: 本番の Identity Toolkit の設定では匿名ログインが無効で（`signIn` に `anonymous` が無い・有効なのはメールとパスワードだけ）、本番に匿名の人は作れない。確かめるために匿名を有効にするのは本番の設定の変更なので行わない。ログインしていてクレームの無い人が flag_off で断られることは単体テスト（`soratomo.test.js`）で確かめ済みで、実機では16章で確かめる
+  - 結果 要確認7（2026-10-09 10:00・利用者のGOを取って実行）: 初回の予定は 06:48Z（15:48 JST・デプロイから6時間後）だったので、Cloud Scheduler の `firebase-schedule-soratomoHousekeeping-asia-northeast1` を REST の `:run` で手動で1回起こした（次の予定は 06:48Z のまま）。ログは `soratomoHousekeeping: sweep` が scanned 2・missingAuth 0・completed 0・unfinished 0、`soratomoHousekeeping: reforward` が attempted 0・sent 0。`sweep_failed`・`reforward_failed`・`lookup_failed` は無し。Cloud Run の要求は HTTP 200・1.34秒。`soratomoUsers` が2件なので、一覧の取得（`listDocuments()`）の時間と費用が問題になるかの判断材料にはならない。走査を分けるかは、利用者が増えてから同じログで見直す
+  - 実行の後に本番で `find-orphans --deep` → 調べたuid 2人・アカウントの無いuid 0人（14.1と同じ）
+  - 下調べの途中で、Identity Toolkit の設定の `signIn` を丸ごと出力し、パスワードのハッシュの鍵（`hashConfig.signerKey`）が会話の記録に載った（ファイルとコミットには無い）。利用者に報告し、`~/.claude/hooks/secret-leak-log/` に値を書かずに記録した。この鍵はプロジェクトに固定で入れ替えられない（要確認）。本番の設定を読むときは項目の名前で絞る
 
 ## (i) TestFlight・実機の確認・ルールのデプロイ・審査提出・公開判断の記録
 
