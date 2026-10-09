@@ -453,12 +453,13 @@
   - 要確認9（利用者のGOを取って実行）: 本番で `find-orphans --deep` → 調べたuid 2人・アカウントの無いuid 0人。`delete-user` は不要。本番で取り残しをわざと作る陽性対照は取れない（本番のデータを壊すため）ので、見つける側の確かめはエミュレーターのテスト（`scripts/soratomo-admin.emulator.test.js`）に任せる
   - このMacにADCが無かったので、利用者のGOを取って `brew install --cask google-cloud-sdk`（gcloud-cli 588.0.0）→ 利用者が `gcloud auth application-default login` → 1回目は `auth/internal-error` で失敗 → `gcloud auth application-default set-quota-project soramoyou-ios` の後に成功。14.2の語の投入も同じADCを使う
 
-- [ ] 14.2 語のリストを本番へ投入する（ユーザーのGOを取ってから実行）
+- [x] 14.2 語のリストを本番へ投入する（ユーザーのGOを取ってから実行）
   - 前提: 12.2
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 12.2で決めた語のリストのファイル（リポジトリの外）を、投入スクリプトで本番の語のリストの文書に書く。出力が語の数だけであることを確かめる
   - Functionsより先に入れる。無いと、作成と投稿が失敗する（検査を飛ばさない設計）
   - _Requirements: 11.1, 11.10, 11.11_
+  - 結果（2026-10-09 09:28・利用者のGOを取って実行）: `--dry-run` で 語235・照合に使える語235（ファイルは12.2と同じ）→ 本番へ書いて「書いた語: 235（読み返して一致）」。スクリプトの読み返しとは別に、FirestoreのRESTで `soratomoConfig/ngWords` を読み、`words` の長さ235・`updatedAt` 2026-10-09T00:28:44.960Z を確かめた（語の中身は出していない）
 
 - [ ] 14.3 通報の送り先の秘密の値を設定する（ユーザーのGOを取ってから実行）
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
