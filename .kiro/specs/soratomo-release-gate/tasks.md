@@ -443,12 +443,15 @@
 
 - [ ] 14. 本番へ反映する（Functionsまで。すべてユーザーのGOを取ってから）
 
-- [ ] 14.1 出す前の確認と、アカウントの無いデータの件数の確認（ユーザーのGOを取ってから実行）
+- [x] 14.1 出す前の確認と、アカウントの無いデータの件数の確認（ユーザーのGOを取ってから実行）
   - 前提: 7, 11.2
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - ブランチにmainを取り込み、`npm test`・`npm run test:emulator`・ルールのテストをもう一度通す。Functionsのデプロイは、このmainを取り込んだブランチから行う
   - 要確認9: `find-orphans` を本番に対して実行し（本番の読み取りなので、GOを取ってから）、公開済みの1.13から退会した人の残りの件数を数えて記録する。多ければ、初回の定期実行の前に `delete-user` で分けて消す（これもGOを取ってから）。出力は内部IDと件数だけ
   - _Requirements: 4.1, 4.3_
+  - 結果（2026-10-09 09:30）: mainの取り込みは不要だった（`git fetch` 後に origin/main から66コミット先行・遅れ0）。`npm test` 288/288、`npm run test:emulator` 175/175（8080が別セッションで使用中のため、ポート8180/9160/9299/4420/4520の設定ファイルを `--config` で渡した）、`rules_test_soratomo.py` 96/96・`--mutants` 20個すべて有効、`rules_test_post_update.py` 13/13、`rules_test_storage_soratomo.py` 24/24
+  - 要確認9（利用者のGOを取って実行）: 本番で `find-orphans --deep` → 調べたuid 2人・アカウントの無いuid 0人。`delete-user` は不要。本番で取り残しをわざと作る陽性対照は取れない（本番のデータを壊すため）ので、見つける側の確かめはエミュレーターのテスト（`scripts/soratomo-admin.emulator.test.js`）に任せる
+  - このMacにADCが無かったので、利用者のGOを取って `brew install --cask google-cloud-sdk`（gcloud-cli 588.0.0）→ 利用者が `gcloud auth application-default login` → 1回目は `auth/internal-error` で失敗 → `gcloud auth application-default set-quota-project soramoyou-ios` の後に成功。14.2の語の投入も同じADCを使う
 
 - [ ] 14.2 語のリストを本番へ投入する（ユーザーのGOを取ってから実行）
   - 前提: 12.2
