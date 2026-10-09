@@ -495,7 +495,7 @@
 
 ## (i) TestFlight・実機の確認・ルールのデプロイ・審査提出・公開判断の記録
 
-- [ ] 15. 1.14をTestFlightでベータの人へ配る（ユーザーのGOを取ってから実行）
+- [x] 15. 1.14をTestFlightでベータの人へ配る（ユーザーのGOを取ってから実行）
   - 前提: 12.1, 14.5
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 提出の決まりは `docs/pre-release-checklist.md` の§4と `docs/appstore-release-automation.md` に従う。build番号は、App Store Connectで実測した最大値より大きくする。版とbuildの値はpbxprojに実値をコミットする（コマンドの上書きで上げない）。archiveは `ENABLE_USER_SCRIPT_SANDBOXING=YES` のまま通す。版数は公開済みの1.13.0より上げる
@@ -503,6 +503,9 @@
   - 提出に要るgit管理外のファイル（ExportOptions.plistなど）がworktreeに無ければ、本体のcheckoutから写す
   - 成否は、アップロードのログでなく、App Store Connectにbuildが載ったことで判定する。ベータの人（開発者とクレームのあるテスト用アカウント）へ配る
   - _Requirements: 3.1, 5.1, 10.1, 15.1_
+  - 結果（2026-10-09 10:16・利用者のGOを取って実行）: PR #163は入れない（利用者の判断。ゲートを外す変更と一緒に審査用のbuildで合わせる）。App Store Connectの実測（最大build 110・最新トレイン1.13.0）から、pbxprojを1.14.0 / build 111に書いて `0dce8c7` でコミット（アプリとウィジェットの4か所ずつ・テスト用ターゲットは1.0 / 1のまま・版数の直書きはコメントだけ）。`ENABLE_USER_SCRIPT_SANDBOXING = YES` のまま
+  - `0dce8c7`（origin/mainから遅れ0）から `nohup nice -n 19 ~/.claude/scripts/xcode-testflight-upload.sh Soramoyou/Soramoyou.xcodeproj Soramoyou --no-bump` → ARCHIVE・EXPORT・UPLOAD SUCCEEDED（10:07〜10:12・Delivery UUID `71234eec…`・ExportOptions.plistはworktreeに写し済みのもの）。IPAのInfo.plistは1.14.0 / 111で、作業ツリーに未コミットの変更なし
+  - App Store Connectで build 111（版1.14.0）が VALID（10:16）・内部テストの状態 IN_BETA_TESTING・自動通知 ON。ベータのグループは内部テストの1つ（全buildを受け取る設定・テスター1人）。暗号化の申告は pbxproj の `ITSAppUsesNonExemptEncryption = NO`
 
 - [ ] 16. 実機で確かめる（2台・クレームのある2アカウント。利用者の操作が要る）
 
