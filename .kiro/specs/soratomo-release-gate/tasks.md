@@ -606,6 +606,13 @@
   - 1.13のままの端末の作成と参加は「うまくいきませんでした」になり、投稿と閲覧は続く（14.4の想定どおり）
   - 要確認8: 退会の直後に、別の端末から同じアカウントで参加と投稿を試し、アカウントを消した後のIDトークンでCallableとルールが通る時間（推測で最長1時間）を記録する。どちらでも定期実行が拾うので、設計は変えない
   - _Requirements: 4.1, 4.3_
+  - 途中経過・下ごしらえ（2026-10-10 06:10〜06:25・利用者はリモートで iPhone と iPad だけ。本番への実行と読み取りは利用者のGOを取って実行）
+    - 端末の役: iPad = S4 の 1.14（TestFlight 1.14.0 / 111）・iPhone = S3 の 1.14・シミュレーター BF678DA1 = 1.13。1.13 は App Store 版が入らないため、1.13.0 のコミット `f2f191b` からのビルド（`~/dev/soramoyou-113-dd`）を使う
+    - 1.13 の入れ替え: BF678DA1 には版数の表示だけ 1.13.0 の開発版（新しい Callable の名前が1個ずつ）が入っていたので、`simctl install` で 1.13 のビルドに入れ替えた。入ったアプリの `Soramoyou.debug.dylib` がビルドとハッシュで一致し、`soratomoAgreeGuideline`・`soratomoCreateSky`・`soratomoDeleteMyData`・`soratomoReportSky` が0個（陽性対照: 昔からある `soratomoCreateGroup`・`soratomoJoinGroup` は1個ずつ）
+    - 1.14 の build 111（`0dce8c7`）からこのブランチの先頭までで変わったのは `.md` だけで、実機の 1.14 は手元のソースと同じコード
+    - 退会の後の予想（手元のソースで確認）: 1.13 の退会（`deleteUserData` の後に `user.delete()`）が消すのは publicProfiles・follows・likes・comments・users だけで、`soratomoUsers` には触らない。定期実行（`sweepUsersWithoutAccount`）と `find-orphans` は `soratomoUsers` を `listDocuments()` で集める（文書の無い親も含む）ので、1.13 で退会したアカウントは定期実行に見つかるはず
+    - S4（テスト用・新規）: iPad の 1.14 で `soratomo4@gmail.com`（利用者の選択。アプリは登録で確認メールを送らない）を新規登録 → 本番の Auth で uid `1xPRKe…`・作成 06:19:20・クレームなし → `set-soratomo-beta-claim.js` で付与前（なし）→付与後 soratomoBeta・読み返して一致（06:23:02）→ iPad でログアウトして S4 でログインし直すと、ホームにそらともの入口が出た（押していない＝同意の記録が無いまま。1.13 の作成と参加の失敗を見るため）。Auth の最後のログイン 06:24:07（付与の後）
+    - 残り: 1.13 での作成・参加（失敗の確認）→ 1.14 で同意 → 1.13 での作成・参加・投稿・退会 → 要確認8 → 17 → 定期実行の後の `find-orphans`。1.13 の操作は Mac の前で行う
 
 - [ ] 17. ルールを本番へ出す（ユーザーのGOを取ってから実行）
   - 前提: 15, 16.1, 16.2, 16.3, 16.4の1.13での操作（定期実行を待つ確認は含めない）
