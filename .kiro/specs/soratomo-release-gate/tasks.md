@@ -461,12 +461,14 @@
   - _Requirements: 11.1, 11.10, 11.11_
   - 結果（2026-10-09 09:28・利用者のGOを取って実行）: `--dry-run` で 語235・照合に使える語235（ファイルは12.2と同じ）→ 本番へ書いて「書いた語: 235（読み返して一致）」。スクリプトの読み返しとは別に、FirestoreのRESTで `soratomoConfig/ngWords` を読み、`words` の長さ235・`updatedAt` 2026-10-09T00:28:44.960Z を確かめた（語の中身は出していない）
 
-- [ ] 14.3 通報の送り先の秘密の値を設定する（ユーザーのGOを取ってから実行）
+- [x] 14.3 通報の送り先の秘密の値を設定する（ユーザーのGOを取ってから実行）
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 利用者がDiscordに通報専用のチャンネル（フィードバックとは別）を作り、WebhookのURLを発行する（利用者の操作）
   - `firebase functions:secrets:set DISCORD_REPORT_WEBHOOK_URL --project soramoyou-ios` だけを実行し、値は対話の入力欄に入れる。値をコマンドの引数・出力・ログ・チャットに出さない。貼り付けで値の末尾に改行が入らないよう注意する
   - 設定されたことは、名前と版の存在だけで確かめる（値は読まない）
   - _Requirements: 7.1, 7.6_
+  - 結果（2026-10-09 10時台・利用者のGOを取って実行）: Discordのサーバー「notify」に、プライベートのチャンネル `#そらとも-通報`（フィードバックとは別・見えるのは開発者だけ）とWebhook「そらとも通報」を作った（利用者のGOのもとでClaude in Chromeで操作。ログインは利用者）。URLは画面に出さずクリップボードへコピーし、値を出さずに形（`https://discord.com/api/webhooks/数字/文字列`）・長さ121・末尾の改行なしを確かめた
+  - 入れ方は、利用者の選択で、対話の入力欄の代わりに `pbpaste | tr -d '\n' | firebase functions:secrets:set DISCORD_REPORT_WEBHOOK_URL --project soramoyou-ios --data-file=-`（値はパイプの中だけ・引数と出力に出ない）。`functions:secrets:get` で Version 1・ENABLED を確かめ（値は読まない）、クリップボードを空にした。届くかどうかの確かめは16.2（通報がこのチャンネルに届くこと）
 
 - [ ] 14.4 Functionsをデプロイする（ユーザーのGOを取ってから実行）
   - 前提: 14.1, 14.2, 14.3
