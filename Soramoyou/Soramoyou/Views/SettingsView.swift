@@ -124,7 +124,7 @@ struct SettingsView: View {
                     }
                 }
             } message: {
-                Text("アカウントを削除すると、すべての投稿・下書き・プロフィール情報が完全に削除されます。この操作は取り消せません。")
+                Text(deleteAccountConfirmationMessage)
             }
             // 再認証が必要な場合のアラート
             .alert("パスワードを入力", isPresented: $viewModel.showingReauthentication) {
@@ -220,6 +220,16 @@ struct SettingsView: View {
     }
 
     // MARK: - Account Deletion
+
+    /// アカウント削除の確認の文言
+    ///
+    /// ⭐️ そらともの機能フラグが有効なときだけ、そらとものデータも消えることを 1 文足す（release-gate 9.4・要件 3.7）。
+    /// 無効のときは今までの文のまま。文案は下書き（tasks 12.1 で利用者が確認する）
+    private var deleteAccountConfirmationMessage: String {
+        let base = "アカウントを削除すると、すべての投稿・下書き・プロフィール情報が完全に削除されます。この操作は取り消せません。"
+        guard soratomoGate.isEnabled else { return base }
+        return base + "そらともの投稿（写真を含む）とグループへの参加も削除されます。"
+    }
 
     /// アカウント削除を実行（ViewModelに委譲）
     private func performAccountDeletion() async {

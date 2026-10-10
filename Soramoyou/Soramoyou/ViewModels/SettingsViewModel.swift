@@ -42,18 +42,29 @@ class SettingsViewModel: ObservableObject {
     private let firestoreService: FirestoreServiceProtocol
     /// ⭐️ そらとも通知の保存先（`users/{uid}.notifySoratomo` だけを `updateData` で書く・tasks 11.5）
     private let soratomoProfileService: SoratomoProfileServiceProtocol
+    /// ⭐️ 退会のときに、そらとものデータを消すサービス（release-gate 9.4・要件 3.1）
+    private let soratomoAccountDeletion: SoratomoAccountDeletionServiceProtocol
+    /// ⭐️ 退会のときに、この端末の通報の記録を消す口（uid を受け取る・要件 3.9）
+    private let eraseReportedSkies: @MainActor (String) -> Void
 
     /// ゴールデンアワー通知の切替処理（直近の Task）。連打時の直列化に使う。
     private var goldenHourToggleTask: Task<Void, Never>?
 
-    /// - Parameter soratomoProfileService: そらとも通知の保存先。既定は本物（`SoratomoProfileService` は
-    ///   MainActor の型ではなく、作っただけでは Firebase に触れないので、既定の引数で作ってよい）
+    /// - Parameters:
+    ///   - soratomoProfileService: そらとも通知の保存先。既定は本物（`SoratomoProfileService` は
+    ///     MainActor の型ではなく、作っただけでは Firebase に触れないので、既定の引数で作ってよい）
+    ///   - soratomoAccountDeletion: 退会のそらとも分の削除。既定は本物（呼ぶまで Firebase に触れない）
+    ///   - eraseReportedSkies: この端末の通報の記録を消す口。既定は `SoratomoReportedSkies.erase`（UserDefaults.standard）
     init(authService: AuthServiceProtocol = AuthService(),
          firestoreService: FirestoreServiceProtocol = FirestoreService(),
-         soratomoProfileService: SoratomoProfileServiceProtocol = SoratomoProfileService()) {
+         soratomoProfileService: SoratomoProfileServiceProtocol = SoratomoProfileService(),
+         soratomoAccountDeletion: SoratomoAccountDeletionServiceProtocol = SoratomoAccountDeletionService(),
+         eraseReportedSkies: @escaping @MainActor (String) -> Void = { SoratomoReportedSkies.erase(uid: $0) }) {
         self.authService = authService
         self.firestoreService = firestoreService
         self.soratomoProfileService = soratomoProfileService
+        self.soratomoAccountDeletion = soratomoAccountDeletion
+        self.eraseReportedSkies = eraseReportedSkies
     }
 
     // MARK: - ゴールデンアワー通知
@@ -219,6 +230,8 @@ class SettingsViewModel: ObservableObject {
 
     /// アカウント削除を実行
     func performAccountDeletion() async -> Bool {
+        // ⭐️ 処理中に重ねて受け付けない（要件 3.6）。defer より前に返すので、先の処理の表示を消さない
+        guard !isDeletingAccount else { return false }
         isDeletingAccount = true
         defer { isDeletingAccount = false }
 
@@ -240,11 +253,17 @@ class SettingsViewModel: ObservableObject {
         }
 
         do {
+            // 0. ⭐️ そらとものデータを消し終える（release-gate 9.4・要件 3.1）。既存の手順より前に置く:
+            //    失敗しやすい関数の呼び出しを先にすれば、失敗しても既存のデータは手つかずのまま残る（design.md の退会）
+            try await soratomoAccountDeletion.deleteMyData()
+
             // 1. Firestoreのユーザーデータを削除
             try await firestoreService.deleteUserData(userId: userId)
 
             // 1.5 端末内のパーソナルAI編集コーパスを削除（プライバシー: 退会後に学習データを残さない）
             RecipeCorpusStore().clear(userId: userId)
+            // 1.6 ⭐️ この端末の通報の記録も消す（要件 3.9）
+            eraseReportedSkies(userId)
 
             // 2. Firebase Authのアカウントを削除
             try await authService.deleteAccount()
@@ -263,6 +282,8 @@ class SettingsViewModel: ObservableObject {
 
     /// 再認証後にアカウント削除を実行
     func performReauthAndDelete(email: String, password: String) async -> Bool {
+        // ⭐️ 処理中に重ねて受け付けない（要件 3.6）
+        guard !isDeletingAccount else { return false }
         isDeletingAccount = true
         defer { isDeletingAccount = false }
 
@@ -275,11 +296,16 @@ class SettingsViewModel: ObservableObject {
             // 1. 再認証
             try await authService.reauthenticate(email: email, password: password)
 
+            // 1.5 ⭐️ 再認証の後で、そらとものデータを消し終える（release-gate 9.4・要件 3.1）
+            try await soratomoAccountDeletion.deleteMyData()
+
             // 2. Firestoreのユーザーデータを削除
             try await firestoreService.deleteUserData(userId: userId)
 
             // 2.5 端末内のパーソナルAI編集コーパスを削除（プライバシー: 退会後に学習データを残さない）
             RecipeCorpusStore().clear(userId: userId)
+            // 2.6 ⭐️ この端末の通報の記録も消す（要件 3.9）
+            eraseReportedSkies(userId)
 
             // 3. Firebase Authのアカウントを削除
             try await authService.deleteAccount()

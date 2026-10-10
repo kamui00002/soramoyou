@@ -7,6 +7,7 @@
 //
 //  イベント名・パラメータ名・値は要件 14 の表と 1 対 1 で対応する。表を変えるときは、
 //  SoratomoAnalyticsTests の期待値と requirements.md の表も同時に変えること。
+//  release-gate 8 で足した値・イベント・画面名は、.kiro/specs/soratomo-release-gate/requirements.md の要件 15 の表と対応する。
 //
 
 import Foundation
@@ -38,6 +39,8 @@ enum SoratomoAnalyticsValue: Equatable {
 /// `soratomo_create_failed` の `reason`
 enum SoratomoCreateFailReason: String, CaseIterable {
     case userLimit = "user_limit", invalidName = "invalid_name", network, flagOff = "flag_off", unknown
+    /// release-gate 要件 15.2 で足した値（既存の値と並びは変えない）
+    case ngWord = "ng_word", suspended, consentRequired = "consent_required"
 
     /// 失敗の種類から理由を決める（表に無い組み合わせは unknown・design.md の Error Categories）
     init(_ error: SoratomoError) {
@@ -46,6 +49,10 @@ enum SoratomoCreateFailReason: String, CaseIterable {
         case .invalidName: self = .invalidName
         case .network: self = .network
         case .flagOff: self = .flagOff
+        case .ngWord: self = .ngWord
+        case .suspended: self = .suspended
+        // アプリが古いときも、サーバーが拒否した理由は consent_required（要件 15.2 の値を増やさない・design.md）
+        case .consentRequired, .outdatedApp: self = .consentRequired
         default: self = .unknown
         }
     }
@@ -55,6 +62,8 @@ enum SoratomoCreateFailReason: String, CaseIterable {
 enum SoratomoJoinFailReason: String, CaseIterable {
     case invalidFormat = "invalid_format", notFound = "not_found", groupFull = "group_full"
     case userLimit = "user_limit", network, flagOff = "flag_off", unknown
+    /// release-gate 要件 15.2 で足した値（既存の値と並びは変えない。参加には NG ワードの検査が無い）
+    case suspended, consentRequired = "consent_required"
 
     /// 失敗の種類から理由を決める（表に無い組み合わせは unknown）
     init(_ error: SoratomoError) {
@@ -65,6 +74,9 @@ enum SoratomoJoinFailReason: String, CaseIterable {
         case .userLimit: self = .userLimit
         case .network: self = .network
         case .flagOff: self = .flagOff
+        case .suspended: self = .suspended
+        // 作成と同じく、アプリが古いときは consent_required として数える
+        case .consentRequired, .outdatedApp: self = .consentRequired
         default: self = .unknown
         }
     }
@@ -86,6 +98,8 @@ enum SoratomoPostFailStage: String, CaseIterable {
 enum SoratomoPostFailReason: String, CaseIterable {
     case offline, dailyLimit = "daily_limit"
     case network, unreadable, tooLarge = "too_large", permission, timeout, background, unknown
+    /// release-gate 要件 15.2 で足した値（既存の値と並びは変えない）
+    case ngWord = "ng_word"
 
     /// 失敗した段階と種類から理由を決める（design.md の Error Categories の下の注記）
     ///
@@ -100,6 +114,7 @@ enum SoratomoPostFailReason: String, CaseIterable {
         case .permissionDenied: self = .permission
         case .uploadTimeout: self = .timeout
         case .backgroundExpired: self = .background
+        case .ngWord: self = .ngWord
         default: self = .unknown
         }
     }
@@ -175,7 +190,46 @@ enum SoratomoNotificationOpenResult: String, CaseIterable {
     case opened, notMember = "not_member", flagOff = "flag_off", signedOut = "signed_out"
 }
 
-// MARK: - イベント（要件 14 の表の 17 個）
+/// 通報・ブロックをした画面（`soratomo_report_submitted`・`soratomo_user_blocked` の `source`・release-gate 要件 15.1）
+///
+/// 通報とブロックのサービス（release-gate 9.2）とタイムライン（10.1）もこの型を使う。
+enum SoratomoModerationSource: String, CaseIterable {
+    /// 投稿詳細の「…」のメニュー
+    case detail
+    /// タイムラインの長押しのメニュー
+    case timeline
+}
+
+/// `soratomo_report_failed` の `reason`（release-gate 要件 15.1）
+enum SoratomoReportFailReason: String, CaseIterable {
+    case network, notFound = "not_found", unknown
+
+    /// 失敗の種類から理由を決める（表に無い組み合わせは unknown）
+    init(_ error: SoratomoError) {
+        switch error {
+        case .network: self = .network
+        case .skyGone: self = .notFound
+        default: self = .unknown
+        }
+    }
+}
+
+/// ガイドラインの全文を出したきっかけ（`soratomo_guideline_result` の `trigger`・release-gate 要件 15.1）
+///
+/// 作成と参加の同意の段（release-gate 10.4）と入口（10.5）もこの型を使う。
+enum SoratomoGuidelineTrigger: String, CaseIterable {
+    case create, join, entry
+}
+
+/// ガイドラインの全文で選んだ操作（`soratomo_guideline_result` の `choice`・release-gate 要件 15.1）
+enum SoratomoGuidelineChoice: String, CaseIterable {
+    /// 「同意する」
+    case agree
+    /// 「同意しない」
+    case decline
+}
+
+// MARK: - イベント（要件 14 の表の 17 個と、release-gate 要件 15.1 の表の 4 個）
 
 /// そらともの計測イベント
 enum SoratomoEvent: Equatable {
@@ -213,6 +267,14 @@ enum SoratomoEvent: Equatable {
     case displayNameFailed(SoratomoDisplayNameFailReason)
     /// メンバー一覧を開いた
     case membersViewed(memberCount: Int)
+    /// 通報が受け付けられた（release-gate）
+    case reportSubmitted(reason: ReportReason, source: SoratomoModerationSource)
+    /// 通報に失敗した（release-gate）
+    case reportFailed(SoratomoReportFailReason)
+    /// ブロックが保存された（release-gate）
+    case userBlocked(source: SoratomoModerationSource)
+    /// ガイドラインの全文で操作を選んだ（release-gate。`version` はアプリの版 `SoratomoGuideline.currentVersion`）
+    case guidelineResult(choice: SoratomoGuidelineChoice, trigger: SoratomoGuidelineTrigger, version: Int)
 
     /// イベント名（英小文字のスネークケース・`soratomo_` で始める・要件 14.2）
     var name: String {
@@ -234,6 +296,10 @@ enum SoratomoEvent: Equatable {
         case .displayNameSaved: "soratomo_display_name_saved"
         case .displayNameFailed: "soratomo_display_name_failed"
         case .membersViewed: "soratomo_members_viewed"
+        case .reportSubmitted: "soratomo_report_submitted"
+        case .reportFailed: "soratomo_report_failed"
+        case .userBlocked: "soratomo_user_blocked"
+        case .guidelineResult: "soratomo_guideline_result"
         }
     }
 
@@ -274,11 +340,20 @@ enum SoratomoEvent: Equatable {
             ["reason": .value(reason.rawValue)]
         case let .membersViewed(memberCount):
             ["member_count": .int(memberCount)]
+        case let .reportSubmitted(reason, source):
+            // 通報の理由は既存のルートの通報と同じ列挙の値（release-gate 要件 5.3）
+            ["report_reason": .value(reason.rawValue), "source": .value(source.rawValue)]
+        case let .reportFailed(reason):
+            ["reason": .value(reason.rawValue)]
+        case let .userBlocked(source):
+            ["source": .value(source.rawValue)]
+        case let .guidelineResult(choice, trigger, version):
+            ["choice": .value(choice.rawValue), "trigger": .value(trigger.rawValue), "version": .int(version)]
         }
     }
 }
 
-// MARK: - 画面名（要件 14.5）
+// MARK: - 画面名（要件 14.5・release-gate 要件 15.3）
 
 /// そらともの主要画面の名前（既存の画面計測 `logScreen` で日本語の画面名として記録する）
 enum SoratomoScreen: String, CaseIterable {
@@ -288,6 +363,8 @@ enum SoratomoScreen: String, CaseIterable {
     case invite = "そらとも招待"
     case members = "そらともメンバー一覧"
     case skyDetail = "そらとも投稿詳細"
+    /// ガイドラインの全文（release-gate 要件 15.3。同意を求める形と読むだけの形の両方）
+    case guideline = "そらともガイドライン"
 }
 
 // MARK: - 送信の窓口

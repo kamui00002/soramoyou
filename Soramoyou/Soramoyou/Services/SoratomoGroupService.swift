@@ -331,6 +331,11 @@ final class SoratomoGroupService: SoratomoGroupServiceProtocol, @unchecked Senda
     /// | 元のエラー | 写した種類 |
     /// |---|---|
     /// | `details["reason"]` が `flag_off`・`invalid_name`・`invalid_format`・`not_found`・`group_full`・`user_limit`・`not_owner` | 同名の種類 |
+    /// | `details["reason"]` が `ng_word`・`suspended`・`not_member` | `.ngWord`・`.suspended`・`.notMember`（release-gate） |
+    /// | `details["reason"]` が `sky_not_found` | `.skyGone`（release-gate） |
+    /// | `details["reason"]` が `consent_required` | `details["currentVersion"]` がアプリの版より大きければ `.outdatedApp`、それ以外は `.consentRequired` |
+    /// | `details["reason"]` が `outdated_guideline` | `details["currentVersion"]` がアプリの版より大きければ `.outdatedApp`、それ以外は `.unknown` |
+    /// | `details["reason"]` が `invalid_input`・`invalid_reason`・`self_report` | 種類を作らない（下の code の行で `.unknown`） |
     /// | `unavailable`・`deadlineExceeded`（制限時間切れを含む） | `.network` |
     /// | `permissionDenied`（理由なし）・`unauthenticated` | `.permissionDenied` |
     /// | 理由の無い、それ以外の code | `.unknown` |
@@ -355,7 +360,7 @@ final class SoratomoGroupService: SoratomoGroupServiceProtocol, @unchecked Senda
         // サーバーが理由を付けているもの（ドメインの失敗）が最優先
         if let details = nsError.userInfo[FunctionsErrorDetailsKey] as? [String: Any],
            let reason = details["reason"] as? String,
-           let mapped = reasonToError(reason)
+           let mapped = reasonToError(reason, details: details)
         {
             return mapped
         }
@@ -375,8 +380,11 @@ final class SoratomoGroupService: SoratomoGroupServiceProtocol, @unchecked Senda
 
     /// `details["reason"]` の文字列を、そらともの失敗の種類に写す（functions/soratomo.js の `REASON_TO_CODE` の理由）
     ///
+    /// - Parameters:
+    ///   - reason: `details["reason"]`
+    ///   - details: サーバーが付けた詳細（`consent_required`・`outdated_guideline` の `currentVersion` だけを読む）
     /// - Returns: 知っている理由なら種類。知らない理由は nil
-    private static func reasonToError(_ reason: String) -> SoratomoError? {
+    private static func reasonToError(_ reason: String, details: [String: Any]) -> SoratomoError? {
         switch reason {
         case "flag_off":
             .flagOff
@@ -392,9 +400,35 @@ final class SoratomoGroupService: SoratomoGroupServiceProtocol, @unchecked Senda
             .userLimit
         case "not_owner":
             .notOwner
+        // release-gate（NGワード・利用停止・同意・投稿・通報）
+        case "ng_word":
+            .ngWord
+        case "suspended":
+            .suspended
+        case "not_member":
+            .notMember
+        case "sky_not_found":
+            .skyGone
+        case "consent_required":
+            // サーバーの版がアプリより新しいと、全文を出して同意しても outdated_guideline で拒否され続ける。
+            // そのときは全文を出さずに、アップデートを案内する（design.md の「古い版のアプリ」）
+            isServerGuidelineNewer(details) ? .outdatedApp : .consentRequired
+        case "outdated_guideline":
+            // アプリは自分の版で同意するので、サーバーの版が新しいとき以外は想定外（不明として記録に残す）
+            isServerGuidelineNewer(details) ? .outdatedApp : .unknown
         default:
             nil
         }
+    }
+
+    /// サーバーの現行のガイドラインの版（`details["currentVersion"]`）が、アプリの版より大きいか
+    ///
+    /// 詳細は JSON から読んだ `NSNumber` で届く。無い・数でないときは偽（アプリが古いとは決めない）。
+    private static func isServerGuidelineNewer(_ details: [String: Any]) -> Bool {
+        guard let version = details["currentVersion"] as? NSNumber else {
+            return false
+        }
+        return version.intValue > SoratomoGuideline.currentVersion
     }
 
     /// 読み取り（Firestore）の失敗を写す。想定外（`.unknown`）だけ記録に残す

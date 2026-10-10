@@ -10,12 +10,43 @@
 //  - 監視の札はこの ViewModel のプロパティに持つ。張り直しは札の上書きだけで古い監視が止まる
 //  - グループを最初に読めたらルーターへ「読めた」、読めなかったら「読めなかった」を知らせる（12.1 の記録）
 //  - 自分の投稿の削除（13.6）: 通信の確認 → 投稿のデータの削除 → 成功なら画像とキャッシュの後始末（画面は待たせない）
+//  - ⭐️ 通報・ブロック・隠す・続き読み（release-gate 10.1・要件 1.6・5.1〜5.8・9.1〜9.9・15.1）:
+//    自分以外の投稿だけに通報とブロックを許し、隠す集合（ブロックした投稿者・この端末で通報した投稿）で表示を絞る。
+//    全部隠れても続きを読む（自動で連続 3 回まで、その後は「さらに読み込む」）
 //
 //  ⚠️ この ViewModel はサービスの容れ物（SoratomoDependencies）を受け取らない。
-//     protocol とクロージャだけを受け取り、単体テストではモックとクロージャだけで作る。
+//     protocol とクロージャと、隠す集合の 2 つの部品（SoratomoBlockedAuthors・SoratomoReportedSkies）だけを受け取り、
+//     単体テストではモックとクロージャと、テスト用の通知センター・UserDefaults で作った部品で作る。
 //
 
+import Combine
 import Foundation
+
+/// 通報とブロックの結果を伝える知らせ（release-gate 要件 5.4〜5.7・9.9）
+enum SoratomoModerationNotice: Equatable {
+    /// 「通報を受け付けました」
+    case reportAccepted
+    /// 「通報を送信できませんでした」
+    case reportFailed
+    /// 「この投稿はもうありません」
+    case skyGone
+    /// 「ブロックできませんでした」
+    case blockFailed
+
+    /// 画面に出す文言（タイムラインと投稿詳細で同じものを出す・失敗の文言は既存の定義を使う）
+    var userMessage: String {
+        switch self {
+        case .reportAccepted:
+            "通報を受け付けました"
+        case .reportFailed:
+            SoratomoFailedAction.report.userMessage
+        case .skyGone:
+            SoratomoError.skyGone.userMessage
+        case .blockFailed:
+            SoratomoFailedAction.block.userMessage
+        }
+    }
+}
 
 /// そらとものグループのタイムラインの ViewModel
 @MainActor
@@ -36,6 +67,10 @@ final class SoratomoTimelineViewModel: ObservableObject {
 
     /// 1 回に読む件数（最初の 20 件・末尾で 20 件ずつ足す・引き下げで 20 件に戻す・要件 8.2・8.3・8.11）
     static let pageSize = 20
+
+    /// 表示が増えないときに、自分で上限を伸ばす連続の回数の上限（release-gate 9.7・
+    /// ルートの一覧の `PaginatedPostsViewModel.maxPagesPerLoad` と同じ上限）
+    static let maxAutoExtensions = 3
 
     // MARK: - 公開する状態
 
@@ -62,6 +97,18 @@ final class SoratomoTimelineViewModel: ObservableObject {
 
     /// 削除の失敗を伝える文言（出し終えたら画面が nil に戻す）
     @Published var deleteErrorMessage: String?
+
+    /// 通報の途中の投稿の ID（二重の通報を防ぐ・要件 5.8）
+    @Published private(set) var reportingSkyIds: Set<String> = []
+
+    /// ブロックの途中の投稿者の uid（二重のブロックを防ぐ）
+    @Published private(set) var blockingAuthorIds: Set<String> = []
+
+    /// 通報とブロックの結果の知らせ（出し終えたら画面が nil に戻す）
+    @Published var moderationNotice: SoratomoModerationNotice?
+
+    /// 自動の続き読みが上限に達しても表示が増えず、続きがありうる（末尾に「さらに読み込む」を出す・9.7）
+    @Published private(set) var canLoadMoreManually = false
 
     /// いまの監視の上限（20・40・60 …）
     private(set) var limit = SoratomoTimelineViewModel.pageSize
@@ -93,6 +140,30 @@ final class SoratomoTimelineViewModel: ObservableObject {
     private let removeCachedImages: @MainActor (SoratomoImagePaths) -> Void
     /// 計測の記録（既定は `SoratomoAnalytics.log`。単体テストで差し替える）
     private let logEvent: (SoratomoEvent) -> Void
+    /// 通報とブロック
+    private let moderationService: any SoratomoModerationServiceProtocol
+    /// ブロックした投稿者（アプリ全体で 1 つ）
+    private let blockedAuthors: SoratomoBlockedAuthors
+    /// この端末で通報した投稿（アプリ全体で 1 つ）
+    private let reportedSkies: SoratomoReportedSkies
+
+    // MARK: - 隠す集合の状態
+
+    /// いまの隠す集合（2 つの部品の値の写し。部品が変わるたびに購読で入れ替える）
+    private var hidden: SoratomoHiddenContent
+    /// 隠す集合の購読
+    private var hiddenSubscription: AnyCancellable?
+    /// ブロックの一覧を読めたか（読めなかったら、次に start() が呼ばれたときに読み直す）
+    private var hasLoadedBlockedAuthors = false
+    /// ブロックの一覧を読み込み中か（start() が重なっても二重に読まない）
+    private var isLoadingBlockedAuthors = false
+
+    // MARK: - 続き読みの状態
+
+    /// 自分で上限を伸ばした連続の回数（表示が増えたら 0 に戻す）
+    private var autoExtensionCount = 0
+    /// 上限を伸ばす前の表示の件数（伸ばした結果を待っている間だけ値がある）
+    private var visibleCountBeforeExtension: Int?
 
     // MARK: - 監視の状態
 
@@ -128,6 +199,9 @@ final class SoratomoTimelineViewModel: ObservableObject {
     ///   - reportNotAccessible: グループを読めなかったときに呼ぶ（本番は `SoratomoRouter.reportNotAccessible(groupId:)`）
     ///   - rememberSkies: 届いた投稿を覚える（本番は `SoratomoSkyLookup.remember`）
     ///   - forgetSky: 削除した投稿を忘れる（本番は `SoratomoSkyLookup.forget`）
+    ///   - moderationService: 通報とブロック
+    ///   - blockedAuthors: ブロックした投稿者（本番は `SoratomoDependencies.live.blockedAuthors`）
+    ///   - reportedSkies: この端末で通報した投稿（本番は `SoratomoDependencies.live.reportedSkies`）
     ///   - removeCachedImages: 削除した投稿の画像をキャッシュから消す。既定は `SoratomoImageCache.remove`
     ///   - logEvent: 計測の記録。既定は本番の `SoratomoAnalytics.log`
     init(
@@ -141,6 +215,9 @@ final class SoratomoTimelineViewModel: ObservableObject {
         reportNotAccessible: @escaping @MainActor (String) -> Void,
         rememberSkies: @escaping @MainActor ([SoratomoSky]) -> Void,
         forgetSky: @escaping @MainActor (_ groupId: String, _ skyId: String) -> Void,
+        moderationService: any SoratomoModerationServiceProtocol,
+        blockedAuthors: SoratomoBlockedAuthors,
+        reportedSkies: SoratomoReportedSkies,
         removeCachedImages: @escaping @MainActor (SoratomoImagePaths) -> Void = { SoratomoImageCache.remove($0) },
         logEvent: @escaping (SoratomoEvent) -> Void = SoratomoAnalytics.log
     ) {
@@ -156,6 +233,22 @@ final class SoratomoTimelineViewModel: ObservableObject {
         self.forgetSky = forgetSky
         self.removeCachedImages = removeCachedImages
         self.logEvent = logEvent
+        self.moderationService = moderationService
+        self.blockedAuthors = blockedAuthors
+        self.reportedSkies = reportedSkies
+        hidden = SoratomoHiddenContent(blockedAuthorIds: blockedAuthors.ids, reportedSkies: reportedSkies.keys)
+
+        // 隠す集合が変わったら、届いている結果から直ちに作り直す（9.4 の「手動で更新しなくても」）。
+        // ⚠️ @Published は値が入る「前」に流れるので、部品のプロパティは読まず、流れてきた値を使う。
+        //    receive(on:) を付けないのは、変更と同じ流れで直ちに作り直すため（部品はどちらもメインアクター）
+        hiddenSubscription = blockedAuthors.$ids
+            .combineLatest(reportedSkies.$keys)
+            .dropFirst()
+            .sink { [weak self] ids, keys in
+                MainActor.assumeIsolated {
+                    self?.applyHidden(SoratomoHiddenContent(blockedAuthorIds: ids, reportedSkies: keys))
+                }
+            }
     }
 
     // MARK: - 監視の開始
@@ -163,24 +256,42 @@ final class SoratomoTimelineViewModel: ObservableObject {
     /// グループとタイムラインの監視を始める（画面の表示で呼ぶ）
     ///
     /// すでに監視しているものは張り直さない（投稿詳細から戻ったときなど、何度呼んでもよい）。
-    func start() {
+    /// - この端末で通報した投稿を、いまの利用者の分に読み込む（読む場所がほかに無いため、ここで読む）
+    /// - ブロックの一覧を読み込んでから、タイムラインの監視を始める（最初の表示でブロックした相手を出さない・9.6）。
+    ///   読めなかったら表示を優先して監視を始め、次に呼ばれたときに読み直す
+    func start() async {
         if groupToken == nil {
             observeGroup()
         }
+        if let uid = currentUid(), !uid.isEmpty {
+            if reportedSkies.currentUid != uid {
+                reportedSkies.load(uid: uid)
+            }
+            if !hasLoadedBlockedAuthors, !isLoadingBlockedAuthors {
+                isLoadingBlockedAuthors = true
+                let service = moderationService
+                hasLoadedBlockedAuthors = await blockedAuthors.load(uid: uid) { uid in
+                    try await service.fetchBlockedUserIds(uid: uid)
+                }
+                isLoadingBlockedAuthors = false
+            }
+        }
+        // 待っている間に、重なった start() が監視を始めていれば張り直さない
         if timelineToken == nil {
             observeTimeline()
         }
     }
 
-    /// 末尾に達したときに呼ぶ。続きがありうるなら、上限を 20 件伸ばして張り直す（要件 8.3）
+    /// 末尾に達したとき・「さらに読み込む」を押したときに呼ぶ。続きがありうるなら、上限を 20 件伸ばして張り直す（要件 8.3・9.7）
     ///
     /// いまの上限の結果がまだ届いていない間（読み込み中）・続きが無いときは何もしない（二重に伸ばさない）。
+    /// 利用者の操作なので、自動の続き読みの回数は 0 に戻す。
     func loadMoreIfNeeded() {
         guard hasLoadedTimeline, !isLoadingMore, lastMayHaveMore else { return }
 
-        limit += Self.pageSize
-        isLoadingMore = true
-        observeTimeline()
+        autoExtensionCount = 0
+        canLoadMoreManually = false
+        extendLimit()
     }
 
     /// 引き下げて更新したときに呼ぶ。上限を 20 件に戻して、最新の 20 件を取り直す（要件 8.11）
@@ -190,6 +301,9 @@ final class SoratomoTimelineViewModel: ObservableObject {
     func refresh() {
         limit = Self.pageSize
         isLoadingMore = false
+        autoExtensionCount = 0
+        canLoadMoreManually = false
+        visibleCountBeforeExtension = nil
         observeTimeline()
         if groupToken == nil {
             observeGroup()
@@ -220,6 +334,92 @@ final class SoratomoTimelineViewModel: ObservableObject {
     func canDelete(_ sky: SoratomoSky) -> Bool {
         guard let uid = currentUid(), !uid.isEmpty else { return false }
         return sky.authorId == uid
+    }
+
+    /// この投稿に通報とブロックの操作を出してよいか（自分以外の投稿だけ・要件 5.1・5.2・9.1）
+    func canModerate(_ sky: SoratomoSky) -> Bool {
+        guard let uid = currentUid(), !uid.isEmpty else { return false }
+        return sky.authorId != uid
+    }
+
+    /// この投稿を見せないか（ブロックした投稿者・この端末で通報した投稿・要件 9.4・9.6）
+    func isHidden(_ sky: SoratomoSky) -> Bool {
+        hidden.hides(sky)
+    }
+
+    /// 空の案内（「まだ投稿がありません」）を出してよいか
+    ///
+    /// 読めていて、表示が 0 件で、続きも無いときだけ。全部隠れていて続きがありうるときは出さない（9.7）。
+    var showsEmptyGuide: Bool {
+        hasLoadedTimeline && skies.isEmpty && !lastMayHaveMore
+    }
+
+    // MARK: - 通報とブロック（release-gate 10.1）
+
+    /// 投稿を通報する（理由を選んで確定した後に呼ぶ）
+    ///
+    /// 1. 自分の投稿・通報の途中なら何もしない（要件 5.2・5.8）
+    /// 2. 前回の知らせを消す（一度失敗すると以後の成功が出ない、を作らない・5.4）
+    /// 3. 通信できなければ、送らずに失敗を出す
+    /// 4. 成功したら、この端末の通報の記録に足して隠し、受け付けたことを出す（5.5）
+    /// 5. 投稿がもう無い（`.skyGone`）なら、削除済みと同じく取り除いて「もう無い」を出す（5.7）
+    /// 6. それ以外の失敗では、隠さずに失敗を出す（5.6）
+    /// - Returns: 受け付けられたら true
+    @discardableResult
+    func report(_ sky: SoratomoSky, reason: ReportReason, source: SoratomoModerationSource) async -> Bool {
+        guard canModerate(sky), !reportingSkyIds.contains(sky.id), let uid = currentUid() else { return false }
+        moderationNotice = nil
+
+        guard isOnline() else {
+            failReport(.network)
+            return false
+        }
+
+        reportingSkyIds.insert(sky.id)
+        defer { reportingSkyIds.remove(sky.id) }
+
+        do {
+            try await moderationService.report(groupId: sky.groupId, skyId: sky.id, reason: reason)
+        } catch .skyGone {
+            removeFromTimeline(sky)
+            moderationNotice = .skyGone
+            logEvent(.reportFailed(.notFound))
+            return false
+        } catch {
+            failReport(error)
+            return false
+        }
+
+        reportedSkies.add(SoratomoSkyKey(sky), uid: uid)
+        moderationNotice = .reportAccepted
+        logEvent(.reportSubmitted(reason: reason, source: source))
+        return true
+    }
+
+    /// 投稿者をブロックする（確認ダイアログで確定した後に呼ぶ）
+    ///
+    /// 成功したら、ブロックの一覧に足して隠す（既存のブロックの通知はサービスが送る・9.3・9.4・9.8）。
+    /// 失敗したら、隠さずに失敗を出す（9.9）。
+    /// - Returns: 保存できたら true
+    @discardableResult
+    func block(_ sky: SoratomoSky, source: SoratomoModerationSource) async -> Bool {
+        let authorId = sky.authorId
+        guard canModerate(sky), !blockingAuthorIds.contains(authorId), let uid = currentUid() else { return false }
+        moderationNotice = nil
+
+        blockingAuthorIds.insert(authorId)
+        defer { blockingAuthorIds.remove(authorId) }
+
+        do {
+            try await moderationService.block(uid: uid, authorId: authorId)
+        } catch {
+            moderationNotice = .blockFailed
+            return false
+        }
+
+        blockedAuthors.add(authorId)
+        logEvent(.userBlocked(source: source))
+        return true
     }
 
     // MARK: - 削除（tasks 13.6）
@@ -342,11 +542,8 @@ final class SoratomoTimelineViewModel: ObservableObject {
             lastMayHaveMore = snapshot.mayHaveMore
             hasLoadedTimeline = true
 
-            // 削除が確定した投稿は、遅れた結果に混ざっていても出さない（覚えにも戻さない）
-            let visible = snapshot.skies.filter { !deletedSkyIds.contains($0.id) }
-            // 届いた投稿は、投稿詳細が読めるように覚える
-            rememberSkies(visible)
-            skies = visible
+            rebuildSkies()
+            continueReadingIfStalled()
         case let .failure(error):
             isLoadingMore = false
             SoratomoError.record(error, context: "soratomo.observeTimeline")
@@ -355,6 +552,89 @@ final class SoratomoTimelineViewModel: ObservableObject {
             // 失敗で止まった監視は、引き下げの更新（refresh）で張り直す
             timelineToken = nil
         }
+    }
+
+    // MARK: - Private: 隠す・続き読み
+
+    /// 届いている結果から、表示する投稿を作り直す
+    ///
+    /// 削除が確定した投稿（遅れた結果に混ざっていても出さない）と、隠す集合に当たる投稿を除く。
+    /// 表示する投稿は、投稿詳細が読めるように覚える（隠した投稿は覚えに戻さない）。
+    private func rebuildSkies() {
+        guard let lastSkies else { return }
+        let visible = lastSkies.filter { !deletedSkyIds.contains($0.id) && !hidden.hides($0) }
+        rememberSkies(visible)
+        skies = visible
+    }
+
+    /// 隠す集合が変わった
+    ///
+    /// 届いている結果から作り直す。全部隠れて続きがありうるなら、続きを読む（ブロックの直後に、
+    /// 何も出ず末尾の行も無いので読み込みが始まらない、を作らない）。
+    private func applyHidden(_ newHidden: SoratomoHiddenContent) {
+        guard newHidden != hidden else { return }
+        hidden = newHidden
+        guard hasLoadedTimeline else { return }
+        rebuildSkies()
+        if !isLoadingMore {
+            continueReadingIfStalled()
+        }
+    }
+
+    /// 表示が増えない・0 件で、続きがありうるなら、自分で上限を伸ばす（9.7）
+    ///
+    /// - 伸ばした結果を待っていたなら、表示が増えたかを見る。増えたら回数を 0 に戻して終わる
+    /// - 待っていなければ、表示が 0 件のとき（最初の読み込み・全部隠れた）だけ続きを読む
+    /// - 連続 `maxAutoExtensions` 回伸ばしても増えなければ、末尾に「さらに読み込む」を出す
+    private func continueReadingIfStalled() {
+        if let before = visibleCountBeforeExtension {
+            visibleCountBeforeExtension = nil
+            if skies.count > before {
+                autoExtensionCount = 0
+                canLoadMoreManually = false
+                return
+            }
+        } else if !skies.isEmpty {
+            return
+        }
+
+        guard lastMayHaveMore else {
+            canLoadMoreManually = false
+            return
+        }
+        if autoExtensionCount < Self.maxAutoExtensions {
+            autoExtensionCount += 1
+            extendLimit()
+        } else {
+            canLoadMoreManually = true
+        }
+    }
+
+    /// 上限を 20 件伸ばして張り直す（結果が届くまで「読み込み中」）
+    private func extendLimit() {
+        visibleCountBeforeExtension = skies.count
+        limit += Self.pageSize
+        isLoadingMore = true
+        observeTimeline()
+    }
+
+    /// 投稿をタイムラインから取り除き、覚えから外す（削除が確定した・通報で「もう無い」と分かった）
+    ///
+    /// ⚠️ 画像の後始末はしない（他人の投稿の画像を消しに行かないため）。自分の削除は `finishDeletion` が続けて行う。
+    private func removeFromTimeline(_ sky: SoratomoSky) {
+        deletedSkyIds.insert(sky.id)
+        skies.removeAll { $0.id == sky.id }
+        if var cached = lastSkies {
+            cached.removeAll { $0.id == sky.id }
+            lastSkies = cached
+        }
+        forgetSky(sky.groupId, sky.id)
+    }
+
+    /// 通報の失敗を出して記録する（投稿は隠さない・要件 5.6）
+    private func failReport(_ error: SoratomoError) {
+        moderationNotice = .reportFailed
+        logEvent(.reportFailed(SoratomoReportFailReason(error)))
     }
 
     // MARK: - Private: 削除
@@ -375,13 +655,7 @@ final class SoratomoTimelineViewModel: ObservableObject {
 
     /// 投稿のデータを消せた後の処理（タイムラインから消し、画像の後始末を裏で行う）
     private func finishDeletion(of sky: SoratomoSky) {
-        deletedSkyIds.insert(sky.id)
-        skies.removeAll { $0.id == sky.id }
-        if var cached = lastSkies {
-            cached.removeAll { $0.id == sky.id }
-            lastSkies = cached
-        }
-        forgetSky(sky.groupId, sky.id)
+        removeFromTimeline(sky)
 
         let paths = sky.imagePaths
         // 端末のキャッシュは先に消す（削除した画像が端末に残らないように）

@@ -7,9 +7,12 @@
 //    要件 2・4・10.1・10.5・12.2・12.5・14.3・15.4・18）
 //
 //  シートの中の流れ:
-//    1. 表示名が要るかを確かめる（`needsDisplayName`）
+//    1. ガイドラインへの同意と、表示名が要るかを確かめる（`fetchConsentStatus`・`needsDisplayName`）
+//    1.5 現行の版に同意していなければ、ガイドラインの全文（release-gate 10.4・要件 10.1・10.3・10.4・10.6〜10.8）
+//        →「同意する」で記録に成功したら 2 へ／「同意しない」は記録せずにシートを閉じる
 //    2. 要るなら表示名の入力（13.2）→ 保存に成功したら 3 へ
 //    3. グループ名か招待コードの入力（13.3）→ 作成か参加に成功したら 4 へ
+//       サーバーが「同意が必要」で拒否したら 1.5 へ戻り、入力は残す（要件 10.11）
 //    4. 通知の事前説明の判定（`primer.decide()`・12.2）→ 事前説明か設定の案内があれば出し、閉じたら完了。無ければすぐ完了
 //  完了したら、進む先のパスを `onCompleted` で返す（一覧がルーターのパスに入れて、シートを閉じる）。
 //
@@ -33,6 +36,8 @@ final class SoratomoGroupFormViewModel: ObservableObject {
         case checking
         /// 表示名が要るかを確かめられなかった（先へは進ませない。`message` は固定の文言）
         case checkFailed(message: String)
+        /// ガイドラインの全文と同意（release-gate 10.4。`trigger` は計測に使うきっかけ）
+        case guideline(SoratomoGuidelineTrigger)
         /// 表示名の入力（13.2）
         case displayName
         /// グループ名か招待コードの入力（13.3）
@@ -74,6 +79,8 @@ final class SoratomoGroupFormViewModel: ObservableObject {
     private let groupService: any SoratomoGroupServiceProtocol
     /// 表示名のサービス
     private let profileService: any SoratomoProfileServiceProtocol
+    /// ガイドラインへの同意の状態を読み、同意を記録するサービス
+    private let guidelineService: any SoratomoGuidelineServiceProtocol
     /// 通知の事前説明の判定
     private let primer: any SoratomoNotificationPrimerProtocol
     /// いま通信できる状態か（確定の前の確認に使う）
@@ -84,6 +91,11 @@ final class SoratomoGroupFormViewModel: ObservableObject {
     private let logEvent: (SoratomoEvent) -> Void
     /// 成功したときに、進む先のパスを渡す
     private let onCompleted: ([SoratomoDestination]) -> Void
+    /// ガイドラインで「同意しない」を選んだとき（シートを閉じて一覧へ戻す・要件 10.4）
+    private let onDeclined: () -> Void
+
+    /// 同意を記録した後に進む段（表示名の入力か、グループ名・招待コードの入力）
+    private var stepAfterGuideline: Step = .form
 
     /// 作成で使っている要求 ID と、そのときのグループ名（前後の空白を除いたもの）
     ///
@@ -103,44 +115,55 @@ final class SoratomoGroupFormViewModel: ObservableObject {
     ///   - mode: 作成か参加か
     ///   - groupService: グループのサービス
     ///   - profileService: 表示名のサービス
+    ///   - guidelineService: ガイドラインへの同意の状態を読み、同意を記録するサービス
     ///   - primer: 通知の事前説明の判定
     ///   - isOnline: いま通信できる状態かを返す
     ///   - currentUid: いまログインしている利用者の uid を返す
     ///   - logEvent: 計測の記録。既定は本番の `SoratomoAnalytics.log`
     ///   - onCompleted: 成功したときに、進む先のパスを受け取る
+    ///   - onDeclined: ガイドラインで「同意しない」を選んだとき（シートを閉じる）
     init(
         mode: SoratomoGroupFormMode,
         groupService: any SoratomoGroupServiceProtocol,
         profileService: any SoratomoProfileServiceProtocol,
+        guidelineService: any SoratomoGuidelineServiceProtocol,
         primer: any SoratomoNotificationPrimerProtocol,
         isOnline: @escaping () -> Bool,
         currentUid: @escaping () -> String?,
         logEvent: @escaping (SoratomoEvent) -> Void = SoratomoAnalytics.log,
-        onCompleted: @escaping ([SoratomoDestination]) -> Void
+        onCompleted: @escaping ([SoratomoDestination]) -> Void,
+        onDeclined: @escaping () -> Void
     ) {
         self.mode = mode
         self.groupService = groupService
         self.profileService = profileService
+        self.guidelineService = guidelineService
         self.primer = primer
         self.isOnline = isOnline
         self.currentUid = currentUid
         self.logEvent = logEvent
         self.onCompleted = onCompleted
+        self.onDeclined = onDeclined
     }
 
-    // MARK: - 1. 表示名が要るか
+    // MARK: - 1. 同意と表示名が要るか
 
-    /// 表示名の入力が要るかを確かめ、最初の段を決める（シートを開いたとき・やり直しのときに呼ぶ）
+    /// ガイドラインへの同意と表示名の入力が要るかを確かめ、最初の段を決める（シートを開いたとき・やり直しのときに呼ぶ）
     ///
-    /// - 要る（未設定か空白だけ）→ 表示名の入力（要件 18.1）
-    /// - 要らない（設定済み）→ グループ名か招待コードの入力（要件 18.6）
-    /// - 確かめられなかった（どのエラーでも）→ 先へ進ませず、固定の文言とやり直しの操作を出す
+    /// - 現行の版に同意していない → ガイドラインの全文（要件 10.1）。同意の後に、下の段へ進む
+    ///   ⚠️ 入口の判定（`SoratomoEntryGate.needsGuideline`）は使わない。所属が 0 のときに偽を返すので、
+    ///      初めてグループを作る人に全文が出なくなる
+    /// - 同意の状態を読めなかった → 全文を出さずに進む。作成と参加はサーバーが同意を確かめて拒否し、
+    ///   その拒否（`.consentRequired`）で全文へ戻る（要件 10.10・10.11）。ここで止めると、読めないだけで先へ進めなくなる
+    /// - 表示名が要る（未設定か空白だけ）→ 表示名の入力（要件 18.1）
+    /// - 表示名が要らない（設定済み）→ グループ名か招待コードの入力（要件 18.6）
+    /// - 表示名が要るかを確かめられなかった（どのエラーでも）→ 先へ進ませず、固定の文言とやり直しの操作を出す
     func start() async {
-        // 確かめている途中と、確かめた後（入力中・処理中）は、もう一度確かめない
+        // 確かめている途中と、確かめた後（同意・入力中・処理中）は、もう一度確かめない
         switch step {
         case .checking, .checkFailed:
             break
-        case .displayName, .form, .primer:
+        case .guideline, .displayName, .form, .primer:
             return
         }
         guard phase == .idle else { return }
@@ -155,9 +178,24 @@ final class SoratomoGroupFormViewModel: ObservableObject {
             return
         }
 
+        // 同意の状態（読めなければ nil＝全文を出さない）
+        let hasAgreed: Bool
+        do {
+            hasAgreed = try await guidelineService.fetchConsentStatus(uid: uid).hasAgreedCurrent
+        } catch {
+            SoratomoError.record(error, context: "soratomo.fetchConsentStatus")
+            hasAgreed = true
+        }
+
         do {
             let needs = try await profileService.needsDisplayName(uid: uid)
-            step = needs ? .displayName : .form
+            let next: Step = needs ? .displayName : .form
+            if hasAgreed {
+                step = next
+            } else {
+                stepAfterGuideline = next
+                step = .guideline(guidelineTrigger)
+            }
         } catch {
             // ⚠️ 権限の拒否は `.notMember` に写るが、その文言（「グループを開けませんでした」）はこの場面に合わない。
             //    通信のときだけ通信の文言、それ以外は「うまくいきませんでした」の文言にする
@@ -165,6 +203,45 @@ final class SoratomoGroupFormViewModel: ObservableObject {
             let message = error == .network ? SoratomoError.network.userMessage : SoratomoError.unknown.userMessage
             step = .checkFailed(message: message)
         }
+    }
+
+    // MARK: - 1.5 ガイドラインへの同意（release-gate 10.4）
+
+    /// 「同意する」を選んだ（全文の段で呼ぶ）
+    ///
+    /// - 通信できなければ、記録せずに「同意を記録できませんでした」を出し、先へ進ませない（要件 10.7）
+    /// - 記録に成功してから、表示名かグループ名・招待コードの入力へ進む（要件 10.6）
+    /// - 記録に失敗したら、先へ進ませない。アプリが古い（サーバーの版のほうが新しい）ならアップデートの案内、
+    ///   それ以外は「同意を記録できませんでした」
+    /// - ⚠️ 選んだ操作の計測（`soratomo_guideline_result`）は全文の画面が記録する。ここでは記録しない（二重に数えない）
+    func agreeGuideline() async {
+        guard case .guideline = step, phase == .idle else { return }
+
+        guard isOnline() else {
+            errorMessage = SoratomoFailedAction.agreeGuideline.userMessage
+            return
+        }
+
+        // ⚠️ 最初の await より前に処理中にする（二重の確定を防ぐ）
+        phase = .processing
+        defer { phase = .idle }
+
+        do {
+            try await guidelineService.agree(version: SoratomoGuideline.currentVersion)
+            errorMessage = nil
+            step = stepAfterGuideline
+        } catch {
+            SoratomoError.record(error, context: "soratomo.agreeGuideline")
+            errorMessage = error == .outdatedApp
+                ? SoratomoError.outdatedApp.userMessage
+                : SoratomoFailedAction.agreeGuideline.userMessage
+        }
+    }
+
+    /// 「同意しない」を選んだ（全文の段で呼ぶ）。同意を記録せず、シートを閉じて一覧へ戻す（要件 10.4）
+    func declineGuideline() {
+        guard case .guideline = step, phase == .idle else { return }
+        onDeclined()
     }
 
     // MARK: - 2. 表示名の保存（13.2）
@@ -276,9 +353,9 @@ final class SoratomoGroupFormViewModel: ObservableObject {
             await finish(destinations: [.timeline(groupId: summary.groupId), .invite(groupId: summary.groupId)])
         } catch {
             SoratomoError.record(error, context: "soratomo.createGroup")
-            errorMessage = error.userMessage
             logEvent(.createFailed(SoratomoCreateFailReason(error)))
             phase = .idle
+            showSubmitFailure(error)
         }
     }
 
@@ -309,9 +386,24 @@ final class SoratomoGroupFormViewModel: ObservableObject {
             await finish(destinations: [.timeline(groupId: result.groupId)])
         } catch {
             SoratomoError.record(error, context: "soratomo.joinGroup")
-            errorMessage = error.userMessage
             logEvent(.joinFailed(SoratomoJoinFailReason(error)))
             phase = .idle
+            showSubmitFailure(error)
+        }
+    }
+
+    /// 作成・参加の失敗を出す（入力は消さない・要件 2.6・4.9・11.7）
+    ///
+    /// - 「同意が必要」（サーバーが同意の記録を見つけられなかった）→ 全文の段へ戻す。同意したら入力の段へ戻る（要件 10.11）
+    /// - それ以外 → 固定の文言（利用停止はお問い合わせの方法つき・アプリが古いはアップデートの案内・
+    ///   NGワードは該当した語を含めない）
+    private func showSubmitFailure(_ error: SoratomoError) {
+        if error == .consentRequired {
+            errorMessage = nil
+            stepAfterGuideline = .form
+            step = .guideline(guidelineTrigger)
+        } else {
+            errorMessage = error.userMessage
         }
     }
 
@@ -349,6 +441,11 @@ final class SoratomoGroupFormViewModel: ObservableObject {
 
     // MARK: - 表示用
 
+    /// 全文を出したきっかけ（計測に使う）
+    var guidelineTrigger: SoratomoGuidelineTrigger {
+        mode == .create ? .create : .join
+    }
+
     /// 処理中か完了後か（true の間は確定のボタンを無効にする）
     var isProcessing: Bool {
         phase != .idle
@@ -366,7 +463,7 @@ final class SoratomoGroupFormViewModel: ObservableObject {
             true
         case .primer:
             false
-        case .displayName, .form:
+        case .guideline, .displayName, .form:
             phase == .idle
         }
     }

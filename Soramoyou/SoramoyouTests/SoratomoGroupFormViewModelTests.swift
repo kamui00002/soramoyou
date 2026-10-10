@@ -129,6 +129,8 @@ final class SoratomoGroupFormViewModelTests: XCTestCase {
     private final class Recorder {
         var events: [SoratomoEvent] = []
         var completed: [[SoratomoDestination]] = []
+        /// ガイドラインで「同意しない」を選んで閉じた回数
+        var declined = 0
     }
 
     /// テスト用の ViewModel を作る
@@ -136,6 +138,7 @@ final class SoratomoGroupFormViewModelTests: XCTestCase {
     ///   - mode: 作成か参加か
     ///   - groupService: グループのサービス（既定は共有のモック）
     ///   - profileService: 表示名のサービス
+    ///   - guideline: ガイドラインの同意のサービス（既定は現行の版に同意済み・既存のテストを変えないため）
     ///   - primer: 事前説明の判定
     ///   - online: 通信できる状態か
     ///   - recorder: 計測と行き先の記録先
@@ -143,6 +146,7 @@ final class SoratomoGroupFormViewModelTests: XCTestCase {
         mode: SoratomoGroupFormMode,
         groupService: any SoratomoGroupServiceProtocol,
         profileService: MockSoratomoProfileService,
+        guideline: MockSoratomoGuidelineService? = nil,
         // 既定の引数はメインアクターの外で評価されるので、@MainActor の代役は本体の中で作る
         primer: SoratomoGroupFormPrimerStub? = nil,
         online: Bool = true,
@@ -152,12 +156,30 @@ final class SoratomoGroupFormViewModelTests: XCTestCase {
             mode: mode,
             groupService: groupService,
             profileService: profileService,
+            guidelineService: guideline ?? agreedGuideline(),
             primer: primer ?? SoratomoGroupFormPrimerStub(),
             isOnline: { online },
             currentUid: { "me" },
             logEvent: { recorder.events.append($0) },
-            onCompleted: { recorder.completed.append($0) }
+            onCompleted: { recorder.completed.append($0) },
+            onDeclined: { recorder.declined += 1 }
         )
+    }
+
+    /// 現行の版に同意済みの利用者の同意のサービス
+    private func agreedGuideline() -> MockSoratomoGuidelineService {
+        let guideline = MockSoratomoGuidelineService()
+        guideline.fetchConsentStatusResult = .success(
+            SoratomoConsentStatus(agreedVersion: SoratomoGuideline.currentVersion, groupCount: 1)
+        )
+        return guideline
+    }
+
+    /// まだ同意していない利用者の同意のサービス（所属 0＝初めてグループを作る人）
+    private func unagreedGuideline() -> MockSoratomoGuidelineService {
+        let guideline = MockSoratomoGuidelineService()
+        guideline.fetchConsentStatusResult = .success(SoratomoConsentStatus(agreedVersion: nil, groupCount: 0))
+        return guideline
     }
 
     /// 表示名が設定済みの利用者の表示名のサービス
@@ -621,6 +643,221 @@ final class SoratomoGroupFormViewModelTests: XCTestCase {
 
             XCTAssertEqual(primer.decideCalls, 1)
             XCTAssertEqual(recorder.completed, [[.timeline(groupId: "g1")]])
+        }
+    }
+
+    // MARK: - ガイドラインへの同意（release-gate 10.4）
+
+    func testUnagreedShowsGuidelineBeforeDisplayNameAndProceedsAfterAgree() async {
+        let profile = MockSoratomoProfileService()
+        profile.needsDisplayNameResult = .success(true)
+        let guideline = unagreedGuideline()
+        guideline.agreeResult = .success(())
+        let viewModel = makeViewModel(
+            mode: .create, groupService: MockSoratomoGroupService(), profileService: profile,
+            guideline: guideline, recorder: Recorder()
+        )
+
+        await viewModel.start()
+
+        // 所属 0 でも、表示名・グループ名より先に全文を出す（要件 10.1）
+        XCTAssertEqual(viewModel.step, .guideline(.create))
+        XCTAssertTrue(viewModel.canCancel)
+
+        await viewModel.agreeGuideline()
+
+        // 記録に成功してから、表示名の入力へ進む（要件 10.6）
+        XCTAssertEqual(guideline.agreeCalls, [SoratomoGuideline.currentVersion])
+        XCTAssertEqual(viewModel.step, .displayName)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testAgreedSkipsGuidelineForCreateAndJoin() async {
+        for mode in [SoratomoGroupFormMode.create, .join] {
+            let guideline = agreedGuideline()
+            let viewModel = makeViewModel(
+                mode: mode, groupService: MockSoratomoGroupService(), profileService: profileWithName(),
+                guideline: guideline, recorder: Recorder()
+            )
+
+            await viewModel.start()
+
+            // 同意済みなら全文を出さない（要件 10.8）
+            XCTAssertEqual(viewModel.step, .form, "mode=\(mode)")
+            XCTAssertTrue(guideline.agreeCalls.isEmpty, "mode=\(mode)")
+        }
+    }
+
+    func testJoinGuidelineUsesJoinTrigger() async {
+        let viewModel = makeViewModel(
+            mode: .join, groupService: MockSoratomoGroupService(), profileService: profileWithName(),
+            guideline: unagreedGuideline(), recorder: Recorder()
+        )
+
+        await viewModel.start()
+
+        XCTAssertEqual(viewModel.step, .guideline(.join))
+    }
+
+    func testDeclineClosesWithoutRecording() async {
+        let guideline = unagreedGuideline()
+        let groupService = MockSoratomoGroupService()
+        let recorder = Recorder()
+        let viewModel = makeViewModel(
+            mode: .create, groupService: groupService, profileService: profileWithName(),
+            guideline: guideline, recorder: recorder
+        )
+
+        await viewModel.start()
+        viewModel.declineGuideline()
+
+        // 同意を記録せず、作成へ進ませずにシートを閉じる（要件 10.4）
+        XCTAssertEqual(recorder.declined, 1)
+        XCTAssertTrue(guideline.agreeCalls.isEmpty)
+        XCTAssertTrue(groupService.createGroupCalls.isEmpty)
+        XCTAssertTrue(recorder.completed.isEmpty)
+    }
+
+    func testAgreeFailureDoesNotProceed() async {
+        for error in [SoratomoError.network, .unknown] {
+            let guideline = unagreedGuideline()
+            guideline.agreeResult = .failure(error)
+            let viewModel = makeViewModel(
+                mode: .create, groupService: MockSoratomoGroupService(), profileService: profileWithName(),
+                guideline: guideline, recorder: Recorder()
+            )
+
+            await viewModel.start()
+            await viewModel.agreeGuideline()
+
+            // 先へ進ませず「同意を記録できませんでした」（要件 10.7）
+            XCTAssertEqual(viewModel.step, .guideline(.create), "error=\(error)")
+            XCTAssertEqual(viewModel.errorMessage, "同意を記録できませんでした", "error=\(error)")
+            XCTAssertFalse(viewModel.isProcessing, "error=\(error)")
+        }
+    }
+
+    func testAgreeOfflineDoesNotRecordOrProceed() async {
+        let guideline = unagreedGuideline()
+        guideline.agreeResult = .success(())
+        let viewModel = makeViewModel(
+            mode: .join, groupService: MockSoratomoGroupService(), profileService: profileWithName(),
+            guideline: guideline, online: false, recorder: Recorder()
+        )
+
+        await viewModel.start()
+        await viewModel.agreeGuideline()
+
+        XCTAssertTrue(guideline.agreeCalls.isEmpty)
+        XCTAssertEqual(viewModel.step, .guideline(.join))
+        XCTAssertEqual(viewModel.errorMessage, "同意を記録できませんでした")
+    }
+
+    func testAgreeRejectedAsOutdatedAppShowsUpdateGuide() async {
+        let guideline = unagreedGuideline()
+        guideline.agreeResult = .failure(.outdatedApp)
+        let viewModel = makeViewModel(
+            mode: .create, groupService: MockSoratomoGroupService(), profileService: profileWithName(),
+            guideline: guideline, recorder: Recorder()
+        )
+
+        await viewModel.start()
+        await viewModel.agreeGuideline()
+
+        XCTAssertEqual(viewModel.step, .guideline(.create))
+        XCTAssertEqual(viewModel.errorMessage, "アプリを最新の版にアップデートしてください")
+    }
+
+    func testConsentStatusUnreadableDoesNotBlock() async {
+        let guideline = MockSoratomoGuidelineService()
+        guideline.fetchConsentStatusResult = .failure(.network)
+        let viewModel = makeViewModel(
+            mode: .create, groupService: MockSoratomoGroupService(), profileService: profileWithName(),
+            guideline: guideline, recorder: Recorder()
+        )
+
+        await viewModel.start()
+
+        // 読めなければ全文を出さずに進む（作成と参加はサーバーが同意を確かめる）
+        XCTAssertEqual(viewModel.step, .form)
+    }
+
+    func testConsentRequiredReturnsToGuidelineKeepsInputAndResumesForm() async {
+        let groupService = MockSoratomoGroupService()
+        groupService.createGroupResult = .failure(.consentRequired)
+        let guideline = agreedGuideline()
+        guideline.agreeResult = .success(())
+        let viewModel = makeViewModel(
+            mode: .create, groupService: groupService, profileService: profileWithName(),
+            guideline: guideline, recorder: Recorder()
+        )
+
+        await viewModel.start()
+        viewModel.groupNameInput = "空の会"
+        await viewModel.submit()
+
+        // サーバーが同意を求めたら全文へ戻り、入力は残す（要件 10.11）
+        XCTAssertEqual(viewModel.step, .guideline(.create))
+        XCTAssertEqual(viewModel.groupNameInput, "空の会")
+        XCTAssertNil(viewModel.errorMessage)
+
+        await viewModel.agreeGuideline()
+
+        // 同意したら入力の段へ戻り、入力したグループ名で確定し直せる
+        XCTAssertEqual(viewModel.step, .form)
+        XCTAssertEqual(viewModel.groupNameInput, "空の会")
+    }
+
+    func testConsentRequiredOnJoinKeepsInviteCode() async {
+        let groupService = MockSoratomoGroupService()
+        groupService.joinGroupResult = .failure(.consentRequired)
+        let viewModel = makeViewModel(
+            mode: .join, groupService: groupService, profileService: profileWithName(), recorder: Recorder()
+        )
+
+        await viewModel.start()
+        viewModel.inviteCodeInput = "ABCD-EFGH"
+        await viewModel.submit()
+
+        XCTAssertEqual(viewModel.step, .guideline(.join))
+        XCTAssertEqual(viewModel.inviteCodeInput, "ABCD-EFGH")
+    }
+
+    // MARK: - 作成・参加の拒否の文言（release-gate 10.4・要件 8.7・11.6・11.9）
+
+    func testRejectionMessagesKeepInputAndDoNotRevealWord() async {
+        let cases: [(SoratomoError, String)] = [
+            (.suspended, "そらともの利用が停止されています。設定の『お問い合わせ』からご連絡ください"),
+            (.outdatedApp, "アプリを最新の版にアップデートしてください"),
+            (.ngWord, "使えない言葉が含まれています"),
+        ]
+        for (error, message) in cases {
+            let groupService = MockSoratomoGroupService()
+            groupService.createGroupResult = .failure(error)
+            groupService.joinGroupResult = .failure(error)
+
+            let create = makeViewModel(
+                mode: .create, groupService: groupService, profileService: profileWithName(), recorder: Recorder()
+            )
+            await create.start()
+            create.groupNameInput = "空の会"
+            await create.submit()
+
+            XCTAssertEqual(create.step, .form, "error=\(error)")
+            XCTAssertEqual(create.errorMessage, message, "error=\(error)")
+            XCTAssertEqual(create.groupNameInput, "空の会", "error=\(error)")
+            XCTAssertFalse(create.errorMessage?.contains("空の会") ?? true, "error=\(error)")
+
+            let join = makeViewModel(
+                mode: .join, groupService: groupService, profileService: profileWithName(), recorder: Recorder()
+            )
+            await join.start()
+            join.inviteCodeInput = "ABCD-EFGH"
+            await join.submit()
+
+            XCTAssertEqual(join.step, .form, "error=\(error)")
+            XCTAssertEqual(join.errorMessage, message, "error=\(error)")
+            XCTAssertEqual(join.inviteCodeInput, "ABCD-EFGH", "error=\(error)")
         }
     }
 }

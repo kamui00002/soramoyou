@@ -4,6 +4,7 @@
 firestore.rules の「そらとも」（招待制の小さなグループで空を共有する）の部分を、
 Firebase の rules test API で評価する。評価だけを行うので、本番のデータにも deploy 済みのルールにも触れない。
 spec: .kiro/specs/soratomo/（tasks.md 2.3・要件 11 の各項目を許可と拒否の両方で確かめる）
+      .kiro/specs/soratomo-release-gate/（tasks.md 5・投稿の作成を閉じ、通報の記録と語のリストを誰にも読み書きさせない）
 
 使い方:
   python3 scripts/rules_test_soratomo.py [firestore.rules のパス]            # 省略時はリポジトリ直下
@@ -54,13 +55,9 @@ NOCLAIM = "noclaim"    # g1 のメンバーの文書はあるが、機能フラ�
 OUTSIDER = "outsider"  # クレームはあるが g1 のメンバーではない
 G1_MEMBERS = {AUTHOR, OWNER, MEMBER, NOCLAIM}
 
-# 正しい投稿（5 項目）。作成日時は要求の時刻と同じ
+# 旧ルールで正しかった投稿（5 項目）。作成日時は要求の時刻と同じ。
+# 作成は Callable（soratomoCreateSky）だけになったので、これもアプリからは拒否される（release-gate 5）
 VALID_SKY = {"authorId": AUTHOR, "caption": "夕焼け", "width": 1080, "height": 1440, "createdAt": T}
-
-# キャプションの入力は research.md の要確認 1 と同じもの（数え方はコードポイント）
-EMOJI = "\U0001F600"          # サロゲートペア（UTF-16 で 2）
-E_ACUTE = "é"           # e＋結合文字（コードポイント 2・書記素 1）
-MIX_100 = EMOJI * 20 + E_ACUTE * 20 + "あ" * 40  # コードポイント 100・UTF-16 120
 
 
 def sky(**fields):
@@ -74,9 +71,9 @@ def sky(**fields):
     return data
 
 
-def case(name, expect, uid, method, path, data=None, existing=None, claim=True):
-    """1 ケース。uid=None は未ログイン。claim=False は soratomoBeta の無い利用者（別のクレームは持つ）"""
-    return {"name": name, "expect": expect, "uid": uid, "claim": claim and uid != NOCLAIM,
+def case(name, expect, uid, method, path, data=None, existing=None):
+    """1 ケース。uid=None は未ログイン。uid=NOCLAIM は soratomoBeta の無い利用者（別のクレームは持つ）"""
+    return {"name": name, "expect": expect, "uid": uid, "claim": uid != NOCLAIM,
             "method": method, "path": path, "data": data, "existing": existing}
 
 
@@ -140,10 +137,12 @@ CASES = [
     case("所属 本人が所属の写しを作成", DENY, OUTSIDER, "create", D + "/soratomoUsers/" + OUTSIDER + "/groups/g1",
          {"groupId": "g1", "joinedAt": T}),
 
-    # --- 投稿の作成（要件 11.3・11.4・11.12・11.13）---
-    case("作成 メンバーが自分の投稿者 ID で 5 項目の投稿", ALLOW, AUTHOR, "create", SKY, sky()),
-    case("作成 キャプション無しの 4 項目の投稿", ALLOW, AUTHOR, "create", SKY, sky(caption=None)),
-    case("作成 幅 1・高さ 2048（境界）", ALLOW, AUTHOR, "create", SKY, sky(width=1, height=2048)),
+    # --- 投稿の作成（release-gate 要件 8.6・11.5）---
+    # 作成は Callable（soratomoCreateSky）のトランザクションだけ。旧ルールで許していた正しい 5 項目・4 項目も、
+    # アプリからは拒否する（直接書けると、利用停止と NG ワードの検査を飛ばせる）。
+    # キャプションと幅・高さの値の検査は functions/soratomoCore.test.js（validateSkyInput）へ移した
+    case("作成 メンバーが自分の投稿者 ID で 5 項目の投稿（作成は Callable だけ）", DENY, AUTHOR, "create", SKY, sky()),
+    case("作成 キャプション無しの 4 項目の投稿（作成は Callable だけ）", DENY, AUTHOR, "create", SKY, sky(caption=None)),
     case("作成 非メンバー（クレーム有り）が投稿", DENY, OUTSIDER, "create", SKY, sky(authorId=OUTSIDER)),
     case("作成 他人の投稿者 ID で投稿", DENY, MEMBER, "create", SKY, sky()),
     case("作成 未ログインで投稿", DENY, None, "create", SKY, sky()),
@@ -155,12 +154,6 @@ CASES = [
     case("作成 投稿者 ID が無い", DENY, AUTHOR, "create", SKY, sky(authorId=None)),
     case("作成 幅が無い", DENY, AUTHOR, "create", SKY, sky(width=None)),
     case("作成 高さが無い", DENY, AUTHOR, "create", SKY, sky(height=None)),
-    case("作成 幅 0", DENY, AUTHOR, "create", SKY, sky(width=0)),
-    case("作成 幅 2049", DENY, AUTHOR, "create", SKY, sky(width=2049)),
-    case("作成 高さ 0", DENY, AUTHOR, "create", SKY, sky(height=0)),
-    case("作成 高さ 2049", DENY, AUTHOR, "create", SKY, sky(height=2049)),
-    case("作成 幅が小数（1080.5）", DENY, AUTHOR, "create", SKY, sky(width=1080.5)),
-    case("作成 高さが文字列（\"1440\"）", DENY, AUTHOR, "create", SKY, sky(height="1440")),
 
     # --- 投稿の更新と削除（要件 11.6・11.15）---
     case("更新 投稿者が自分の投稿のキャプションを更新", DENY, AUTHOR, "update", SKY,
@@ -170,30 +163,43 @@ CASES = [
     case("削除 ほかのメンバーが他人の投稿を削除", DENY, MEMBER, "delete", SKY, existing=sky()),
     case("削除 未ログインで削除", DENY, None, "delete", SKY, existing=sky()),
 
-    # --- キャプション（要件 11.11・入力は research.md の要確認 1）---
-    case("キャプション コードポイント 100（絵文字 20＋結合文字 20＋かな 40・UTF-16 120）", ALLOW, AUTHOR, "create", SKY,
-         sky(caption=MIX_100)),
-    case("キャプション ASCII 100", ALLOW, AUTHOR, "create", SKY, sky(caption="a" * 100)),
-    case("キャプション 絵文字 50（UTF-16 100）", ALLOW, AUTHOR, "create", SKY, sky(caption=EMOJI * 50)),
-    case("キャプション 絵文字 50＋a（コードポイント 51・UTF-16 101）", ALLOW, AUTHOR, "create", SKY,
-         sky(caption=EMOJI * 50 + "a")),
-    case("キャプション かな 100（UTF-8 300 バイト）", ALLOW, AUTHOR, "create", SKY, sky(caption="あ" * 100)),
-    case("キャプション タブを含む", ALLOW, AUTHOR, "create", SKY, sky(caption="a\tb")),
-    case("キャプション コードポイント 101（上の 100＋a）", DENY, AUTHOR, "create", SKY, sky(caption=MIX_100 + "a")),
-    case("キャプション ASCII 101", DENY, AUTHOR, "create", SKY, sky(caption="a" * 101)),
-    case("キャプション e＋U+0301 ×60（書記素 60・コードポイント 120）", DENY, AUTHOR, "create", SKY,
-         sky(caption=E_ACUTE * 60)),
-    case("キャプション 空文字", DENY, AUTHOR, "create", SKY, sky(caption="")),
-    case("キャプション 数値", DENY, AUTHOR, "create", SKY, sky(caption=123)),
-    case("キャプション 改行 LF", DENY, AUTHOR, "create", SKY, sky(caption="a\nb")),
-    case("キャプション 改行 LF が 2 つ", DENY, AUTHOR, "create", SKY, sky(caption="a\nb\nc")),
-    case("キャプション 改行 CR", DENY, AUTHOR, "create", SKY, sky(caption="a\rb")),
-    case("キャプション 改行 CRLF", DENY, AUTHOR, "create", SKY, sky(caption="a\r\nb")),
-    case("キャプション 改行 U+0085", DENY, AUTHOR, "create", SKY, sky(caption="a\u0085b")),
-    case("キャプション 改行 U+2028", DENY, AUTHOR, "create", SKY, sky(caption="a b")),
-    case("キャプション 改行 U+2029", DENY, AUTHOR, "create", SKY, sky(caption="a b")),
-    case("キャプション 末尾の LF", DENY, AUTHOR, "create", SKY, sky(caption="ab\n")),
+    # --- 利用者の文書の同意と利用停止（release-gate 要件 8.9・10.14）---
+    # 本人の読み取り（同意と利用停止の項目を含む）と他人の拒否は、上の「所属」の get のケースで見る。
+    # ここでは、本人が停止を外す・同意を書く書き込みを見る（停止と解除は開発者の運用手順、同意は Callable だけ）
+    case("利用者 本人が利用停止の項目（suspendedAt）を消す", DENY, MEMBER, "update", D + "/soratomoUsers/" + MEMBER,
+         {"groupCount": 1}, existing={"groupCount": 1, "suspendedAt": T}),
+    case("利用者 本人が同意の版（guidelineVersion）を書く", DENY, MEMBER, "update", D + "/soratomoUsers/" + MEMBER,
+         {"groupCount": 1, "guidelineVersion": 1, "guidelineAgreedAt": T}, existing={"groupCount": 1}),
 ]
+
+
+def closed_collection_cases():
+    """通報の記録と語のリスト（release-gate 要件 6.10・11.10）。
+    Functions（Admin SDK）だけが読み書きする。どの立場の利用者にも get・list・create・update・delete を許さない"""
+    report = {"groupId": "g1", "skyId": "s1", "authorId": AUTHOR, "reporterId": MEMBER, "reason": "spam",
+              "createdAt": T, "forwardStatus": "pending", "forwardAttempts": 0}
+    ng_words = {"words": ["てすとごい"]}  # ダミーの語（実在の語は書かない）
+    targets = [
+        # 通報の記録の ID は「グループ ID_投稿 ID_通報者」（soratomoCore.reportDocId）
+        ("通報の記録", "soratomoReports", "g1_s1_" + MEMBER, report, dict(report, forwardStatus="sent")),
+        ("語のリスト", "soratomoConfig", "ngWords", ng_words, {"words": []}),
+    ]
+    roles = [("通報者", MEMBER), ("投稿者", AUTHOR), ("ほかのメンバー", OWNER), ("未ログイン", None)]
+    cases = []
+    for label, collection, doc_id, data, updated in targets:
+        doc = D + "/" + collection + "/" + doc_id
+        for role, uid in roles:
+            cases += [
+                case(f"{label} {role}が 1 件取得", DENY, uid, "get", doc),
+                case(f"{label} {role}が一覧を取得", DENY, uid, "list", D + "/" + collection + "/x"),
+                case(f"{label} {role}が作成", DENY, uid, "create", doc, data),
+                case(f"{label} {role}が更新", DENY, uid, "update", doc, updated, existing=data),
+                case(f"{label} {role}が削除", DENY, uid, "delete", doc, existing=data),
+            ]
+    return cases
+
+
+CASES += closed_collection_cases()
 
 # 陽性対照: (名前, [(置き換え元, 置き換え先), ...])。置き換え元はルールに 1 回だけ現れること
 # 細かい壊し方（条件を 1 つ外す・境界を 1 つずらす）で「その条件をテストが見ている」ことを、
@@ -201,14 +207,13 @@ CASES = [
 # 同じ文字列が複数回出る箇所は、直前の match の行ごと置き換え元にする（インデントも含めて完全一致）。
 CLAIM = "isAuthenticated() && request.auth.token.get('soratomoBeta', false) == true"
 MEMBER_EXISTS = "return exists(/databases/$(database)/documents/soratomoGroups/$(groupId)/members/$(request.auth.uid));"
-CAPTION_RE = r"[^\\r\\n\\x{85}\\x{2028}\\x{2029}]{1,100}"
-DIMENSION = "return value is int && value >= 1 && value <= 2048;"
-SKY_CREATE = ("allow create: if isSoratomoUser()\n"
-              "                      && isSoratomoMember(groupId)\n"
-              "                      && isValidSoratomoSky(request.resource.data);")
+# 投稿の作成と更新は同じ「if false」なので、2 行の組で置き換え元を 1 回にする
+SKY_CREATE_UPDATE = "allow create: if false;\n        allow update: if false;"
 SKY_DELETE = "allow delete: if isSoratomoUser() && resource.data.authorId == request.auth.uid;"
 USERS_READ = "match /soratomoUsers/{uid} {\n      allow read: if isSoratomoUser() && isOwner(uid);"
 USER_GROUPS_READ = "match /groups/{groupId} {\n        allow read: if isSoratomoUser() && isOwner(uid);"
+REPORTS_CLOSED = "match /soratomoReports/{reportId} {\n      allow read, write: if false;"
+CONFIG_CLOSED = "match /soratomoConfig/{docId} {\n      allow read, write: if false;"
 
 MUTANTS = [
     # 共通の判定
@@ -233,39 +238,14 @@ MUTANTS = [
     ("所属数の書き込みを許す", [("isOwner(uid);\n      allow write: if false;", "isOwner(uid);\n      allow write: if true;")]),
     ("所属の写しの書き込みを許す", [("isOwner(uid);\n        allow write: if false;",
                                     "isOwner(uid);\n        allow write: if true;")]),
-    # 投稿の作成
-    ("作成の条件をすべて外す", [(SKY_CREATE, "allow create: if true;")]),
-    ("項目の制限（hasOnly）を外す",
-     [("data.keys().hasOnly(['authorId', 'caption', 'width', 'height', 'createdAt'])\n             && ", "")]),
-    ("必須の項目（hasAll）を外す", [("data.keys().hasAll(['authorId', 'width', 'height', 'createdAt'])\n             && ", "")]),
-    ("投稿者の一致を外す", [("\n             && data.authorId == request.auth.uid", "")]),
-    ("作成日時の一致を外す", [("\n             && data.createdAt == request.time", "")]),
-    ("幅の検査を外す", [("\n             && isValidSoratomoDimension(data.width)", "")]),
-    ("高さの検査を外す", [("\n             && isValidSoratomoDimension(data.height)", "")]),
-    ("幅・高さの整数の判定を外す", [(DIMENSION, "return value >= 1 && value <= 2048;")]),
-    ("幅・高さの範囲を外す", [(DIMENSION, "return value is int;")]),
-    ("幅・高さの下限を 1 ずらす（> 1）", [(DIMENSION, "return value is int && value > 1 && value <= 2048;")]),
-    ("幅・高さの上限を 1 ずらす（< 2048）", [(DIMENSION, "return value is int && value >= 1 && value < 2048;")]),
-    # キャプション
-    ("キャプションの検査を外す", [("\n             && isValidSoratomoCaption(data)", "")]),
-    ("キャプションの型の判定を外す", [("(data.caption is string\n                 && ", "(")]),
-    ("キャプションを size()（UTF-16）で数える",
-     [(CAPTION_RE + "')", r"[^\\r\\n\\x{85}\\x{2028}\\x{2029}]+') && data.caption.size() <= 100")]),
-    ("キャプションの上限を外す（{1,}）", [(CAPTION_RE, CAPTION_RE.replace("{1,100}", "{1,}"))]),
-    ("キャプションの上限を 1 ずらす（{1,99}）", [(CAPTION_RE, CAPTION_RE.replace("{1,100}", "{1,99}"))]),
-    ("キャプションの下限を外す（{0,100}）", [(CAPTION_RE, CAPTION_RE.replace("{1,100}", "{0,100}"))]),
-    ("改行類の検査をすべて外す", [(CAPTION_RE, r"[\\s\\S]{1,100}")]),
-    ("改行類から CR を外す", [(CAPTION_RE, CAPTION_RE.replace(r"\\r", ""))]),
-    ("改行類から LF を外す", [(CAPTION_RE, CAPTION_RE.replace(r"\\n", ""))]),
-    ("改行類から U+0085 を外す", [(CAPTION_RE, CAPTION_RE.replace(r"\\x{85}", ""))]),
-    ("改行類から U+2028 を外す", [(CAPTION_RE, CAPTION_RE.replace(r"\\x{2028}", ""))]),
-    ("改行類から U+2029 を外す", [(CAPTION_RE, CAPTION_RE.replace(r"\\x{2029}", ""))]),
-    ("改行類の代わりに空白類（\\s）を禁じる", [(CAPTION_RE, r"[^\\s\\x{85}\\x{2028}\\x{2029}]{1,100}")]),
-    # 投稿の更新と削除
-    ("投稿の更新を許す", [("isValidSoratomoSky(request.resource.data);\n        allow update: if false;",
-                          "isValidSoratomoSky(request.resource.data);\n        allow update: if true;")]),
+    # 投稿の作成・更新・削除
+    ("投稿の作成を許す", [(SKY_CREATE_UPDATE, SKY_CREATE_UPDATE.replace("create: if false", "create: if true"))]),
+    ("投稿の更新を許す", [(SKY_CREATE_UPDATE, SKY_CREATE_UPDATE.replace("update: if false", "update: if true"))]),
     ("削除の投稿者判定を外す", [(SKY_DELETE, "allow delete: if isSoratomoUser();")]),
     ("削除の条件をすべて外す", [(SKY_DELETE, "allow delete: if true;")]),
+    # 通報の記録と語のリスト
+    ("通報の記録の読み書きを許す", [(REPORTS_CLOSED, REPORTS_CLOSED.replace("if false", "if true"))]),
+    ("語のリストの読み書きを許す", [(CONFIG_CLOSED, CONFIG_CLOSED.replace("if false", "if true"))]),
 ]
 
 
@@ -303,7 +283,7 @@ def evaluate(source, token):
         data=body,
         headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
     )
-    # --mutants は 40 回あまり呼ぶので、接続が切れるなどの一時的な失敗は 3 回まで再試行する（HTTP のエラーは再試行しない）
+    # --mutants は壊し方の数（len(MUTANTS)）だけ呼ぶので、接続が切れるなどの一時的な失敗は 3 回まで再試行する（HTTP のエラーは再試行しない）
     for attempt in range(3):
         try:
             result = json.load(urllib.request.urlopen(req, timeout=60))

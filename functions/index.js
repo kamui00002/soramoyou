@@ -547,5 +547,6 @@ exports.onSkyMotionPurchaseCreated = require("./skyMotionPurchase").onSkyMotionP
 exports.reconcilePendingSkyMotionPurchases =
   require("./skyMotionPurchase").reconcilePendingSkyMotionPurchases;
 
-// MARK: - 「そらとも」（友達グループで空を共有）の Callable 3本と新着投稿の通知。詳細は functions/soratomo.js
+// MARK: - 「そらとも」（友達グループで空を共有）の Callable 7本・トリガー2本（新着投稿の通知・通報の転送）・定期実行1本。
+//   詳細は functions/soratomo.js
 Object.assign(exports, require("./soratomo"));

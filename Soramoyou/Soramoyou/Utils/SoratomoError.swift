@@ -4,6 +4,8 @@
 //
 //  そらとも（友達グループで空を共有）の失敗の種類と、画面に出す固定の文言 ⭐️
 //  （tasks 10.2・design.md の Error Handling・要件 12.5・15.1・15.4）
+//  release-gate 8 で、NGワード・利用停止・同意・アプリが古い・投稿がもう無いの 5 つと、通報・ブロック・同意の記録の
+//  操作の文言を足した（.kiro/specs/soratomo-release-gate/design.md の「エラーと計測」。文言は 12.1 で利用者が確認する下書き）
 //
 
 import Foundation
@@ -48,6 +50,16 @@ enum SoratomoError: Error, Equatable, CaseIterable {
     case backgroundExpired
     /// ルールに拒否された
     case permissionDenied
+    /// 使えない言葉（NGワード）が含まれている。どの語かは画面にもログにも出さない（release-gate 要件 11.6・11.7・11.9）
+    case ngWord
+    /// そらともの利用が停止されている（release-gate 要件 8.7）
+    case suspended
+    /// そらともガイドラインへの同意が必要（release-gate 要件 10.11）。出せる画面では文言でなく全文を出す
+    case consentRequired
+    /// サーバーのガイドラインの版がアプリより新しい（アップデートが要る・design.md の「古い版のアプリ」）
+    case outdatedApp
+    /// 対象の投稿がもう無い（通報した投稿が削除済み・release-gate 要件 5.7）
+    case skyGone
     /// 上のどれでもない
     case unknown
 
@@ -83,6 +95,17 @@ enum SoratomoError: Error, Equatable, CaseIterable {
             "この写真は大きすぎて送れません"
         case .displayNameInvalid:
             "表示名は1〜20文字で入力してください"
+        case .ngWord:
+            // 該当した語を補間しない（release-gate 要件 11.9）
+            "使えない言葉が含まれています"
+        case .suspended:
+            "そらともの利用が停止されています。設定の『お問い合わせ』からご連絡ください"
+        case .consentRequired:
+            "そらともガイドラインへの同意が必要です"
+        case .outdatedApp:
+            "アプリを最新の版にアップデートしてください"
+        case .skyGone:
+            "この投稿はもうありません"
         case .flagOff, .notOwner, .permissionDenied, .uploadTimeout, .backgroundExpired, .unknown:
             "うまくいきませんでした。時間をおいてもう一度お試しください"
         }
@@ -92,9 +115,9 @@ enum SoratomoError: Error, Equatable, CaseIterable {
 // MARK: - 操作ごとの失敗の文言
 
 /// 失敗したとき、種類ではなく「何ができなかったか」を出す操作
-/// （design.md の Error Categories の表の下・要件 3.12・8.19・18.5）
+/// （design.md の Error Categories の表の下・要件 3.12・8.19・18.5。通報・ブロック・同意の記録は release-gate 要件 5.6・9.9・10.7）
 ///
-/// この 3 つの操作は、通信できない場合を含めて、失敗したら操作の文言を出す。
+/// これらの操作は、通信できない場合を含めて、失敗したら操作の文言を出す。
 /// `SoratomoError` の case にしないのは、計測の理由（`not_owner`・`network` など）を種類から写すため。
 /// 操作の名前を case にすると、種類が消えて、計測の理由がすべて `unknown` に落ちる。
 /// 例: 再発行の失敗 → 画面は `SoratomoFailedAction.regenerateInviteCode.userMessage`、
@@ -106,6 +129,12 @@ enum SoratomoFailedAction: CaseIterable {
     case deleteSky
     /// 表示名の保存（入力した表示名を残す・要件 18.5）。文字数の検証の失敗は `SoratomoError.displayNameInvalid` の文言
     case saveDisplayName
+    /// 通報の送信（投稿は隠さず、もう一度通報できる・release-gate 要件 5.6）。投稿がもう無いときは `SoratomoError.skyGone` の文言
+    case report
+    /// ブロックの保存（投稿は隠さない・release-gate 要件 9.9）
+    case block
+    /// ガイドラインへの同意の記録（先へ進ませない・release-gate 要件 10.7）
+    case agreeGuideline
 
     /// 画面に出す文言（利用者の入力を含めない固定の文言）
     var userMessage: String {
@@ -116,6 +145,12 @@ enum SoratomoFailedAction: CaseIterable {
             "削除できませんでした"
         case .saveDisplayName:
             "表示名を保存できませんでした"
+        case .report:
+            "通報を送信できませんでした"
+        case .block:
+            "ブロックできませんでした"
+        case .agreeGuideline:
+            "同意を記録できませんでした"
         }
     }
 }

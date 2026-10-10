@@ -106,6 +106,8 @@ final class MockSoratomoGroupService: SoratomoGroupServiceProtocol, @unchecked S
 final class MockSoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Sendable {
     // 返す結果
     var createSkyResult: Result<Void, SoratomoError> = .failure(.unknown)
+    /// `createSky` が呼ばれた順に返す結果（空になったら `createSkyResult` を返す・送り直しのテスト用）
+    var createSkyResultQueue: [Result<Void, SoratomoError>] = []
     var skyExistsOnServerResult: Result<Bool, SoratomoError> = .failure(.unknown)
     var deleteSkyResult: Result<Void, SoratomoError> = .failure(.unknown)
     /// `countTodaySkies` が返す件数（nil = 数えられなかった）
@@ -120,9 +122,15 @@ final class MockSoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Senda
     private(set) var countTodaySkiesCalls: [(groupId: String, authorId: String, since: Date)] = []
     /// 止められた監視の番号（`observeTimelineCalls` の添字）
     private(set) var cancelledTimelineIndexes: Set<Int> = []
+    /// 投稿 1 件の監視の呼び出し（release-gate 9.3）
+    private(set) var observeSkyCalls: [(groupId: String, skyId: String)] = []
+    /// 止められた投稿 1 件の監視の番号（`observeSkyCalls` の添字）
+    private(set) var cancelledSkyIndexes: Set<Int> = []
 
     /// 監視の受け手（`observeTimelineCalls` と同じ添字）
     private var timelineObservers: [@MainActor (Result<SoratomoTimelineSnapshot, SoratomoError>) -> Void] = []
+    /// 投稿 1 件の監視の受け手（`observeSkyCalls` と同じ添字）
+    private var skyObservers: [@MainActor (Result<SoratomoSkyPresence, SoratomoError>) -> Void] = []
 
     func newSkyId(groupId: String) -> String {
         newSkyIdCalls.append(groupId)
@@ -142,9 +150,23 @@ final class MockSoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Senda
         }
     }
 
+    func observeSky(
+        groupId: String,
+        skyId: String,
+        onChange: @escaping @MainActor (Result<SoratomoSkyPresence, SoratomoError>) -> Void
+    ) -> SoratomoListenerToken {
+        let index = observeSkyCalls.count
+        observeSkyCalls.append((groupId, skyId))
+        skyObservers.append(onChange)
+        return SoratomoListenerToken { [weak self] in
+            self?.cancelledSkyIndexes.insert(index)
+        }
+    }
+
     func createSky(_ draft: SoratomoSkyDraft) async throws(SoratomoError) {
         createSkyCalls.append(draft)
-        try createSkyResult.soratomoValue()
+        let result = createSkyResultQueue.isEmpty ? createSkyResult : createSkyResultQueue.removeFirst()
+        try result.soratomoValue()
     }
 
     func skyExistsOnServer(groupId: String, skyId: String) async throws(SoratomoError) -> Bool {
@@ -169,6 +191,15 @@ final class MockSoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Senda
             return
         }
         timelineObservers[index](result)
+    }
+
+    /// いちばん新しい、止められていない投稿 1 件の監視に結果を届ける（無ければ何もしない）
+    @MainActor
+    func emitSky(_ result: Result<SoratomoSkyPresence, SoratomoError>) {
+        guard let index = skyObservers.indices.last(where: { !cancelledSkyIndexes.contains($0) }) else {
+            return
+        }
+        skyObservers[index](result)
     }
 }
 
@@ -236,5 +267,86 @@ final class MockSoratomoProfileService: SoratomoProfileServiceProtocol, @uncheck
     func setNotifySoratomo(uid: String, enabled: Bool) async throws(SoratomoError) {
         setNotifySoratomoCalls.append((uid, enabled))
         try setNotifySoratomoResult.soratomoValue()
+    }
+}
+
+// MARK: - 通報とブロック（release-gate 9.2）
+
+/// `SoratomoModerationServiceProtocol` のモック
+///
+/// ⚠️ 本物と違い、ブロックが成功しても `.userBlocked` を送らない（呼ばれた引数を記録するだけ）。
+final class MockSoratomoModerationService: SoratomoModerationServiceProtocol, @unchecked Sendable {
+    // 返す結果
+    var reportResult: Result<Void, SoratomoError> = .failure(.unknown)
+    var blockResult: Result<Void, SoratomoError> = .failure(.unknown)
+    var fetchBlockedUserIdsResult: Result<Set<String>, SoratomoError> = .failure(.unknown)
+    /// 通報が呼ばれたとき、結果を返す前に流す処理（処理中で止めておくのに使う・release-gate 10.1）
+    var onReport: (@Sendable () async -> Void)?
+
+    // 呼ばれた引数
+    private(set) var reportCalls: [(groupId: String, skyId: String, reason: ReportReason)] = []
+    private(set) var blockCalls: [(uid: String, authorId: String)] = []
+    private(set) var fetchBlockedUserIdsCalls: [String] = []
+
+    func report(groupId: String, skyId: String, reason: ReportReason) async throws(SoratomoError) {
+        reportCalls.append((groupId, skyId, reason))
+        await onReport?()
+        try reportResult.soratomoValue()
+    }
+
+    func block(uid: String, authorId: String) async throws(SoratomoError) {
+        blockCalls.append((uid, authorId))
+        try blockResult.soratomoValue()
+    }
+
+    func fetchBlockedUserIds(uid: String) async throws(SoratomoError) -> Set<String> {
+        fetchBlockedUserIdsCalls.append(uid)
+        return try fetchBlockedUserIdsResult.soratomoValue()
+    }
+}
+
+// MARK: - 退会のそらとも分（release-gate 9.4）
+
+/// `SoratomoAccountDeletionServiceProtocol` のモック
+///
+/// ⚠️ 失敗の型が `SoratomoError` でないので、上の `soratomoValue()` は使わない。
+final class MockSoratomoAccountDeletionService: SoratomoAccountDeletionServiceProtocol, @unchecked Sendable {
+    // 返す結果
+    var deleteMyDataResult: Result<Void, SoratomoAccountDeletionError> = .failure(.unknown)
+    /// 呼ばれたとき、結果を返す前に流す処理（順序の確かめや、処理中で止めておくのに使う）
+    var onDeleteMyData: (@Sendable () async -> Void)?
+
+    // 呼ばれた回数
+    private(set) var deleteMyDataCallCount = 0
+
+    func deleteMyData() async throws(SoratomoAccountDeletionError) {
+        deleteMyDataCallCount += 1
+        await onDeleteMyData?()
+        if case let .failure(error) = deleteMyDataResult {
+            throw error
+        }
+    }
+}
+
+// MARK: - ガイドラインへの同意（release-gate 9.5）
+
+/// `SoratomoGuidelineServiceProtocol` のモック
+final class MockSoratomoGuidelineService: SoratomoGuidelineServiceProtocol, @unchecked Sendable {
+    // 返す結果
+    var fetchConsentStatusResult: Result<SoratomoConsentStatus, SoratomoError> = .failure(.unknown)
+    var agreeResult: Result<Void, SoratomoError> = .failure(.unknown)
+
+    // 呼ばれた引数
+    private(set) var fetchConsentStatusCalls: [String] = []
+    private(set) var agreeCalls: [Int] = []
+
+    func fetchConsentStatus(uid: String) async throws(SoratomoError) -> SoratomoConsentStatus {
+        fetchConsentStatusCalls.append(uid)
+        return try fetchConsentStatusResult.soratomoValue()
+    }
+
+    func agree(version: Int) async throws(SoratomoError) {
+        agreeCalls.append(version)
+        try agreeResult.soratomoValue()
     }
 }

@@ -90,6 +90,14 @@ final class SoratomoDependencies {
     let network: NetworkStatusMonitor
     /// タイムラインで読んだ投稿の覚え（投稿詳細が読む）
     let skyLookup: SoratomoSkyLookup
+    /// ⭐️ 通報とブロック（release-gate 9.2）
+    let moderationService: any SoratomoModerationServiceProtocol
+    /// ⭐️ ガイドラインへの同意の状態と記録（release-gate 9.5）
+    let guidelineService: any SoratomoGuidelineServiceProtocol
+    /// ⭐️ ブロックした投稿者（release-gate 9.1）。すべてのグループのタイムラインと投稿詳細が同じものを読む
+    let blockedAuthors: SoratomoBlockedAuthors
+    /// ⭐️ この端末で通報した投稿（release-gate 9.1）。すべてのグループのタイムラインと投稿詳細が同じものを読む
+    let reportedSkies: SoratomoReportedSkies
     /// いまログインしている利用者の uid（未ログインなら nil）
     let currentUid: () -> String?
 
@@ -102,8 +110,8 @@ final class SoratomoDependencies {
     weak var activeTimelineViewModel: SoratomoTimelineViewModel?
 
     /// - Parameters: 各サービス。テストや Preview では、モックを渡す
-    ///   （`skyLookup` に既定値を付けないのは、既定の引数がメインアクターの外で評価され、
-    ///   メインアクターの `SoratomoSkyLookup()` を呼べないため）
+    ///   （`skyLookup`・`blockedAuthors`・`reportedSkies` に既定値を付けないのは、既定の引数がメインアクターの外で
+    ///   評価され、メインアクターの型の init を呼べないため）
     init(
         groupService: any SoratomoGroupServiceProtocol,
         skyService: any SoratomoSkyServiceProtocol,
@@ -113,6 +121,10 @@ final class SoratomoDependencies {
         primer: any SoratomoNotificationPrimerProtocol,
         network: NetworkStatusMonitor,
         skyLookup: SoratomoSkyLookup,
+        moderationService: any SoratomoModerationServiceProtocol,
+        guidelineService: any SoratomoGuidelineServiceProtocol,
+        blockedAuthors: SoratomoBlockedAuthors,
+        reportedSkies: SoratomoReportedSkies,
         currentUid: @escaping () -> String?
     ) {
         self.groupService = groupService
@@ -123,13 +135,28 @@ final class SoratomoDependencies {
         self.primer = primer
         self.network = network
         self.skyLookup = skyLookup
+        self.moderationService = moderationService
+        self.guidelineService = guidelineService
+        self.blockedAuthors = blockedAuthors
+        self.reportedSkies = reportedSkies
         self.currentUid = currentUid
+    }
+
+    /// サインアウトのときに、セッションの間だけ持つものを空にする（ContentView のサインアウトの後片付けから呼ぶ）
+    ///
+    /// 表示名とアイコンの保持・投稿の覚え（14.1）と、ブロックの一覧・通報の記録のメモリ（release-gate 9.6・要件 9.4・9.6）。
+    /// ⚠️ 端末の通報の記録（UserDefaults）は消さない。同じ人が入り直したときも隠したままにするため（決定事項 6）。
+    ///    消すのは退会のときだけ（`SoratomoReportedSkies.erase`・SettingsViewModel）
+    func clearSessionState() {
+        profileStore.clear()
+        skyLookup.clear()
+        blockedAuthors.clear()
+        reportedSkies.clear()
     }
 
     /// アプリ全体で使う本物の容れ物
     ///
-    /// サインアウト時は、14.1 が `live.profileStore.clear()`・`live.skyLookup.clear()`・
-    /// `SoratomoImageCache.clear()` を呼ぶ。
+    /// サインアウト時は、ContentView が `live.clearSessionState()` と `SoratomoImageCache.clear()` を呼ぶ。
     static let live = SoratomoDependencies(
         groupService: SoratomoGroupService(),
         skyService: SoratomoSkyService(),
@@ -139,6 +166,10 @@ final class SoratomoDependencies {
         primer: SoratomoNotificationPrimer(),
         network: .shared,
         skyLookup: SoratomoSkyLookup(),
+        moderationService: SoratomoModerationService(),
+        guidelineService: SoratomoGuidelineService(),
+        blockedAuthors: SoratomoBlockedAuthors(),
+        reportedSkies: SoratomoReportedSkies(),
         currentUid: { Auth.auth().currentUser?.uid }
     )
 }

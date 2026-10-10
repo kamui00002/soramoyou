@@ -10,6 +10,8 @@
 //  - 投稿を日付の見出しで区切って新しい順に出す。末尾で 20 件ずつ足し、引き下げで最新の 20 件に戻す
 //  - オフラインの間は、読み込んだ投稿を出したまま、先頭にオフラインであることを出す
 //  - 自分の投稿だけに削除の操作を出し、確認の後に削除する（13.6）
+//  - 自分以外の投稿には通報とブロックの操作を出す。通報は 5 つの理由から選び、ブロックは確認の後に行う
+//    （release-gate 10.2・要件 5.1〜5.3・9.1・9.2・9.10）
 //  ⚠️ init のシグネチャは変えない（呼び出し側の SoratomoRootView が使う）
 //
 
@@ -43,6 +45,10 @@ struct SoratomoTimelineView: View {
     @State private var isComposing = false
     /// 削除の確認を出している投稿（nil なら出していない）
     @State private var skyPendingDeletion: SoratomoSky?
+    /// 通報の理由を選ばせている投稿（nil なら出していない）
+    @State private var skyPendingReport: SoratomoSky?
+    /// ブロックの確認を出している投稿（nil なら出していない）
+    @State private var skyPendingBlock: SoratomoSky?
 
     // MARK: - Init
 
@@ -71,7 +77,10 @@ struct SoratomoTimelineView: View {
                 reportAccessible: { [weak router] id in router?.reportAccessible(groupId: id) },
                 reportNotAccessible: { [weak router] id in router?.reportNotAccessible(groupId: id) },
                 rememberSkies: { skies in skyLookup.remember(skies) },
-                forgetSky: { groupId, skyId in skyLookup.forget(groupId: groupId, skyId: skyId) }
+                forgetSky: { groupId, skyId in skyLookup.forget(groupId: groupId, skyId: skyId) },
+                moderationService: dependencies.moderationService,
+                blockedAuthors: dependencies.blockedAuthors,
+                reportedSkies: dependencies.reportedSkies
             )
         )
     }
@@ -120,10 +129,47 @@ struct SoratomoTimelineView: View {
             ) {
                 Button("OK", role: .cancel) {}
             }
+            // 通報の理由は既存の通報と同じ 5 つから 1 つを選ばせる（要件 5.3）
+            .confirmationDialog(
+                "通報理由を選択",
+                isPresented: isChoosingReportReason,
+                titleVisibility: .visible,
+                presenting: skyPendingReport
+            ) { sky in
+                ForEach(ReportReason.allCases, id: \.self) { reason in
+                    Button(reason.displayName) {
+                        Task { await viewModel.report(sky, reason: reason, source: .timeline) }
+                    }
+                }
+                Button("キャンセル", role: .cancel) {}
+            } message: { _ in
+                Text("通報したことは、投稿した人やほかのメンバーには知らされません")
+            }
+            // ブロックは確認してから行う（要件 9.2）。表示名は見出しにだけ使い、ログと計測には出さない（14.1）
+            .alert(
+                blockConfirmationTitle,
+                isPresented: isConfirmingBlock,
+                presenting: skyPendingBlock
+            ) { sky in
+                Button("キャンセル", role: .cancel) {}
+                Button("ブロック", role: .destructive) {
+                    Task { await viewModel.block(sky, source: .timeline) }
+                }
+            } message: { _ in
+                // 消える範囲（そらともとホーム）と、相手に知らされないこと（要件 9.10）を書く
+                Text("この人の投稿が、そらともとホームに表示されなくなります。ブロックしたことは相手に知らされません")
+            }
+            // 通報とブロックの結果の知らせ（要件 5.4〜5.7・9.9）
+            .alert(
+                viewModel.moderationNotice?.userMessage ?? "",
+                isPresented: isShowingModerationNotice
+            ) {
+                Button("OK", role: .cancel) {}
+            }
             .task {
                 // 投稿詳細が同じ ViewModel で削除できるように、いま開いているタイムラインとして知らせる
                 dependencies.activeTimelineViewModel = viewModel
-                viewModel.start()
+                await viewModel.start()
             }
             // 投稿者の表示名とアイコンを、まだ持っていない分だけ取りに行く
             .task(id: authorIds) {
@@ -137,10 +183,12 @@ struct SoratomoTimelineView: View {
     /// 読み込みの状態ごとの中身
     @ViewBuilder
     private var content: some View {
-        if !viewModel.skies.isEmpty {
-            timelineList
-        } else if viewModel.hasLoadedTimeline {
+        if viewModel.showsEmptyGuide {
+            // 読めていて、表示が 0 件で、続きも無いときだけ（全部隠れて続きがありうるときは出さない・9.7）
             emptyGuide
+        } else if !viewModel.skies.isEmpty || viewModel.hasLoadedTimeline {
+            // 全部隠れて表示が 0 件でも、一覧を出す（末尾の「さらに読み込む」と読み込み中の表示を見せるため）
+            timelineList
         } else if viewModel.timelineError != nil {
             errorView
         } else {
@@ -181,6 +229,11 @@ struct SoratomoTimelineView: View {
                     .frame(maxWidth: .infinity)
                     .listRowSeparator(.hidden)
                     .soratomoClearRowBackground()
+            } else if viewModel.canLoadMoreManually {
+                // 自動の続き読みで表示が増えず、続きがありうるとき（9.7）
+                loadMoreButton
+                    .listRowSeparator(.hidden)
+                    .soratomoClearRowBackground()
             }
         }
         .listStyle(.plain)
@@ -210,7 +263,8 @@ struct SoratomoTimelineView: View {
         .buttonStyle(.plain)
         .soratomoCard()
         .accessibilityHint("投稿を大きく表示します")
-        // 削除の操作は投稿者本人にだけ出す（要件 8.15）。VoiceOver ではアクションとして読める
+        // 削除の操作は投稿者本人にだけ出す（要件 8.15）。自分以外の投稿には通報とブロックだけを出す（要件 5.2）。
+        // VoiceOver ではアクションとして読める
         .contextMenu {
             if viewModel.canDelete(sky) {
                 Button(role: .destructive) {
@@ -219,6 +273,23 @@ struct SoratomoTimelineView: View {
                     Label("削除", systemImage: "trash")
                 }
                 .accessibilityLabel("この投稿を削除")
+            } else if viewModel.canModerate(sky) {
+                Button {
+                    skyPendingReport = sky
+                } label: {
+                    Label("通報", systemImage: "exclamationmark.bubble")
+                }
+                .accessibilityLabel("この投稿を通報")
+                // 送信の途中は重ねて受け付けない（要件 5.8）
+                .disabled(viewModel.reportingSkyIds.contains(sky.id))
+
+                Button(role: .destructive) {
+                    skyPendingBlock = sky
+                } label: {
+                    Label("ブロック", systemImage: "hand.raised")
+                }
+                .accessibilityLabel("この投稿者をブロック")
+                .disabled(viewModel.blockingAuthorIds.contains(sky.authorId))
             }
         }
         .onAppear {
@@ -298,6 +369,16 @@ struct SoratomoTimelineView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// 末尾の「さらに読み込む」（自動の続き読みが上限に達したときだけ出す・9.7）
+    private var loadMoreButton: some View {
+        Button("さらに読み込む") {
+            viewModel.loadMoreIfNeeded()
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .accessibilityHint("続きの投稿を読み込みます")
+    }
+
     /// 先頭に出すオフラインの表示
     private var offlineBanner: some View {
         Label("オフラインです。以前に読み込んだ投稿を表示しています", systemImage: "wifi.slash")
@@ -363,6 +444,51 @@ struct SoratomoTimelineView: View {
             set: { isPresented in
                 if !isPresented {
                     skyPendingDeletion = nil
+                }
+            }
+        )
+    }
+
+    /// 通報の理由を選ばせているか（閉じたら対象を消す）
+    private var isChoosingReportReason: Binding<Bool> {
+        Binding(
+            get: { skyPendingReport != nil },
+            set: { isPresented in
+                if !isPresented {
+                    skyPendingReport = nil
+                }
+            }
+        )
+    }
+
+    /// ブロックの確認を出しているか（閉じたら対象を消す）
+    private var isConfirmingBlock: Binding<Bool> {
+        Binding(
+            get: { skyPendingBlock != nil },
+            set: { isPresented in
+                if !isPresented {
+                    skyPendingBlock = nil
+                }
+            }
+        )
+    }
+
+    /// ブロックの確認の見出し（表示名を使う。画面に出すだけで、ログと計測には渡さない・14.1）
+    private var blockConfirmationTitle: String {
+        guard let sky = skyPendingBlock else { return "" }
+        return "\(profileStore.displayName(for: sky.authorId))さんをブロックしますか？"
+    }
+
+    /// 通報とブロックの結果の知らせを出しているか（閉じたら知らせを消す）
+    ///
+    /// 削除の失敗と同じく、タイムラインが一番上に出ているときだけ出す。投稿詳細は同じ ViewModel を使い、
+    /// 自分で知らせを出すので、下に隠れたタイムラインからは出さない（二重に出さないため・10.6）
+    private var isShowingModerationNotice: Binding<Bool> {
+        Binding(
+            get: { viewModel.moderationNotice != nil && router.path.last == .timeline(groupId: groupId) },
+            set: { isPresented in
+                if !isPresented {
+                    viewModel.moderationNotice = nil
                 }
             }
         )

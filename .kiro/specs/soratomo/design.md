@@ -58,7 +58,7 @@
 | 10.7, 10.8, 10.9, 10.10, 10.11, 10.12, 10.13 | 通知のタップ | SoratomoRouter・GoldenHourNotificationManager | `receive(userInfo:)` | 通知のタップ |
 | 10.14, 10.15, 10.16, 10.17 | 「そらとも通知」の設定 | SettingsView・SettingsViewModel・SoratomoProfileService | `setNotifySoratomo` | — |
 | 11.1, 11.2 | メンバーだけが読む | Firestoreのルール・Storageのルール | `isSoratomoMember` | — |
-| 11.3, 11.4, 11.12 | 投稿の作成条件 | Firestoreのルール | `skies`の`create` | 投稿と通知 |
+| 11.3, 11.4, 11.12 | 投稿の作成条件 | Firestoreのルール（⚠️2026-10-09 上書き: soratomo-release-gateで`soratomoCreateSky`の入力検査`soratomoCore.validateSkyInput`とAdmin SDKの`serverTimestamp()`へ移り、ルールの`create`は`false`） | `skies`の`create` | 投稿と通知 |
 | 11.5, 11.6, 11.7, 11.15 | 画像の保存と削除・投稿者だけが削除 | Storageのルール・Firestoreのルール | `soratomo/`の`create`・`delete` | — |
 | 11.8, 11.9 | メンバー追加の経路・コードの秘匿 | Firestoreのルール・Callable | `members`と`soratomoInviteCodes`の書き込み拒否 | 作成と参加 |
 | 11.14 | 許可と拒否の自動テスト | ルールのテスト・soratomoStoreのテスト | `scripts/rules_test_soratomo.py` | — |
@@ -69,7 +69,7 @@
 | 13.5, 13.6 | 既存のトリガーと別 | onSoratomoSkyCreated | — | 投稿と通知 |
 | 13.7 | 既存の3つの通知設定を変えない | soratomoCore | `SORATOMO_PREF_DEFAULT` | — |
 | 13.8 | 既存のアクセス条件を変えない | ルールは追加だけ | — | — |
-| 13.9, 13.10 | 退会処理を変えずに完了させる | 変更なし | `deleteUserData` | — |
+| 13.9, 13.10 | 退会処理を変えずに完了させる | 変更なし（⚠️2026-10-09 上書き: soratomo-release-gateの要件3で、既存の手順の前にそらとものデータを消す`soratomoDeleteMyData`が加わった） | `deleteUserData` | — |
 | 14.1, 14.2, 14.3, 14.4, 14.5 | 計測 | SoratomoAnalytics | `SoratomoEvent` | — |
 | 14.6 | 「そらとも通知」の切り替えの計測 | SettingsViewModel | `prefKey(.soratomo)`が`soratomo`を返す | — |
 | 15.1, 15.2, 15.3 | ログに個人情報を出さない | SoratomoAnalytics・soratomo.js | 内部IDだけのログ | — |
@@ -227,7 +227,7 @@ sequenceDiagram
         Compose->>Store: delete
         Compose-->>User: 失敗と再試行
     end
-    Compose->>Sky: createSky トランザクション
+    Compose->>Sky: createSky（Callable soratomoCreateSky）
     alt 保存失敗
         Compose->>Store: delete
         Compose-->>User: 失敗と再試行
@@ -242,6 +242,7 @@ sequenceDiagram
 
 - 投稿データは、2枚の画像のアップロードが両方成功した後にだけ作る（6.6）。画像の無い投稿は構造上できない（6.11、12.4）。
 - 保存のトランザクションが「通信の失敗」で終わり、結果が確定しないときは、画像を消す前にサーバーで投稿の有無を確かめる。確かめられなければ画像を残す（画像の無い投稿よりも、取り残しの画像を選ぶ）。
+  - ⚠️2026-10-09 上書き（soratomo-release-gate 10.3）: 有無の確認はやめた。関数の実行中に「無い」と読み、画像を消した後で投稿だけが作られうるため。代わりに同じ投稿IDで1回だけ送り直す（同じ投稿者の同じ投稿IDはサーバーが成功で返すので1件になる）。送り直しも確定しなければ画像を残す。確定した拒否（NGワード・利用停止など）では画像を消す。利用者が押す再試行は、今も新しい投稿IDで行う。
 - バックグラウンドへ移ったときは、`beginBackgroundTask`の中で変換・アップロード・保存を続ける。猶予が切れたとき（expiration handler）だけ、変換中とアップロード中なら中止して後始末し、失敗（`backgroundExpired`）として扱う。保存のトランザクションを送った後は中止せず、結果を待つ（6.11）。
 
 ### 通知のタップ
@@ -528,6 +529,7 @@ final class SoratomoListenerToken { func cancel() }
 - タイムラインは`skies`を`createdAt`の降順で、`limit`を20・40・60と伸ばして張り直す1本のリスナーで監視する。追加と削除はどちらもリスナーで届く。
 - 引き下げて更新したときは`limit`を20に戻して張り直す（8.11）。
 - 作成と削除は、書き込みだけのトランザクションで行う。オフラインでは`unavailable`で失敗し、端末内に積まれない。作成日時は`FieldValue.serverTimestamp()`。
+  - ⚠️2026-10-09 上書き（soratomo-release-gate 9.3）: 作成はCallableの`soratomoCreateSky`へ移った（`createSky(_:)`の署名は同じ）。オフラインではCallableが即座に失敗する。作成日時はFunctionsのAdmin SDKの`serverTimestamp()`で書く。削除は今もアプリの書き込みだけのトランザクション。
 - 文書のデコードに失敗したら、文書のパスをログに残して1件だけ飛ばす（`compactMap { try? }`は使わない）。
 - 日次件数は`count()`で数える。失敗したら`nil`を返し、投稿を止めない（v1はアプリ側の目安）。
 
@@ -818,16 +820,17 @@ enum SoratomoAnalytics {
 
 | Callable | Request | Response | Errors（`HttpsError`の`code`と`details.reason`） |
 |----------|---------|----------|------------------------------------------------|
-| `soratomoCreateGroup` | `{ name: string, requestId: string }` | `{ groupId: string, name: string, inviteCode: string, memberCount: number }` | `unauthenticated`／`permission-denied`・`flag_off`／`invalid-argument`・`invalid_name`／`resource-exhausted`・`user_limit`／`internal` |
-| `soratomoJoinGroup` | `{ code: string }` | `{ groupId: string, alreadyMember: boolean }` | `unauthenticated`／`permission-denied`・`flag_off`／`invalid-argument`・`invalid_format`／`not-found`・`not_found`／`resource-exhausted`・`group_full`または`user_limit`／`internal` |
+| `soratomoCreateGroup` | `{ name: string, requestId: string }` | `{ groupId: string, name: string, inviteCode: string, memberCount: number }` | `unauthenticated`／`permission-denied`・`flag_off`または`suspended`／`failed-precondition`・`consent_required`／`invalid-argument`・`invalid_name`または`ng_word`／`resource-exhausted`・`user_limit`／`internal` |
+| `soratomoJoinGroup` | `{ code: string }` | `{ groupId: string, alreadyMember: boolean }` | `unauthenticated`／`permission-denied`・`flag_off`または`suspended`／`failed-precondition`・`consent_required`／`invalid-argument`・`invalid_format`／`not-found`・`not_found`／`resource-exhausted`・`group_full`または`user_limit`／`internal` |
 | `soratomoRegenerateInviteCode` | `{ groupId: string }` | `{ inviteCode: string }` | `unauthenticated`／`permission-denied`・`flag_off`または`not_owner`／`not-found`・`not_found`／`internal` |
 
 - `name`はサーバーでも前後の空白を除いてから1〜30文字を確かめる。`code`はサーバーでも正規化し、8文字かつ字種の範囲内を確かめる。
 - 作成は`soratomoUsers/{uid}.lastCreateRequestId`が同じなら、前回作ったグループを返す（冪等）。
+- ⚠️2026-10-09 上書き: soratomo-release-gateで、作成と参加は利用停止（`suspended`）と、ガイドラインへの同意（`consent_required`。`details.currentVersion`に現行の版）を確かめる。作成は、グループ名のNGワード（`ng_word`）も確かめる。参加にNGワードの検査は無い。あわせて`soratomoCreateSky`・`soratomoReportSky`・`soratomoAgreeGuideline`・`soratomoDeleteMyData`と、通報の転送・定期実行（`soratomoHousekeeping`）が加わった。契約は`.kiro/specs/soratomo-release-gate/design.md`のAPI Contractを正とする。
 
 ```js
 /**
- * @typedef {{ reason: "flag_off"|"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner" }} SoratomoErrorDetails
+ * @typedef {{ reason: "flag_off"|"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner"|"suspended"|"consent_required"|"ng_word" }} SoratomoErrorDetails
  * @typedef {{ groupId: string, name: string, inviteCode: string, memberCount: number }} CreateGroupResult
  * @typedef {{ groupId: string, alreadyMember: boolean }} JoinGroupResult
  */
@@ -920,13 +923,15 @@ function classifyRecipient({ hasFlag, userData, posterId }) {}
 |------|------|--------|--------|--------|
 | `soratomoGroups/{groupId}` | `get`はユーザーかつメンバー。`list`は拒否 | 拒否 | 拒否 | 拒否 |
 | `.../members/{memberId}` | ユーザーかつメンバー | 拒否 | 拒否 | 拒否 |
-| `.../skies/{skyId}` | ユーザーかつメンバー | 下の条件 | 拒否 | ユーザーかつ`resource.data.authorId == request.auth.uid` |
+| `.../skies/{skyId}` | ユーザーかつメンバー | 拒否（`false`。下の注記） | 拒否 | ユーザーかつ`resource.data.authorId == request.auth.uid` |
 | `.../notifyState/{uid}` | 拒否 | 拒否 | 拒否 | 拒否 |
 | `soratomoInviteCodes/{code}` | 拒否 | 拒否 | 拒否 | 拒否 |
 | `soratomoUsers/{uid}` | ユーザーかつ本人 | 拒否 | 拒否 | 拒否 |
 | `soratomoUsers/{uid}/groups/{groupId}` | ユーザーかつ本人 | 拒否 | 拒否 | 拒否 |
 
-`skies`の`create`の条件は次のとおり。
+⚠️2026-10-09 上書き: soratomo-release-gateで`skies`の`create`は`false`にした（作成はCallableの`soratomoCreateSky`だけ）。下の箇条書きは旧条件で、同じ検査は`soratomoCore.validateSkyInput`と、Admin SDKの`serverTimestamp()`で行う。
+
+（旧）`skies`の`create`の条件は次のとおり。
 - ユーザーかつメンバー。
 - `keys().hasOnly(['authorId', 'caption', 'width', 'height', 'createdAt'])`かつ`hasAll(['authorId', 'width', 'height', 'createdAt'])`。画像のパスやURLの項目は持てない（11.4、11.13）。
 - `authorId == request.auth.uid`（11.3）。`createdAt == request.time`（11.12）。
@@ -980,10 +985,10 @@ erDiagram
 |--------------|--------|------------|--------|
 | `soratomoGroups` | 自動ID | `name`（文字列）・`ownerId`（文字列）・`inviteCode`（文字列）・`memberCount`（数値）・`createdAt`（時刻）・`lastActivityAt`（時刻） | Functions |
 | `soratomoGroups/{groupId}/members` | uid | `uid`（文字列）・`role`（`owner`または`member`）・`joinedAt`（時刻） | Functions |
-| `soratomoGroups/{groupId}/skies` | 自動ID | `authorId`（文字列）・`caption`（文字列・任意）・`width`（整数）・`height`（整数）・`createdAt`（サーバー時刻） | アプリ（作成・削除） |
+| `soratomoGroups/{groupId}/skies` | 自動ID | `authorId`（文字列）・`caption`（文字列・任意）・`width`（整数）・`height`（整数）・`createdAt`（サーバー時刻） | Functions（作成・`soratomoCreateSky`）・アプリ（削除） |
 | `soratomoGroups/{groupId}/notifyState` | 受信者のuid | `lastSentAt`（時刻）・`lastSkyId`（文字列） | Functions |
 | `soratomoInviteCodes` | 招待コード | `groupId`（文字列）・`createdAt`（時刻） | Functions |
-| `soratomoUsers` | uid | `groupCount`（数値）・`lastCreateRequestId`（文字列）・`lastCreatedGroupId`（文字列）・`updatedAt`（時刻） | Functions |
+| `soratomoUsers` | uid | `groupCount`（数値）・`lastCreateRequestId`（文字列）・`lastCreatedGroupId`（文字列）・`updatedAt`（時刻）・`guidelineVersion`（整数・同意した版）・`guidelineAgreedAt`（時刻）・`suspendedAt`（時刻・利用停止中だけ持つ）（後の3つはsoratomo-release-gateで追加） | Functions |
 | `soratomoUsers/{uid}/groups` | groupId | `groupId`（文字列）・`joinedAt`（時刻） | Functions |
 | `users`（既存に項目を追加） | uid | `notifySoratomo`（真偽値・欠落はON） | アプリ（`updateData`） |
 
@@ -1061,6 +1066,7 @@ enum SoratomoError: Error, Equatable {
 
 - 再発行の失敗は「招待コードを再発行できませんでした」、削除の失敗は「削除できませんでした」、表示名の保存の失敗は「表示名を保存できませんでした」を、操作に合わせて出す（3.12、8.19、18.5）。
 - **未確定の失敗**: トランザクションが`unavailable`や`deadlineExceeded`で終わったときは、`skyExistsOnServer`で確かめてから成否を決める。投稿の保存では、確かめられなければ画像を消さない。削除では、確かめられなければ投稿を残したまま失敗を出す。
+  - ⚠️2026-10-09 上書き（soratomo-release-gate 10.3）: 投稿の保存は`skyExistsOnServer`で確かめず、同じ投稿IDで1回だけ送り直す（上の「投稿と通知」の注記）。`skyExistsOnServer`を使うのは削除だけになった。
 - **削除の後の画像の失敗**: 投稿はタイムラインに戻さず、非致命エラーとして記録する（8.20）。
 
 ### Monitoring
@@ -1104,6 +1110,7 @@ enum SoratomoError: Error, Equatable {
 | 11.13 | 許可された5項目だけの作成（11.4と同じ）。`Soratomo`で始まるファイルの`downloadURL`のgrepが0件 | 投稿の文書にURLを持たせる作成 | Firestore・静的検査 |
 | 3.10 | オーナーによる再発行 | メンバーによる再発行（`not_owner`）・古いコードでの参加（`not_found`） | トランザクション |
 
+- ⚠️2026-10-09 上書き: soratomo-release-gateで`skies`の`create`は`false`になった。11.3・11.4・11.12・11.13の作成の行は、今は「クライアントからの作成がすべて拒否されること」と、`soratomoCreateSky`の入力検査（soratomo-release-gateの4章のテスト）で確かめる。
 - 陽性対照: 各ケースは先に「わざと壊したルール」で期待外れになることを1回確かめてから、正しいルールで通す（`rules/workflow.md`の検証の作法）。
 - エミュレーターを使う場合は`firebase.json`に`emulators`の設定（Firestore・Storage・Auth）を足す。デプロイには影響しない。
 
@@ -1113,7 +1120,7 @@ enum SoratomoError: Error, Equatable {
 - 機内モードで、作成・参加・投稿・削除・表示名の保存が始まらないか失敗として出ること。機内モードを解いても後から実行されないこと。
 - 既存の通知（いいね・コメント・フォロー・ゴールデンアワー）のタップの挙動が変わらないこと。
 - What's Newが未読の状態で、そらともの通知のタップからコールドスタートしたとき、What's Newがその起動か次回の起動に1回出て既読になること（SoratomoRouterのRisks）。
-- そらともに参加・投稿したアカウントで、既存の退会処理がエラーなく終わること（13.9）。
+- そらともに参加・投稿したアカウントで、既存の退会処理がエラーなく終わること（13.9）。（⚠️2026-10-09 上書き: soratomo-release-gateの要件3で、退会がそらとものデータも消すようになった。確かめ方はsoratomo-release-gateの16.1）
 
 ### Performance
 - Wi-Fiで12MPの写真の投稿が10秒以内（確定から完了まで。`duration_ms`で計測）（16.1）。
@@ -1128,7 +1135,7 @@ enum SoratomoError: Error, Equatable {
 - **機能フラグ**: アプリ・ルール・Functionsの3か所で同じクレームを要求する。一般公開の際にクレームの運用をやめるなら、3か所を同時に変える（ずれると、入口は出るのに書き込みが拒否される）。
 - **招待コード**: 32文字種の8桁。一覧の取得と非メンバーの読み取りはルールで拒否する。`not_found`の件数を監視する。
 - **個人情報**: アプリとFunctionsのログ・計測に、グループ名・表示名・キャプション・招待コード・トークンを出さない。通知の本文には名前とキャプションが含まれる（要件9の2と9の3のとおり）。
-- **既知の受け入れ**: 改造したアプリによる1日20件の超過（v1はアプリ側の判定だけ）。投稿の失敗時に削除しきれなかった画像の取り残し。
+- **既知の受け入れ**: 改造したアプリによる1日20件の超過（v1はアプリ側の判定だけ）。投稿の失敗時に削除しきれなかった画像の取り残し（⚠️2026-10-09 上書き: 退会と利用停止では、その人の分を消す。soratomo-release-gateの要件1.3）。
 
 ## Performance & Scalability
 

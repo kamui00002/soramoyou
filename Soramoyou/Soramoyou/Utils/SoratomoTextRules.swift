@@ -45,7 +45,7 @@ enum SoratomoTextRules {
     static let groupNameMax = 30
     /// 表示名の事前入力の上限（要件 18.2）。既存のプロフィール編集の上限（50 文字）とは別
     static let displayNameMax = 20
-    /// キャプションの上限（要件 6.3）。⚠️ Firestore のルール（`isValidSoratomoCaption` の `{1,100}`）と一致させる
+    /// キャプションの上限（要件 6.3）。⚠️ Functions の入力検査（`soratomoCore.js` の `CAPTION_MAX`・`validateSkyInput`）と一致させる
     static let captionMax = 100
 
     /// 名前の前後から取り除く文字（空白と改行）

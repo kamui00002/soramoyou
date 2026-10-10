@@ -38,7 +38,8 @@ extension SoratomoError {
     /// | それ以外 | `.unknown` | `.unknown` |
     ///
     /// - Note: `unavailable` と `deadlineExceeded` は、書き込みでは結果が確定していないことがある
-    ///   （サーバーには届いた可能性がある）。作成・削除の後は `skyExistsOnServer` で確かめること（design.md の Error Handling）。
+    ///   （サーバーには届いた可能性がある）。削除の後は `skyExistsOnServer` で確かめること（design.md の Error Handling）。
+    ///   投稿の作成は Callable なので、この表ではなく `SoratomoGroupService.mapCallableError` で写す（release-gate 9.3）。
     /// - Parameters:
     ///   - error: 元のエラー
     ///   - access: 読み取りか書き込みか
