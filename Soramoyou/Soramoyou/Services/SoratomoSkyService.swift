@@ -114,23 +114,41 @@ final class SoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Sendable 
     ///   サーバーが同じ内容を返しても、中身が変わらないので 2 回目の結果が届かない。ViewModel が失敗の表示や
     ///   続きの読み込み中を解除できなくなる（オフラインの表示そのものは `NetworkStatusMonitor` で出している）。`limit` は 20〜60 なので、metadata だけの発火が増えるコストは無視できる。
     /// - `createdAt` は送信直後の推定値で読む（`serverTimestampBehavior = .estimate`）。
-    /// - 札が止められた（`cancel()` か解放）後は、すでにメインアクターへの引き継ぎ待ちだった結果も届けない。
+    /// - 結果は、届いた順に 1 本の列（AsyncStream）へ積み、メインアクターの 1 つの Task が順に `onChange` へ渡す
+    ///   （`observeSky`・`observeGroup` と同じ形。結果ごとに Task を作ると、キャッシュの結果とサーバーの結果の順序が入れ替わりうるため）。
+    /// - 札が止められたら（`cancel()` か解放）、Firestore の監視を外し、まだ届いていない結果は捨てる。
     ///   上限を伸ばして張り直すとき、古い監視の遅れた結果が新しい結果を上書きしないようにするため。
+    /// - ⚠️ `onChange` は札が止まるまで保持する。`onChange` の中で `self` を強く捕まえないこと（`observeSky` と同じ）。
     func observeTimeline(
         groupId: String,
         limit: Int,
         onChange: @escaping @MainActor (Result<SoratomoTimelineSnapshot, SoratomoError>) -> Void
     ) -> SoratomoListenerToken {
+        // 結果の列（作った直後に、列へ積む口を取り出す）
+        var capturedContinuation: AsyncStream<Result<SoratomoTimelineSnapshot, SoratomoError>>.Continuation?
+        let stream = AsyncStream<Result<SoratomoTimelineSnapshot, SoratomoError>> { capturedContinuation = $0 }
+        let continuation = capturedContinuation
+
+        // 列から順に取り出して、メインアクターで渡す Task
+        let consumer = Task { @MainActor in
+            for await result in stream {
+                // 札が止められた後に積まれていた結果は、渡さない
+                if Task.isCancelled { break }
+                onChange(result)
+            }
+        }
+
         guard SoratomoSkyService.isUsableDocumentId(groupId) else {
             // 不正な groupId でパスを作ると Firestore が例外で落ちる。読めないグループとして 1 回だけ失敗を返す
-            Task { @MainActor in
-                onChange(.failure(.notMember))
+            // （`observeSky`・`observeGroup` と同じ扱い。監視は張らず、Firestore には触れない）
+            continuation?.yield(.failure(.notMember))
+            continuation?.finish()
+            return SoratomoListenerToken {
+                consumer.cancel()
             }
-            return SoratomoListenerToken {}
         }
 
         let effectiveLimit = SoratomoSkyService.effectiveLimit(limit)
-        let state = ListenerState()
         let registration = skiesCollection(groupId: groupId)
             .order(by: Field.createdAt, descending: true)
             .limit(to: effectiveLimit)
@@ -158,15 +176,13 @@ final class SoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Sendable 
                     let cause: Error = error ?? SoratomoError.unknown
                     result = .failure(SoratomoError.fromFirestore(cause, access: .read))
                 }
-                Task { @MainActor in
-                    guard !state.isCancelled else { return }
-                    onChange(result)
-                }
+                continuation?.yield(result)
             }
 
         return SoratomoListenerToken {
-            state.cancel()
             registration.remove()
+            continuation?.finish()
+            consumer.cancel()
         }
     }
 
@@ -607,31 +623,6 @@ extension SoratomoSkyService {
             throw DecodeError.invalidField(key)
         }
         return value
-    }
-
-    // MARK: - 監視の状態
-
-    /// 監視が止められたかを、Firestore のコールバックとメインアクターの間で共有する入れ物
-    ///
-    /// 止める操作（札の `cancel()`・どのスレッドからでも呼ばれうる）と、結果を届ける側（メインアクター）が
-    /// 同時に触るので、ロックで守る。
-    fileprivate final class ListenerState: @unchecked Sendable {
-        private let lock = NSLock()
-        private var cancelled = false
-
-        /// もう止められたか
-        var isCancelled: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return cancelled
-        }
-
-        /// 止められたことを記録する
-        func cancel() {
-            lock.lock()
-            cancelled = true
-            lock.unlock()
-        }
     }
 }
 

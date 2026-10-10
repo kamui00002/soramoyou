@@ -394,6 +394,42 @@ final class SoratomoSkyServiceTests: XCTestCase {
         XCTAssertEqual(received, [.failure(.notMember)])
     }
 
+    @MainActor
+    func testObserveTimelineWithUnusableGroupIdDeliversNotMember() async {
+        // 投稿 1 件の監視と同じく、監視を張らずに「メンバーでない」を 1 回だけ返す
+        let (service, _) = makeService()
+        let delivered = expectation(description: "結果が届く")
+        var received: [Result<SoratomoTimelineSnapshot, SoratomoError>] = []
+
+        let token = service.observeTimeline(groupId: "a/b", limit: 20) { result in
+            received.append(result)
+            delivered.fulfill()
+        }
+        await fulfillment(of: [delivered], timeout: 5)
+        token.cancel()
+
+        XCTAssertEqual(received, [.failure(.notMember)])
+    }
+
+    @MainActor
+    func testObserveTimelineWithUnusableGroupIdDeliversNothingAfterCancel() async {
+        // 札を止めた後は、列に積まれていた結果も渡さない（監視を張らない経路でも、投稿 1 件の監視と同じ扱い）
+        let (service, _) = makeService()
+        let notDelivered = expectation(description: "結果が届かない")
+        notDelivered.isInverted = true
+        var received: [Result<SoratomoTimelineSnapshot, SoratomoError>] = []
+
+        let token = service.observeTimeline(groupId: "a/b", limit: 20) { result in
+            received.append(result)
+            notDelivered.fulfill()
+        }
+        // メインアクターが結果を渡すより前に止める（このテストはメインアクターで動くので、止めるまで渡されない）
+        token.cancel()
+        await fulfillment(of: [notDelivered], timeout: 1)
+
+        XCTAssertEqual(received, [])
+    }
+
     // MARK: - ヘルパー
 
     private func draft(caption: String?) -> SoratomoSkyDraft {
