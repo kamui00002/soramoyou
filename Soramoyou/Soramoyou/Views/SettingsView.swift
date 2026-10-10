@@ -615,7 +615,7 @@ struct SettingsView: View {
 
     /// メールアプリを開く
     private func openMailApp() {
-        let email = "soramoyou.app@gmail.com"
+        let email = SupportContact.email
         let subject = "そらもようアプリへのお問い合わせ"
         let body = """
 
@@ -841,7 +841,7 @@ struct PrivacyPolicyView: View {
         ■ お問い合わせ
 
         プライバシーに関するお問い合わせは、以下のメールアドレスまでご連絡ください。
-        メール: soramoyou.app@gmail.com
+        メール: \(SupportContact.email)
 
         ■ ポリシーの変更
 
