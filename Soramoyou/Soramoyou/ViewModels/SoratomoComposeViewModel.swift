@@ -385,7 +385,9 @@ final class SoratomoComposeViewModel: ObservableObject {
     /// - `.network` の失敗は、保存の結果が確定していないことがある。同じ draft（同じ投稿 ID）で 1 回だけ送り直す。
     ///   同じ投稿者の同じ投稿 ID はサーバーが成功で返すので、元の呼び出しが届いていても 1 件になる。
     ///   - 送り直しが成功したら成功として扱う
-    ///   - 送り直しも確定しなければ、画像を残して失敗にする（画像の無い投稿よりも、取り残しの画像を選ぶ）
+    ///   - 送り直しも確定しなければ（`.network`・`.unknown`）、画像を残して失敗にする（画像の無い投稿よりも、取り残しの画像を選ぶ）。
+    ///     `.unknown` はサーバーの internal など。サーバーは語のリストの読み込みを既存の投稿の確かめより前に行うので、
+    ///     1 回目で投稿が作られていても、送り直しが internal で返りうる（拒否と確定したことにはならない）
     ///   - 送り直しが確定した拒否なら、下の確定した拒否と同じに扱う
     /// - 確定した拒否（NGワード・利用停止・メンバーでない・権限なしなど）は、画像を消してから失敗にする。
     ///   NGワードの文言は該当した語を含めない。写真とキャプションは残る（`.failed` は入力を消さない）
@@ -401,8 +403,8 @@ final class SoratomoComposeViewModel: ObservableObject {
             } catch let retryError {
                 finalError = retryError
             }
-            if finalError == .network {
-                // また確定しなかった。投稿があるかもしれないので、画像は消さない
+            if finalError == .network || finalError == .unknown {
+                // また確定しなかった（通信の失敗か、拒否と分からない失敗）。投稿があるかもしれないので、画像は消さない
                 SoratomoError.record(finalError, context: "soratomo.createSky")
                 fail(stage: .save, error: finalError)
                 return false

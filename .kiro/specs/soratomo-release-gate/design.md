@@ -722,7 +722,7 @@ protocol SoratomoSkyServiceProtocol: Sendable {
 ```
 - `createSky`の署名は変えない。中身をFirestoreのトランザクションからCallableに替える。`makeCreateFields`は使わなくなる。
 - `SoratomoComposeViewModel.handleSaveFailure`（`:390-409`）を次のように変える。
-  - `.network`（結果が確定しない）: 同じ`draft`で1回だけ送り直す。成功なら成功。確定した拒否なら画像を消して失敗。また確定しなければ、画像を残して失敗（既存の方針）。
+  - `.network`（結果が確定しない）: 同じ`draft`で1回だけ送り直す。成功なら成功。確定した拒否なら画像を消して失敗。また確定しなければ（`.network`、またはサーバーの`internal`などの`.unknown`）、画像を残して失敗（既存の方針）。`.unknown`は1回目で投稿が作られていても返りうる（語のリストの読み込みは既存の文書の確認より前）ので、拒否と確定したことにしない。残った画像は、それを指す投稿の文書が無ければどの画面にも出ず、その人がグループを抜けるか退会したときに`soratomo/{groupId}/{uid}/`ごと消える（`find-orphans`はアカウントの無い uid だけを拾うので、アカウントのある人の残りは拾わない）（1.14.1・PR #170 のレビューで直した）。
   - `.ngWord`: 画像を消し（11.8）、`使えない言葉が含まれています`を出す。写真とキャプションは`Failed`の状態が持ったまま（11.7）。計測は`stage: save`・`reason: ng_word`（15.2）。
   - `.suspended`・`.notMember`・`.permissionDenied`などの確定した拒否: 画像を消して失敗（既存と同じ）。
 
