@@ -405,7 +405,8 @@ final class SoratomoComposeViewModel: ObservableObject {
             }
             if finalError == .network || finalError == .unknown {
                 // また確定しなかった（通信の失敗か、拒否と分からない失敗）。投稿があるかもしれないので、画像は消さない
-                SoratomoError.record(finalError, context: "soratomo.createSky")
+                // 文脈は .retry に分ける。下の画像を消す側（1 回目の .unknown など）とログで見分けるため
+                SoratomoError.record(finalError, context: "soratomo.createSky.retry")
                 fail(stage: .save, error: finalError)
                 return false
             }
