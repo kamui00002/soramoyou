@@ -328,7 +328,7 @@ test("show-report: 記録が無ければ終了コード 1", async () => {
 // MARK: - review-report（順序）
 
 test("review-report violation: 投稿の削除 → 記録の投稿者の利用停止 → 確認の記録、の順に行う", async () => {
-  const db = fakeDb({ [`soratomoReports/${REPORT_ID}`]: REPORT });
+  const db = fakeDb({ [`soratomoReports/${REPORT_ID}`]: REPORT, [`soratomoGroups/${G}/skies/${S}`]: SKY });
   const d = deps({ db });
   const out = await admin.cmdReviewReport(d, { reportId: REPORT_ID, result: "violation" });
   assert.equal(out.exitCode, 0);
@@ -358,6 +358,34 @@ test("review-report violation: 記録の ID が壊れていれば、推測で消
   assert.equal(out.exitCode, 1);
   assert.deepEqual(d.deletion.calls, []);
   assert.deepEqual(db.updates, []);
+});
+
+test("review-report violation: 今の投稿の投稿者が記録と違えば、消さず・止めず・記録も書かずに止める", async () => {
+  // 元の投稿が消えた後に、同じ投稿IDで別の人の投稿が作られた（記録の投稿者と今の投稿者がずれる）
+  const db = fakeDb({
+    [`soratomoReports/${REPORT_ID}`]: REPORT,
+    [`soratomoGroups/${G}/skies/${S}`]: { ...SKY, authorId: "someoneElse" },
+  });
+  const d = deps({ db });
+  const out = await admin.cmdReviewReport(d, { reportId: REPORT_ID, result: "violation" });
+  assert.equal(out.exitCode, 1);
+  assert.deepEqual(d.deletion.calls, []);
+  assert.deepEqual(db.updates, []);
+  assert.match(out.lines.join("\n"), /今の投稿者 someoneElse が記録の投稿者 authorUid と違う/);
+  assertNoSecrets(out.lines);
+});
+
+test("review-report violation: 今の投稿者の値が ID の形でなければ、値を出さずに止める", async () => {
+  const db = fakeDb({
+    [`soratomoReports/${REPORT_ID}`]: REPORT,
+    [`soratomoGroups/${G}/skies/${S}`]: { ...SKY, authorId: "ひみつの表示名" },
+  });
+  const d = deps({ db });
+  const out = await admin.cmdReviewReport(d, { reportId: REPORT_ID, result: "violation" });
+  assert.equal(out.exitCode, 1);
+  assert.deepEqual(d.deletion.calls, []);
+  assert.deepEqual(db.updates, []);
+  assertNoSecrets(out.lines);
 });
 
 test("review-report no_violation: 削除も停止もせず、確認の記録だけを書く。前回の結果は出して上書きする", async () => {

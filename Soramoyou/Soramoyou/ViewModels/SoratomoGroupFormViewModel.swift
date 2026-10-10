@@ -178,7 +178,7 @@ final class SoratomoGroupFormViewModel: ObservableObject {
             return
         }
 
-        // 同意の状態（読めなければ nil＝全文を出さない）
+        // 同意の状態（読めなければ同意済みとして扱い、全文を出さずに進む。理由は上の説明の「読めなかった」）
         let hasAgreed: Bool
         do {
             hasAgreed = try await guidelineService.fetchConsentStatus(uid: uid).hasAgreedCurrent

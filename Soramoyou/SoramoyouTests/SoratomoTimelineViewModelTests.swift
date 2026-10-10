@@ -630,6 +630,96 @@ final class SoratomoTimelineViewModelTests: XCTestCase {
         XCTAssertEqual(fixture.skyService.observeTimelineCalls.map(\.limit), [20, 40, 60])
     }
 
+    func testExtensionIsJudgedByServerResultNotCacheResult() async {
+        let fixture = makeFixture()
+        fixture.moderationService.fetchBlockedUserIdsResult = .success(["spammer"])
+        await fixture.viewModel.start()
+        let shown = makeSnapshot(count: 20, mayHaveMore: true).skies
+        fixture.skyService.emitTimeline(.success(SoratomoTimelineSnapshot(skies: shown, isFromCache: false, mayHaveMore: true)))
+
+        // 末尾で伸ばす → 張り直した監視の 1 回目は端末のキャッシュ（前のページの 20 件しか無く、続きが無いように見える）
+        fixture.viewModel.loadMoreIfNeeded()
+        fixture.skyService.emitTimeline(.success(
+            SoratomoTimelineSnapshot(skies: shown, isFromCache: true, mayHaveMore: false)
+        ))
+        // キャッシュの結果では、伸ばした結果の判定をしない（読み込み中の表示は下ろす）
+        XCTAssertEqual(fixture.skyService.observeTimelineCalls.map(\.limit), [20, 40])
+        XCTAssertFalse(fixture.viewModel.isLoadingMore)
+
+        // サーバーの結果: 伸ばした 20 件が全部隠れていた → 表示が増えないので、自分でもう一度伸ばす
+        let hiddenTail = makeSnapshot(count: 20, authorId: "spammer", prefix: "x", mayHaveMore: true).skies
+        fixture.skyService.emitTimeline(.success(
+            SoratomoTimelineSnapshot(skies: shown + hiddenTail, isFromCache: false, mayHaveMore: true)
+        ))
+        XCTAssertEqual(fixture.viewModel.skies.count, 20)
+        XCTAssertEqual(fixture.skyService.observeTimelineCalls.map(\.limit), [20, 40, 60])
+    }
+
+    func testExtensionHeldOnCacheIsJudgedWhenServerSendsSameContent() async {
+        let fixture = makeFixture()
+        fixture.moderationService.fetchBlockedUserIdsResult = .success(["spammer"])
+        await fixture.viewModel.start()
+        let shown = makeSnapshot(count: 20, mayHaveMore: true).skies
+        fixture.skyService.emitTimeline(.success(SoratomoTimelineSnapshot(skies: shown, isFromCache: false, mayHaveMore: true)))
+        fixture.viewModel.loadMoreIfNeeded()
+
+        // キャッシュに伸ばした分まで残っていた（中身はこの後のサーバーの結果と同じ・伸ばした 20 件は全部隠れる）
+        let hiddenTail = makeSnapshot(count: 20, authorId: "spammer", prefix: "x", mayHaveMore: true).skies
+        fixture.skyService.emitTimeline(.success(
+            SoratomoTimelineSnapshot(skies: shown + hiddenTail, isFromCache: true, mayHaveMore: true)
+        ))
+        XCTAssertEqual(fixture.skyService.observeTimelineCalls.map(\.limit), [20, 40])
+
+        // サーバーの結果は中身が同じ（キャッシュ由来かどうかだけが変わった）でも、保留していた判定をする
+        fixture.skyService.emitTimeline(.success(
+            SoratomoTimelineSnapshot(skies: shown + hiddenTail, isFromCache: false, mayHaveMore: true)
+        ))
+        XCTAssertEqual(fixture.skyService.observeTimelineCalls.map(\.limit), [20, 40, 60])
+    }
+
+    func testHidingWhileExtensionIsHeldWaitsForServerResult() async {
+        let fixture = makeFixture()
+        await fixture.viewModel.start()
+        let alice = makeSnapshot(count: 10, authorId: "alice", prefix: "a", mayHaveMore: true).skies
+        let bob = makeSnapshot(count: 10, authorId: "bob", prefix: "b", mayHaveMore: true).skies
+        let page = alice + bob
+        fixture.skyService.emitTimeline(.success(SoratomoTimelineSnapshot(skies: page, isFromCache: false, mayHaveMore: true)))
+        fixture.viewModel.loadMoreIfNeeded()
+        fixture.skyService.emitTimeline(.success(
+            SoratomoTimelineSnapshot(skies: page, isFromCache: true, mayHaveMore: false)
+        ))
+
+        // キャッシュの結果で読み込み中は下りたが、判定はサーバーの結果を待っている。ここで隠す集合が変わっても判定しない
+        fixture.blockedAuthors.add("bob")
+        XCTAssertEqual(fixture.viewModel.skies.count, 10)
+        XCTAssertEqual(fixture.skyService.observeTimelineCalls.map(\.limit), [20, 40])
+
+        // サーバーの結果: 伸ばした 20 件も bob の投稿だった → 表示が増えないので、自分でもう一度伸ばす
+        let moreBob = makeSnapshot(count: 20, authorId: "bob", prefix: "c", mayHaveMore: true).skies
+        fixture.skyService.emitTimeline(.success(
+            SoratomoTimelineSnapshot(skies: page + moreBob, isFromCache: false, mayHaveMore: true)
+        ))
+        XCTAssertEqual(fixture.viewModel.skies.count, 10)
+        XCTAssertEqual(fixture.skyService.observeTimelineCalls.map(\.limit), [20, 40, 60])
+    }
+
+    func testHidingAfterExtensionFailedContinuesReading() async {
+        let fixture = makeFixture()
+        await fixture.viewModel.start()
+        fixture.skyService.emitTimeline(.success(makeSnapshot(count: 20, authorId: "bob", prefix: "b", mayHaveMore: true)))
+        fixture.viewModel.loadMoreIfNeeded()
+
+        // 伸ばした監視が失敗した（伸ばした結果はもう届かない）
+        fixture.skyService.emitTimeline(.failure(.network))
+        XCTAssertFalse(fixture.viewModel.isLoadingMore)
+
+        // その後に表示中の投稿が全部隠れた → 待っている結果は無いので、自分で続きを読む
+        fixture.blockedAuthors.add("bob")
+
+        XCTAssertTrue(fixture.viewModel.skies.isEmpty)
+        XCTAssertEqual(fixture.skyService.observeTimelineCalls.map(\.limit), [20, 40, 60])
+    }
+
     func testBlockingEveryoneShownContinuesReading() async {
         let fixture = makeFixture()
         await fixture.viewModel.start()

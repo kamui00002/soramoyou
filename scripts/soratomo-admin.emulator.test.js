@@ -304,6 +304,33 @@ test("review-report violation: 投稿と画像を消し、投稿者を停止し�
   assertNoSecrets(out.lines);
 });
 
+test("review-report violation: 同じ投稿IDで別の人の投稿が作り直されていたら、消さず・止めず・記録も書かない", async () => {
+  // 通報を受け付けた後に元の投稿（bad の投稿）が消え、同じ投稿IDで other の投稿が作られた
+  await seedGroup({
+    groupId: "gA",
+    members: [
+      { uid: "alive", role: "owner" },
+      { uid: "bad", role: "member" },
+      { uid: "other", role: "member" },
+    ],
+    skies: [{ skyId: "s1", authorId: "other" }],
+  });
+  const reportId = await seedReport({ groupId: "gA", skyId: "s1", authorId: "bad", reporterId: "alive" });
+  const d = deps({ existing: ["alive", "bad", "other"], images: imagesOf("gA", "other", "s1") });
+
+  const out = await admin.cmdReviewReport(d, { reportId, result: "violation" });
+  assert.equal(out.exitCode, 1, out.lines.join("\n"));
+  assert.equal(await exists(`${GROUPS}/gA/skies/s1`), true);
+  assert.deepEqual([...d.storage.paths].sort(), imagesOf("gA", "other", "s1"));
+  assert.equal((await db.doc(`${USERS}/bad`).get()).get("suspendedAt"), undefined);
+  assert.equal((await db.doc(`${USERS}/other`).get()).get("suspendedAt"), undefined);
+  assert.deepEqual(await memberIds("gA"), ["alive", "bad", "other"]);
+  const report = await db.doc(`${REPORTS}/${reportId}`).get();
+  assert.equal(report.get("reviewResult"), undefined);
+  assert.equal(report.get("reviewedAt"), undefined);
+  assertNoSecrets(out.lines);
+});
+
 test("review-report no_violation: 投稿も投稿者もそのままで、確認の記録だけを書く", async () => {
   await seedGroup({
     groupId: "gA",

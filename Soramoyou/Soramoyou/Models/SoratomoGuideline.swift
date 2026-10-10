@@ -32,7 +32,7 @@ enum SoratomoGuideline {
     }
 
     /// 開発者への連絡先（設定の「お問い合わせ」と同じ。アプリとプライバシーポリシーに載せ済み）
-    static let contactEmail = "soramoyou.app@gmail.com"
+    static let contactEmail = SupportContact.email
 
     /// 本文の前置き
     static let introduction = "そらともは、招待した友達だけで空の写真を見せ合う場所です。みんなが気持ちよく使えるよう、次のことを守ってください。"

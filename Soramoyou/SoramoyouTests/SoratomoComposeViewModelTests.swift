@@ -416,6 +416,24 @@ final class SoratomoComposeViewModelTests: XCTestCase {
         XCTAssertEqual(log.events, [.postFailed(stage: .save, reason: .network)])
     }
 
+    func testRetryEndingUnknownKeepsImages() async {
+        skyService.createSkyResultQueue = [.failure(.network), .failure(.unknown)]
+        let viewModel = makeViewModel()
+        await fillInput(viewModel)
+
+        await viewModel.submit()
+
+        // 送り直しが .unknown（サーバーの internal など）で終わっても、拒否と確定したわけではない。
+        // 1 回目で投稿が作られていたかもしれないので、画像は消さない（画像の無い投稿を残さない）
+        XCTAssertEqual(skyService.createSkyCalls.count, 2)
+        XCTAssertTrue(imageStore.deleteCalls.isEmpty)
+        XCTAssertTrue(skyService.skyExistsOnServerCalls.isEmpty)
+        XCTAssertEqual(viewModel.phase, .failed(message: SoratomoError.unknown.userMessage))
+        XCTAssertEqual(viewModel.caption, "夕焼け")
+        XCTAssertNotNil(viewModel.photoData)
+        XCTAssertEqual(log.events, [.postFailed(stage: .save, reason: .unknown)])
+    }
+
     // MARK: - NGワード（release-gate 10.3・要件 11.7〜11.9・15.2）
 
     func testNgWordDeletesImagesKeepsInputAndDoesNotRetry() async {

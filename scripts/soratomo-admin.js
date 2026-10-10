@@ -402,6 +402,7 @@ async function cmdShowReport({ db }, { reportId }) {
 /**
  * review-report（要件8.2・8.3）: 確認の日時と結果を記録する。
  * violation なら、投稿を消し（画像も）、記録の投稿者（受け付けたときの実際の投稿者・要件6.8）を利用停止にしてから記録を書く。
+ * 今の投稿があって投稿者が記録と違えば（同じ投稿IDで作り直された投稿）、何もせずに止める。
  * 停止が予算の時間で止まったら記録を書かない（同じコマンドの再実行で続きから。削除と停止は冪等）。
  * 前回の結果があれば出して上書きする。violation から no_violation に変えても、削除と停止は戻さない。
  * @param {{ db: FirebaseFirestore.Firestore, deletion: { deleteSoratomoSky: Function, suspendSoratomoUser: Function },
@@ -424,6 +425,17 @@ async function cmdReviewReport(deps, { reportId, result }) {
   if (result === "violation") {
     if (!core.isAutoId(r.groupId) || !core.isAutoId(r.skyId) || !isPrintableId(r.authorId)) {
       lines.push("❌ 記録の ID が壊れているので、推測で消さずに止めた（コンソールで確かめ、delete-sky と suspend を使う）");
+      return { lines, exitCode: 1 };
+    }
+    // 元の投稿が消えた後に、同じ投稿IDで別の人が投稿を作り直していると、記録の投稿者と今の投稿者がずれる。
+    // そのまま進むと、別の人の投稿を消して記録の投稿者を止めてしまうので、今の投稿を読み直して確かめる。
+    // 投稿が無ければ今までどおり進む（投稿者が消した後でも、記録の投稿者を止める・要件6.8）
+    const current = await deps.db.doc(`${GROUPS}/${r.groupId}/${SKIES}/${r.skyId}`).get();
+    if (current.exists && current.get("authorId") !== r.authorId) {
+      lines.push(
+        `❌ 今の投稿者 ${shown(current.get("authorId"), isPrintableId)} が記録の投稿者 ${r.authorId} と違う` +
+          "（同じ投稿IDで作り直された投稿かもしれない）ので、消さずに止めた（コンソールで確かめ、delete-sky と suspend を使う）"
+      );
       return { lines, exitCode: 1 };
     }
     const sky = await deps.deletion.deleteSoratomoSky(deps, { groupId: r.groupId, skyId: r.skyId });

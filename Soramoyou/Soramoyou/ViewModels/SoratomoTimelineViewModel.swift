@@ -534,18 +534,28 @@ final class SoratomoTimelineViewModel: ObservableObject {
             if timelineError != nil {
                 timelineError = nil
             }
-            // 同じ内容（メタデータだけが変わった通知など）なら何もしない
-            if lastSkies == snapshot.skies, lastMayHaveMore == snapshot.mayHaveMore {
+            // 上限を伸ばした結果を待っているか。張り直した監視の 1 回目は端末のキャッシュの結果で、前のページの分しか無く
+            // 「続きが無い」ように見えることがある。そこで判定すると、後から届くサーバーの結果（伸ばした分が全部隠れる）で
+            // 続きを読まなくなるので、伸ばした結果の判定はサーバーの結果で行う（レビューで直した）
+            let awaitsExtension = visibleCountBeforeExtension != nil
+            if lastSkies != snapshot.skies || lastMayHaveMore != snapshot.mayHaveMore {
+                lastSkies = snapshot.skies
+                lastMayHaveMore = snapshot.mayHaveMore
+                hasLoadedTimeline = true
+                rebuildSkies()
+            } else if !awaitsExtension {
+                // 同じ内容（メタデータだけが変わった通知など）なら何もしない
                 return
             }
-            lastSkies = snapshot.skies
-            lastMayHaveMore = snapshot.mayHaveMore
-            hasLoadedTimeline = true
-
-            rebuildSkies()
+            // キャッシュの結果では判定を保留する（読み込み中の表示は下ろしたまま。中身の同じサーバーの結果でも判定する）
+            if awaitsExtension, snapshot.isFromCache {
+                return
+            }
             continueReadingIfStalled()
         case let .failure(error):
             isLoadingMore = false
+            // 伸ばした結果はもう届かない（監視が止まった）。待つのをやめて、隠す集合が変わったときに判定できるようにする
+            visibleCountBeforeExtension = nil
             SoratomoError.record(error, context: "soratomo.observeTimeline")
             // 読み込んだ投稿があれば、出したままにする（失敗は投稿が無いときだけ出す）
             timelineError = error
@@ -576,7 +586,8 @@ final class SoratomoTimelineViewModel: ObservableObject {
         hidden = newHidden
         guard hasLoadedTimeline else { return }
         rebuildSkies()
-        if !isLoadingMore {
+        // 伸ばした結果を待っている間（読み込み中・キャッシュの結果で判定を保留中）は、届く結果で判定する
+        if !isLoadingMore, visibleCountBeforeExtension == nil {
             continueReadingIfStalled()
         }
     }
