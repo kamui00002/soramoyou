@@ -30,13 +30,30 @@
 
 ## (a) 着手の条件（段0-1）
 
-- [ ] 1. leave-group の反映と受け入れの確認が済んだことを確かめ、承認版と現物で突き合わせる（要確認1）
+- [x] 1. leave-group の反映と受け入れの確認が済んだことを確かめ、承認版と現物で突き合わせる（要確認1）
   - leave-group の `tasks.md` で、main へのマージ・本番への反映（`soratomoLeaveGroup`・定期実行の仕事C・`firestore.rules` の拒否だけの `match`）・受け入れの確認のタスクに「結果」があり、完了していることを読む（2026-10-11 に書かれた leave-group の tasks.md では11・12、結果のまとめは13）。このときのルールの関門は、まだクレームの判定のまま（leave-group は `isSoratomoUser()` に触れない）
   - 要確認1（承認版の design との突き合わせ）: 2026-10-11 に承認版の leave-group `design.md` を読み、本 spec の design.md の P12 と内容の食い違いが無いことを確かめた（tasks.md の作成時）。一致した項目: Callable の名前 `soratomoLeaveGroup`・`requireFlag: false`・8本目の Callable で `module.exports` の11本目・新しい関数は足さず `soratomoHousekeeping` に仕事C・`firestore.rules` に拒否だけの `match /soratomoPendingLeaves/{markerId}` を `soratomoConfig` の後に足し `isSoratomoUser()` に触れない・`storage.rules` は変えない・入口はタイムラインの右上のメニュー（`ellipsis.circle`）の「グループを抜ける」。P12 の行番号（`design.md:452`・`:462`）は承認版では453行・463行（1行ずれ）。承認版は加えて、`firestore.rules` の拒否のコレクションの数のコメント（2つ→3つ）と `functions/index.js` のコメント（Callable 7本→8本）を直し、`scripts/rules_test_soratomo.py` に `soratomoPendingLeaves` のケースと変異を足す。イベントは `soratomo_group_left`・`soratomo_leave_failed`・`soratomo_join_failed` の `reason` の `leave_pending`
   - 要確認1（現物での数え直し・leave-group が main に入った後）: `grep -n "requireFlag" functions/soratomo.js` で、選択肢を渡しているのが `soratomoDeleteMyData` と `soratomoLeaveGroup` の2か所だけ。`module.exports` が11個。`functions/soratomo.js` の頭の説明が Callable 8本・計11本。`firestore.rules` に `soratomoPendingLeaves` の拒否だけの `match` があり、`isSoratomoUser()` は変わっていない。`storage.rules` に leave-group の差分が無い。抜けるの入口の画面の言葉（メニューの項目名）。違っていれば、このファイルの関数の指定（3.1・11.5）・本数・期待値22・What's New（7.1）と審査メモ（10.4）の言葉を直してから進む
   - 本番の関数の数: leave-group の反映の後の `firebase functions:list --project soramoyou-ios` の名前と数（22本）を、leave-group の結果から引く。書かれていなければ、GOを取って読む
   - `git fetch -q origin` の後、`git log --oneline origin/main` で leave-group のマージが入っていることを見てから、PR-A と PR-B のブランチを main から切る
   - _Requirements: 12.3, 12.4_
+  - 結果（2026-10-12 08:10・本番は読んでいない＝GO は不要だった）:
+    - leave-group の完了: `git fetch` の後の origin/main の leave-group の `tasks.md` で、1〜14 がすべて `[x]` で、11〜14 に結果がある。main へは `d204a9e`（#174・機能）・`7364bb5`（#176・11〜13 の記録）・`72bf527`（#177・14 の隙間の直しと記録。2026-10-11 23:02Z のマージを `gh pr view 177` で確認）で入っている。leave-group 13 の要約: 出し元 `d204a9e`・本番の関数 22 本（11.3）・Firestore のルールの本番の読み返しが main とバイト一致（ruleset `8ba8a746`・11.5）・要確認Q4 と Q1 は 11.4・11.6 で確認済み・受け入れ（12.1・12.2）は 2026-10-12 01:56〜06:45 にシミュレーター 2 台と本番で済んだ
+    - 本番の関数の数: 22 本は、leave-group 11.3 の結果（2026-10-12 01:34・出した後の `functions:list`）から引いた。このタスクでは本番を読んでいない
+    - 要確認1（現物での数え直し・origin/main `72bf527` の中身）:
+      - `grep -n "requireFlag" functions/soratomo.js`: 選択肢として渡しているのは 262 行（`soratomoDeleteMyData`）と 304 行（`soratomoLeaveGroup`）の 2 か所だけ。ほかの該当は関門の定義と説明のコメント
+      - `module.exports` は 11 個（Callable 8・トリガー 2・定期実行 1）。ファイルの頭の説明も「Callable 8本・トリガー2本・定期実行1本」と「11 本」。`functions/index.js` の 550 行の説明も Callable 8 本
+      - 要確認8 の先取り（数の内訳だけ）: `functions/index.js` の `exports.名前 =` が 9・`functions/skyMotion.js` が 2・`soratomo.js` の `module.exports` が 11 の計 22 で、leave-group 11.3 の本番の 22 本と数が合う。名前の突き合わせは 11.5 で行う
+      - `firestore.rules`: `soratomoPendingLeaves` の拒否だけの `match`（読み書きとも `false`）が `soratomoConfig` の後（660 行）にある。`isSoratomoUser()`（573 行）の本体は leave-group の前（`b07da6e`）と同じで、まだクレームの判定（`request.auth.token.get('soratomoBeta', false) == true`）のまま
+      - `storage.rules`: `b07da6e..origin/main` の差分は 0 行（leave-group は触れていない）
+      - `scripts/rules_test_soratomo.py` に `soratomoPendingLeaves` のケースがある。`functions/soratomo.test.js` の `CALLABLES` はまだ 6 本で、`soratomoLeaveGroup` は無い（3.1 で足して 7 本にする想定のとおり）
+      - 抜けるの入口の画面の言葉（`SoratomoTimelineView.swift` の 590〜603 行）: タイムラインの右上のメニュー（アイコン `ellipsis.circle`・VoiceOver の読み上げ「その他の操作」）の項目「グループを抜ける」（アイコン `rectangle.portrait.and.arrow.right`・destructive）。7.1 と 10.4 の言葉はこれにそろえる
+      - 食い違いは無かったので、このファイルの関数の指定（3.1・11.5）・本数・期待値 22・7.1 と 10.4 の言葉は直していない
+    - ブランチ: origin/main（`72bf527`）から `機能-そらとも一般公開-アプリ`（PR-B）を上流なしで切り、この記録をコミットした。`機能-そらとも一般公開-サーバー`（PR-A）は同じコミットから切る（タスク1の記録を両方の共通の土台にし、PR-B が先に main へ入っても、5 の origin/main の取り込みでこの行がぶつからないようにする）。どちらもまだ push していない（初回は `git push -u origin <ブランチ名>`）
+    - leave-group から渡されたもの（後のタスクで拾う）:
+      - 相手役 B（`soratomo5@gmail.com`・uid `nhYcDQ…`・クレームあり）は、10.1 の S5（クレーム無し・未作成）とは別人。S5 には別のメールを使う。10.1 で S5 を足すときに、**B の uid も `research.md` の除外の条件に足す**。leave-group の受け入れで、開発版 1.14.1 / 111（出荷していない組み合わせ）のイベントが本番の PostHog に届いている（ID の頭は B と S3）ので、除外の条件で落ちることを 12.3 で見る
+      - 実機で未確認のまま渡されたもの（12.2 の通しで見る）: 機内モードの 2 つ・オフラインの一覧・古い通知・抜けたことやオーナーになったことの通知が来ないこと・古い版（1.14.x）での投稿・leave-group 8.5 の (b)(c)・leave-group 14 の「確認を出せない間に画面が詰まらないこと」
+      - 12.3 の G4 のイベントに `soratomo_group_left`・`soratomo_leave_failed`・`soratomo_join_failed` の `leave_pending` が入っていることは、leave-group 13 で確認済み。`leave_pending` は本番でふつうには起こせないので、0 件が期待どおり（根拠は leave-group の単体テスト C1）
 
 ## (b) PR-A（サーバー）: ルール2本と読み返しの道具
 
