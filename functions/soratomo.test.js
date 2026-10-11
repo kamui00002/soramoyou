@@ -318,6 +318,20 @@ test("参加: 成功と既存のメンバー、形の誤り・不在・満員・
   assert.ok(!allLogs().includes("SKYFULLA"), "招待コードをログに出さない");
 });
 
+test("参加（陽性対照C1・leave-group 2.1）: 片づけ中（写しが残り、メンバーの文書が無い）の人は failed-precondition（leave_pending）で、何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  await agree("bob");
+  const userRef = db.collection("soratomoUsers").doc("bob");
+  await userRef.set({ groupCount: 1 }, { merge: true });
+  await userRef.collection("groups").doc("g1").set({ groupId: "g1", joinedAt: Timestamp.now() });
+
+  await assert.rejects(call("soratomoJoinGroup", authOf("bob"), { code: "SKYAAAAA" }), httpsError("failed-precondition", "leave_pending", {}));
+  assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("memberCount"), 1);
+  assert.equal((await db.collection("soratomoGroups").doc("g1").collection("members").get()).size, 1);
+  assert.equal((await userRef.get()).get("groupCount"), 1);
+  assert.ok(!allLogs().includes("SKYAAAAA"), "招待コードをログに出さない");
+});
+
 test("再発行: オーナーは新しいコード、メンバーは permission-denied（not_owner）、無いグループは not-found", async () => {
   await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob"] });
 

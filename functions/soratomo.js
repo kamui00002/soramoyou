@@ -73,6 +73,8 @@ const REASON_TO_CODE = Object.freeze({
   sky_not_found: "not-found",
   self_report: "failed-precondition",
   outdated_guideline: "failed-precondition",
+  // leave-group（抜けるか退会の片づけ中の参加）
+  leave_pending: "failed-precondition",
 });
 
 /**

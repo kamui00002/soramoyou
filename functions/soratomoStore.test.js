@@ -448,6 +448,45 @@ test("参加: 既存のメンバーの再参加は、上限とは無関係に「
   assert.equal(await userGroupDocCount("m05"), 10);
 });
 
+/** 片づけ中の人（メンバーの文書は無く、所属の写しと所属数が残る）を作る。抜けるの手順1の後・退会の途中の形。 */
+async function seedLeavePending(uid, groupId, { groupCount = 1 } = {}) {
+  const userRef = db.collection(USERS).doc(uid);
+  await userRef.set({ groupCount }, { merge: true });
+  await userRef.collection("groups").doc(groupId).set({ groupId, joinedAt: Timestamp.now() });
+}
+
+test("参加（陽性対照C1・leave-group 2.1）: 片づけ中（写しが残り、メンバーの文書が無い）の人は、印の有無に関わらず leave_pending で、何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+  await agree("amy");
+  await seedLeavePending("amy", "g1");
+
+  // 印の無い形（退会の途中）と、印のある形（抜けるの途中）
+  for (const withMarker of [false, true]) {
+    if (withMarker) {
+      await db.collection("soratomoPendingLeaves").doc("amy_g1").set({ uid: "amy", groupId: "g1", episodeId: "e1", leftAt: Timestamp.now() });
+    }
+    await assert.rejects(store.joinGroupTx(db, { uid: "amy", code: "SKYAAAAA", policy: POLICY }), domainError("leave_pending"), `印 ${withMarker}`);
+    assert.equal((await groupData("g1")).memberCount, 1);
+    assert.equal(await memberDocCount("g1"), 1);
+    assert.equal(await userGroupCount("amy"), 1);
+    assert.equal(await userGroupDocCount("amy"), 1);
+  }
+});
+
+test("参加（leave-group 2.1）: 片づけ中で所属10個の人は、user_limit より先に leave_pending。片づけ中でないグループへは user_limit", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", memberIds: ["owner"] });
+  await seedGroup({ groupId: "g2", ownerId: "owner", inviteCode: "SKYBBBBB", memberIds: ["owner"] });
+  await seedMemberships("busy", 9);
+  await agree("busy");
+  await seedLeavePending("busy", "g1", { groupCount: 10 }); // 片づけ中のグループも所属数に数えられたまま
+
+  await assert.rejects(store.joinGroupTx(db, { uid: "busy", code: "SKYAAAAA", policy: POLICY }), domainError("leave_pending"));
+  await assert.rejects(store.joinGroupTx(db, { uid: "busy", code: "SKYBBBBB", policy: POLICY }), domainError("user_limit"));
+  assert.equal(await userGroupCount("busy"), 10);
+  assert.equal(await userGroupDocCount("busy"), 10);
+  assert.equal((await groupData("g1")).memberCount, 1);
+});
+
 test("同時の参加: 19人のグループへ25人が同時に参加しても、20人を超えない", async (t) => {
   await seedGroup({ groupId: "g1", ownerId: "m00", inviteCode: "SKYAAAAA", memberIds: memberIds(19) });
   const joiners = Array.from({ length: 25 }, (_, i) => `j${String(i).padStart(2, "0")}`);

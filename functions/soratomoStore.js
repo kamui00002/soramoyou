@@ -52,7 +52,7 @@ class SoratomoDomainError extends Error {
   /**
    * @param {"flag_off"|"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner"
    *   |"suspended"|"consent_required"|"ng_word"|"invalid_input"|"not_member"|"invalid_reason"|"sky_not_found"
-   *   |"self_report"|"outdated_guideline"} reason
+   *   |"self_report"|"outdated_guideline"|"leave_pending"} reason
    * @param {{ currentVersion: number }|null} [details] 利用者へ返してよい詳細。いまは consent_required と
    *   outdated_guideline の現行のガイドラインの版だけ（アプリが「同意が要る」と「アプリが古い」を見分けるため・
    *   release-gate 2.1・2.4）。
@@ -243,10 +243,14 @@ async function createGroupTx(db, { uid, name, requestId, policy }, { randomInt }
 
 /**
  * 招待コードでグループに参加する（要件4.5〜4.8）。
- * 判定の順（release-gate 2.1）: invalid_format（トランザクションの前）→ suspended → consent_required →
- * コードの不在 → 既存のメンバー → 所属10個 → 満員20人。
+ * 判定の順（release-gate 2.1・leave-group 2.1）: invalid_format（トランザクションの前）→ suspended → consent_required →
+ * コードの不在 → 既存のメンバー → 片づけ中 → 所属10個 → 満員20人。
  * 利用停止と同意は、コードの有無と既存のメンバーより先に見る（停止中や同意の無い既存のメンバーも成功にしない）。
  * 既存のメンバーなら、上限とは無関係に alreadyMember: true の成功で返し、何も増やさない（要件4.8）。
+ * 片づけ中（このグループの所属の写しが残り、メンバーの文書が無い＝抜けるか退会の途中）なら leave_pending で断る
+ * （leave-group 要件8.4）。写しは create で作るので、断らないとコミットが ALREADY_EXISTS になり internal に化ける。
+ * 所属10個より先に見るのは、片づけ中のグループが所属数に数えられたままで、user_limit と誤って案内しないため。
+ * 片づけ中の印（soratomoPendingLeaves）の有無は見ない（退会の途中の写しも同じく断る）。
  * メンバーの文書・メンバー数・所属の写し・所属数は、同じトランザクションでそろって増やす（要件11.8）。
  * @param {FirebaseFirestore.Firestore} db
  * @param {{ uid: string, code: unknown, policy: { guidelineVersion: number } }} params
@@ -271,11 +275,14 @@ async function joinGroupTx(db, { uid, code, policy }) {
 
     const groupRef = db.collection(GROUPS).doc(groupId);
     const memberRef = groupRef.collection(MEMBERS).doc(uid);
-    const [groupSnap, memberSnap] = await tx.getAll(groupRef, memberRef);
+    const copyRef = userRef.collection(USER_GROUPS).doc(groupId);
+    const [groupSnap, memberSnap, copySnap] = await tx.getAll(groupRef, memberRef, copyRef);
 
     // コードの文書が残っていても、グループの今のコードでなければ無効（再発行の後の古いコード・要件3.10）
     if (!groupSnap.exists || groupSnap.get("inviteCode") !== normalized) throw new SoratomoDomainError("not_found");
     if (memberSnap.exists) return { groupId, alreadyMember: true };
+    // メンバーの文書が無いのに写しが残っている＝片づけ中（上の説明）
+    if (copySnap.exists) throw new SoratomoDomainError("leave_pending");
 
     const groupCount = countOf(user.groupCount);
     if (groupCount >= core.MAX_GROUPS_PER_USER) throw new SoratomoDomainError("user_limit");
@@ -287,7 +294,7 @@ async function joinGroupTx(db, { uid, code, policy }) {
     tx.create(memberRef, { uid, role: "member", joinedAt: now });
     tx.update(groupRef, { memberCount: memberCount + 1 });
     tx.set(userRef, { groupCount: groupCount + 1, updatedAt: now }, { merge: true });
-    tx.create(userRef.collection(USER_GROUPS).doc(groupId), { groupId, joinedAt: now });
+    tx.create(copyRef, { groupId, joinedAt: now });
 
     return { groupId, alreadyMember: false };
   });

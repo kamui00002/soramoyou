@@ -88,7 +88,7 @@
 
 - [ ] 2. 参加の判定に、片づけ中の `leave_pending` を足す
 
-- [ ] 2.1 `joinGroupTx` で、写しが残っている人の参加を `leave_pending` で断る（陽性対照C1・要確認Q6）
+- [x] 2.1 `joinGroupTx` で、写しが残っている人の参加を `leave_pending` で断る（陽性対照C1・要確認Q6）
   - 前提: なし（1と同じエミュレーターと `functions/soratomo.js` を使うので、1と同時には進めない）
   - `functions/soratomoStore.js` の `joinGroupTx` の2回目の読み（`tx.getAll(groupRef, memberRef)`）に、所属の写し `soratomoUsers/{uid}/groups/{groupId}` を足す（読みはすべて書きの前）
   - 判定の順: …→コードの不在→既存のメンバー（今のまま）→写しがあれば `leave_pending`→所属10個→満員20人。所属10個より先に見るのは、片づけ中のグループが所属数に数えられたままで、`user_limit` と誤って案内しないため。印の有無は見ない（退会の途中の写しも同じく断る）
@@ -98,6 +98,7 @@
   - 要確認Q6: 読みが1件増えても、既存の同時の参加のテスト（「同時の参加: 19人のグループへ25人が同時に参加しても、20人を超えない」と「同時の参加: 所属9個の人が25のグループへ同時に参加しても、10個を超えない」）がそのまま通るか。通らなければ、原因（エミュレーターの競合の返し方か、判定の誤りか）を切り分けて記録し、設計を変える前に利用者に相談する
   - 陽性対照（C1）: 今の現物（写しの判定が無い）で、同じ場面の参加が `SoratomoDomainError` でない失敗（`ALREADY_EXISTS`）になり、Callableでは `internal` になることを先に確かめる。写しの判定を所属10個の判定より後に置いた実装で、判定の順のテストが赤になることも確かめる
   - _Requirements: 8.4, 10.3_
+  - 結果（2026-10-11 13:42）: 変更前の基準は、store・soratomo・削除の3ファイルで 162/162。`joinGroupTx` の2回目の `getAll` に写し（`copyRef`）を同じ呼び出しで足し、「既存のメンバー」の直後・所属10個の前で、写しがあれば `leave_pending` にした（印は見ない）。写しの作成も同じ `copyRef` を使う。`REASON_TO_CODE` に `leave_pending: "failed-precondition"` を、`SoratomoDomainError` のJSDocに理由を足した。テストは `soratomoStore.test.js` に2件（片づけ中の人の参加を印の無い形と有る形で・判定の順）、`soratomo.test.js` に1件（Callableの `failed-precondition`・`details` は `reason` だけ）。写しの重なりで `internal` を期待する既存のテストが無いことをgrepで確かめた（`internal` を期待するのは、要求IDの欠落と語のリストの未読込の3か所だけ）。陽性対照（C1）: テストだけを足した変更前の実装で3件が赤。トランザクション層は `6 ALREADY_EXISTS: entity already exists`（写しの文書）で `SoratomoDomainError` でない失敗、Callableは `internal`、判定の順は `user_limit`。写しの判定を所属10個の後ろに置いた実装で、判定の順のテストだけが赤（`user_limit`）。正しい実装に戻して shasum の頭 `c4bb9b89e36c` で一致を確認。要確認Q6: 同時の参加の2件（19人へ25人・所属9個の人が25のグループへ）は無修正で通った。内訳も変更前と同じ（成功1・`group_full` 24・競合0／成功1・`user_limit` 24・競合0）。正しい実装で `npm run lint` 通過・`npm test` 290/290・エミュレーター（store・soratomo・削除・管理）175/175
 
 - [ ] 2.2 片づけの後の入り直しと、同時実行のテストを書く
   - 前提: 1.3, 2.1
