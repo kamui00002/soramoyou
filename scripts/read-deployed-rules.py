@@ -237,7 +237,8 @@ def main(argv=None):
             try:
                 remote = read_release(release_name, token)
             except ReadError as e:
-                print(f"[{label}] リリース {release_name}: 読めなかった\n  {e}")
+                print(f"[{label}] リリース {release_name}: 読めなかった")
+                print("  " + str(e).replace("\n", "\n  "))
                 failed = True
                 continue
             if not compare_and_save(label, release_name, remote, local_path, os.path.join(args.out_dir, file_name)):
