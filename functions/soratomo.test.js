@@ -282,7 +282,7 @@ test("Callable: 関門を持つ7本とも、ログインが無ければ unauthen
   }
 });
 
-test("Callable（public-launch 1.7）: 匿名のログインは、クレームの有無に関係なく7本とも permission-denied（registration_required・理由だけ）で、何も書かない。拒否のログは uid と理由", async () => {
+test("Callable（public-launch 1.7）: 匿名のログインは、クレームの有無に関係なく7本とも permission-denied（registration_required・理由だけ）で、何も書かない。拒否のログに理由を出す", async () => {
   await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
   for (const token of [ANONYMOUS, { ...ANONYMOUS, soratomoBeta: true }]) {
     for (const [name, data] of CALLABLES) {
@@ -298,8 +298,11 @@ test("Callable（public-launch 1.7）: 匿名のログインは、クレーム�
     const rejected = logFieldsOf(`${name}: rejected`);
     assert.equal(rejected.length, 2, name);
     for (const fields of rejected) {
-      assert.equal(fields.uid, "alice", name);
+      // 既存の形（{name}: rejected { uid, groupId?, skyId?, reason }）。関門の拒否では uid はまだ決まっていないので null
+      // （1.14 期の flag_off の拒否と同じ）。トークンの中身は出さない
+      assert.equal(fields.uid, null, name);
       assert.equal(fields.reason, "registration_required", name);
+      assert.deepEqual(Object.keys(fields).filter((k) => !["uid", "groupId", "skyId", "reason"].includes(k)), [], name);
     }
   }
 });
