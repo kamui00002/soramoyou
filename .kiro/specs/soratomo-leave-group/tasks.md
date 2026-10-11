@@ -191,7 +191,7 @@
     - `SoratomoLeaveFailReason` には `init(_:)` を付けていない（写す元の `SoratomoLeaveError` は7.1で作り、写し方は8.1で決める）
     - ⚠️ 1回目は並列テストでシミュレーターが複製され、5分平均のロードが一時72まで上がった。以後のiOSのテストは `-parallel-testing-enabled NO` を付ける
 
-- [ ] 7. iOSの部品を作る
+- [x] 7. iOSの部品を作る
 
 - [x] 7.1 抜けるのサービス `SoratomoLeaveService` を作る（要確認Q2の前半）
   - 前提: 6
@@ -248,12 +248,18 @@
     - 整形のフックが、Viewの2ファイルで無関係の行（`withActionMenu` のジェネリクス・コメントの字下げ）を書き換えたので、元に戻してPythonで変更だけを入れ直した
     - ⚠️ 正しい版の回の終わりに、1分平均のロードが一時302まで上がった（C2E3F752の起動と別のセッションの2台が重なった）
 
-- [ ] 7.4 容れ物 `SoratomoDependencies` に、新しい部品を載せる
+- [x] 7.4 容れ物 `SoratomoDependencies` に、新しい部品を載せる
   - 前提: 7.1, 7.2
   - `leaveService: any SoratomoLeaveServiceProtocol` と `leftGroups: SoratomoLeftGroups` を足し、`live` で本物を入れる
   - `init` の引数が増えるので、組み立てている箇所を `grep -rn "SoratomoDependencies(" Soramoyou` で探して全部直す（いまは `live` と `SoramoyouTests/SoratomoDependenciesTests.swift:48` の2か所）
   - ビルドが通り、既存の `SoratomoDependenciesTests` が通る
   - _Requirements: 4.3, 5.3_
+  - 結果（2026-10-11 19:05）:
+    - 容れ物に `leaveService`（本物は `SoratomoLeaveService()`）と `leftGroups`（本物は `SoratomoLeftGroups()`）を足した。組み立ては `live` とテストの2か所だけ（`grep -rn "SoratomoDependencies(" Soramoyou` で確認）。テストは `MockSoratomoLeaveService()` と、通報の記録と同じテスト用のUserDefaultsを渡す `SoratomoLeftGroups(defaults:)` にした。initの引数に既定値は付けていない（既存のinitの方針のまま）
+    - `SoratomoDependenciesTests` 3/3通過（19:02〜19:04・C2E3F752・`-parallel-testing-enabled NO`）。件数はxcresultで数えた。ログで、変更した2ファイルがコンパイルされたことと、2ファイルに警告が無いことを確かめた
+    - 陽性対照は取っていない（検証済みとは書かない）。このタスクは新しいテストを足さず、完了の条件はビルドと既存のテストのため。組み立ての取りこぼしは、initの引数が増えたことでコンパイラが拾う
+    - design.mdの「`live` で `SoratomoRouter.shared.isLeftGroup` を配線する」は、ここではしない。`isLeftGroup` は8.3で作り、配線も8.3の本文が持つ（`live` は `static let` なので、ルーターへの代入を置く場所は8.3で決める）
+    - ⚠️ テストの終わりに、1分平均のロードが一時253まで上がった（別のセッションのシミュレーターの起動と重なった）
 
 - [ ] 8. iOSの画面と配線を変える
 

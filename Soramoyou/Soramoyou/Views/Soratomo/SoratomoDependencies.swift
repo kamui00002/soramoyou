@@ -104,6 +104,10 @@ final class SoratomoDependencies {
     let blockedAuthors: SoratomoBlockedAuthors
     /// ⭐️ この端末で通報した投稿（release-gate 9.1）。すべてのグループのタイムラインと投稿詳細が同じものを読む
     let reportedSkies: SoratomoReportedSkies
+    /// ⭐️ グループを 1 つだけ抜ける（leave-group 7.4）
+    let leaveService: any SoratomoLeaveServiceProtocol
+    /// ⭐️ この端末で抜けたグループの記録（leave-group 7.4）。サインアウトでは消さない（同じ人が入り直したときも隠す）
+    let leftGroups: SoratomoLeftGroups
     /// いまログインしている利用者の uid（未ログインなら nil）
     let currentUid: () -> String?
 
@@ -131,6 +135,8 @@ final class SoratomoDependencies {
         guidelineService: any SoratomoGuidelineServiceProtocol,
         blockedAuthors: SoratomoBlockedAuthors,
         reportedSkies: SoratomoReportedSkies,
+        leaveService: any SoratomoLeaveServiceProtocol,
+        leftGroups: SoratomoLeftGroups,
         currentUid: @escaping () -> String?
     ) {
         self.groupService = groupService
@@ -145,6 +151,8 @@ final class SoratomoDependencies {
         self.guidelineService = guidelineService
         self.blockedAuthors = blockedAuthors
         self.reportedSkies = reportedSkies
+        self.leaveService = leaveService
+        self.leftGroups = leftGroups
         self.currentUid = currentUid
     }
 
@@ -176,6 +184,8 @@ final class SoratomoDependencies {
         guidelineService: SoratomoGuidelineService(),
         blockedAuthors: SoratomoBlockedAuthors(),
         reportedSkies: SoratomoReportedSkies(),
+        leaveService: SoratomoLeaveService(),
+        leftGroups: SoratomoLeftGroups(),
         currentUid: { Auth.auth().currentUser?.uid }
     )
 }

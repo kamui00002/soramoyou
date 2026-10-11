@@ -59,6 +59,8 @@ final class SoratomoDependenciesTests: XCTestCase {
             guidelineService: MockSoratomoGuidelineService(),
             blockedAuthors: SoratomoBlockedAuthors(notificationCenter: NotificationCenter()),
             reportedSkies: SoratomoReportedSkies(defaults: defaults),
+            leaveService: MockSoratomoLeaveService(),
+            leftGroups: SoratomoLeftGroups(defaults: defaults),
             currentUid: { nil }
         )
     }
