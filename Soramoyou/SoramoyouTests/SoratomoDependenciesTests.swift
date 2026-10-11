@@ -5,6 +5,7 @@
 //  そらともの組み立て口（SoratomoDependencies）のサインアウトの後片付けのテスト ⭐️（release-gate 9.6）
 //  - サインアウトで、ブロックの一覧と通報の記録のメモリが空になる（別のアカウントに前の人の隠す集合が残らない）
 //  - 端末の通報の記録は残る（同じ人が入り直したときに隠したままにする）
+//  - 投稿の覚え（SoratomoSkyLookup）は、抜けたグループの分だけを忘れる（leave-group 7.3）
 //
 //  ⚠️ Firebase には接続しない。サービスはすべてモック、通報の記録の置き場はテスト用の UserDefaults。
 //
@@ -112,5 +113,35 @@ final class SoratomoDependenciesTests: XCTestCase {
         dependencies.reportedSkies.load(uid: "userA")
 
         XCTAssertEqual(dependencies.reportedSkies.keys, [key])
+    }
+
+    // MARK: - 投稿の覚え（SoratomoSkyLookup）
+
+    /// グループを抜けたら、そのグループの投稿だけを忘れる（ほかのグループの覚えは残す・leave-group 7.3）
+    func testSkyLookupForgetGroupKeepsOtherGroups() {
+        let lookup = SoratomoSkyLookup()
+        lookup.remember([
+            makeSky(id: "s1", groupId: "g1"),
+            makeSky(id: "s2", groupId: "g1"),
+            makeSky(id: "s1", groupId: "g2"),
+        ])
+
+        lookup.forget(groupId: "g1")
+
+        XCTAssertNil(lookup.sky(groupId: "g1", skyId: "s1"))
+        XCTAssertNil(lookup.sky(groupId: "g1", skyId: "s2"))
+        XCTAssertNotNil(lookup.sky(groupId: "g2", skyId: "s1"), "抜けていないグループの投稿まで忘れた")
+    }
+
+    private func makeSky(id: String, groupId: String) -> SoratomoSky {
+        SoratomoSky(
+            id: id,
+            groupId: groupId,
+            authorId: "author-1",
+            caption: nil,
+            pixelWidth: 100,
+            pixelHeight: 100,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
     }
 }

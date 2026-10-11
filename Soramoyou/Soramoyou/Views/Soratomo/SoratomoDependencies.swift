@@ -51,6 +51,12 @@ final class SoratomoSkyLookup {
         skies[Key(groupId: groupId, skyId: skyId)] = nil
     }
 
+    /// 1 つのグループの投稿をすべて忘れる（グループを抜けたとき。ほかのグループの覚えは残す・leave-group 7.3）
+    /// - Parameter groupId: 抜けたグループ ID
+    func forget(groupId: String) {
+        skies = skies.filter { $0.key.groupId != groupId }
+    }
+
     /// 覚えている投稿を引く
     /// - Returns: 覚えていなければ nil
     func sky(groupId: String, skyId: String) -> SoratomoSky? {

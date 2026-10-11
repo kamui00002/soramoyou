@@ -18,8 +18,9 @@
 //  - 開いている間は投稿 1 件を監視し、「もう無い」か「メンバーでなくなった」が届いたら「この投稿は表示できなくなりました」を出し、
 //    覚えから外す（release-gate 10.6・要件 1.7）
 //  - 画像の VoiceOver の説明はキャプション。無ければ「{表示名}さんの空」
-//  - ⚠️ 画像は必ず `SoratomoStorageImageProvider` と `.targetCache(SoratomoImageCache.shared)` で読み、
-//    processor（ダウンサンプリングなど）は付けない（鍵が変わり、削除やサインアウトで消せなくなるため）
+//  - ⚠️ 画像は必ず `SoratomoStorageImageProvider` と `.targetCache(SoratomoImageCache.cache(forStoragePath:))`
+//    （パスは provider と同じ）で読み、processor（ダウンサンプリングなど）は付けない
+//    （鍵が変わり、削除やサインアウトや抜けたときに消せなくなるため）
 //  - ⚠️ init のシグネチャ（groupId:skyId:dependencies:）は変えない（呼び出し側の SoratomoRootView が使うため）
 //
 
@@ -231,13 +232,13 @@ struct SoratomoSkyDetailView: View {
         return ZStack {
             // 下: サムネイル（タイムラインで読んだので、キャッシュから出る前提）
             KFImage(source: .provider(SoratomoStorageImageProvider(storagePath: paths.thumbnail)))
-                .targetCache(SoratomoImageCache.shared)
+                .targetCache(SoratomoImageCache.cache(forStoragePath: paths.thumbnail))
                 .resizable()
                 .scaledToFit()
 
             // 上: 表示用画像（届いたら重ねて置き換える。届かなければサムネイルが見えたまま）
             KFImage(source: .provider(SoratomoStorageImageProvider(storagePath: paths.display)))
-                .targetCache(SoratomoImageCache.shared)
+                .targetCache(SoratomoImageCache.cache(forStoragePath: paths.display))
                 .fade(duration: 0.2)
                 .resizable()
                 .scaledToFit()

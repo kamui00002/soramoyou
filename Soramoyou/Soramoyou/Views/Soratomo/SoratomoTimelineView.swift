@@ -561,11 +561,11 @@ struct SoratomoTimelineRow: View {
 
     /// サムネイル（メンバー判定を経る取得経路・要件 8.14）
     ///
-    /// ⚠️ `.targetCache(SoratomoImageCache.shared)` を必ず付け、processor は付けない
-    ///    （付けると鍵が変わり、削除やサインアウトのときに消せなくなる）
+    /// ⚠️ `.targetCache(SoratomoImageCache.cache(forStoragePath:))`（パスは provider と同じ）を必ず付け、
+    ///    processor は付けない（付けると鍵が変わり、削除やサインアウトや抜けたときに消せなくなる）
     private var thumbnail: some View {
         KFImage(source: .provider(SoratomoStorageImageProvider(storagePath: sky.imagePaths.thumbnail)))
-            .targetCache(SoratomoImageCache.shared)
+            .targetCache(SoratomoImageCache.cache(forStoragePath: sky.imagePaths.thumbnail))
             .placeholder {
                 Rectangle()
                     .fill(Color.secondary.opacity(0.15))

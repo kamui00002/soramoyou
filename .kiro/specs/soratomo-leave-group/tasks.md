@@ -225,7 +225,7 @@
     - 同じグループを足し直したら最新の扱いに移す（`SoratomoReportedSkies.add` と同じ）。消す口（`clear`・`erase`）は作らない（サインアウトで消さない・退会に足さない、を型で守る）
     - ⚠️ 陽性対照の回で、C2E3F752の起動と別のセッションの2台（BF678DA1・DCFBF2D6）が重なり、1分平均のロードが一時230まで上がった（メモリの空きは29%）。正しい版の回の終わりにも一時190を見た
 
-- [ ] 7.3 画像のキャッシュをグループごとに分け、投稿の覚えをグループ単位で消せるようにする（要確認Q3の前半）
+- [x] 7.3 画像のキャッシュをグループごとに分け、投稿の覚えをグループ単位で消せるようにする（要確認Q3の前半）
   - 前提: 6
   - `SoratomoImageCache`（`SoratomoStorageImageProvider.swift`）に `cache(forStoragePath:)` を足す。パス `soratomo/{groupId}/…` のグループIDごとに、`ImageCache(name: "soratomo.{groupId}", cacheDirectoryURL: 親のフォルダ)` を返す（メモ化）。親のフォルダは `Caches/soratomo-images/`（テストでは一時フォルダに差し替えられる形にする）。パスの形が違えば、グループ外の共通のキャッシュを返す（壊れた値で落とさない）
   - メモリの上限は、1つのキャッシュの既定（物理メモリの1/4）を、所属の上限10で割った値にする（10個そろっても今と同じ合計）
@@ -236,6 +236,17 @@
   - テスト: 2つのグループに鍵を入れ、片方を `removeGroup` すると、もう片方が残る（一時フォルダで行う）。`forget(groupId:)` の後も、ほかのグループの覚えが残る
   - 陽性対照: `removeGroup` がすべてのグループを消す実装で、もう片方が残るテストが赤になることを先に確かめる
   - _Requirements: 5.4, 5.5_
+  - 結果（2026-10-11 18:55）:
+    - 陽性対照（18:39〜18:51・C2E3F752・`SoratomoImageCacheTests` 9件＋`SoratomoImageStoreTests` 17件＋`SoratomoDependenciesTests` 3件＝29件）: `removeGroup` がすべてのグループのメモリと親のフォルダを消す実装で `testRemoveGroupDropsOnlyThatGroup`（「ほかのグループのメモリまで消えた」「ほかのグループのディスクまで消えた」）が赤。`forget(groupId:)` がすべてを忘れる実装で `testSkyLookupForgetGroupKeepsOtherGroups` が赤。赤はこの2本だけ（27件は通過）。走らせる前に書いた予想と一致した
+    - 正しい版（写しを戻してshasumの一致を確認）で、同じ29/29通過（18:51〜18:53・`-parallel-testing-enabled NO`）。件数はxcresultで数えた。変更した4つのソースと3つのテストのファイルに警告なし
+    - 要確認Q3の前半（シミュレーター）: Kingfisher 8.6.2で、置き場が `親/com.onevcat.Kingfisher.ImageCache.soratomo.{groupId}` になること（`diskStorage.directoryURL` と自分で組む規則の一致）・メモリの上限の変更（物理メモリの1/4を `SoratomoGroupService.maxListedGroups`＝10で割った値）・`removeGroup` と `clear` のフォルダの削除を、テストで確かめた。実機での確かめは12.2（検証済みでない）
+    - 中身は `SoratomoGroupImageCaches`（親のフォルダと受け皿を注入できるクラス・ロックで守る）。`SoratomoImageCache` の static の口（`cache(forStoragePath:)`・`remove`・`removeGroup`・`clear`・`purgeLegacyIfNeeded`）は design のまま、本番用の1つへ流す
+    - design.mdとの違い: 「グループ外の共通のキャッシュ」は、1.14.xの共通のキャッシュ `shared`（名前 `soratomo`）をそのまま受け皿にした（パスの形が違うときだけ使う・ふつうは空）。上限は既定の1/4のままなので、10グループと合わせた合計は1/4を少し超えうる
+    - キャッシュを作れない（フォルダを作れない）ときは、覚えずに受け皿を返し、IDを持たない専用のエラーで記録する（文脈 `soratomo.imageCache.create`）。Kingfisherのエラーはパス（グループIDを含む）を持つので、そのまま記録しない（要件11.1）
+    - ⚠️ 8.5への申し送り: Kingfisherは書き込むときにフォルダが無ければ作り直す。`removeGroup` は、タイムラインを閉じて監視を止めた後に呼ぶ（画面が残ると、再描画でキャッシュとフォルダが戻る）。doc コメントに書いた
+    - 既存のテスト `testRemoveDropsBothKeysOfThePostAndKeepsOthers` は、共通のキャッシュに入れていたので、グループのキャッシュに入れる形に直した（同じグループの別の投稿が残ることを見る）
+    - 整形のフックが、Viewの2ファイルで無関係の行（`withActionMenu` のジェネリクス・コメントの字下げ）を書き換えたので、元に戻してPythonで変更だけを入れ直した
+    - ⚠️ 正しい版の回の終わりに、1分平均のロードが一時302まで上がった（C2E3F752の起動と別のセッションの2台が重なった）
 
 - [ ] 7.4 容れ物 `SoratomoDependencies` に、新しい部品を載せる
   - 前提: 7.1, 7.2
