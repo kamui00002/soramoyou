@@ -1,5 +1,5 @@
 //
-// そらもよう Cloud Functions — 「そらとも」の配線（Callable 7本・トリガー2本・定期実行1本）⭐️☁️
+// そらもよう Cloud Functions — 「そらとも」の配線（Callable 8本・トリガー2本・定期実行1本）⭐️☁️
 //
 // - soratomoCreateGroup・soratomoJoinGroup・soratomoRegenerateInviteCode（tasks 8.1）:
 //   ログインと soratomoBeta のクレームを確かめ、soratomoStore.js のトランザクションを呼び、
@@ -9,6 +9,8 @@
 //   ガイドラインへの同意。作りは上の3本と同じ（クレームを確かめ、トランザクションを呼ぶ）。
 // - soratomoDeleteMyData（release-gate 4.1）: 退会の前に、本人のそらとものデータを soratomoDeletion.js の
 //   共通の削除で消す。クレームは確かめない（ログインは求める）。
+// - soratomoLeaveGroup（leave-group 3.1）: 本人が1つのグループだけを抜ける。soratomoDeletion.js の
+//   leaveSoratomoGroup（片づけ中の印つき）で、そのグループの本人のデータを消す。クレームは確かめない（ログインは求める）。
 // - onSoratomoSkyCreated（tasks 8.2）: グループの新しい投稿を、投稿者以外のメンバーへ知らせる。
 //   既存の onPostCreated とは名前も対象（soratomoGroups/{groupId}/skies/{skyId}）も別。
 // - onSoratomoReportCreated（release-gate 4.3）: 通報の記録を、開発者の Discord（フィードバックとは別の送り先）へ
@@ -17,7 +19,7 @@
 //   共通の削除で消す。仕事B＝転送に失敗した通報を送り直す。
 //
 // index.js の末尾の Object.assign(exports, require("./soratomo")) で公開する（tasks 8.3）。
-// ここで公開するのは Cloud Functions の 10 本だけにする（ほかの値を exports に混ぜない）。
+// ここで公開するのは Cloud Functions の 11 本だけにする（ほかの値を exports に混ぜない）。
 //
 // ⚠️ ログと個人情報（要件15.2・15.3）: ログに出すのは uid・groupId・skyId・結果の理由・件数だけ。
 //    グループ名・表示名・キャプション・招待コード・通知トークン・エラーの本文（文書のパスに招待コードが
@@ -38,7 +40,7 @@ const core = require("./soratomoCore");
 const store = require("./soratomoStore");
 const { createNgWordProvider } = require("./soratomoNgWords");
 const { createStorageGateway } = require("./soratomoStorage");
-const { deleteSoratomoUserData } = require("./soratomoDeletion");
+const { deleteSoratomoUserData, leaveSoratomoGroup } = require("./soratomoDeletion");
 const { sendToTokenGrouped } = require("./pushHelpers");
 
 /** 既存の Functions と同じリージョン（index.js の setGlobalOptions と同じ値を明示する）。 */
@@ -128,8 +130,8 @@ function requestIdFields(data) {
  * @param {{ requireFlag?: boolean, runtime?: Object, respond?: (result: Object) => Object,
  *   okLogFields?: (result: Object, data: Object) => Object }} [options]
  *   - requireFlag: soratomoBeta のクレームを確かめるか（既定 true）。false にしてよいのは退会の削除
- *     （soratomoDeleteMyData）だけ。フラグを取り消された人と、一度も ON になっていない人のデータも消すため（要件1.4）。
- *     false でもログイン（匿名を含む）は求める
+ *     （soratomoDeleteMyData）と抜ける（soratomoLeaveGroup）だけ。フラグを取り消された人と、一度も ON になっていない人の
+ *     データも消すため（要件1.4・leave-group 要件2.6・9.1）。false でもログイン（匿名を含む）は求める
  *   - runtime: onCall の設定（timeoutSeconds・memory など）。リージョンは REGION に固定する
  *   - respond: 本体の結果から、利用者へ返す応答を作る（既定はそのまま返す）
  *   - okLogFields: 成功のログに uid と一緒に出す項目（既定は groupId）。内部IDと件数だけにする（要件14.2・14.3）
@@ -266,6 +268,50 @@ const soratomoDeleteMyData = soratomoCallable(
       groupsLeft: totals.groupsLeft,
       ownersTransferred: totals.ownersTransferred,
       groupsDeleted: totals.groupsDeleted,
+    }),
+  }
+);
+
+// MARK: - グループだけ抜ける（leave-group 3.1）
+
+/**
+ * 本人が1つのグループを抜ける。{ groupId } → { done, groupDeleted }（アプリは done が true になるまで呼ぶ・leave-group 要件4.1）。
+ * - 機能フラグのクレームを確かめない（requireFlag: false）。フラグの状態に関わらず、自分のデータを消す方向の操作を
+ *   受け付けるため（要件2.6・9.1）。ログイン（匿名を含む）は soratomoCallable の関門が求める（要件9.2）
+ * - 抜ける相手は認証の uid だけ。要求の本文からは groupId だけを読む（uid を書かれても使わない・要件3.13）
+ * - groupId が自動IDの形でなければ invalid_input（soratomoCreateSky と同じ型）。共通の削除が投げる TypeError を
+ *   internal にしないため、呼ぶ前に確かめる
+ * - 利用停止・同意は確かめない（要件9.3・9.4）
+ * - 1回の予算は退会と同じ45秒。終わらなければ done: false。片づけ中の印と写しが残るので、次の呼び出しが続ける（要件4.1）
+ * - メンバーでない人にも { done: true, groupDeleted: false } を返し、not_member は返さない（グループの有無を知らせない・要件3.14）
+ * - 応答の groupDeleted は「この抜けるでグループごと消える（消えた）か」＝kind が delete_group（同じ回の再試行でも同じ値）。
+ *   成功のログの groupDeleted は「この実行でグループの文書を消したか」（退会の groupsDeleted と同じ意味・design の API Contract）
+ * - 成功のログは内部IDと件数だけ（要件11.2〜11.4）。グループ名・表示名・キャプション・招待コードは出さない
+ */
+const soratomoLeaveGroup = soratomoCallable(
+  "soratomoLeaveGroup",
+  (uid, data) => {
+    if (!core.isAutoId(data.groupId)) throw new store.SoratomoDomainError("invalid_input");
+    return leaveSoratomoGroup(
+      { db, storage, nowMs: Date.now },
+      { uid, groupId: data.groupId, deadlineMs: Date.now() + DELETE_BUDGET_MS, origin: "self" }
+    );
+  },
+  {
+    // クレームを確かめない理由: フラグの状態に関わらず、自分のデータを消す方向の操作を受け付けるため（要件2.6・9.1）
+    requireFlag: false,
+    runtime: { timeoutSeconds: 120, memory: "512MiB" },
+    respond: (result) => ({ done: result.done, groupDeleted: result.kind === "delete_group" }),
+    okLogFields: (result, data) => ({
+      groupId: data.groupId,
+      done: result.done,
+      state: result.state,
+      kind: result.kind,
+      removed: result.removed,
+      ownerTransferred: result.ownerTransferred,
+      groupDeleted: result.groupDeleted,
+      skiesDeleted: result.skiesDeleted,
+      imagesDeleted: result.imagesDeleted,
     }),
   }
 );
@@ -592,6 +638,7 @@ module.exports = {
   soratomoReportSky,
   soratomoAgreeGuideline,
   soratomoDeleteMyData,
+  soratomoLeaveGroup,
   onSoratomoSkyCreated,
   onSoratomoReportCreated,
   soratomoHousekeeping,

@@ -112,7 +112,7 @@
 
 - [ ] 3. 抜けるのCallableと、定期実行の仕事Cを配線する
 
-- [ ] 3.1 抜けるのCallable `soratomoLeaveGroup` を作る
+- [x] 3.1 抜けるのCallable `soratomoLeaveGroup` を作る
   - 前提: 1.3, 2.1（同じ `functions/soratomo.js` を触る）
   - `functions/soratomo.js` の `soratomoDeleteMyData` の直後に、`soratomoCallable` で作る。選択肢は `requireFlag: false` と `runtime: { timeoutSeconds: 120, memory: "512MiB" }`。`requireFlag: false` の理由（機能フラグの状態に関わらず、自分のデータを消す方向の操作を受け付けるため・要件2.6と9.1）をコメントに残す。ログイン（匿名を含む）は既存の関門が求める。関門の中身は変えない
   - 抜ける相手は `request.auth.uid` だけ。要求の本文からは `groupId` だけを読む。`core.isAutoId(groupId)` でなければ `SoratomoDomainError("invalid_input")`（`soratomoCreateSky` と同じ型）。利用停止・同意・機能フラグは確かめない
@@ -123,6 +123,7 @@
   - テスト（`soratomo.test.js`・`.run()` で呼ぶ）: 未ログインは `unauthenticated` で何も消さない。クレームの無い人・`soratomoBeta: false` の人・利用停止中の人・ガイドラインに未同意の人も抜けられる。`groupId` が自動IDの形でなければ `invalid_input` で何も書かない。本文に他人の `uid` を書いても、本人だけが抜ける。メンバーでない人には `{ done: true, groupDeleted: false }` で、何も変わらない。応答のキーは `done` と `groupDeleted` だけ。ログの項目に、グループ名・表示名・キャプション・招待コードが無い。関数の設定（120秒・512MiB・リージョン）
   - 陽性対照: `requireFlag: false` を外した実装で、クレームの無い人のテストが赤になることを先に確かめる。本文の `uid` を使う実装で他人のテストが、ログにグループ名を混ぜた実装でログの検査が、それぞれ赤になることも確かめる
   - _Requirements: 2.6, 3.13, 3.14, 4.1, 9.1, 9.2, 9.3, 9.4, 9.6, 11.2, 11.3, 11.4_
+  - 結果（2026-10-11 14:05）: `soratomoDeleteMyData` の直後に `soratomoLeaveGroup` を置いた（`requireFlag: false`・120秒・512MiB・予算45秒・`origin: "self"`）。`groupId` が自動IDの形でなければ `invalid_input`。応答は `{ done, groupDeleted }`（`groupDeleted` は `kind === "delete_group"`）、成功のログは design の10項目。ヘッダーの本数（Callable 8本・公開11本）・説明・`soratomoCallable` の `requireFlag` の説明（false にしてよいのは退会と抜けるだけ）・`index.js:550`（Callable 8本）を直した。`CALLABLES` には足さず、そのコメントだけ「退会と抜ける以外」に直した。テストは `soratomo.test.js` に6件（未ログイン・クレーム無し/false/利用停止/未同意の4通り・`invalid_input` の7通りで印も書かず internal にもしない・他人の uid とメンバーでない人・最後の1人の `groupDeleted: true` とログの項目と名前などが出ないこと・関数の設定と公開する関数が11本）。陽性対照: (a) `requireFlag: false` を外した実装で、クレーム無しのテストが `permission-denied`（`flag_off`）で赤（クレーム `{}` の人を使う他人のテストも赤・2件）。(b) 本文の `uid` を使う実装で、他人のテストだけが赤（alice が外れた）。(c) 成功のログにグループ名を混ぜた実装で、ログのテストだけが赤。正しい実装に戻して shasum の頭 `d55a373db2a4` で一致を確認。正しい実装で `npm run lint` 通過・`npm test` 290/290・エミュレーター（store・soratomo・削除・管理）183/183
 
 - [ ] 3.2 定期実行に、途中で止まった抜けるを終える仕事Cを足す（陽性対照C2のサーバー版）
   - 前提: 1.4, 3.1

@@ -235,7 +235,7 @@ async function seedGroup({ groupId, ownerId, inviteCode, memberIds, name = "種�
 
 // MARK: - Callable: ログインとフラグ（8.1）
 
-/** クレームを確かめる Callable（退会の削除の soratomoDeleteMyData 以外のすべて）と、正しい形の要求。 */
+/** クレームを確かめる Callable（退会の削除の soratomoDeleteMyData と、抜ける soratomoLeaveGroup 以外のすべて）と、正しい形の要求。 */
 const CALLABLES = [
   ["soratomoCreateGroup", { name: "空の会", requestId: "r1" }],
   ["soratomoJoinGroup", { code: "SKYAAAAA" }],
@@ -549,6 +549,132 @@ test("退会: 関数の設定は、制限時間120秒・メモリ512MiB・既存
   assert.equal(endpoint.timeoutSeconds, 120);
   assert.equal(endpoint.availableMemoryMb, 512);
   assert.deepEqual(endpoint.region, ["asia-northeast1"]);
+});
+
+// MARK: - Callable: グループだけ抜ける（leave-group 3.1）
+
+/** 抜けるの Callable の ok のログの項目。 */
+function leaveOkLogs() {
+  return logFieldsOf("soratomoLeaveGroup: ok");
+}
+/** gdel1 のメンバー（uid → 役割）。 */
+async function delGroupRoles() {
+  const snap = await db.collection("soratomoGroups").doc(DEL_GROUP).collection("members").get();
+  return Object.fromEntries(snap.docs.map((d) => [d.id, d.get("role")]));
+}
+
+test("抜ける: ログインが無ければ unauthenticated で、何も消さない", async () => {
+  await seedDeletionScene();
+  await assert.rejects(call("soratomoLeaveGroup", undefined, { groupId: DEL_GROUP }), httpsError("unauthenticated"));
+  assert.deepEqual(await delGroupRoles(), { alice: "owner", bob: "member" });
+  assert.equal(storageFiles.size, 4);
+  assert.deepEqual(leaveOkLogs(), []);
+});
+
+test("抜ける: クレームの無い人（匿名を含む）・false の人・利用停止中の人・ガイドラインに未同意の人も抜けられ、応答は { done, groupDeleted } だけ", async () => {
+  const cases = [
+    ["クレーム無し（匿名）", { firebase: { sign_in_provider: "anonymous" } }, async () => {}],
+    ["クレームが false", { soratomoBeta: false }, async () => {}],
+    ["利用停止中", ON, (ref) => ref.update({ suspendedAt: Timestamp.now() })],
+    ["ガイドラインに未同意", ON, (ref) => ref.set({ groupCount: 1 })],
+  ];
+  for (const [name, token, prepare] of cases) {
+    await seedDeletionScene();
+    const bobRef = db.collection("soratomoUsers").doc("bob");
+    await prepare(bobRef);
+    const groupRef = db.collection("soratomoGroups").doc(DEL_GROUP);
+
+    const response = await call("soratomoLeaveGroup", authOf("bob", token), { groupId: DEL_GROUP });
+    assert.deepEqual(response, { done: true, groupDeleted: false }, name);
+    assert.deepEqual(await delGroupRoles(), { alice: "owner" }, `${name}: 本人が外れる`);
+    assert.equal((await groupRef.get()).get("memberCount"), 1, name);
+    assert.equal((await groupRef.collection("skies").doc("sb1").get()).exists, false, `${name}: 本人の投稿は消える`);
+    assert.equal((await groupRef.collection("skies").doc("sa1").get()).exists, true, `${name}: ほかのメンバーの投稿は残る`);
+    assert.deepEqual([...storageFiles].sort(), imagesOf("alice", "sa1").sort(), `${name}: 画像は本人の分だけ消える`);
+    assert.equal((await bobRef.collection("groups").doc(DEL_GROUP).get()).exists, false, `${name}: 写しが消える`);
+    assert.equal((await bobRef.get()).exists, true, `${name}: 利用者の文書は残る（退会と違う）`);
+  }
+});
+
+test("抜ける: groupId が自動IDの形でなければ invalid-argument（invalid_input）で、何も書かない", async () => {
+  await seedDeletionScene();
+  for (const data of [{}, null, { groupId: "" }, { groupId: "g-1" }, { groupId: "a/b" }, { groupId: 123 }, { groupId: ["gdel1"] }]) {
+    await assert.rejects(
+      call("soratomoLeaveGroup", authOf("bob"), data),
+      httpsError("invalid-argument", "invalid_input", {}),
+      JSON.stringify(data)
+    );
+  }
+  assert.deepEqual(await delGroupRoles(), { alice: "owner", bob: "member" });
+  assert.equal(storageFiles.size, 4);
+  assert.equal((await db.collection("soratomoPendingLeaves").get()).size, 0, "印を書かない");
+  assert.deepEqual(record.logs.filter((l) => l.level === "error"), [], "想定外の失敗（internal）にしない");
+});
+
+test("抜ける: 本文に他人の uid を書いても、抜けるのは認証の uid だけ。メンバーでない人には { done: true, groupDeleted: false } で、何も変わらない", async () => {
+  await seedDeletionScene();
+  const groupRef = db.collection("soratomoGroups").doc(DEL_GROUP);
+
+  // メンバーでない carol が alice を指定しても、何も変わらない（not_member も返さない）
+  assert.deepEqual(await call("soratomoLeaveGroup", authOf("carol", {}), { groupId: DEL_GROUP, uid: "alice" }), { done: true, groupDeleted: false });
+  assert.deepEqual(await delGroupRoles(), { alice: "owner", bob: "member" });
+  assert.equal((await groupRef.get()).get("memberCount"), 2);
+  assert.equal(storageFiles.size, 4);
+  assert.equal((await db.collection("soratomoUsers").doc("carol").get()).exists, false, "メンバーでない人の文書を作らない");
+
+  // メンバーの bob が alice を指定しても、抜けるのは bob
+  assert.deepEqual(await call("soratomoLeaveGroup", authOf("bob"), { groupId: DEL_GROUP, uid: "alice" }), { done: true, groupDeleted: false });
+  assert.deepEqual(await delGroupRoles(), { alice: "owner" });
+  assert.equal((await groupRef.collection("skies").doc("sa1").get()).exists, true);
+  assert.equal((await db.collection("soratomoUsers").doc("alice").collection("groups").doc(DEL_GROUP).get()).exists, true);
+  assert.deepEqual([...storageFiles].sort(), imagesOf("alice", "sa1").sort());
+  assert.deepEqual(leaveOkLogs().map((l) => l.uid), ["carol", "bob"]);
+});
+
+test("抜ける: 最後の1人なら groupDeleted: true。ログは内部IDと件数だけで、グループ名・表示名・キャプション・招待コードを出さない", async () => {
+  await seedDeletionScene();
+  await db.collection("users").doc("alice").set({ displayName: "そらのアリス" });
+
+  assert.deepEqual(await call("soratomoLeaveGroup", authOf("bob"), { groupId: DEL_GROUP }), { done: true, groupDeleted: false });
+  assert.deepEqual(await call("soratomoLeaveGroup", authOf("alice"), { groupId: DEL_GROUP }), { done: true, groupDeleted: true });
+  assert.equal((await db.collection("soratomoGroups").doc(DEL_GROUP).get()).exists, false);
+  assert.equal((await db.collection("soratomoInviteCodes").doc("SKYDELAA").get()).exists, false);
+  assert.equal(storageFiles.size, 0);
+
+  assert.deepEqual(leaveOkLogs(), [
+    {
+      uid: "bob", groupId: DEL_GROUP, done: true, state: "started", kind: "leave", removed: true,
+      ownerTransferred: false, groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+    },
+    {
+      uid: "alice", groupId: DEL_GROUP, done: true, state: "started", kind: "delete_group", removed: true,
+      ownerTransferred: false, groupDeleted: true, skiesDeleted: 1, imagesDeleted: 2,
+    },
+  ]);
+  const logs = allLogs();
+  for (const secret of ["ひみつの空の会", "SKYDELAA", "夕焼けがきれい", "そらのアリス"]) {
+    assert.ok(!logs.includes(secret), `ログに「${secret}」を出さない`);
+  }
+});
+
+test("抜ける: 関数の設定は、制限時間120秒・メモリ512MiB・既存と同じリージョン。公開する関数は11本", () => {
+  const endpoint = fns.soratomoLeaveGroup.__endpoint;
+  assert.equal(endpoint.timeoutSeconds, 120);
+  assert.equal(endpoint.availableMemoryMb, 512);
+  assert.deepEqual(endpoint.region, ["asia-northeast1"]);
+  assert.deepEqual(Object.keys(fns).sort(), [
+    "onSoratomoReportCreated",
+    "onSoratomoSkyCreated",
+    "soratomoAgreeGuideline",
+    "soratomoCreateGroup",
+    "soratomoCreateSky",
+    "soratomoDeleteMyData",
+    "soratomoHousekeeping",
+    "soratomoJoinGroup",
+    "soratomoLeaveGroup",
+    "soratomoRegenerateInviteCode",
+    "soratomoReportSky",
+  ]);
 });
 
 // MARK: - トリガー: onSoratomoSkyCreated（8.2）
