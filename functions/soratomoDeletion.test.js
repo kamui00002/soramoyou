@@ -2154,3 +2154,166 @@ test("抜ける: 退会の後に残った印は、本人が同意し直して入
   assert.deepEqual(sortedPaths(storage, "soratomo/"), files);
   assert.deepEqual(swept, { ...NOTHING, state: "stale_marker" });
 });
+
+// MARK: - 抜けるの後の入り直しと、同時実行（leave-group タスク 2.2）
+// tasks.md は soratomoStore.test.js を置き場にしているが、要確認3 の型と、そのための部品（偽のゲートウェイ・参加日時つきの
+// 種・印の読み）がこのファイルにあるので、ここに置く（部品を写して二重に持たないため）。
+
+test("抜けるの後の入り直し: 新しいメンバー（オーナーだった人も member）で、joinedAt は入り直した時刻。人数と所属数がそろって1増え、消した投稿と画像は戻らない", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "amy",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "amy", role: "owner", joinedAtMs: T(1) },
+      { uid: "bob", role: "member", joinedAtMs: T(2) },
+      { uid: "carl", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"));
+  const left = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("amy", "g1"));
+  assert.equal(left.done, true);
+  assert.equal(left.ownerTransferred, true);
+  assert.equal((await groupData("g1")).memberCount, 2);
+  assert.equal((await userData("amy")).groupCount, 0);
+
+  const beforeJoinMs = Date.now();
+  const joined = await store.joinGroupTx(db, { uid: "amy", code: "SKYAAAAA", policy: JOIN_POLICY });
+  assert.deepEqual(joined, { groupId: "g1", alreadyMember: false });
+  assert.deepEqual(await memberRoles("g1"), { bob: "owner", carl: "member", amy: "member" }, "オーナーに戻さない（8.1）");
+  const member = (await db.collection(GROUPS).doc("g1").collection("members").doc("amy").get()).data();
+  assert.ok(member.joinedAt.toMillis() >= beforeJoinMs - 1_000, "joinedAt は入り直したときの時刻（抜ける前の T(1) ではない）");
+  assert.equal((await groupData("g1")).ownerId, "bob");
+  assert.equal((await groupData("g1")).memberCount, 3, "人数が1増える（8.2）");
+  assert.equal((await userData("amy")).groupCount, 1, "所属数が1増える（8.2）");
+  assert.deepEqual(await copyIds("amy"), ["g1"]);
+  assert.deepEqual(await skyAuthors("g1"), [], "抜けるで消した投稿は戻らない（3.12）");
+  assert.deepEqual(sortedPaths(storage, "soratomo/"), [], "抜けるで消した画像は戻らない");
+  await assertGroupInvariants("g1");
+});
+
+/** 抜けるの同時実行で想定内の拒否（要確認3 の理由に、片づけ中の参加の leave_pending を足す）。 */
+const LEAVE_RACE_REJECTIONS = new Set([...EXPECTED_REJECTIONS, "leave_pending"]);
+
+/** エミュレーターの競合（ABORTED か、競合で返す INVALID_ARGUMENT の「Transaction is invalid or closed」）か。 */
+function isContention(error) {
+  return Boolean(error) && (error.code === 10 || (error.code === 3 && /Transaction is invalid or closed/.test(error.message)));
+}
+
+test("同時実行（leave-group 2.2）: 抜けると、ほかの人の参加・本人の別のグループへの参加・本人の入り直し・本人の別のグループの抜けるを20回並べても、人数・所属数・写しとメンバーの文書がずれない", async (t) => {
+  const tally = { othersOk: 0, othersFull: 0, joinOtherOk: 0, rejoinAlready: 0, rejoinPending: 0, rejoinOk: 0, rejoinOther: 0, contention: 0 };
+  const unexpected = [];
+  for (let i = 0; i < 20; i += 1) {
+    const g = `c${i}`;
+    const h = `h${i}`;
+    const k = `k${i}`;
+    const amy = `amy${i}`;
+    const carol = `carol${i}`;
+    const dave = `dave${i}`;
+    // g: 1人分の空きがある19人のグループ（amy はただのメンバー）。h: amy が新しく入るグループ。k: amy が同時に抜けるグループ
+    const fillers = Array.from({ length: 17 }, (_, n) => ({ uid: `f${i}x${n}`, role: "member", joinedAtMs: T(10 + n) }));
+    await seedGroup({
+      groupId: g,
+      ownerId: `o${i}`,
+      inviteCode: codeFor("CCC", i),
+      members: [{ uid: `o${i}`, role: "owner", joinedAtMs: T(1) }, { uid: amy, role: "member", joinedAtMs: T(2) }, ...fillers],
+    });
+    await seedGroup({ groupId: h, ownerId: `p${i}`, inviteCode: codeFor("HHH", i), members: [{ uid: `p${i}`, role: "owner", joinedAtMs: T(1) }] });
+    await seedGroup({
+      groupId: k,
+      ownerId: `q${i}`,
+      inviteCode: codeFor("KKK", i),
+      members: [{ uid: `q${i}`, role: "owner", joinedAtMs: T(1) }, { uid: amy, role: "member", joinedAtMs: T(2) }],
+    });
+    await seedSkies(g, amy, ["a1"]);
+    await seedSkies(k, amy, ["k1"]);
+    await seedUser(amy, [g, k]);
+    await seedUser(carol, []);
+    await seedUser(dave, []);
+    const storage = fakeStorage([...imagesOf(g, amy, "a1"), ...imagesOf(k, amy, "k1")]);
+
+    // 抜けるの手順0（締め切りの確認）を合図に、ほかの操作を待たずに発火させる。合図からの遅れを回ごとに 0〜38ms ずらす
+    let racers = null;
+    const settle = (p) => p.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }));
+    const later = (ms, fn) => new Promise((resolve) => setTimeout(resolve, ms)).then(fn);
+    const delay = i * 2;
+    const leaveK = () => deletion.leaveSoratomoGroup({ db, storage: storage.gateway, nowMs: () => LEFT_AT }, { uid: amy, groupId: k, deadlineMs: DEADLINE, origin: "self" });
+    const nowMs = () => {
+      if (racers === null) {
+        racers = [
+          settle(later(delay, () => store.joinGroupTx(db, { uid: carol, code: codeFor("CCC", i), policy: JOIN_POLICY }))),
+          settle(later(delay, () => store.joinGroupTx(db, { uid: dave, code: codeFor("CCC", i), policy: JOIN_POLICY }))),
+          settle(later(delay, () => store.joinGroupTx(db, { uid: amy, code: codeFor("HHH", i), policy: JOIN_POLICY }))),
+          settle(later(delay, () => store.joinGroupTx(db, { uid: amy, code: codeFor("CCC", i), policy: JOIN_POLICY }))),
+          settle(later(delay, leaveK)),
+        ];
+      }
+      return LEFT_AT;
+    };
+    const leaveG = () => deletion.leaveSoratomoGroup({ db, storage: storage.gateway, nowMs: () => LEFT_AT }, { uid: amy, groupId: g, deadlineMs: DEADLINE, origin: "self" });
+    let main = await settle(deletion.leaveSoratomoGroup({ db, storage: storage.gateway, nowMs }, { uid: amy, groupId: g, deadlineMs: DEADLINE, origin: "self" }));
+    assert.ok(racers, "手順0で、ほかの操作を発火できた");
+    const [carolJoin, daveJoin, joinOther, rejoin, sideLeave] = await Promise.all(racers);
+
+    // 抜ける2つは、競合で止まったら続きを流して終える（本番ならアプリの繰り返しか定期実行に当たる）
+    const finish = async (name, r, again) => {
+      let cur = r;
+      for (let n = 0; !(cur.ok && cur.value.done) && n < 3; n += 1) {
+        if (!cur.ok) {
+          if (!isContention(cur.error)) {
+            unexpected.push(`回 ${i} ${name}: ${cur.error.code} ${cur.error.message}`);
+            return;
+          }
+          tally.contention += 1;
+        }
+        cur = await settle(again());
+      }
+      assert.ok(cur.ok && cur.value.done, `回 ${i} ${name}: 抜けるが終わる`);
+    };
+    await finish("抜ける g", main, leaveG);
+    await finish("抜ける k", sideLeave, leaveK);
+
+    for (const [name, r] of [["carol", carolJoin], ["dave", daveJoin], ["h へ参加", joinOther], ["g へ入り直し", rejoin]]) {
+      if (r.ok || LEAVE_RACE_REJECTIONS.has(r.error.reason)) continue;
+      if (isContention(r.error)) tally.contention += 1;
+      else unexpected.push(`回 ${i} ${name}: ${r.error.reason || r.error.code} ${r.error.message}`);
+    }
+    tally.othersOk += [carolJoin, daveJoin].filter((r) => r.ok).length;
+    tally.othersFull += [carolJoin, daveJoin].filter((r) => !r.ok && r.error.reason === "group_full").length;
+    if (joinOther.ok) tally.joinOtherOk += 1;
+    if (rejoin.ok && rejoin.value.alreadyMember) tally.rejoinAlready += 1;
+    else if (rejoin.ok) tally.rejoinOk += 1;
+    else if (rejoin.error.reason === "leave_pending") tally.rejoinPending += 1;
+    else tally.rejoinOther += 1;
+
+    // 人数＝メンバーの件数で20以下・オーナーはちょうど1人
+    const amyCopies = await copyIds(amy);
+    for (const groupId of [g, h, k]) {
+      const group = await groupData(groupId);
+      const roles = await memberRoles(groupId);
+      assert.equal(group.memberCount, Object.keys(roles).length, `回 ${i} ${groupId}: 人数がメンバーの件数と等しい`);
+      assert.ok(group.memberCount <= core.MAX_MEMBERS, `回 ${i} ${groupId}: 20人以下`);
+      await assertGroupInvariants(groupId);
+      // 写しとメンバーの文書が食い違わない（片づけは終えている）
+      assert.equal(amyCopies.includes(groupId), roles[amy] !== undefined, `回 ${i} ${groupId}: amy の写しとメンバーの文書がそろう`);
+    }
+    assert.equal(await markerData(amy, g), null, `回 ${i}: g の印が残らない`);
+    assert.equal(await markerData(amy, k), null, `回 ${i}: k の印が残らない`);
+    assert.deepEqual(await memberRoles(k), { [`q${i}`]: "owner" }, `回 ${i}: k から抜けた`);
+    assert.deepEqual((await skyAuthors(k)).filter((s) => s.startsWith(`${amy}:`)), [], `回 ${i}: k の amy の投稿が残らない`);
+    assert.deepEqual((await skyAuthors(g)).filter((s) => s.startsWith(`${amy}:`)), [], `回 ${i}: g の抜ける前の投稿が残らない`);
+    // 所属数＝写しの件数で10以下
+    for (const uid of [amy, carol, dave]) {
+      const user = await userData(uid);
+      const copies = await copyIds(uid);
+      assert.ok(user, `回 ${i} ${uid}: 利用者の文書は残る（抜けるは消さない）`);
+      assert.equal(user.groupCount, copies.length, `回 ${i} ${uid}: 所属数が写しの件数と等しい`);
+      assert.ok(user.groupCount <= core.MAX_GROUPS_PER_USER, `回 ${i} ${uid}: 10個以下`);
+    }
+  }
+  t.diagnostic(`2.2 の分布 ${JSON.stringify(tally)}`);
+  if (unexpected.length > 0) t.diagnostic(`想定外 ${JSON.stringify(unexpected)}`);
+  assert.deepEqual(unexpected, [], "想定外の失敗が無い");
+});
