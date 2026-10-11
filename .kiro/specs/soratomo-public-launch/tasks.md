@@ -3,6 +3,7 @@
 ## 進め方の約束
 
 - **着手の条件**: leave-group spec（`.kiro/specs/soratomo-leave-group/`）が main に入り、本番へ反映され、受け入れの確認が済んでから着手する（leave-group の `tasks.md` の「結果」で見る＝段0-1＝タスク1）。両 spec とも `functions/soratomo.js`・`firestore.rules`・テストを触るので、spec をまたいだ並行はしない。ブランチは main から切る（切る前に `git fetch -q origin && git log --oneline origin/main..HEAD` で未コミットを数える。origin/main から切ったブランチの初回の push は `git push -u origin <ブランチ名>`）。
+- **着手の条件の変更（2026-10-11 19:30・利用者の決定）**: 上の条件を緩める。leave-group が main に入った直後（leave-group の tasks.md の 11.2 の後）から、leave-group の 11.3〜13 と並行して始めてよい。並行してよいのは、main からブランチを切る・コードとテストを書く・PR を作るまで。**main へのマージ（9.3 と 11.2）と本番の操作は、leave-group の 12〜13 が済んでから**行い、タスク1（受け入れが済んだことの確認）はマージの直前に行う。受け入れの開発版に一般公開の変更を混ぜないため。leave-group の受け入れで直しが main に入ったら、PR-A と PR-B のブランチを main に合わせ直す
 - **PR は2本**。
   - PR-B（アプリ）: ブランチ `機能-そらとも一般公開-アプリ`。判定・What's New・オンボ（PR #163 の取り込み）・ポリシーの本文・版数・テスト。**先に main へ入れる**（段0-4＝9.3）。
   - PR-A（サーバー）: ブランチ `機能-そらとも一般公開-サーバー`。ルール2本・Functions・テスト・読み返しの道具・文書。PR の作成とレビューは先に済ませてよいが、**マージは切り替えの当日**（段1-1＝11.2）で、そのまま出す。先にマージすると、別の理由で main からルールや Functions を出したときに、予定より早く開くため。

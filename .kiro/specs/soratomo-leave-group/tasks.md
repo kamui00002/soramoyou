@@ -21,6 +21,7 @@
 - もう1本のspec（`soratomo-public-launch`）との約束（public-launchの担当にも同じものを渡している）:
   - 実装の順番は、このspec → public-launch。このspecをmainへ入れ、本番へ反映し、受け入れの確認（12）を済ませてから、public-launchのPR-B（アプリ）とPR-A（サーバー）に進む。どちらのspecも `functions/soratomo.js`・`firestore.rules`・テストを触るので、specをまたいだ並行はしない。
   - 抜けるのCallable `soratomoLeaveGroup`（Callableの8本目）は、退会と同じ `requireFlag: false` で作る。関門の中身の置き換え（クレーム `soratomoBeta` →「登録済みでログイン・匿名は拒否」）と、`requireFlag: false` の1行の削除は、public-launchが行う。このspecは `isSoratomoUser()`・`requireSoratomoUser` の中身・`storage.rules` に触らない。`firestore.rules` には、拒否だけの `match`（`soratomoPendingLeaves`）を足すだけにする。
+  - **順番の変更（2026-10-11 19:30・利用者の決定）**: public-launchは、このspecがmainへ入った直後（11.2の後）から、11.3〜13と並行して始めてよい。並行してよいのは、mainからブランチを切る・コードとテストを書く・PRを作るまで。mainへのマージ（public-launchの9.3と11.2）と本番の操作は、このspecの12〜13が済んでから行う（受け入れに使う開発版に、一般公開の変更を混ぜないため）。受け入れで直しが要ったら、このspecの修正としてmainへ入れ、public-launchのブランチをmainに合わせ直す
   - 本数の数え方を混ぜない。`functions/soratomo.js` の中は、Callable 8本・トリガー2本・定期実行1本の計11本（このspecでヘッダーと `functions/index.js:550` のコメントを直す）。本番の関数の全体は、21本から22本になる（public-launchの要確認8が使う）。
   - 本番への反映と受け入れの確認は、このtasks.mdの11と12が持つ。public-launchの手順書の段0-1が、ここの「結果」を見に来る。このときのルールの判定は、まだクレームの判定のまま。
   - 要件12.5（イベントの着弾の確認）は、public-launchのG4（段2-3・6-2）と同じ時点・同じ除外の条件で行う（13）。
