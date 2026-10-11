@@ -51,6 +51,12 @@ final class SoratomoSkyLookup {
         skies[Key(groupId: groupId, skyId: skyId)] = nil
     }
 
+    /// 1 つのグループの投稿をすべて忘れる（グループを抜けたとき。ほかのグループの覚えは残す・leave-group 7.3）
+    /// - Parameter groupId: 抜けたグループ ID
+    func forget(groupId: String) {
+        skies = skies.filter { $0.key.groupId != groupId }
+    }
+
     /// 覚えている投稿を引く
     /// - Returns: 覚えていなければ nil
     func sky(groupId: String, skyId: String) -> SoratomoSky? {
@@ -98,6 +104,10 @@ final class SoratomoDependencies {
     let blockedAuthors: SoratomoBlockedAuthors
     /// ⭐️ この端末で通報した投稿（release-gate 9.1）。すべてのグループのタイムラインと投稿詳細が同じものを読む
     let reportedSkies: SoratomoReportedSkies
+    /// ⭐️ グループを 1 つだけ抜ける（leave-group 7.4）
+    let leaveService: any SoratomoLeaveServiceProtocol
+    /// ⭐️ この端末で抜けたグループの記録（leave-group 7.4）。サインアウトでは消さない（同じ人が入り直したときも隠す）
+    let leftGroups: SoratomoLeftGroups
     /// いまログインしている利用者の uid（未ログインなら nil）
     let currentUid: () -> String?
 
@@ -125,6 +135,8 @@ final class SoratomoDependencies {
         guidelineService: any SoratomoGuidelineServiceProtocol,
         blockedAuthors: SoratomoBlockedAuthors,
         reportedSkies: SoratomoReportedSkies,
+        leaveService: any SoratomoLeaveServiceProtocol,
+        leftGroups: SoratomoLeftGroups,
         currentUid: @escaping () -> String?
     ) {
         self.groupService = groupService
@@ -139,6 +151,8 @@ final class SoratomoDependencies {
         self.guidelineService = guidelineService
         self.blockedAuthors = blockedAuthors
         self.reportedSkies = reportedSkies
+        self.leaveService = leaveService
+        self.leftGroups = leftGroups
         self.currentUid = currentUid
     }
 
@@ -152,6 +166,16 @@ final class SoratomoDependencies {
         skyLookup.clear()
         blockedAuthors.clear()
         reportedSkies.clear()
+    }
+
+    /// いまの利用者が、この端末でそのグループを抜けたか（未ログインなら偽・leave-group 8.3）
+    ///
+    /// 通知のタップで、ルーターが抜けたグループのタイムラインを開かないための判定の口。
+    /// 本物は `SoratomoRouter.shared` の組み立てが、判定のたびに `live` を引いて呼ぶ。
+    /// - Parameter groupId: 調べるグループの ID
+    func isLeftGroup(_ groupId: String) -> Bool {
+        guard let uid = currentUid() else { return false }
+        return leftGroups.contains(groupId, uid: uid)
     }
 
     /// アプリ全体で使う本物の容れ物
@@ -170,6 +194,8 @@ final class SoratomoDependencies {
         guidelineService: SoratomoGuidelineService(),
         blockedAuthors: SoratomoBlockedAuthors(),
         reportedSkies: SoratomoReportedSkies(),
+        leaveService: SoratomoLeaveService(),
+        leftGroups: SoratomoLeftGroups(),
         currentUid: { Auth.auth().currentUser?.uid }
     )
 }

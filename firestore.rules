@@ -638,7 +638,7 @@ service cloud.firestore {
       }
     }
 
-    // 次の 2 つは、ルールが無くても既定で拒否される。意図を残し、テストの陽性対照（--mutants）で
+    // 次の 3 つは、ルールが無くても既定で拒否される。意図を残し、テストの陽性対照（--mutants）で
     // パスの書き間違いを見分けられるように、すべて拒否を明示する。
 
     // 通報の記録（文書 ID は「グループ ID_投稿 ID_通報者」・release-gate 要件 6.10）
@@ -652,6 +652,12 @@ service cloud.firestore {
     // 語のリストは Functions だけが読む。利用者に読ませない（読めると、検査をすり抜ける言い換えを探せる）。
     // 書き込みは開発者の投入スクリプト（Admin SDK）だけ
     match /soratomoConfig/{docId} {
+      allow read, write: if false;
+    }
+
+    // 抜けるの片づけ中の印（文書 ID は「uid_グループ ID」・leave-group spec）
+    // 抜けるの Callable と定期実行（Admin SDK）が書いて消す。本人を含め、誰にも読ませず、書かせない
+    match /soratomoPendingLeaves/{markerId} {
       allow read, write: if false;
     }
   }

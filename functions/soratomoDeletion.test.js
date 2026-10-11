@@ -347,17 +347,21 @@ const DEADLINE = 1_000_000;
 /**
  * 偽の Storage ゲートウェイ（メモリ上のパスの集合）。接頭辞は本物と同じく文字列の前方一致（1.2 で実測）。
  * @param {string[]} paths 置いておくパス
- * @param {{ ghosts?: string[], failAt?: number|null, onDelete?: (count: number) => void }} [options]
+ * @param {{ ghosts?: string[], failAt?: number|null, onDelete?: (count: number) => void,
+ *   onList?: (prefix: string, count: number) => Promise<void> }} [options]
  *   ghosts: 一覧には出るが、もう無いパス（消すと "absent"）。failAt: その回数目の deleteFile で投げる。
  *   onDelete: deleteFile を呼ぶたびに、それまでの回数で呼んで待つ（時計を進める・削除の途中に参加を差し込むため）
+ *   onList: listFiles を呼ぶたびに、接頭辞とそれまでの回数で呼んで待つ。一覧の名前を作る前に待つので、待っている間に
+ *   増えた画像も一覧に出る（一覧の中で実行を止め、別の実行と入り直しを差し込むため・leave-group 1.4）
  */
-function fakeStorage(paths, { ghosts = [], failAt = null, onDelete = null } = {}) {
+function fakeStorage(paths, { ghosts = [], failAt = null, onDelete = null, onList = null } = {}) {
   const files = new Set(paths);
   const state = { files, calls: 0, inFlight: 0, maxInFlight: 0, prefixes: [] };
   state.gateway = {
     async *listFiles(prefix) {
       if (typeof prefix !== "string" || !prefix.endsWith("/")) throw new TypeError("偽物: 接頭辞は / で終える");
       state.prefixes.push(prefix);
+      if (onList) await onList(prefix, state.prefixes.length);
       const names = [...files, ...ghosts].filter((p) => p.startsWith(prefix)).sort();
       for (const name of names) yield name;
     },
@@ -1429,4 +1433,958 @@ test("停止中の人: アカウントの無い人の後始末（account_deleted
   await seedUser("plain", []);
   assert.equal((await deletion.deleteSoratomoUserData(deps, { uid: "plain", trigger: "self", deadlineMs: DEADLINE })).done, true);
   assert.equal(await userData("plain"), null);
+});
+
+// MARK: - 抜けるの手順1（leaveSoratomoGroup の beginLeaveTx・leave-group タスク 1.2）
+
+const PENDING = "soratomoPendingLeaves";
+const LEFT_AT = 5_000;
+
+/**
+ * 抜けるの依存（印の札と時計を決めて渡す）。storage は fakeStorage の戻り値（省略すると画像の無い偽物）。
+ * nowMs を渡すと now より優先する（締め切りを途中で過ぎさせるため）。
+ */
+function leaveDeps(episodeIds = ["e1", "e2", "e3"], { now = LEFT_AT, nowMs = () => now, storage = fakeStorage([]) } = {}) {
+  const ids = [...episodeIds];
+  return { db, storage: storage.gateway, nowMs, newEpisodeId: () => ids.shift() };
+}
+const leaveReq = (uid, groupId, origin = "self") => ({ uid, groupId, deadlineMs: DEADLINE, origin });
+
+/**
+ * 手順1（beginLeaveTx）だけを呼ぶ。leaveSoratomoGroup は手順4（タスク 1.3）で印と写しを消すので、手順1が書いた印
+ * （episodeId・leftAt）と、手順4まで残す写しは、ここで直接見る。
+ */
+function beginLeave(uid, groupId, { origin = "self", episodeIds = ["e1", "e2", "e3"], now = LEFT_AT } = {}) {
+  const ids = [...episodeIds];
+  return deletion.beginLeaveTx(db, { uid, groupId, origin, nowMs: () => now, newEpisodeId: () => ids.shift() });
+}
+
+async function markerData(uid, groupId) {
+  const snap = await db.collection(PENDING).doc(`${uid}_${groupId}`).get();
+  if (!snap.exists) return null;
+  const d = snap.data();
+  return { ...d, leftAt: d.leftAt.toMillis() };
+}
+async function seedMarker(uid, groupId, episodeId, leftAtMs = LEFT_AT) {
+  await db.collection(PENDING).doc(`${uid}_${groupId}`).set({ uid, groupId, episodeId, leftAt: Timestamp.fromMillis(leftAtMs) });
+}
+/** グループ・メンバー・招待コード・所属の写し・利用者の文書・印を丸ごと読む（1バイトも変わらないことの読み比べ用）。 */
+async function dumpAll() {
+  const out = {};
+  for (const coll of [GROUPS, CODES, USERS, PENDING]) {
+    const snap = await db.collection(coll).get();
+    for (const doc of snap.docs) {
+      out[doc.ref.path] = JSON.stringify(doc.data());
+      for (const sub of await doc.ref.listCollections()) {
+        for (const child of (await sub.get()).docs) out[child.ref.path] = JSON.stringify(child.data());
+      }
+    }
+  }
+  return out;
+}
+
+test("抜ける手順1: ただのメンバーは、外れて人数が残りの数（ずれていても数え直す）になり、オーナーは変わらず、印を書く", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    memberCount: 7, // わざとずらす
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+      { uid: "bob", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedUser("amy", ["g1"]);
+  const step1 = await beginLeave("amy", "g1");
+  assert.deepEqual(step1, {
+    state: "started", kind: "leave", removed: true, ownerTransferred: false, groupExisted: true,
+    episodeId: "e1", leftAtMs: LEFT_AT,
+  });
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner", bob: "member" });
+  assert.equal((await groupData("g1")).memberCount, 2);
+  await assertGroupInvariants("g1");
+  assert.deepEqual(await markerData("amy", "g1"), { uid: "amy", groupId: "g1", episodeId: "e1", leftAt: LEFT_AT });
+  // 写しと利用者の文書は手順4まで残す
+  assert.deepEqual(await copyIds("amy"), ["g1"]);
+  assert.equal((await userData("amy")).groupCount, 1);
+});
+
+test("抜ける手順1: ほかにメンバーがいるオーナーは、参加の古い人（同じなら uid の昇順）へ引き継ぎ、オーナーは1人・招待コードは同じ", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "zed", role: "member", joinedAtMs: T(5) },
+      { uid: "bob", role: "member", joinedAtMs: T(5) },
+      { uid: "new", role: "member", joinedAtMs: T(9) },
+    ],
+  });
+  const step1 = await beginLeave("owner", "g1");
+  assert.equal(step1.state, "started");
+  assert.equal(step1.ownerTransferred, true);
+  const group = await groupData("g1");
+  assert.equal(group.ownerId, "bob");
+  assert.equal(group.inviteCode, "SKYAAAAA");
+  assert.equal((await db.collection(CODES).doc("SKYAAAAA").get()).get("groupId"), "g1");
+  assert.deepEqual(await memberRoles("g1"), { bob: "owner", zed: "member", new: "member" });
+  await assertGroupInvariants("g1");
+  assert.equal((await markerData("owner", "g1")).episodeId, "e1");
+});
+
+test("抜ける手順1: 最後の1人なら、グループと招待コードを消し、印を書く", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }] });
+  const step1 = await beginLeave("owner", "g1");
+  assert.equal(step1.state, "started");
+  assert.equal(step1.kind, "delete_group");
+  assert.equal(step1.groupExisted, true);
+  assert.equal(await groupData("g1"), null);
+  assert.equal((await db.collection(CODES).doc("SKYAAAAA").get()).exists, false);
+  assert.deepEqual(await memberRoles("g1"), {});
+  assert.equal((await markerData("owner", "g1")).episodeId, "e1");
+});
+
+test("抜ける手順1: 写しだけが残った人（印なし）の self は、人数とオーナーを整え、印を新しく書いて続ける（continued）", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "gone",
+    inviteCode: "SKYAAAAA",
+    memberCount: 4,
+    members: [
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+      { uid: "bob", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedUser("gone", ["g1"]);
+  const step1 = await beginLeave("gone", "g1");
+  assert.equal(step1.state, "continued");
+  assert.equal(step1.removed, false);
+  assert.equal(step1.episodeId, "e1");
+  assert.equal((await groupData("g1")).memberCount, 2);
+  assert.equal((await groupData("g1")).ownerId, "amy");
+  await assertGroupInvariants("g1");
+  assert.deepEqual(await markerData("gone", "g1"), { uid: "gone", groupId: "g1", episodeId: "e1", leftAt: LEFT_AT });
+});
+
+test("抜ける手順1: 印が残っている人（メンバーでない）は、印をそのまま使って続ける。self でも sweep でも同じ", async () => {
+  for (const origin of ["self", "sweep"]) {
+    await seedGroup({ groupId: "g1", ownerId: "amy", inviteCode: "SKYAAAAA", memberCount: 3, members: [{ uid: "amy", role: "owner", joinedAtMs: T(2) }] });
+    await seedUser("gone", ["g1"]);
+    await seedMarker("gone", "g1", "old", 1_000);
+    const step1 = await beginLeave("gone", "g1", { origin });
+    assert.equal(step1.state, "continued", origin);
+    assert.equal(step1.episodeId, "old", `${origin}: 印の回のまま照合する`);
+    assert.equal(step1.leftAtMs, 1_000, origin);
+    assert.equal((await groupData("g1")).memberCount, 1, origin);
+    assert.deepEqual(await markerData("gone", "g1"), { uid: "gone", groupId: "g1", episodeId: "old", leftAt: 1_000 }, origin);
+  }
+});
+
+test("抜ける手順1（陽性対照C4）: メンバーでない人（写しも印も無い）は、ずれた人数とオーナーを書き直さず、何も変えない（nothing）", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "gone",
+    inviteCode: "SKYAAAAA",
+    memberCount: 9,
+    members: [
+      { uid: "amy", role: "owner", joinedAtMs: T(2) },
+      { uid: "bob", role: "owner", joinedAtMs: T(3) },
+    ],
+  });
+  await seedUser("amy", ["g1"]);
+  await seedUser("stranger", ["g9"]);
+  const before = await dumpAll();
+  for (const origin of ["self", "sweep"]) {
+    const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("stranger", "g1", origin));
+    assert.deepEqual(result, {
+      done: true, state: "nothing", kind: null, removed: false, ownerTransferred: false,
+      groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+    }, origin);
+  }
+  assert.deepEqual(await dumpAll(), before);
+});
+
+test("抜ける手順1: sweep でメンバーの文書がある（入り直した後の古い印）なら、印だけを消し、メンバーは外さない（stale_marker）", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(9) },
+    ],
+  });
+  await seedUser("amy", ["g1"]);
+  await seedMarker("amy", "g1", "old");
+  const before = await dumpAll();
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("amy", "g1", "sweep"));
+  assert.equal(result.state, "stale_marker");
+  assert.equal(result.done, true);
+  assert.equal(result.removed, false);
+  assert.equal(await markerData("amy", "g1"), null);
+  const after = await dumpAll();
+  delete before[`${PENDING}/amy_g1`];
+  assert.deepEqual(after, before);
+});
+
+test("抜ける手順1: sweep でメンバーの文書があり印が無いときは、何も書かない（nothing）", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedUser("amy", ["g1"]);
+  const before = await dumpAll();
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("amy", "g1", "sweep"));
+  assert.equal(result.state, "nothing");
+  assert.deepEqual(await dumpAll(), before);
+});
+
+test("抜ける手順1: self でメンバーの文書と古い印があれば、新しい回として外し、印を上書きする", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(9) }] });
+  await seedMarker("amy", "g1", "old", 1_000);
+  const step1 = await beginLeave("amy", "g1", { episodeIds: ["e7"] });
+  assert.equal(step1.state, "started");
+  assert.equal(step1.removed, true);
+  assert.equal(step1.episodeId, "e7");
+  assert.deepEqual(await markerData("amy", "g1"), { uid: "amy", groupId: "g1", episodeId: "e7", leftAt: LEFT_AT });
+});
+
+test("抜ける手順0・引数: 締め切りを過ぎていれば何もせず done: false。引数の誤りは TypeError で何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedUser("amy", ["g1"]);
+  const before = await dumpAll();
+  const late = await deletion.leaveSoratomoGroup(leaveDeps([], { now: DEADLINE }), leaveReq("amy", "g1"));
+  assert.equal(late.done, false);
+  assert.equal(late.state, null);
+  const bad = [
+    [leaveDeps(), { ...leaveReq("amy", "g1"), uid: "a/b" }],
+    [leaveDeps(), { ...leaveReq("amy", "g1"), groupId: "g-1" }],
+    [leaveDeps(), { ...leaveReq("amy", "g1"), deadlineMs: Infinity }],
+    [leaveDeps(), { ...leaveReq("amy", "g1"), origin: "admin" }],
+    [{ ...leaveDeps(), newEpisodeId: "e1" }, leaveReq("amy", "g1")],
+    [{ ...leaveDeps(), nowMs: undefined }, leaveReq("amy", "g1")],
+  ];
+  for (const [i, [deps, req]] of bad.entries()) {
+    await assert.rejects(deletion.leaveSoratomoGroup(deps, req), TypeError, `引数 ${i}`);
+  }
+  assert.deepEqual(await dumpAll(), before);
+});
+
+// MARK: - 抜けるの手順2〜4（照合・finishLeaveTx・時間の予算・leave-group タスク 1.3）
+
+/** 抜けるの時計: 最初の n 回は LEFT_AT、その後は締め切り（数える順は 手順0 → 手順1の leftAt → 投稿の1ページ目の後）。 */
+function leaveClockPastAfter(n) {
+  let calls = 0;
+  return () => (++calls <= n ? LEFT_AT : DEADLINE);
+}
+/** そらもよう本体の利用者の文書（users/{uid}）。そらともの通知の設定を持つ。 */
+async function appUserData(uid) {
+  const snap = await db.collection("users").doc(uid).get();
+  return snap.exists ? snap.data() : null;
+}
+const NOTHING = Object.freeze({
+  done: true, state: "nothing", kind: null, removed: false, ownerTransferred: false,
+  groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+});
+
+test("抜ける手順2〜4: ただのメンバーは、本人の投稿・画像（取り残しも）・通知の間引き・写し・印を消し、ほかの人とほかのグループ・通報・利用者の文書の項目・users の設定は残す", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+      { uid: "bob", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedGroup({
+    groupId: "g2",
+    ownerId: "amy",
+    inviteCode: "SKYBBBBB",
+    members: [
+      { uid: "amy", role: "owner", joinedAtMs: T(1) },
+      { uid: "carl", role: "member", joinedAtMs: T(2) },
+    ],
+  });
+  await seedSkies("g1", "amy", ["a1", "a2"]);
+  await seedSkies("g1", "owner", ["o1"]);
+  await seedSkies("g1", "bob", ["b1"]);
+  await seedSkies("g2", "amy", ["x1"]);
+  await seedNotify("g1", ["amy", "owner"]);
+  await seedNotify("g2", ["amy", "carl"]);
+  await seedUser("amy", ["g1", "g2"]);
+  const suspendedAt = Timestamp.fromMillis(T(50));
+  await db.collection(USERS).doc("amy").update({ suspendedAt });
+  await db.collection("users").doc("amy").set({ [core.SORATOMO_PREF_KEY]: false, displayName: "種の名前" });
+  await seedReport("r1", { groupId: "g1", skyId: "a1", authorId: "amy", reporterId: "owner" });
+  await seedReport("r2", { groupId: "g1", skyId: "o1", authorId: "owner", reporterId: "amy" });
+  const amyImages = [...imagesOf("g1", "amy", "a1"), ...imagesOf("g1", "amy", "a2"), ...imagesOf("g1", "amy", "orphan")];
+  const keptImages = [
+    ...imagesOf("g1", "owner", "o1"),
+    ...imagesOf("g1", "bob", "b1"),
+    ...imagesOf("g1", "amy2", "z1"), // 接頭辞の境目（amy の後ろに文字が続く別の人）
+    ...imagesOf("g2", "amy", "x1"),
+  ].sort();
+  const storage = fakeStorage([...amyImages, ...keptImages]);
+  const g2Before = await groupSnapshot("g2");
+
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("amy", "g1"));
+  assert.deepEqual(result, {
+    done: true, state: "started", kind: "leave", removed: true, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: 2, imagesDeleted: 6,
+  });
+  assert.deepEqual(await skyAuthors("g1"), ["bob:b1", "owner:o1"], "ほかのメンバーの投稿は残す（2.5）");
+  assert.deepEqual([...storage.files].sort(), keptImages, "ほかの人の画像・ほかのグループの画像は残す（2.5）");
+  assert.deepEqual(storage.prefixes, ["soratomo/g1/amy/"], "画像は本人のパスの接頭辞だけを一覧する（2.2・2.3）");
+  assert.deepEqual(await notifyIds("g1"), ["owner"], "本人あての通知の間引きだけを消す（3.3）");
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner", bob: "member" });
+  assert.equal((await groupData("g1")).memberCount, 2, "人数は残りの数（3.1）");
+  await assertGroupInvariants("g1");
+  assert.deepEqual(await copyIds("amy"), ["g2"], "このグループの写しだけを消す（3.3）");
+  const user = await userData("amy");
+  assert.equal(user.groupCount, 1, "所属数は残りの写しの数（3.4）");
+  assert.equal(user.guidelineVersion, core.GUIDELINE_VERSION, "同意の項目は残す（3.5）");
+  assert.equal(user.suspendedAt.toMillis(), suspendedAt.toMillis(), "停止の項目は残す（3.5）");
+  assert.equal(await markerData("amy", "g1"), null, "印は手順4で消える");
+  assert.deepEqual(await groupSnapshot("g2"), g2Before, "ほかのグループ（投稿・メンバー・通知の間引き）には触れない");
+  assert.deepEqual(await skyAuthors("g2"), ["amy:x1"]);
+  assert.deepEqual(await notifyIds("g2"), ["amy", "carl"]);
+  assert.equal((await db.collection(REPORTS).get()).size, 2, "通報の記録には触れない（2.7）");
+  assert.deepEqual(await appUserData("amy"), { [core.SORATOMO_PREF_KEY]: false, displayName: "種の名前" }, "users の設定には触れない（3.5）");
+
+  // 2回目は状態が変わらず、件数が0（印も写しも無いので nothing）
+  const before = await dumpAll();
+  const again = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage }), leaveReq("amy", "g1"));
+  assert.deepEqual(again, NOTHING);
+  assert.deepEqual(await dumpAll(), before);
+  assert.deepEqual([...storage.files].sort(), keptImages);
+});
+
+test("抜ける手順2〜4: 最後の1人なら、グループ・招待コード・全投稿・グループのパスの全画像・残りの記録を消し、その後の同じコードの参加は not_found", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }] });
+  await seedGroup({ groupId: "g2", ownerId: "owner", inviteCode: "SKYBBBBB", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }] });
+  await seedSkies("g1", "owner", ["o1", "o2"]);
+  await seedSkies("g1", "old", ["x1"]); // 前のメンバーの投稿
+  await seedNotify("g1", ["owner", "old"]);
+  await seedUser("owner", ["g1", "g2"]);
+  await seedUser("carol", []); // 参加を試す人（同意済み）
+  await seedReport("r1", { groupId: "g1", skyId: "o1", authorId: "owner", reporterId: "old" });
+  const groupImages = [...imagesOf("g1", "owner", "o1"), ...imagesOf("g1", "owner", "o2"), ...imagesOf("g1", "old", "x1"), ...imagesOf("g1", "old", "orphan")];
+  const keptImages = [...imagesOf("g10", "owner", "y1"), ...imagesOf("g2", "owner", "y2")].sort();
+  const storage = fakeStorage([...groupImages, ...keptImages]);
+
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("owner", "g1"));
+  assert.deepEqual(result, {
+    done: true, state: "started", kind: "delete_group", removed: true, ownerTransferred: false,
+    groupDeleted: true, skiesDeleted: 3, imagesDeleted: 8,
+  });
+  const groupRef = db.collection(GROUPS).doc("g1");
+  assert.equal(await groupData("g1"), null);
+  assert.deepEqual((await groupRef.listCollections()).map((c) => c.id), [], "グループの下に何も残らない（3.10）");
+  assert.equal((await db.collection(CODES).doc("SKYAAAAA").get()).exists, false, "招待コードも消える");
+  assert.equal((await db.collection(CODES).doc("SKYBBBBB").get()).get("groupId"), "g2", "ほかのグループの招待コードは残す");
+  assert.deepEqual([...storage.files].sort(), keptImages, "隣のグループ g10・ほかのグループ g2 の画像は残す");
+  assert.deepEqual(storage.prefixes, ["soratomo/g1/"]);
+  assert.deepEqual(await copyIds("owner"), ["g2"]);
+  assert.equal((await userData("owner")).groupCount, 1);
+  assert.equal(await markerData("owner", "g1"), null);
+  assert.equal((await db.collection(REPORTS).get()).size, 1, "通報の記録には触れない（2.7）");
+
+  // 消えたグループのコードでの参加は not_found（ほかの人も、抜けた本人も・3.11）
+  for (const uid of ["carol", "owner"]) {
+    await assert.rejects(
+      store.joinGroupTx(db, { uid, code: "SKYAAAAA", policy: JOIN_POLICY }),
+      (err) => err instanceof store.SoratomoDomainError && err.reason === "not_found",
+      uid
+    );
+  }
+
+  const again = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage }), leaveReq("owner", "g1"));
+  assert.deepEqual(again, NOTHING);
+});
+
+test("抜ける時間の予算: 投稿300件を消した後に締め切りを過ぎたら、印と写しを残して done: false。続きは印の回のまま消し切り、その後は件数0", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  const skyIds = Array.from({ length: 301 }, (_, i) => `a${String(i).padStart(3, "0")}`);
+  await seedSkies("g1", "amy", skyIds);
+  await seedNotify("g1", ["amy"]);
+  await seedUser("amy", ["g1"]);
+  const storage = fakeStorage(imagesOf("g1", "amy", "a000"));
+
+  const first = await deletion.leaveSoratomoGroup(
+    leaveDeps(["e1"], { storage, nowMs: leaveClockPastAfter(2) }),
+    leaveReq("amy", "g1")
+  );
+  assert.deepEqual(first, {
+    done: false, state: "started", kind: "leave", removed: true, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: deletion.SKY_PAGE_SIZE, imagesDeleted: 0,
+  });
+  assert.equal((await skyAuthors("g1")).length, 1);
+  assert.equal(storage.calls, 0, "画像はまだ消していない");
+  assert.deepEqual(await notifyIds("g1"), ["amy"]);
+  assert.deepEqual(await copyIds("amy"), ["g1"], "写しが残る（片づけ中の参加を断る手がかり）");
+  assert.deepEqual(await markerData("amy", "g1"), { uid: "amy", groupId: "g1", episodeId: "e1", leftAt: LEFT_AT }, "印が残る（続きの手がかり）");
+
+  // 続き（アプリの繰り返しか定期実行）。新しい札を渡しても、印の回 e1 のまま進む
+  const second = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage }), leaveReq("amy", "g1"));
+  assert.deepEqual(second, {
+    done: true, state: "continued", kind: "leave", removed: false, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+  });
+  assert.deepEqual(await skyAuthors("g1"), []);
+  assert.equal(storage.files.size, 0);
+  assert.deepEqual(await notifyIds("g1"), []);
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.equal((await userData("amy")).groupCount, 0);
+  assert.equal(await markerData("amy", "g1"), null);
+  await assertGroupInvariants("g1");
+
+  const before = await dumpAll();
+  const third = await deletion.leaveSoratomoGroup(leaveDeps(["e3"], { storage }), leaveReq("amy", "g1"));
+  assert.deepEqual(third, NOTHING);
+  assert.deepEqual(await dumpAll(), before);
+});
+
+test("抜ける時間の予算: 画像100件を消した後に締め切りを過ぎたら、印・写し・通知の間引きを残して done: false。続きで消し切る", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedNotify("g1", ["amy"]);
+  await seedUser("amy", ["g1"]);
+  const paths = Array.from({ length: 101 }, (_, i) => `soratomo/g1/amy/orphan${String(i).padStart(3, "0")}/display.jpg`);
+  let now = LEFT_AT;
+  const storage = fakeStorage(paths, { onDelete: (count) => { if (count >= deletion.IMAGE_CHECK_EVERY) now = DEADLINE; } });
+
+  const first = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage, nowMs: () => now }), leaveReq("amy", "g1"));
+  assert.equal(first.done, false);
+  assert.equal(first.state, "started");
+  assert.equal(first.imagesDeleted, deletion.IMAGE_CHECK_EVERY);
+  assert.equal(storage.files.size, 1);
+  assert.deepEqual(await notifyIds("g1"), ["amy"], "手順4はまだ");
+  assert.deepEqual(await copyIds("amy"), ["g1"], "写しは最後");
+  assert.equal((await markerData("amy", "g1")).episodeId, "e1");
+
+  now = LEFT_AT;
+  const second = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage, nowMs: () => now }), leaveReq("amy", "g1"));
+  assert.equal(second.done, true);
+  assert.equal(second.state, "continued");
+  assert.equal(second.imagesDeleted, 1);
+  assert.equal(storage.files.size, 0);
+  assert.deepEqual(await notifyIds("g1"), []);
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.equal(await markerData("amy", "g1"), null);
+});
+
+test("抜ける途中の失敗: 画像の削除が失敗したら投げ、印と写しと通知の間引きは残る。再実行で消し切る", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1", "a2"]);
+  await seedNotify("g1", ["amy"]);
+  await seedUser("amy", ["g1"]);
+  const images = [...imagesOf("g1", "amy", "a1"), ...imagesOf("g1", "amy", "a2")];
+  const failing = fakeStorage(images, { failAt: 3 });
+
+  await assert.rejects(deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage: failing }), leaveReq("amy", "g1")), /わざと失敗/);
+  assert.ok(failing.files.size >= 1, "失敗した画像は残っている");
+  assert.deepEqual(await copyIds("amy"), ["g1"], "写しが残る（片づけ中の参加を断る手がかり）");
+  assert.deepEqual(await markerData("amy", "g1"), { uid: "amy", groupId: "g1", episodeId: "e1", leftAt: LEFT_AT }, "印が残る（続きの手がかり）");
+  assert.deepEqual(await notifyIds("g1"), ["amy"], "手順4へ進まない");
+  assert.equal((await userData("amy")).groupCount, 1);
+
+  const healthy = fakeStorage([...failing.files]);
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage: healthy }), leaveReq("amy", "g1"));
+  assert.equal(result.done, true);
+  assert.equal(result.state, "continued");
+  assert.equal(healthy.files.size, 0);
+  assert.deepEqual(await skyAuthors("g1"), []);
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.deepEqual(await notifyIds("g1"), []);
+  assert.equal(await markerData("amy", "g1"), null);
+  assert.equal((await userData("amy")).groupCount, 0);
+});
+
+// MARK: - 抜けるの入り直し・重なった実行・退会と利用停止との重なり（leave-group タスク 1.4・陽性対照C2・C3）
+
+const SKY_POLICY = Object.freeze({ containsNgWord: () => false });
+
+/** 本人が同じグループへ入り直し、投稿1件と画像2枚を作る（入り直した後のもの）。 */
+async function rejoinAndPost(storage, skyId, { uid = "amy", groupId = "g1", code = "SKYAAAAA" } = {}) {
+  const joined = await store.joinGroupTx(db, { uid, code, policy: JOIN_POLICY });
+  await store.createSkyTx(db, { uid, input: { groupId, skyId, width: 1, height: 1 }, policy: SKY_POLICY });
+  for (const path of imagesOf(groupId, uid, skyId)) storage.files.add(path);
+  return joined;
+}
+
+/** エミュレーターの文書を全部消す（1つのテストの中で、順に行った場合と重なった場合を同じ種から流すため）。 */
+async function clearFirestore() {
+  const url = `http://${EMULATOR_HOST}/emulator/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
+  const res = await fetch(url, { method: "DELETE" });
+  assert.equal(res.ok, true, `エミュレーターの文書を消せなかった: HTTP ${res.status}`);
+}
+
+test("抜ける（陽性対照C2）: 片づけが終わり、本人が入り直して投稿した後に、遅れた片づけ（sweep）が来ても、入り直した後のものに触れない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"));
+  const first = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("amy", "g1"));
+  assert.equal(first.done, true, "1回目の片づけが終わった");
+  const joined = await rejoinAndPost(storage, "n1");
+  assert.deepEqual(joined, { groupId: "g1", alreadyMember: false }, "入り直しが通った（この場面を作れている）");
+  const before = await dumpAll();
+  const files = sortedPaths(storage, "soratomo/");
+  assert.deepEqual(files, imagesOf("g1", "amy", "n1").sort());
+
+  // 遅れた片づけ（1回目の印を読んだ定期実行など）。印はもう無い
+  const late = await deletion.leaveSoratomoGroup(leaveDeps(["e9"], { storage }), leaveReq("amy", "g1", "sweep"));
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner", amy: "member" }, "入り直したメンバーを外し直さない（8.6）");
+  assert.deepEqual(await skyAuthors("g1"), ["amy:n1"], "入り直した後の投稿は残る");
+  assert.deepEqual(sortedPaths(storage, "soratomo/"), files, "入り直した後の画像は残る");
+  assert.deepEqual(await dumpAll(), before);
+  assert.deepEqual(late, NOTHING);
+
+  // 印が残っていた（退会の手順4は印を消さない）なら、印だけを消して stale_marker
+  await seedMarker("amy", "g1", "e1");
+  const stale = await deletion.leaveSoratomoGroup(leaveDeps(["e9"], { storage }), leaveReq("amy", "g1", "sweep"));
+  assert.deepEqual(await dumpAll(), before, "メンバー・新しい投稿・写し・所属数は変わらず、印だけが消える");
+  assert.deepEqual(sortedPaths(storage, "soratomo/"), files);
+  assert.deepEqual(await copyIds("amy"), ["g1"]);
+  assert.equal((await userData("amy")).groupCount, 1);
+  assert.deepEqual(stale, { ...NOTHING, state: "stale_marker" });
+});
+
+test("抜ける（陽性対照C3）: 実行Aを画像の一覧で止めている間に、実行Bが最後まで終え、本人が入り直して投稿しても、Aは照合で止まって何も消さない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  let b = null;
+  let joined = null;
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"), {
+    onList: async (prefix, count) => {
+      if (count !== 1) return; // A の一覧だけで止める（B の一覧は止めない）
+      b = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage }), leaveReq("amy", "g1"));
+      joined = await rejoinAndPost(storage, "n1");
+    },
+  });
+
+  const a = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("amy", "g1"));
+  assert.equal(b && b.done, true, "B が A より先に最後まで終えた");
+  assert.deepEqual(joined, { groupId: "g1", alreadyMember: false }, "A の途中で入り直しが通った（この場面を作れている）");
+  assert.deepEqual(sortedPaths(storage, "soratomo/"), imagesOf("g1", "amy", "n1").sort(), "入り直した後の画像は残る（A は一覧に出ても消さない）");
+  assert.equal(storage.calls, 2, "消しにいったのは B の2枚だけ");
+  assert.deepEqual(await skyAuthors("g1"), ["amy:n1"]);
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner", amy: "member" });
+  assert.deepEqual(await copyIds("amy"), ["g1"], "入り直した後の新しい写しは残る（B が消した古い写しは消えたまま）");
+  assert.equal((await userData("amy")).groupCount, 1);
+  assert.equal(await markerData("amy", "g1"), null);
+  await assertGroupInvariants("g1");
+  assert.deepEqual(b, {
+    done: true, state: "continued", kind: "leave", removed: false, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: 0, imagesDeleted: 2,
+  });
+  assert.deepEqual(a, {
+    done: true, state: "superseded", kind: "leave", removed: true, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 0,
+  });
+  assert.deepEqual(storage.prefixes, ["soratomo/g1/amy/", "soratomo/g1/amy/"]);
+});
+
+test("抜ける: 抜けて、入り直して、また抜けると、1回目の遅れた実行は2回目の回の印と写しを消さず、2回目は自分で終える", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  let second = null;
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"), {
+    onList: async (prefix, count) => {
+      if (count !== 1) return; // 1回目の回 e1 の実行 A1 を一覧で止める
+      // ほかの実行が e1 を最後まで終える → 入り直して投稿 → 2回目の抜ける（e2）の手順1だけが済む
+      await deletion.leaveSoratomoGroup(leaveDeps(["x1"], { storage }), leaveReq("amy", "g1"));
+      await rejoinAndPost(storage, "n1");
+      second = await beginLeave("amy", "g1", { episodeIds: ["e2"] });
+    },
+  });
+
+  const a1 = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("amy", "g1"));
+  assert.equal(second && second.state, "started", "A1 の途中で2回目の抜けるが始まった（この場面を作れている）");
+  assert.equal(second.episodeId, "e2");
+  assert.deepEqual(await markerData("amy", "g1"), { uid: "amy", groupId: "g1", episodeId: "e2", leftAt: LEFT_AT }, "2回目の回の印を消さない");
+  assert.deepEqual(await copyIds("amy"), ["g1"], "2回目の回の写しを消さない（片づけ中の参加を断る手がかり）");
+  assert.deepEqual(await skyAuthors("g1"), ["amy:n1"], "2回目の回の投稿は A1 が消さない（2回目の実行が消す）");
+  assert.deepEqual(sortedPaths(storage, "soratomo/"), imagesOf("g1", "amy", "n1").sort());
+  assert.equal(a1.state, "superseded");
+  assert.equal(a1.done, true);
+
+  // 2回目は自分で終える（印の回 e2 のまま）
+  const a2 = await deletion.leaveSoratomoGroup(leaveDeps(["e3"], { storage }), leaveReq("amy", "g1"));
+  assert.deepEqual(a2, {
+    done: true, state: "continued", kind: "leave", removed: false, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+  });
+  assert.deepEqual(await skyAuthors("g1"), []);
+  assert.deepEqual(sortedPaths(storage, "soratomo/"), []);
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner" });
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.equal((await userData("amy")).groupCount, 0);
+  assert.equal(await markerData("amy", "g1"), null);
+  await assertGroupInvariants("g1");
+});
+
+/** 退会・利用停止との重なりの種。amy は g1 のオーナー（bob が残る）で、g2 のただのメンバー（carl がオーナー）。 */
+const OVERLAP_IMAGES = Object.freeze([
+  ...imagesOf("g1", "amy", "a1"),
+  ...imagesOf("g1", "amy", "orphan"),
+  ...imagesOf("g1", "bob", "b1"),
+  ...imagesOf("g2", "amy", "x1"),
+  ...imagesOf("g2", "carl", "c1"),
+]);
+async function seedOverlap() {
+  await seedGroup({ groupId: "g1", ownerId: "amy", inviteCode: "SKYAAAAA", members: [{ uid: "amy", role: "owner", joinedAtMs: T(1) }, { uid: "bob", role: "member", joinedAtMs: T(2) }] });
+  await seedGroup({ groupId: "g2", ownerId: "carl", inviteCode: "SKYBBBBB", members: [{ uid: "carl", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedSkies("g1", "bob", ["b1"]);
+  await seedSkies("g2", "amy", ["x1"]);
+  await seedSkies("g2", "carl", ["c1"]);
+  await seedNotify("g1", ["amy", "bob"]);
+  await seedNotify("g2", ["amy", "carl"]);
+  await seedUser("amy", ["g1", "g2"]);
+}
+/** 消す範囲・人数・所属数・オーナーを読む（作成日時など、種を入れ直すと変わる値は比べない）。 */
+async function overlapSummary(storage) {
+  const groups = {};
+  for (const g of ["g1", "g2"]) {
+    const data = await groupData(g);
+    groups[g] = {
+      memberCount: data ? data.memberCount : null,
+      ownerId: data ? data.ownerId : null,
+      roles: await memberRoles(g),
+      skies: await skyAuthors(g),
+      notify: await notifyIds(g),
+    };
+  }
+  const user = await userData("amy");
+  return {
+    groups,
+    copies: await copyIds("amy"),
+    user: user ? { groupCount: user.groupCount, suspended: Boolean(user.suspendedAt) } : null,
+    marker: await markerData("amy", "g1"),
+    files: [...storage.files].sort(),
+  };
+}
+
+test("抜ける: 抜けるの途中で退会か利用停止が最後まで走っても、消す範囲・人数・所属数・オーナーは、順に行った場合と同じ", async () => {
+  const deps = (storage) => ({ db, storage: storage.gateway, nowMs: steadyClock() });
+  const others = {
+    退会: (storage) => deletion.deleteSoratomoUserData(deps(storage), { uid: "amy", trigger: "self", deadlineMs: DEADLINE }),
+    利用停止: (storage) => deletion.suspendSoratomoUser(deps(storage), { uid: "amy", deadlineMs: DEADLINE }),
+  };
+  const keptFiles = [...imagesOf("g1", "bob", "b1"), ...imagesOf("g2", "carl", "c1")].sort();
+  for (const [name, other] of Object.entries(others)) {
+    // 順に行った場合（抜けるが終わってから、退会か利用停止）
+    await clearFirestore();
+    await seedOverlap();
+    const sequential = fakeStorage(OVERLAP_IMAGES);
+    assert.equal((await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage: sequential }), leaveReq("amy", "g1"))).done, true, name);
+    assert.equal((await other(sequential)).done, true, name);
+    const expected = await overlapSummary(sequential);
+    // 順に行った場合の結果そのものも確かめる（同じでも、両方まちがっていては困るので）
+    assert.deepEqual(expected.groups.g1, { memberCount: 1, ownerId: "bob", roles: { bob: "owner" }, skies: ["bob:b1"], notify: ["bob"] }, name);
+    assert.deepEqual(expected.groups.g2, { memberCount: 1, ownerId: "carl", roles: { carl: "owner" }, skies: ["carl:c1"], notify: ["carl"] }, name);
+    assert.deepEqual(expected.copies, [], name);
+    assert.deepEqual(expected.user, name === "退会" ? null : { groupCount: 0, suspended: true }, name);
+    assert.equal(expected.marker, null, name);
+    assert.deepEqual(expected.files, keptFiles, name);
+
+    // 重なった場合（抜けるを画像の一覧で止めている間に、退会か利用停止が最後まで走る）
+    await clearFirestore();
+    await seedOverlap();
+    let otherResult = null;
+    const overlapped = fakeStorage(OVERLAP_IMAGES, {
+      onList: async (prefix, count) => {
+        if (count === 1) otherResult = await other(overlapped);
+      },
+    });
+    const leave = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage: overlapped }), leaveReq("amy", "g1"));
+    assert.equal(otherResult && otherResult.done, true, `${name}が抜けるの途中で最後まで走った（この場面を作れている）`);
+    assert.deepEqual(await overlapSummary(overlapped), expected, name);
+    assert.equal(leave.done, true, name);
+    assert.equal(leave.state, "started", name);
+  }
+});
+
+test("抜ける: 抜けるが締め切りで止まった後に退会が終わると印だけが残り、sweep が continued・件数0で印を消す", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"));
+  const first = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage, nowMs: leaveClockPastAfter(2) }), leaveReq("amy", "g1"));
+  assert.equal(first.done, false, "抜けるは投稿の後で止まった");
+  const quit = await deletion.deleteSoratomoUserData({ db, storage: storage.gateway, nowMs: steadyClock() }, { uid: "amy", trigger: "self", deadlineMs: DEADLINE });
+  assert.equal(quit.done, true);
+  assert.equal(storage.files.size, 0, "退会が画像を消した");
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.equal(await userData("amy"), null);
+  assert.equal((await markerData("amy", "g1")).episodeId, "e1", "退会の手順4は印を消さない（残った印）");
+
+  const before = await dumpAll();
+  const swept = await deletion.leaveSoratomoGroup(leaveDeps(["e9"], { storage }), leaveReq("amy", "g1", "sweep"));
+  assert.deepEqual(swept, {
+    done: true, state: "continued", kind: "leave", removed: false, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+  });
+  delete before[`${PENDING}/amy_g1`];
+  assert.deepEqual(await dumpAll(), before, "印だけが消える（利用者の文書も作り直さない）");
+});
+
+test("抜ける: 退会の後に残った印は、本人が同意し直して入り直していれば、sweep が印だけを消し（stale_marker）、メンバーを外さない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"));
+  const first = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage, nowMs: leaveClockPastAfter(2) }), leaveReq("amy", "g1"));
+  assert.equal(first.done, false);
+  const quit = await deletion.deleteSoratomoUserData({ db, storage: storage.gateway, nowMs: steadyClock() }, { uid: "amy", trigger: "self", deadlineMs: DEADLINE });
+  assert.equal(quit.done, true);
+  await store.agreeGuidelineTx(db, { uid: "amy", input: { version: core.GUIDELINE_VERSION }, policy: JOIN_POLICY });
+  const joined = await rejoinAndPost(storage, "n1");
+  assert.deepEqual(joined, { groupId: "g1", alreadyMember: false }, "入り直しが通った（この場面を作れている）");
+  assert.equal((await markerData("amy", "g1")).episodeId, "e1");
+
+  const before = await dumpAll();
+  const files = sortedPaths(storage, "soratomo/");
+  const swept = await deletion.leaveSoratomoGroup(leaveDeps(["e9"], { storage }), leaveReq("amy", "g1", "sweep"));
+  delete before[`${PENDING}/amy_g1`];
+  assert.deepEqual(await dumpAll(), before, "メンバー・新しい投稿・写し・所属数は変わらず、印だけが消える");
+  assert.deepEqual(sortedPaths(storage, "soratomo/"), files);
+  assert.deepEqual(swept, { ...NOTHING, state: "stale_marker" });
+});
+
+/**
+ * 抜けるの実行A（回 e1）を画像の一覧で止めている間に、本人の退会（self）が最後まで走り、本人が同意し直して入り直す
+ * （/review-full の指摘 F5）。退会は写しと利用者の文書を消すが、印 e1 は残す。A が照合する時点では、印も札も一致し、
+ * メンバーの文書だけがある（照合の「メンバーの文書が無い」だけが外れる）。
+ * - withPost: 入り直した後に投稿1件と画像2枚を作る。A は画像の区切りを消す前の照合（isLeaveEpisodeCurrent）で止まる
+ * - withPost でない: 一覧に何も出ないので、消す前の照合は一度も呼ばれない。手順4の finishLeaveTx の照合だけが守り
+ * @returns {Promise<{ a: object, scene: object|null, storage: object }>} scene は入り直した直後に控えた状態
+ */
+async function leaveWhileQuitAndRejoin({ withPost }) {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  let scene = null;
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"), {
+    onList: async (prefix, count) => {
+      if (count !== 1) return; // A の一覧だけで止める（退会の一覧は止めない）
+      const quit = await deletion.deleteSoratomoUserData({ db, storage: storage.gateway, nowMs: steadyClock() }, { uid: "amy", trigger: "self", deadlineMs: DEADLINE });
+      await store.agreeGuidelineTx(db, { uid: "amy", input: { version: core.GUIDELINE_VERSION }, policy: JOIN_POLICY });
+      const joined = withPost
+        ? await rejoinAndPost(storage, "n1")
+        : await store.joinGroupTx(db, { uid: "amy", code: "SKYAAAAA", policy: JOIN_POLICY });
+      scene = {
+        quit,
+        joined,
+        marker: await markerData("amy", "g1"),
+        roles: await memberRoles("g1"),
+        before: await dumpAll(),
+        files: sortedPaths(storage, "soratomo/"),
+      };
+    },
+  });
+  const a = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("amy", "g1"));
+  return { a, scene, storage };
+}
+
+/** leaveWhileQuitAndRejoin の場面ができていて、A が何も消さずに superseded で止まったことを確かめる（投稿の有無で同じ部分）。 */
+async function assertLeaveSupersededAfterRejoin({ a, scene, storage }) {
+  assert.equal(scene && scene.quit.done, true, "退会が A の途中で最後まで走った（この場面を作れている）");
+  assert.deepEqual(scene.joined, { groupId: "g1", alreadyMember: false }, "A の途中で入り直しが通った");
+  assert.equal(scene.marker.episodeId, "e1", "退会の手順4は印を消さない（A の照合で印も札も一致する）");
+  assert.deepEqual(scene.roles, { owner: "owner", amy: "member" });
+
+  assert.deepEqual(a, {
+    done: true, state: "superseded", kind: "leave", removed: true, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 0,
+  });
+  assert.deepEqual(await dumpAll(), scene.before, "A は入り直した後に何も書かない（メンバー・投稿・写し・所属数・印）");
+  assert.deepEqual(sortedPaths(storage, "soratomo/"), scene.files, "入り直した後の画像は残る");
+  assert.equal(storage.calls, 2, "消しにいったのは退会の a1 の2枚だけ");
+  assert.deepEqual(storage.prefixes, ["soratomo/g1/amy/", "soratomo/g1/amy/"]);
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner", amy: "member" });
+  assert.deepEqual(await copyIds("amy"), ["g1"], "入り直した後の新しい写しは残る（メンバーの文書だけが残る孤児にしない）");
+  assert.equal((await userData("amy")).groupCount, 1);
+  assert.equal((await markerData("amy", "g1")).episodeId, "e1", "印は残る（後で sweep が stale_marker で消す）");
+  await assertGroupInvariants("g1");
+}
+
+test("抜ける: 抜けるの途中で退会が終わり、同意し直して入り直して投稿しても、Aは画像を消す前の照合で止まり、入り直した後の投稿・画像・写しと印を消さない", async () => {
+  const run = await leaveWhileQuitAndRejoin({ withPost: true });
+  assert.deepEqual(run.scene.files, imagesOf("g1", "amy", "n1").sort(), "A の一覧に入り直した後の画像が出る");
+  await assertLeaveSupersededAfterRejoin(run);
+  assert.deepEqual(await skyAuthors("g1"), ["amy:n1"]);
+});
+
+test("抜ける: 抜けるの途中で退会が終わり、同意し直して入り直しただけ（消すものが残っていない）でも、Aは手順4の照合で止まり、写し・所属数・印を消さない", async () => {
+  const run = await leaveWhileQuitAndRejoin({ withPost: false });
+  assert.deepEqual(run.scene.files, [], "A の一覧には何も出ない（消す前の照合は呼ばれない）");
+  await assertLeaveSupersededAfterRejoin(run);
+  assert.deepEqual(await skyAuthors("g1"), []);
+});
+
+// MARK: - 抜けるの後の入り直しと、同時実行（leave-group タスク 2.2）
+// tasks.md は soratomoStore.test.js を置き場にしているが、要確認3 の型と、そのための部品（偽のゲートウェイ・参加日時つきの
+// 種・印の読み）がこのファイルにあるので、ここに置く（部品を写して二重に持たないため）。
+
+test("抜けるの後の入り直し: 新しいメンバー（オーナーだった人も member）で、joinedAt は入り直した時刻。人数と所属数がそろって1増え、消した投稿と画像は戻らない", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "amy",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "amy", role: "owner", joinedAtMs: T(1) },
+      { uid: "bob", role: "member", joinedAtMs: T(2) },
+      { uid: "carl", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"));
+  const left = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("amy", "g1"));
+  assert.equal(left.done, true);
+  assert.equal(left.ownerTransferred, true);
+  assert.equal((await groupData("g1")).memberCount, 2);
+  assert.equal((await userData("amy")).groupCount, 0);
+
+  const beforeJoinMs = Date.now();
+  const joined = await store.joinGroupTx(db, { uid: "amy", code: "SKYAAAAA", policy: JOIN_POLICY });
+  assert.deepEqual(joined, { groupId: "g1", alreadyMember: false });
+  assert.deepEqual(await memberRoles("g1"), { bob: "owner", carl: "member", amy: "member" }, "オーナーに戻さない（8.1）");
+  const member = (await db.collection(GROUPS).doc("g1").collection("members").doc("amy").get()).data();
+  assert.ok(member.joinedAt.toMillis() >= beforeJoinMs - 1_000, "joinedAt は入り直したときの時刻（抜ける前の T(1) ではない）");
+  assert.equal((await groupData("g1")).ownerId, "bob");
+  assert.equal((await groupData("g1")).memberCount, 3, "人数が1増える（8.2）");
+  assert.equal((await userData("amy")).groupCount, 1, "所属数が1増える（8.2）");
+  assert.deepEqual(await copyIds("amy"), ["g1"]);
+  assert.deepEqual(await skyAuthors("g1"), [], "抜けるで消した投稿は戻らない（3.12）");
+  assert.deepEqual(sortedPaths(storage, "soratomo/"), [], "抜けるで消した画像は戻らない");
+  await assertGroupInvariants("g1");
+});
+
+/** 抜けるの同時実行で想定内の拒否（要確認3 の理由に、片づけ中の参加の leave_pending を足す）。 */
+const LEAVE_RACE_REJECTIONS = new Set([...EXPECTED_REJECTIONS, "leave_pending"]);
+
+/** エミュレーターの競合（ABORTED か、競合で返す INVALID_ARGUMENT の「Transaction is invalid or closed」）か。 */
+function isContention(error) {
+  return Boolean(error) && (error.code === 10 || (error.code === 3 && /Transaction is invalid or closed/.test(error.message)));
+}
+
+test("同時実行（leave-group 2.2）: 抜けると、ほかの人の参加・本人の別のグループへの参加・本人の入り直し・本人の別のグループの抜けるを20回並べても、人数・所属数・写しとメンバーの文書がずれない", async (t) => {
+  const tally = { othersOk: 0, othersFull: 0, joinOtherOk: 0, rejoinAlready: 0, rejoinPending: 0, rejoinOk: 0, rejoinOther: 0, contention: 0 };
+  const unexpected = [];
+  for (let i = 0; i < 20; i += 1) {
+    const g = `c${i}`;
+    const h = `h${i}`;
+    const k = `k${i}`;
+    const amy = `amy${i}`;
+    const carol = `carol${i}`;
+    const dave = `dave${i}`;
+    // g: 1人分の空きがある19人のグループ（amy はただのメンバー）。h: amy が新しく入るグループ。k: amy が同時に抜けるグループ
+    const fillers = Array.from({ length: 17 }, (_, n) => ({ uid: `f${i}x${n}`, role: "member", joinedAtMs: T(10 + n) }));
+    await seedGroup({
+      groupId: g,
+      ownerId: `o${i}`,
+      inviteCode: codeFor("CCC", i),
+      members: [{ uid: `o${i}`, role: "owner", joinedAtMs: T(1) }, { uid: amy, role: "member", joinedAtMs: T(2) }, ...fillers],
+    });
+    await seedGroup({ groupId: h, ownerId: `p${i}`, inviteCode: codeFor("HHH", i), members: [{ uid: `p${i}`, role: "owner", joinedAtMs: T(1) }] });
+    await seedGroup({
+      groupId: k,
+      ownerId: `q${i}`,
+      inviteCode: codeFor("KKK", i),
+      members: [{ uid: `q${i}`, role: "owner", joinedAtMs: T(1) }, { uid: amy, role: "member", joinedAtMs: T(2) }],
+    });
+    await seedSkies(g, amy, ["a1"]);
+    await seedSkies(k, amy, ["k1"]);
+    await seedUser(amy, [g, k]);
+    await seedUser(carol, []);
+    await seedUser(dave, []);
+    const storage = fakeStorage([...imagesOf(g, amy, "a1"), ...imagesOf(k, amy, "k1")]);
+
+    // 抜けるの手順0（締め切りの確認）を合図に、ほかの操作を待たずに発火させる。合図からの遅れを回ごとに 0〜38ms ずらす
+    let racers = null;
+    const settle = (p) => p.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }));
+    const later = (ms, fn) => new Promise((resolve) => setTimeout(resolve, ms)).then(fn);
+    const delay = i * 2;
+    const leaveK = () => deletion.leaveSoratomoGroup({ db, storage: storage.gateway, nowMs: () => LEFT_AT }, { uid: amy, groupId: k, deadlineMs: DEADLINE, origin: "self" });
+    const nowMs = () => {
+      if (racers === null) {
+        racers = [
+          settle(later(delay, () => store.joinGroupTx(db, { uid: carol, code: codeFor("CCC", i), policy: JOIN_POLICY }))),
+          settle(later(delay, () => store.joinGroupTx(db, { uid: dave, code: codeFor("CCC", i), policy: JOIN_POLICY }))),
+          settle(later(delay, () => store.joinGroupTx(db, { uid: amy, code: codeFor("HHH", i), policy: JOIN_POLICY }))),
+          settle(later(delay, () => store.joinGroupTx(db, { uid: amy, code: codeFor("CCC", i), policy: JOIN_POLICY }))),
+          settle(later(delay, leaveK)),
+        ];
+      }
+      return LEFT_AT;
+    };
+    const leaveG = () => deletion.leaveSoratomoGroup({ db, storage: storage.gateway, nowMs: () => LEFT_AT }, { uid: amy, groupId: g, deadlineMs: DEADLINE, origin: "self" });
+    let main = await settle(deletion.leaveSoratomoGroup({ db, storage: storage.gateway, nowMs }, { uid: amy, groupId: g, deadlineMs: DEADLINE, origin: "self" }));
+    assert.ok(racers, "手順0で、ほかの操作を発火できた");
+    const [carolJoin, daveJoin, joinOther, rejoin, sideLeave] = await Promise.all(racers);
+
+    // 抜ける2つは、競合で止まったら続きを流して終える（本番ならアプリの繰り返しか定期実行に当たる）
+    const finish = async (name, r, again) => {
+      let cur = r;
+      for (let n = 0; !(cur.ok && cur.value.done) && n < 3; n += 1) {
+        if (!cur.ok) {
+          if (!isContention(cur.error)) {
+            unexpected.push(`回 ${i} ${name}: ${cur.error.code} ${cur.error.message}`);
+            return;
+          }
+          tally.contention += 1;
+        }
+        cur = await settle(again());
+      }
+      assert.ok(cur.ok && cur.value.done, `回 ${i} ${name}: 抜けるが終わる`);
+    };
+    await finish("抜ける g", main, leaveG);
+    await finish("抜ける k", sideLeave, leaveK);
+
+    for (const [name, r] of [["carol", carolJoin], ["dave", daveJoin], ["h へ参加", joinOther], ["g へ入り直し", rejoin]]) {
+      if (r.ok || LEAVE_RACE_REJECTIONS.has(r.error.reason)) continue;
+      if (isContention(r.error)) tally.contention += 1;
+      else unexpected.push(`回 ${i} ${name}: ${r.error.reason || r.error.code} ${r.error.message}`);
+    }
+    tally.othersOk += [carolJoin, daveJoin].filter((r) => r.ok).length;
+    tally.othersFull += [carolJoin, daveJoin].filter((r) => !r.ok && r.error.reason === "group_full").length;
+    if (joinOther.ok) tally.joinOtherOk += 1;
+    if (rejoin.ok && rejoin.value.alreadyMember) tally.rejoinAlready += 1;
+    else if (rejoin.ok) tally.rejoinOk += 1;
+    else if (rejoin.error.reason === "leave_pending") tally.rejoinPending += 1;
+    else tally.rejoinOther += 1;
+
+    // 人数＝メンバーの件数で20以下・オーナーはちょうど1人
+    const amyCopies = await copyIds(amy);
+    for (const groupId of [g, h, k]) {
+      const group = await groupData(groupId);
+      const roles = await memberRoles(groupId);
+      assert.equal(group.memberCount, Object.keys(roles).length, `回 ${i} ${groupId}: 人数がメンバーの件数と等しい`);
+      assert.ok(group.memberCount <= core.MAX_MEMBERS, `回 ${i} ${groupId}: 20人以下`);
+      await assertGroupInvariants(groupId);
+      // 写しとメンバーの文書が食い違わない（片づけは終えている）
+      assert.equal(amyCopies.includes(groupId), roles[amy] !== undefined, `回 ${i} ${groupId}: amy の写しとメンバーの文書がそろう`);
+    }
+    assert.equal(await markerData(amy, g), null, `回 ${i}: g の印が残らない`);
+    assert.equal(await markerData(amy, k), null, `回 ${i}: k の印が残らない`);
+    assert.deepEqual(await memberRoles(k), { [`q${i}`]: "owner" }, `回 ${i}: k から抜けた`);
+    assert.deepEqual((await skyAuthors(k)).filter((s) => s.startsWith(`${amy}:`)), [], `回 ${i}: k の amy の投稿が残らない`);
+    assert.deepEqual((await skyAuthors(g)).filter((s) => s.startsWith(`${amy}:`)), [], `回 ${i}: g の抜ける前の投稿が残らない`);
+    // 所属数＝写しの件数で10以下
+    for (const uid of [amy, carol, dave]) {
+      const user = await userData(uid);
+      const copies = await copyIds(uid);
+      assert.ok(user, `回 ${i} ${uid}: 利用者の文書は残る（抜けるは消さない）`);
+      assert.equal(user.groupCount, copies.length, `回 ${i} ${uid}: 所属数が写しの件数と等しい`);
+      assert.ok(user.groupCount <= core.MAX_GROUPS_PER_USER, `回 ${i} ${uid}: 10個以下`);
+    }
+  }
+  t.diagnostic(`2.2 の分布 ${JSON.stringify(tally)}`);
+  if (unexpected.length > 0) t.diagnostic(`想定外 ${JSON.stringify(unexpected)}`);
+  assert.deepEqual(unexpected, [], "想定外の失敗が無い");
 });

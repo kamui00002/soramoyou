@@ -44,6 +44,8 @@ struct SoratomoGroupListView: View {
             wrappedValue: SoratomoGroupListViewModel(
                 groupService: dependencies.groupService,
                 currentUid: dependencies.currentUid,
+                leaveService: dependencies.leaveService,
+                leftGroups: dependencies.leftGroups,
                 // パスが空 = 入口から開いた。通知から開いたとき（パスにタイムラインがある）は soratomo_opened を記録しない
                 logsOpened: router.path.isEmpty
             )

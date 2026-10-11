@@ -344,3 +344,64 @@ protocol SoratomoGuidelineServiceProtocol: Sendable {
     /// 同意を記録する（Callable `soratomoAgreeGuideline`・20 秒）
     func agree(version: Int) async throws(SoratomoError)
 }
+
+// MARK: - グループを抜ける（leave-group 7.1）
+
+/// 抜けるが完了した結果
+struct SoratomoLeaveResult: Equatable, Sendable {
+    /// 最後の 1 人で、グループごと消えた（消える）か（サーバーの `groupDeleted`）
+    let groupDeleted: Bool
+}
+
+/// 抜けるの失敗（画面の文言は SoratomoLeaveViewModel が決める）
+///
+/// 退会の `SoratomoAccountDeletionError` と違って文言を持たない（`LocalizedError` にしない）。
+/// 抜けるは、失敗の後にメンバーのままかを確かめてから、出す文言を決めるため（要件 4.4・4.5）。
+enum SoratomoLeaveError: Error, Equatable, Sendable {
+    /// 通信できない・制限時間切れ
+    case network
+    /// 最大回数まで呼んでも `done` が返らなかった
+    case incomplete
+    /// その他（戻り値の形の違いを含む）
+    case unknown
+}
+
+/// サーバーで確かめた、自分がメンバーかどうか
+enum SoratomoMembershipCheck: Equatable, Sendable {
+    /// メンバーのまま
+    case member
+    /// メンバーでない（抜けた）
+    case notMember
+    /// 通信できない等で確かめられなかった
+    case unknown
+}
+
+/// グループを 1 つだけ抜けるサービス（要件 4.3・4.4・4.5）
+protocol SoratomoLeaveServiceProtocol: Sendable {
+    /// Callable `soratomoLeaveGroup` を、`done` が真になるまで呼ぶ（最大 8 回・1 回 75 秒）
+    func leave(groupId: String) async throws(SoratomoLeaveError) -> SoratomoLeaveResult
+
+    /// 自分のメンバーの文書を、キャッシュを使わずに読む
+    func membershipOnServer(groupId: String, uid: String) async -> SoratomoMembershipCheck
+}
+
+/// 抜けるの Functions と Firestore の窓口（テストで差し替える）
+///
+/// 窓口は元のエラーのまま投げる。写すのは `SoratomoLeaveService` の役目（形は `SoratomoAccountDeletionDataSource` と同じ）。
+protocol SoratomoLeaveDataSource: Sendable {
+    /// Callable を呼んで、戻り値（デコード済みの JSON）を返す
+    /// - Parameters:
+    ///   - name: Callable の名前
+    ///   - payload: 送る値
+    ///   - timeout: 制限時間（秒）
+    func callCallable(_ name: String, payload: [String: Any], timeout: TimeInterval) async throws -> Any
+
+    /// 自分のメンバーの文書がサーバーにあるか（権限の拒否・通信の失敗は元のエラーのまま投げる）
+    func memberDocumentExistsOnServer(groupId: String, uid: String) async throws -> Bool
+
+    /// いまサインインしている利用者の uid（サインインしていなければ nil）
+    ///
+    /// Callable は呼ぶたびに、その時点の利用者のトークンで送られる。抜けるの繰り返しの途中で
+    /// アカウントが替わっていないかを、回ごとに確かめるために使う（leave-group /review-full D1）。
+    func currentUid() -> String?
+}

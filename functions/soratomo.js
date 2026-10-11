@@ -1,5 +1,5 @@
 //
-// そらもよう Cloud Functions — 「そらとも」の配線（Callable 7本・トリガー2本・定期実行1本）⭐️☁️
+// そらもよう Cloud Functions — 「そらとも」の配線（Callable 8本・トリガー2本・定期実行1本）⭐️☁️
 //
 // - soratomoCreateGroup・soratomoJoinGroup・soratomoRegenerateInviteCode（tasks 8.1）:
 //   ログインと soratomoBeta のクレームを確かめ、soratomoStore.js のトランザクションを呼び、
@@ -9,15 +9,18 @@
 //   ガイドラインへの同意。作りは上の3本と同じ（クレームを確かめ、トランザクションを呼ぶ）。
 // - soratomoDeleteMyData（release-gate 4.1）: 退会の前に、本人のそらとものデータを soratomoDeletion.js の
 //   共通の削除で消す。クレームは確かめない（ログインは求める）。
+// - soratomoLeaveGroup（leave-group 3.1）: 本人が1つのグループだけを抜ける。soratomoDeletion.js の
+//   leaveSoratomoGroup（片づけ中の印つき）で、そのグループの本人のデータを消す。クレームは確かめない（ログインは求める）。
 // - onSoratomoSkyCreated（tasks 8.2）: グループの新しい投稿を、投稿者以外のメンバーへ知らせる。
 //   既存の onPostCreated とは名前も対象（soratomoGroups/{groupId}/skies/{skyId}）も別。
 // - onSoratomoReportCreated（release-gate 4.3）: 通報の記録を、開発者の Discord（フィードバックとは別の送り先）へ
 //   ID・理由・時刻だけで送る。失敗は記録の状態で追い、例外を投げない。
 // - soratomoHousekeeping（release-gate 4.4）: 6時間ごとの定期実行。仕事A＝Auth のアカウントが無い人のデータを
-//   共通の削除で消す。仕事B＝転送に失敗した通報を送り直す。
+//   共通の削除で消す。仕事B＝転送に失敗した通報を送り直す。仕事C（leave-group 3.2・仕事Aより先）＝途中で止まった
+//   抜けるを、片づけ中の印（soratomoPendingLeaves）から続けて終える。
 //
 // index.js の末尾の Object.assign(exports, require("./soratomo")) で公開する（tasks 8.3）。
-// ここで公開するのは Cloud Functions の 10 本だけにする（ほかの値を exports に混ぜない）。
+// ここで公開するのは Cloud Functions の 11 本だけにする（ほかの値を exports に混ぜない）。
 //
 // ⚠️ ログと個人情報（要件15.2・15.3）: ログに出すのは uid・groupId・skyId・結果の理由・件数だけ。
 //    グループ名・表示名・キャプション・招待コード・通知トークン・エラーの本文（文書のパスに招待コードが
@@ -32,13 +35,13 @@ const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 const core = require("./soratomoCore");
 const store = require("./soratomoStore");
 const { createNgWordProvider } = require("./soratomoNgWords");
 const { createStorageGateway } = require("./soratomoStorage");
-const { deleteSoratomoUserData } = require("./soratomoDeletion");
+const { deleteSoratomoUserData, leaveSoratomoGroup, PENDING_LEAVES, isUid } = require("./soratomoDeletion");
 const { sendToTokenGrouped } = require("./pushHelpers");
 
 /** 既存の Functions と同じリージョン（index.js の setGlobalOptions と同じ値を明示する）。 */
@@ -73,6 +76,8 @@ const REASON_TO_CODE = Object.freeze({
   sky_not_found: "not-found",
   self_report: "failed-precondition",
   outdated_guideline: "failed-precondition",
+  // leave-group（抜けるか退会の片づけ中の参加）
+  leave_pending: "failed-precondition",
 });
 
 /**
@@ -126,8 +131,8 @@ function requestIdFields(data) {
  * @param {{ requireFlag?: boolean, runtime?: Object, respond?: (result: Object) => Object,
  *   okLogFields?: (result: Object, data: Object) => Object }} [options]
  *   - requireFlag: soratomoBeta のクレームを確かめるか（既定 true）。false にしてよいのは退会の削除
- *     （soratomoDeleteMyData）だけ。フラグを取り消された人と、一度も ON になっていない人のデータも消すため（要件1.4）。
- *     false でもログイン（匿名を含む）は求める
+ *     （soratomoDeleteMyData）と抜ける（soratomoLeaveGroup）だけ。フラグを取り消された人と、一度も ON になっていない人の
+ *     データも消すため（要件1.4・leave-group 要件2.6・9.1）。false でもログイン（匿名を含む）は求める
  *   - runtime: onCall の設定（timeoutSeconds・memory など）。リージョンは REGION に固定する
  *   - respond: 本体の結果から、利用者へ返す応答を作る（既定はそのまま返す）
  *   - okLogFields: 成功のログに uid と一緒に出す項目（既定は groupId）。内部IDと件数だけにする（要件14.2・14.3）
@@ -264,6 +269,51 @@ const soratomoDeleteMyData = soratomoCallable(
       groupsLeft: totals.groupsLeft,
       ownersTransferred: totals.ownersTransferred,
       groupsDeleted: totals.groupsDeleted,
+    }),
+  }
+);
+
+// MARK: - グループだけ抜ける（leave-group 3.1）
+
+/**
+ * 本人が1つのグループを抜ける。{ groupId } → { done, groupDeleted }（アプリは done が true になるまで呼ぶ・leave-group 要件4.1）。
+ * - 機能フラグのクレームを確かめない（requireFlag: false）。フラグの状態に関わらず、自分のデータを消す方向の操作を
+ *   受け付けるため（要件2.6・9.1）。ログイン（匿名を含む）は soratomoCallable の関門が求める（要件9.2）
+ * - 抜ける相手は認証の uid だけ。要求の本文からは groupId だけを読む（uid を書かれても使わない・要件3.13）
+ * - groupId が自動IDの形でなければ invalid_input（soratomoCreateSky と同じ型）。共通の削除が投げる TypeError を
+ *   internal にしないため、呼ぶ前に確かめる
+ * - 利用停止・同意は確かめない（要件9.3・9.4）
+ * - 1回の予算は退会と同じ45秒。終わらなければ done: false。片づけ中の印と写しが残るので、次の呼び出しが続ける（要件4.1）
+ * - メンバーでない人にも { done: true, groupDeleted: false } を返し、not_member は返さない（グループの有無を知らせない・要件3.14）
+ * - 応答の groupDeleted は「この抜けるでグループごと消える（消えた）か」＝kind が delete_group（同じ回の再試行でも同じ値）。
+ *   ただし再試行の間にほかの人が抜けてグループが消えると、kind を数え直すので true に変わる（影響は iOS の計測の値だけ）。
+ *   成功のログの groupDeleted は「この実行でグループの文書を消したか」（退会の groupsDeleted と同じ意味・design の API Contract）
+ * - 成功のログは内部IDと件数だけ（要件11.2〜11.4）。グループ名・表示名・キャプション・招待コードは出さない
+ */
+const soratomoLeaveGroup = soratomoCallable(
+  "soratomoLeaveGroup",
+  (uid, data) => {
+    if (!core.isAutoId(data.groupId)) throw new store.SoratomoDomainError("invalid_input");
+    return leaveSoratomoGroup(
+      { db, storage, nowMs: Date.now },
+      { uid, groupId: data.groupId, deadlineMs: Date.now() + DELETE_BUDGET_MS, origin: "self" }
+    );
+  },
+  {
+    // クレームを確かめない理由: フラグの状態に関わらず、自分のデータを消す方向の操作を受け付けるため（要件2.6・9.1）
+    requireFlag: false,
+    runtime: { timeoutSeconds: 120, memory: "512MiB" },
+    respond: (result) => ({ done: result.done, groupDeleted: result.kind === "delete_group" }),
+    okLogFields: (result, data) => ({
+      groupId: data.groupId,
+      done: result.done,
+      state: result.state,
+      kind: result.kind,
+      removed: result.removed,
+      ownerTransferred: result.ownerTransferred,
+      groupDeleted: result.groupDeleted,
+      skiesDeleted: result.skiesDeleted,
+      imagesDeleted: result.imagesDeleted,
     }),
   }
 );
@@ -553,10 +603,91 @@ async function reforwardPendingReports(webhookUrl) {
   return result;
 }
 
+// MARK: - 途中で止まった抜けるを終える（leave-group 3.2）
+
+/** 仕事Cの予算（開始からのミリ秒）。仕事Aの締め切り（開始から480秒）は変えない（仕事Aに残る時間は、仕事Cが使った分だけ減る）。 */
+const LEAVE_SWEEP_BUDGET_MS = 120_000;
+/** 抜けるの確定（leftAt）からこの時間を過ぎた印だけを扱う。アプリの繰り返し（最大8回×75秒）と同じ回を重ねて進めないため。 */
+const LEAVE_SWEEP_MIN_AGE_MS = 30 * 60 * 1000;
+/** 1回に読む印の数。 */
+const LEAVE_SWEEP_PAGE = 50;
+/** 抜けるの確定からこの時間を過ぎても終わらなければ overdue を出す（要件4.8）。 */
+const LEAVE_OVERDUE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 仕事C: 途中で止まった抜けるを、片づけ中の印から続けて終える（leave-group 要件4.6・4.8・11.5）。
+ * - 印を leftAt が30分より前のものだけ、古い順に50件ずつ読む（leftAt の単一項目のクエリ。複合インデックスは増やさない）
+ * - 印の形（uid が isUid・groupId が自動ID・文書IDが「uid_groupId」）が違えば、消さずに飛ばして malformed_marker を出す
+ *   （開発者が確かめる。書き手は Functions だけなので、ふつうは起きない）
+ * - 各印で leaveSoratomoGroup を origin: "sweep" で呼ぶ。手順1でメンバーを外さないので、入り直した後の古い印は
+ *   印だけを消して終わる（stale_marker・遅れた片づけが入り直した人を外し直さない＝要件8.6）
+ * - 1件の失敗で残りを止めない。終わらなかった印は残り、次の実行が拾う。予算を過ぎたら、残りは次の実行に回す
+ * - ログは内部IDと件数だけ（要件11.2・11.5）: 1件ごとに swept、終わらないか失敗して24時間を過ぎたものに overdue（warn）、
+ *   失敗に sweep_item_failed（error）。グループ名・表示名・キャプション・招待コードは出さない
+ * @param {number} startedMs 定期実行の開始の時刻
+ * @returns {Promise<{ scanned: number, completed: number, unfinished: number, overdue: number, malformed: number,
+ *   failed: number }>} scanned は形を確かめた印の数（malformed を含む）
+ */
+async function sweepPendingLeaves(startedMs) {
+  const deadlineMs = startedMs + LEAVE_SWEEP_BUDGET_MS;
+  const cutoff = Timestamp.fromMillis(startedMs - LEAVE_SWEEP_MIN_AGE_MS);
+  const summary = { scanned: 0, completed: 0, unfinished: 0, overdue: 0, malformed: 0, failed: 0 };
+  let last = null;
+  while (Date.now() < deadlineMs) {
+    let query = db.collection(PENDING_LEAVES).where("leftAt", "<=", cutoff).orderBy("leftAt").limit(LEAVE_SWEEP_PAGE);
+    if (last) query = query.startAfter(last);
+    const snap = await query.get();
+    for (const doc of snap.docs) {
+      if (Date.now() >= deadlineMs) break;
+      summary.scanned += 1;
+      const uid = doc.get("uid");
+      const groupId = doc.get("groupId");
+      if (!isUid(uid) || !core.isAutoId(groupId) || doc.id !== `${uid}_${groupId}`) {
+        summary.malformed += 1;
+        logger.warn("soratomoLeave: malformed_marker", { markerId: doc.id });
+        continue;
+      }
+      const leftAtMs = millisOf(doc.get("leftAt"));
+      let done = false;
+      try {
+        const result = await leaveSoratomoGroup({ db, storage, nowMs: Date.now }, { uid, groupId, deadlineMs, origin: "sweep" });
+        done = result.done;
+        logger.info("soratomoLeave: swept", {
+          uid,
+          groupId,
+          done: result.done,
+          state: result.state,
+          kind: result.kind,
+          removed: result.removed,
+          ownerTransferred: result.ownerTransferred,
+          groupDeleted: result.groupDeleted,
+          skiesDeleted: result.skiesDeleted,
+          imagesDeleted: result.imagesDeleted,
+          ageMs: Date.now() - leftAtMs,
+        });
+        if (done) summary.completed += 1;
+        else summary.unfinished += 1;
+      } catch (err) {
+        summary.failed += 1;
+        logger.error("soratomoLeave: sweep_item_failed", { uid, groupId, errorName: err && err.name, errorCode: err && err.code });
+      }
+      const ageMs = Date.now() - leftAtMs;
+      if (!done && ageMs > LEAVE_OVERDUE_MS) {
+        summary.overdue += 1;
+        logger.warn("soratomoLeave: overdue", { uid, groupId, ageMs });
+      }
+    }
+    if (snap.size < LEAVE_SWEEP_PAGE) break;
+    last = snap.docs[snap.docs.length - 1];
+  }
+  return summary;
+}
+
 /**
  * 6時間ごとの後始末と再送（design の soratomoHousekeeping）。同時に1つだけ動く（maxInstances: 1）。
- * 仕事A→仕事Bの順に、別々の try で囲む（片方の失敗で他方を止めない）。仕事Aは締め切りを持ち、仕事Bの時間を残す。
+ * 仕事C→仕事A→仕事Bの順に、別々の try で囲む（どれかの失敗で他を止めない）。仕事Aは締め切りを持ち、仕事Bの時間を残す。
  * 6時間ごとなので、Auth の削除から最悪6時間で拾い、途中で止まっても24時間の間に4回の機会がある（要件4.1）。
+ * 仕事C（leave-group 3.2）は予算120秒で先に動く。途中で止まった抜けるは、確定から最大6時間30分で最初の機会が来る（要件4.6）。
  */
 const soratomoHousekeeping = onSchedule(
   {
@@ -569,6 +700,11 @@ const soratomoHousekeeping = onSchedule(
   },
   async () => {
     const startedMs = Date.now();
+    try {
+      logger.info("soratomoHousekeeping: leave_sweep", await sweepPendingLeaves(startedMs));
+    } catch (err) {
+      logger.error("soratomoHousekeeping: leave_sweep_failed", { errorName: err && err.name, errorCode: err && err.code });
+    }
     try {
       logger.info("soratomoHousekeeping: sweep", await sweepUsersWithoutAccount(startedMs + SWEEP_BUDGET_MS));
     } catch (err) {
@@ -590,6 +726,7 @@ module.exports = {
   soratomoReportSky,
   soratomoAgreeGuideline,
   soratomoDeleteMyData,
+  soratomoLeaveGroup,
   onSoratomoSkyCreated,
   onSoratomoReportCreated,
   soratomoHousekeeping,

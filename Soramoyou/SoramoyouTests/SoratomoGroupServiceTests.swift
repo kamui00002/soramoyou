@@ -5,6 +5,7 @@
 //  そらとものグループのサービス（SoratomoGroupService）のテスト ⭐️（tasks 11.1）
 //  - Callable のエラーの写し（flag_off・invalid_name・invalid_format・not_found・group_full・user_limit・not_owner・通信）
 //    と、release-gate 8 で足した理由（ng_word・suspended・consent_required・outdated_guideline・sky_not_found・not_member）
+//    と、leave-group 6 で足した理由（leave_pending）
 //  - グループ一覧の並び順（最新の活動時刻の新しい順・最大 10 件）
 //  - Callable の戻り値・グループ・メンバーの文書の読み取り
 //  - グループの監視の 1 回分の結果の決め方（権限の拒否・不在・キャッシュだけの結果）
@@ -243,6 +244,17 @@ final class SoratomoGroupServiceTests: XCTestCase {
                 "\(row.details)"
             )
         }
+    }
+
+    // MARK: - Callable のエラーの写し（leave-group 6・陽性対照 C5）
+
+    func testMapCallableError_leavePending() {
+        // 抜けたときの片づけが終わっていない人の参加は、failed-precondition の leave_pending
+        // （functions/soratomo.js の REASON_TO_CODE）。理由が無ければ code だけからは決めない規則なので、写さないと .unknown に落ちる
+        XCTAssertEqual(
+            SoratomoGroupService.mapCallableError(functionsError(.failedPrecondition, reason: "leave_pending")),
+            .leavePending
+        )
     }
 
     // MARK: - Callable の戻り値

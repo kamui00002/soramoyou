@@ -235,7 +235,7 @@ async function seedGroup({ groupId, ownerId, inviteCode, memberIds, name = "種�
 
 // MARK: - Callable: ログインとフラグ（8.1）
 
-/** クレームを確かめる Callable（退会の削除の soratomoDeleteMyData 以外のすべて）と、正しい形の要求。 */
+/** クレームを確かめる Callable（退会の削除の soratomoDeleteMyData と、抜ける soratomoLeaveGroup 以外のすべて）と、正しい形の要求。 */
 const CALLABLES = [
   ["soratomoCreateGroup", { name: "空の会", requestId: "r1" }],
   ["soratomoJoinGroup", { code: "SKYAAAAA" }],
@@ -316,6 +316,20 @@ test("参加: 成功と既存のメンバー、形の誤り・不在・満員・
 
   assert.ok(!allLogs().includes("SKYAAAAA"), "招待コードをログに出さない");
   assert.ok(!allLogs().includes("SKYFULLA"), "招待コードをログに出さない");
+});
+
+test("参加（陽性対照C1・leave-group 2.1）: 片づけ中（写しが残り、メンバーの文書が無い）の人は failed-precondition（leave_pending）で、何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  await agree("bob");
+  const userRef = db.collection("soratomoUsers").doc("bob");
+  await userRef.set({ groupCount: 1 }, { merge: true });
+  await userRef.collection("groups").doc("g1").set({ groupId: "g1", joinedAt: Timestamp.now() });
+
+  await assert.rejects(call("soratomoJoinGroup", authOf("bob"), { code: "SKYAAAAA" }), httpsError("failed-precondition", "leave_pending", {}));
+  assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("memberCount"), 1);
+  assert.equal((await db.collection("soratomoGroups").doc("g1").collection("members").get()).size, 1);
+  assert.equal((await userRef.get()).get("groupCount"), 1);
+  assert.ok(!allLogs().includes("SKYAAAAA"), "招待コードをログに出さない");
 });
 
 test("再発行: オーナーは新しいコード、メンバーは permission-denied（not_owner）、無いグループは not-found", async () => {
@@ -535,6 +549,132 @@ test("退会: 関数の設定は、制限時間120秒・メモリ512MiB・既存
   assert.equal(endpoint.timeoutSeconds, 120);
   assert.equal(endpoint.availableMemoryMb, 512);
   assert.deepEqual(endpoint.region, ["asia-northeast1"]);
+});
+
+// MARK: - Callable: グループだけ抜ける（leave-group 3.1）
+
+/** 抜けるの Callable の ok のログの項目。 */
+function leaveOkLogs() {
+  return logFieldsOf("soratomoLeaveGroup: ok");
+}
+/** gdel1 のメンバー（uid → 役割）。 */
+async function delGroupRoles() {
+  const snap = await db.collection("soratomoGroups").doc(DEL_GROUP).collection("members").get();
+  return Object.fromEntries(snap.docs.map((d) => [d.id, d.get("role")]));
+}
+
+test("抜ける: ログインが無ければ unauthenticated で、何も消さない", async () => {
+  await seedDeletionScene();
+  await assert.rejects(call("soratomoLeaveGroup", undefined, { groupId: DEL_GROUP }), httpsError("unauthenticated"));
+  assert.deepEqual(await delGroupRoles(), { alice: "owner", bob: "member" });
+  assert.equal(storageFiles.size, 4);
+  assert.deepEqual(leaveOkLogs(), []);
+});
+
+test("抜ける: クレームの無い人（匿名を含む）・false の人・利用停止中の人・ガイドラインに未同意の人も抜けられ、応答は { done, groupDeleted } だけ", async () => {
+  const cases = [
+    ["クレーム無し（匿名）", { firebase: { sign_in_provider: "anonymous" } }, async () => {}],
+    ["クレームが false", { soratomoBeta: false }, async () => {}],
+    ["利用停止中", ON, (ref) => ref.update({ suspendedAt: Timestamp.now() })],
+    ["ガイドラインに未同意", ON, (ref) => ref.set({ groupCount: 1 })],
+  ];
+  for (const [name, token, prepare] of cases) {
+    await seedDeletionScene();
+    const bobRef = db.collection("soratomoUsers").doc("bob");
+    await prepare(bobRef);
+    const groupRef = db.collection("soratomoGroups").doc(DEL_GROUP);
+
+    const response = await call("soratomoLeaveGroup", authOf("bob", token), { groupId: DEL_GROUP });
+    assert.deepEqual(response, { done: true, groupDeleted: false }, name);
+    assert.deepEqual(await delGroupRoles(), { alice: "owner" }, `${name}: 本人が外れる`);
+    assert.equal((await groupRef.get()).get("memberCount"), 1, name);
+    assert.equal((await groupRef.collection("skies").doc("sb1").get()).exists, false, `${name}: 本人の投稿は消える`);
+    assert.equal((await groupRef.collection("skies").doc("sa1").get()).exists, true, `${name}: ほかのメンバーの投稿は残る`);
+    assert.deepEqual([...storageFiles].sort(), imagesOf("alice", "sa1").sort(), `${name}: 画像は本人の分だけ消える`);
+    assert.equal((await bobRef.collection("groups").doc(DEL_GROUP).get()).exists, false, `${name}: 写しが消える`);
+    assert.equal((await bobRef.get()).exists, true, `${name}: 利用者の文書は残る（退会と違う）`);
+  }
+});
+
+test("抜ける: groupId が自動IDの形でなければ invalid-argument（invalid_input）で、何も書かない", async () => {
+  await seedDeletionScene();
+  for (const data of [{}, null, { groupId: "" }, { groupId: "g-1" }, { groupId: "a/b" }, { groupId: 123 }, { groupId: ["gdel1"] }]) {
+    await assert.rejects(
+      call("soratomoLeaveGroup", authOf("bob"), data),
+      httpsError("invalid-argument", "invalid_input", {}),
+      JSON.stringify(data)
+    );
+  }
+  assert.deepEqual(await delGroupRoles(), { alice: "owner", bob: "member" });
+  assert.equal(storageFiles.size, 4);
+  assert.equal((await db.collection("soratomoPendingLeaves").get()).size, 0, "印を書かない");
+  assert.deepEqual(record.logs.filter((l) => l.level === "error"), [], "想定外の失敗（internal）にしない");
+});
+
+test("抜ける: 本文に他人の uid を書いても、抜けるのは認証の uid だけ。メンバーでない人には { done: true, groupDeleted: false } で、何も変わらない", async () => {
+  await seedDeletionScene();
+  const groupRef = db.collection("soratomoGroups").doc(DEL_GROUP);
+
+  // メンバーでない carol が alice を指定しても、何も変わらない（not_member も返さない）
+  assert.deepEqual(await call("soratomoLeaveGroup", authOf("carol", {}), { groupId: DEL_GROUP, uid: "alice" }), { done: true, groupDeleted: false });
+  assert.deepEqual(await delGroupRoles(), { alice: "owner", bob: "member" });
+  assert.equal((await groupRef.get()).get("memberCount"), 2);
+  assert.equal(storageFiles.size, 4);
+  assert.equal((await db.collection("soratomoUsers").doc("carol").get()).exists, false, "メンバーでない人の文書を作らない");
+
+  // メンバーの bob が alice を指定しても、抜けるのは bob
+  assert.deepEqual(await call("soratomoLeaveGroup", authOf("bob"), { groupId: DEL_GROUP, uid: "alice" }), { done: true, groupDeleted: false });
+  assert.deepEqual(await delGroupRoles(), { alice: "owner" });
+  assert.equal((await groupRef.collection("skies").doc("sa1").get()).exists, true);
+  assert.equal((await db.collection("soratomoUsers").doc("alice").collection("groups").doc(DEL_GROUP).get()).exists, true);
+  assert.deepEqual([...storageFiles].sort(), imagesOf("alice", "sa1").sort());
+  assert.deepEqual(leaveOkLogs().map((l) => l.uid), ["carol", "bob"]);
+});
+
+test("抜ける: 最後の1人なら groupDeleted: true。ログは内部IDと件数だけで、グループ名・表示名・キャプション・招待コードを出さない", async () => {
+  await seedDeletionScene();
+  await db.collection("users").doc("alice").set({ displayName: "そらのアリス" });
+
+  assert.deepEqual(await call("soratomoLeaveGroup", authOf("bob"), { groupId: DEL_GROUP }), { done: true, groupDeleted: false });
+  assert.deepEqual(await call("soratomoLeaveGroup", authOf("alice"), { groupId: DEL_GROUP }), { done: true, groupDeleted: true });
+  assert.equal((await db.collection("soratomoGroups").doc(DEL_GROUP).get()).exists, false);
+  assert.equal((await db.collection("soratomoInviteCodes").doc("SKYDELAA").get()).exists, false);
+  assert.equal(storageFiles.size, 0);
+
+  assert.deepEqual(leaveOkLogs(), [
+    {
+      uid: "bob", groupId: DEL_GROUP, done: true, state: "started", kind: "leave", removed: true,
+      ownerTransferred: false, groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+    },
+    {
+      uid: "alice", groupId: DEL_GROUP, done: true, state: "started", kind: "delete_group", removed: true,
+      ownerTransferred: false, groupDeleted: true, skiesDeleted: 1, imagesDeleted: 2,
+    },
+  ]);
+  const logs = allLogs();
+  for (const secret of ["ひみつの空の会", "SKYDELAA", "夕焼けがきれい", "そらのアリス"]) {
+    assert.ok(!logs.includes(secret), `ログに「${secret}」を出さない`);
+  }
+});
+
+test("抜ける: 関数の設定は、制限時間120秒・メモリ512MiB・既存と同じリージョン。公開する関数は11本", () => {
+  const endpoint = fns.soratomoLeaveGroup.__endpoint;
+  assert.equal(endpoint.timeoutSeconds, 120);
+  assert.equal(endpoint.availableMemoryMb, 512);
+  assert.deepEqual(endpoint.region, ["asia-northeast1"]);
+  assert.deepEqual(Object.keys(fns).sort(), [
+    "onSoratomoReportCreated",
+    "onSoratomoSkyCreated",
+    "soratomoAgreeGuideline",
+    "soratomoCreateGroup",
+    "soratomoCreateSky",
+    "soratomoDeleteMyData",
+    "soratomoHousekeeping",
+    "soratomoJoinGroup",
+    "soratomoLeaveGroup",
+    "soratomoRegenerateInviteCode",
+    "soratomoReportSky",
+  ]);
 });
 
 // MARK: - トリガー: onSoratomoSkyCreated（8.2）
@@ -935,6 +1075,176 @@ test("定期実行: 6時間ごと・制限時間540秒・メモリ512MiB・同�
   assert.equal(endpoint.maxInstances, 1);
   assert.deepEqual(endpoint.secretEnvironmentVariables, [{ key: "DISCORD_REPORT_WEBHOOK_URL" }]);
   assert.deepEqual(endpoint.region, ["asia-northeast1"]);
+});
+
+// MARK: - 定期実行の仕事C: 途中で止まった抜けるを終える（leave-group 3.2）
+
+const MINUTE = 60 * 1000;
+const LEAVE_SECRETS = Object.freeze(["ひみつの抜ける会", "SKYLEAVA", "SKYLEAVB", "ひみつのキャプション", "そらのボブ"]);
+
+/**
+ * 抜けるの途中で止まった人を入れる。groupId のグループ（オーナーは owner）から uid が外れた後で、片づけ中の印（leftAt は
+ * ageMs 前）・所属の写し・利用者の文書・投稿1件（キャプションつき）と画像2枚が残っている。
+ * member が真なら、入り直した後（メンバーの文書がある・印だけが古いまま残った）。
+ */
+async function seedPendingLeave({ uid, groupId, owner, code, ageMs, member = false }) {
+  await seedGroup({ groupId, ownerId: owner, inviteCode: code, memberIds: member ? [owner, uid] : [owner], name: "ひみつの抜ける会" });
+  await seedMembership(uid, groupId, `s${uid}`);
+  await db.collection("soratomoGroups").doc(groupId).collection("skies").doc(`s${uid}`).update({ caption: "ひみつのキャプション" });
+  await db.collection("soratomoPendingLeaves").doc(`${uid}_${groupId}`).set({ uid, groupId, episodeId: "e1", leftAt: Timestamp.fromMillis(Date.now() - ageMs) });
+}
+/** 印・写し・投稿・画像が残っているか。 */
+async function leaveLeftovers(uid, groupId) {
+  return {
+    marker: (await db.collection("soratomoPendingLeaves").doc(`${uid}_${groupId}`).get()).exists,
+    copy: (await db.collection("soratomoUsers").doc(uid).collection("groups").doc(groupId).get()).exists,
+    sky: (await db.collection("soratomoGroups").doc(groupId).collection("skies").doc(`s${uid}`).get()).exists,
+    images: [...storageFiles].filter((p) => p.startsWith(`soratomo/${groupId}/${uid}/`)).length,
+  };
+}
+/** swept のログから、実行のたびに変わる ageMs を外して返す（ageMs は別に確かめる）。 */
+function sweptLogs() {
+  return logFieldsOf("soratomoLeave: swept").map(({ ageMs, ...rest }) => rest);
+}
+
+test("定期実行の仕事C: 確定から30分を過ぎた印を sweep で終えて swept を出し、30分より新しい印には触らない。仕事Aより先に動き、ログに名前などを出さない", async () => {
+  await seedPendingLeave({ uid: "bob", groupId: "gl1", owner: "alice", code: "SKYLEAVA", ageMs: 31 * MINUTE });
+  await seedPendingLeave({ uid: "carl", groupId: "gl2", owner: "alice", code: "SKYLEAVB", ageMs: 5 * MINUTE });
+  await db.collection("users").doc("bob").set({ displayName: "そらのボブ" });
+  claims = new Map([["alice", ON], ["bob", ON], ["carl", {}]]); // 仕事Aに消されないよう、アカウントはある
+
+  await runHousekeeping();
+
+  assert.deepEqual(await leaveLeftovers("bob", "gl1"), { marker: false, copy: false, sky: false, images: 0 }, "30分を過ぎた印は終える");
+  assert.equal((await db.collection("soratomoUsers").doc("bob").get()).get("groupCount"), 0);
+  assert.deepEqual(await leaveLeftovers("carl", "gl2"), { marker: true, copy: true, sky: true, images: 2 }, "30分より新しい印には触らない");
+  assert.deepEqual(sweptLogs(), [
+    {
+      uid: "bob", groupId: "gl1", done: true, state: "continued", kind: "leave", removed: false,
+      ownerTransferred: false, groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+    },
+  ]);
+  const ageMs = logFieldsOf("soratomoLeave: swept")[0].ageMs;
+  assert.ok(ageMs >= 31 * MINUTE && ageMs < 40 * MINUTE, `ageMs は確定からの時間（${ageMs}）`);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: leave_sweep"), [
+    { scanned: 1, completed: 1, unfinished: 0, overdue: 0, malformed: 0, failed: 0 },
+  ]);
+  const order = record.logs.map((l) => l.args[0]);
+  assert.ok(
+    order.indexOf("soratomoHousekeeping: leave_sweep") < order.indexOf("soratomoHousekeeping: sweep"),
+    "仕事Cは仕事Aより先に動く"
+  );
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: sweep"), [{ scanned: 2, missingAuth: 0, completed: 0, unfinished: 0 }]);
+  const logs = allLogs();
+  for (const secret of LEAVE_SECRETS) assert.ok(!logs.includes(secret), `ログに「${secret}」を出さない`);
+});
+
+test("定期実行の仕事C（陽性対照C2のサーバー版）: 入り直した後の古い印は、印だけを消してメンバーを外さない（stale_marker）", async () => {
+  await seedPendingLeave({ uid: "bob", groupId: "gl1", owner: "alice", code: "SKYLEAVA", ageMs: 31 * MINUTE, member: true });
+  claims = new Map([["alice", ON], ["bob", ON]]);
+
+  await runHousekeeping();
+
+  const groupRef = db.collection("soratomoGroups").doc("gl1");
+  assert.equal((await groupRef.collection("members").doc("bob").get()).exists, true, "入り直したメンバーを外し直さない（8.6）");
+  assert.equal((await groupRef.get()).get("memberCount"), 2);
+  assert.deepEqual(await leaveLeftovers("bob", "gl1"), { marker: false, copy: true, sky: true, images: 2 }, "印だけが消える");
+  assert.equal((await db.collection("soratomoUsers").doc("bob").get()).get("groupCount"), 1);
+  assert.deepEqual(sweptLogs(), [
+    {
+      uid: "bob", groupId: "gl1", done: true, state: "stale_marker", kind: null, removed: false,
+      ownerTransferred: false, groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+    },
+  ]);
+});
+
+test("定期実行の仕事C: 24時間を過ぎて終わらない（失敗した）ものに overdue と sweep_item_failed を出し、印と写しを残す。次の実行で終える", async () => {
+  await seedPendingLeave({ uid: "bob", groupId: "gl1", owner: "alice", code: "SKYLEAVA", ageMs: 25 * 60 * MINUTE });
+  claims = new Map([["alice", ON], ["bob", ON]]);
+  const originalDelete = fakeStorageGateway.deleteFile;
+  fakeStorageGateway.deleteFile = async () => {
+    throw new Error("偽物: 画像の削除の失敗");
+  };
+  try {
+    await runHousekeeping();
+  } finally {
+    fakeStorageGateway.deleteFile = originalDelete;
+  }
+
+  const left = await leaveLeftovers("bob", "gl1");
+  assert.equal(left.marker, true, "印が残る（次の実行が拾う）");
+  assert.equal(left.copy, true, "写しが残る");
+  const failed = logFieldsOf("soratomoLeave: sweep_item_failed");
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].uid, "bob");
+  assert.equal(failed[0].groupId, "gl1");
+  assert.equal(failed[0].errorName, "Error");
+  const overdue = logFieldsOf("soratomoLeave: overdue");
+  assert.equal(overdue.length, 1);
+  assert.deepEqual(Object.keys(overdue[0]).sort(), ["ageMs", "groupId", "uid"]);
+  assert.ok(overdue[0].ageMs > 24 * 60 * MINUTE);
+  assert.equal(record.logs.find((l) => l.args[0] === "soratomoLeave: overdue").level, "warn");
+  assert.equal(record.logs.find((l) => l.args[0] === "soratomoLeave: sweep_item_failed").level, "error");
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: leave_sweep"), [
+    { scanned: 1, completed: 0, unfinished: 0, overdue: 1, malformed: 0, failed: 1 },
+  ]);
+
+  // ゲートウェイが直った後の次の実行で終える
+  record.logs = [];
+  await runHousekeeping();
+  assert.deepEqual(await leaveLeftovers("bob", "gl1"), { marker: false, copy: false, sky: false, images: 0 });
+  assert.equal(sweptLogs()[0].done, true);
+  assert.deepEqual(logFieldsOf("soratomoLeave: overdue"), []);
+});
+
+test("定期実行の仕事C: 形の違う印は消さずに飛ばして malformed_marker を出し、ほかには触らない", async () => {
+  const old = Timestamp.fromMillis(Date.now() - 31 * MINUTE);
+  const markers = {
+    bad1: { uid: "bob", groupId: "gl1" }, // 文書IDが「uid_groupId」でない
+    "bob_gl-1": { uid: "bob", groupId: "gl-1" }, // groupId が自動IDの形でない
+    "a_gl1": { uid: "a/b", groupId: "gl1" }, // uid に「/」
+    nouid_gl1: { groupId: "gl1" }, // uid が無い
+  };
+  for (const [id, fields] of Object.entries(markers)) {
+    await db.collection("soratomoPendingLeaves").doc(id).set({ ...fields, episodeId: "e1", leftAt: old });
+  }
+  await seedGroup({ groupId: "gl1", ownerId: "alice", inviteCode: "SKYLEAVA", memberIds: ["alice", "bob"], name: "ひみつの抜ける会" });
+
+  await runHousekeeping();
+
+  assert.deepEqual(logFieldsOf("soratomoLeave: malformed_marker").map((f) => f.markerId).sort(), Object.keys(markers).sort());
+  assert.equal(record.logs.find((l) => l.args[0] === "soratomoLeave: malformed_marker").level, "warn");
+  assert.equal((await db.collection("soratomoPendingLeaves").get()).size, 4, "消さない（開発者が確かめる）");
+  assert.equal((await db.collection("soratomoGroups").doc("gl1").collection("members").doc("bob").get()).exists, true);
+  assert.deepEqual(sweptLogs(), []);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: leave_sweep"), [
+    { scanned: 4, completed: 0, unfinished: 0, overdue: 0, malformed: 4, failed: 0 },
+  ]);
+});
+
+test("定期実行: 仕事Cが例外で止まっても、仕事Aと仕事Bは動く", async () => {
+  await seedSweepScene();
+  await seedReportRecord("rold", { ageMs: 11 * MINUTE });
+  const originalCollection = db.collection;
+  db.collection = function (name) {
+    if (name === "soratomoPendingLeaves") {
+      return {
+        where: () => {
+          throw new Error("クエリの失敗");
+        },
+      };
+    }
+    return originalCollection.call(this, name);
+  };
+  try {
+    await runHousekeeping();
+  } finally {
+    db.collection = originalCollection;
+  }
+  assert.equal(logFieldsOf("soratomoHousekeeping: leave_sweep_failed").length, 1);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: leave_sweep"), []);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: sweep"), [{ scanned: 5, missingAuth: 3, completed: 3, unfinished: 0 }], "仕事Aは動く");
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: reforward"), [{ attempted: 1, sent: 1 }], "仕事Bは動く");
 });
 
 // MARK: - Callable の拒否と要確認6（release-gate 4.5）

@@ -2,10 +2,11 @@
 //  SoratomoErrorTests.swift
 //  SoramoyouTests
 //
-//  そらともの失敗の文言（SoratomoError.userMessage）のテスト ⭐️（tasks 10.2・release-gate 8）
+//  そらともの失敗の文言（SoratomoError.userMessage）のテスト ⭐️（tasks 10.2・release-gate 8・leave-group 6）
 //
 //  期待値は design.md の Error Categories の表を写したもの。
 //  release-gate で足した文言は .kiro/specs/soratomo-release-gate/design.md の「エラーと計測」の表（12.1 で利用者が確認する下書き）。
+//  leave-group で足した文言は .kiro/specs/soratomo-leave-group/tasks.md の 6（design.md の「SoratomoError・SoratomoAnalytics・SoratomoDependencies」）。
 //
 
 @testable import Soramoyou
@@ -34,6 +35,8 @@ final class SoratomoErrorTests: XCTestCase {
             .consentRequired: "そらともガイドラインへの同意が必要です",
             .outdatedApp: "アプリを最新の版にアップデートしてください",
             .skyGone: "この投稿はもうありません",
+            // leave-group 6（要件 8.5・利用者の判断 U1 の A）
+            .leavePending: "このグループを抜けたときの片づけが、まだ終わっていません。しばらく時間をおいて（長いときは数時間）、もう一度お試しください",
             .flagOff: generic,
             .notOwner: generic,
             .permissionDenied: generic,
@@ -67,6 +70,9 @@ final class SoratomoErrorTests: XCTestCase {
             .report: "通報を送信できませんでした",
             .block: "ブロックできませんでした",
             .agreeGuideline: "同意を記録できませんでした",
+            // leave-group 6（要件 4.4・1.8）
+            .leaveGroup: "グループを抜けられませんでした",
+            .prepareLeave: "グループの情報を読み込めませんでした",
         ]
         XCTAssertEqual(Set(expected.keys), Set(SoratomoFailedAction.allCases))
         for action in SoratomoFailedAction.allCases {

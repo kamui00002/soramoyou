@@ -5,6 +5,7 @@
 //  そらともの「グループを作る」「招待コードで参加」のシートの ViewModel ⭐️
 //  （tasks 13.2・13.3・design.md の SoratomoGroupFormViewModel・SoratomoDisplayNameStep・
 //    要件 2・4・10.1・10.5・12.2・12.5・14.3・15.4・18）
+//  （leave-group 8.4・design.md の SoratomoGroupListViewModel・SoratomoGroupFormViewModel（変更）・要件 5.6・8.1・8.5）
 //
 //  シートの中の流れ:
 //    1. ガイドラインへの同意と、表示名が要るかを確かめる（`fetchConsentStatus`・`needsDisplayName`）
@@ -87,6 +88,8 @@ final class SoratomoGroupFormViewModel: ObservableObject {
     private let isOnline: () -> Bool
     /// いまログインしている利用者の uid（未ログインなら nil）
     private let currentUid: () -> String?
+    /// この端末で抜けたグループの記録（参加に成功したら、そのグループを外す）
+    private let leftGroups: SoratomoLeftGroups
     /// 計測の記録（既定は `SoratomoAnalytics.log`。単体テストで差し替える）
     private let logEvent: (SoratomoEvent) -> Void
     /// 成功したときに、進む先のパスを渡す
@@ -119,6 +122,8 @@ final class SoratomoGroupFormViewModel: ObservableObject {
     ///   - primer: 通知の事前説明の判定
     ///   - isOnline: いま通信できる状態かを返す
     ///   - currentUid: いまログインしている利用者の uid を返す
+    ///   - leftGroups: この端末で抜けたグループの記録。
+    ///     ⚠️ 既定値を付けない。既定の `SoratomoLeftGroups()` は本物の UserDefaults に書くので、テストが本物の記録を汚す
     ///   - logEvent: 計測の記録。既定は本番の `SoratomoAnalytics.log`
     ///   - onCompleted: 成功したときに、進む先のパスを受け取る
     ///   - onDeclined: ガイドラインで「同意しない」を選んだとき（シートを閉じる）
@@ -130,6 +135,7 @@ final class SoratomoGroupFormViewModel: ObservableObject {
         primer: any SoratomoNotificationPrimerProtocol,
         isOnline: @escaping () -> Bool,
         currentUid: @escaping () -> String?,
+        leftGroups: SoratomoLeftGroups,
         logEvent: @escaping (SoratomoEvent) -> Void = SoratomoAnalytics.log,
         onCompleted: @escaping ([SoratomoDestination]) -> Void,
         onDeclined: @escaping () -> Void
@@ -141,6 +147,7 @@ final class SoratomoGroupFormViewModel: ObservableObject {
         self.primer = primer
         self.isOnline = isOnline
         self.currentUid = currentUid
+        self.leftGroups = leftGroups
         self.logEvent = logEvent
         self.onCompleted = onCompleted
         self.onDeclined = onDeclined
@@ -381,6 +388,13 @@ final class SoratomoGroupFormViewModel: ObservableObject {
         do {
             let result = try await groupService.joinGroup(code: code)
             errorMessage = nil
+            // この端末で抜けたグループに入り直したなら、「抜けた」記録を外す（外さないと一覧で隠れたままになる・要件 5.6）
+            // ⚠️ 端末の画像のキャッシュと投稿の覚えは消さない（要確認 Q7 の判断）。この端末で抜けたなら
+            //    抜けたときにもう消している。入り直した直後に古い投稿が一瞬出うるのは Firestore の端末のキャッシュ由来で、
+            //    画像のキャッシュを消しても防げない
+            if let uid = currentUid() {
+                leftGroups.remove(result.groupId, uid: uid)
+            }
             logEvent(.groupJoined(alreadyMember: result.alreadyMember))
             // 既存のメンバーだった場合も、エラーにせずタイムラインへ（要件 4.4・4.8）
             await finish(destinations: [.timeline(groupId: result.groupId)])

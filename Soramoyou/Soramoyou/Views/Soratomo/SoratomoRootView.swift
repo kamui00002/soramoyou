@@ -11,6 +11,7 @@
 //  全画面のカバーから出すのは 14.1（MainTabView）の担当。
 //  release-gate 10.5: 開くたびに同意の状態を確かめ、入口の判定（`SoratomoEntryGate.needsGuideline`）が真なら、
 //  NavigationStack の代わりにガイドラインの全文を出す（要件 10.2・10.5・10.6）。
+//  leave-group 8.5: 開いたときに、1.14.x の共通の画像のキャッシュを 1 回だけ消す（`purgeLegacyIfNeeded`）。
 //
 
 import SwiftUI
@@ -65,6 +66,9 @@ struct SoratomoRootView: View {
                 router.notice = nil
             }
             .task {
+                // 1.14.x の共通の画像のキャッシュ（全グループの画像が 1 か所にある）を、1 回だけ消す（leave-group 8.5・7.3）。
+                // そらともの画像を読む前に置く（一覧と通知の行き先は、下の checkEntry の後に出る）。印があれば何もしない
+                SoratomoImageCache.purgeLegacyIfNeeded()
                 await checkEntry()
             }
     }

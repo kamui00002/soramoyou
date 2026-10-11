@@ -8,6 +8,8 @@
 //  ホームの入口のボタンと、そらともの新着通知のタップから、そらともの画面へ行く遷移をここで決める。
 //  既存の画面（GoldenHourNotificationManager・ContentView・MainTabView・HomeView）への差し込みは
 //  tasks 14.1 の担当で、このファイルは既存のファイルを一切参照しない。
+//  ただし leave-group 8.3 から、抜けたグループの判定だけは `SoratomoDependencies`（そらともの型）を引く
+//  （`shared` の組み立てで判定のたびに引く。`SoratomoDependencies` の組み立てはルーターに触れない）。
 //
 
 import Foundation
@@ -102,7 +104,13 @@ enum SoratomoSession: Equatable {
 @MainActor
 final class SoratomoRouter: ObservableObject {
     /// アプリ全体で使うルーター
-    static let shared = SoratomoRouter()
+    ///
+    /// ⚠️ 抜けたグループの判定（`isLeftGroup`）は、`SoratomoDependencies.live` の組み立てで代入せず、ここで
+    ///    判定のたびに `live` を引く。`live` は遅延で初期化され、最初に触るのはそらともの全画面のカバーの中身。
+    ///    通知で冷えた起動をすると `resolvePending` が `live` より先に走るので、`live` の中で代入すると
+    ///    判定が間に合わない（引いた時点で `live` が作られるここなら間に合う）。
+    ///    サービスの init がこの `shared` に触れると初期化が輪になるため、触れないこと。
+    static let shared = SoratomoRouter(isLeftGroup: { SoratomoDependencies.live.isLeftGroup($0) })
 
     /// そらともの画面（全画面のカバー）を出しているか
     ///
@@ -135,9 +143,21 @@ final class SoratomoRouter: ObservableObject {
     /// 入口の一覧から開いたグループの読み込みが、通知の計測に混ざらないのもこのため。
     private var awaitingGroupId: String?
 
-    /// - Parameter logEvent: 計測の記録の関数。既定は本番の `SoratomoAnalytics.log`
-    init(logEvent: @escaping (SoratomoEvent) -> Void = SoratomoAnalytics.log) {
+    /// この端末の、いまの利用者が抜けたグループか（leave-group 8.3・既定は常に偽）
+    ///
+    /// 通知のグループがここで真なら、タイムラインを開かずに「開けませんでした」の扱いにする。
+    /// 本物は `SoratomoDependencies.live.isLeftGroup`（`shared` の組み立てで渡す）。
+    private let isLeftGroup: @MainActor (String) -> Bool
+
+    /// - Parameters:
+    ///   - logEvent: 計測の記録の関数。既定は本番の `SoratomoAnalytics.log`
+    ///   - isLeftGroup: 抜けたグループかの判定。既定は常に偽（記録に無いグループは今のまま開く）
+    init(
+        logEvent: @escaping (SoratomoEvent) -> Void = SoratomoAnalytics.log,
+        isLeftGroup: @escaping @MainActor (String) -> Bool = { _ in false }
+    ) {
         self.logEvent = logEvent
+        self.isLeftGroup = isLeftGroup
     }
 
     // MARK: 入口・閉じる
@@ -225,6 +245,18 @@ final class SoratomoRouter: ObservableObject {
             discardPending(as: .flagOff)
         case .enabled:
             guard canPresent else { return }
+            // 抜けたグループの通知は、タイムラインを開かない（leave-group 8.3・要件 5.7）。
+            // 結果待ちにもしない（開いていないので、ここで結果が決まる）。結果待ちが残っていれば先に確定する。
+            // 計測は `not_member` を 1 回。保留を空にするので、続けて呼んでも増えない
+            if isLeftGroup(payload.groupId) {
+                settleAwaitingAsOpened()
+                pending = nil
+                path = []
+                notice = SoratomoError.notMember.userMessage
+                isPresented = true
+                logEvent(.notificationOpened(.notMember))
+                return
+            }
             // 前の通知のタイムラインの結果が決まっていなければ、先に opened として確定する
             // （下で結果待ちを新しいグループに置き換えるので、ここで確定しないと前の分の記録が 0 件になる）
             settleAwaitingAsOpened()
@@ -274,6 +306,24 @@ final class SoratomoRouter: ObservableObject {
         }
     }
 
+    // MARK: 抜けた後
+
+    /// グループを抜けた後に、そのグループの画面を閉じて一時表示を出す（leave-group 8.3）
+    ///
+    /// パスに、そのグループの画面（タイムライン・招待・メンバー・投稿詳細）があるときだけ、
+    /// 一覧へ戻して（`path = []`）`notice` を出す。別のグループの画面だけなら何も変えない。
+    /// 計測はしない（`group_left` は抜けるの ViewModel が記録する）。
+    /// - Parameters:
+    ///   - groupId: 抜けたグループの ID
+    ///   - notice: 一時表示の文言（抜けたグループの名前を含む。出すのは画面と VoiceOver の読み上げだけで、
+    ///     計測・ログには渡さない。`SoratomoError.notMember.userMessage` とは違う文）
+    func finishLeaving(groupId: String, notice: String) {
+        guard path.contains(where: { $0.belongsTo(groupId: groupId) }) else { return }
+
+        path = []
+        self.notice = notice
+    }
+
     // MARK: - Private
 
     /// 結果待ちが残っていれば、`opened` を 1 回記録して結果待ちを消す
@@ -291,5 +341,19 @@ final class SoratomoRouter: ObservableObject {
     private func discardPending(as result: SoratomoNotificationOpenResult) {
         pending = nil
         logEvent(.notificationOpened(result))
+    }
+}
+
+// MARK: - 行き先のグループ
+
+private extension SoratomoDestination {
+    /// この行き先が、指定のグループの画面か（どの行き先もグループ ID を持つ）
+    func belongsTo(groupId target: String) -> Bool {
+        switch self {
+        case .timeline(let groupId), .invite(let groupId), .members(let groupId):
+            return groupId == target
+        case .skyDetail(let groupId, _):
+            return groupId == target
+        }
     }
 }

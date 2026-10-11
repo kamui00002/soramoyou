@@ -6,7 +6,7 @@
 //  - 2 枚を合わせた進み具合の計算（SoratomoImageStoreProgress）
 //  - Storage のエラーの写し（SoratomoImageStoreErrorMapping）
 //  - 取得の鍵（SoratomoStorageImageProvider.cacheKey）
-//  - そらとも専用のキャッシュの全消去と、投稿の 2 つの鍵の削除（SoratomoImageCache）
+//  - そらとも専用のキャッシュの全消去と、投稿の 2 つの鍵の削除（SoratomoImageCache。グループごとの分け方は SoratomoImageCacheTests）
 //
 //  Storage への実際のアップロード・削除・取得は、本番での通しの確認（tasks 15.1）で確かめる。
 //
@@ -191,9 +191,12 @@ final class SoratomoImageStoreTests: XCTestCase {
     }
 
     func testRemoveDropsBothKeysOfThePostAndKeepsOthers() {
-        let paths = makePaths(skyId: "target")
-        let other = makePaths(skyId: "other")
-        let cache = SoratomoImageCache.shared
+        // 同じグループの 2 つの投稿（leave-group 7.3 から、キャッシュはグループごと）
+        let groupId = "test-\(UUID().uuidString)"
+        let paths = SoratomoImagePaths(groupId: groupId, authorId: "u", skyId: "target")
+        let other = SoratomoImagePaths(groupId: groupId, authorId: "u", skyId: "other")
+        let cache = SoratomoImageCache.cache(forStoragePath: paths.display)
+        XCTAssertTrue(cache === SoratomoImageCache.cache(forStoragePath: other.display), "同じグループで別のキャッシュになった")
         // メモリだけに入れる（ディスクの削除は裏で行われるため、結果をすぐ確かめられるように）
         for key in [paths.display, paths.thumbnail, other.display] {
             cache.store(makeImage(), forKey: key, toDisk: false)
@@ -209,7 +212,7 @@ final class SoratomoImageStoreTests: XCTestCase {
         XCTAssertFalse(cache.isCached(forKey: paths.thumbnail), "サムネイルの鍵が消えていない")
         XCTAssertTrue(cache.isCached(forKey: other.display), "別の投稿の鍵まで消えた")
 
-        SoratomoImageCache.remove(other)
+        SoratomoImageCache.removeGroup(groupId)
     }
 
     func testClearEmptiesSoratomoCacheButNotTheDefaultCache() {

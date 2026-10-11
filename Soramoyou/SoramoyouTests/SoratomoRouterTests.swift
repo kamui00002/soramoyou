@@ -10,6 +10,9 @@
 //  - 保留の行き先が、表示できるまで（canPresent == false の間）残ること
 //  - 通知のタイムラインを開いた時点では記録せず（結果待ち）、読めた・読めなかった・閉じた・開き直した・
 //    次の通知で置き換えた、のどれかで結果が決まって 1 回だけ記録すること（1 回のタップで 2 件にならない）
+//  - 抜けた後（`finishLeaving`）は、そのグループの画面があるときだけ一覧へ戻して渡された文言を出し、
+//    抜けたグループの通知はタイムラインを開かずに `not_member` を 1 回だけ記録すること
+//    （leave-group 8.3・design.md の SoratomoRouter（変更）・要件 5.1・5.2・5.7）
 //
 
 @testable import Soramoyou
@@ -670,6 +673,155 @@ final class SoratomoRouterTests: XCTestCase {
                 XCTAssertEqual(log.events, [.notificationOpened(testCase.expected)], "\(testCase.expected) の後に \(ending)")
             }
         }
+    }
+
+    // MARK: - 抜けた後（leave-group 8.3）
+
+    /// 抜けたグループを判定する口つきのルーターを作る（記録は `eventLog` に集める）
+    private func makeRouter(leftGroupIds: Set<String>) -> SoratomoRouter {
+        let log = eventLog!
+        return SoratomoRouter(
+            logEvent: { log.events.append($0) },
+            isLeftGroup: { leftGroupIds.contains($0) }
+        )
+    }
+
+    /// 抜けた後の一時表示の文言（ViewModel が渡す固定の文のつもり）
+    private let leftNotice = "そらを抜けました"
+
+    /// `finishLeaving`: タイムラインがパスにあれば、一覧へ戻して文言を出す。文言は「開けませんでした」ではない
+    func testFinishLeaving_clearsPathAndShowsLeftNoticeForTimeline() {
+        router.path = [.timeline(groupId: "group-1")]
+
+        router.finishLeaving(groupId: "group-1", notice: leftNotice)
+
+        XCTAssertEqual(router.path, [])
+        XCTAssertEqual(router.notice, leftNotice)
+        XCTAssertNotEqual(router.notice, SoratomoError.notMember.userMessage, "抜けた後の文言は「開けませんでした」と別の文")
+    }
+
+    /// `finishLeaving`: メンバー一覧・投稿詳細の画面も、同じグループなら一覧へ戻る
+    ///
+    /// ⚠️ 実際の画面ではタイムラインの上に積まれるが、パスにタイムラインを入れるとタイムラインだけで一致してしまい、
+    ///    メンバー一覧・投稿詳細の行き先を見分けているかを確かめられない。そこで、それぞれ 1 つだけをパスに置く。
+    func testFinishLeaving_clearsPathWhenMembersOrSkyDetailOfSameGroupIsOnPath() {
+        router.path = [.members(groupId: "group-1")]
+        router.finishLeaving(groupId: "group-1", notice: leftNotice)
+        XCTAssertEqual(router.path, [], "メンバー一覧")
+        XCTAssertEqual(router.notice, leftNotice)
+
+        router.notice = nil
+        router.path = [.skyDetail(groupId: "group-1", skyId: "sky-1")]
+        router.finishLeaving(groupId: "group-1", notice: leftNotice)
+        XCTAssertEqual(router.path, [], "投稿詳細")
+        XCTAssertEqual(router.notice, leftNotice)
+    }
+
+    /// `finishLeaving`: 招待の画面だけが積まれていても、同じグループなら一覧へ戻る
+    func testFinishLeaving_clearsPathWhenInviteOfSameGroupIsOnPath() {
+        router.path = [.invite(groupId: "group-1")]
+
+        router.finishLeaving(groupId: "group-1", notice: leftNotice)
+
+        XCTAssertEqual(router.path, [])
+        XCTAssertEqual(router.notice, leftNotice)
+    }
+
+    /// `finishLeaving`: 別のグループの画面だけなら、パスも文言も変えない
+    func testFinishLeaving_keepsPathAndNoticeWhenOnlyOtherGroupIsOnPath() {
+        let original: [SoratomoDestination] = [
+            .timeline(groupId: "group-2"),
+            .members(groupId: "group-2"),
+            .skyDetail(groupId: "group-2", skyId: "sky-1"),
+        ]
+        router.path = original
+        router.notice = "前の文言"
+
+        router.finishLeaving(groupId: "group-1", notice: leftNotice)
+
+        XCTAssertEqual(router.path, original)
+        XCTAssertEqual(router.notice, "前の文言")
+    }
+
+    /// `finishLeaving`: 計測は記録しない
+    func testFinishLeaving_logsNothing() {
+        router.path = [.timeline(groupId: "group-1")]
+
+        router.finishLeaving(groupId: "group-1", notice: leftNotice)
+
+        XCTAssertEqual(eventLog.events, [])
+    }
+
+    /// 抜けたグループの通知: `canPresent` が false の間は保留のまま。開かず、記録もしない
+    func testResolvePending_leftGroupStaysPendingWhileCannotPresent() {
+        router = makeRouter(leftGroupIds: ["group-1"])
+        router.receive(userInfo: soratomoUserInfo(groupId: "group-1"))
+
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: false)
+
+        XCTAssertNotNil(router.pending)
+        XCTAssertFalse(router.isPresented)
+        XCTAssertEqual(router.path, [])
+        XCTAssertNil(router.notice)
+        XCTAssertEqual(eventLog.events, [])
+    }
+
+    /// 抜けたグループの通知: タイムラインを開かず、一覧に「開けませんでした」を出し、`not_member` を 1 回記録する
+    func testResolvePending_leftGroupDoesNotOpenTimelineAndLogsNotMember() {
+        router = makeRouter(leftGroupIds: ["group-1"])
+        router.receive(userInfo: soratomoUserInfo(groupId: "group-1"))
+
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
+
+        XCTAssertNil(router.pending)
+        XCTAssertEqual(router.path, [], "タイムラインを開かない")
+        XCTAssertTrue(router.isPresented)
+        XCTAssertEqual(router.notice, SoratomoError.notMember.userMessage)
+        XCTAssertEqual(eventLog.events, [.notificationOpened(.notMember)])
+    }
+
+    /// 抜けたグループの通知: 続けて呼んでも（保留が無いので）記録は増えない。閉じても `opened` は出ない（結果待ちにしない）
+    func testResolvePending_leftGroupIsLoggedOnlyOnceEvenWhenCalledAgainOrClosed() {
+        router = makeRouter(leftGroupIds: ["group-1"])
+        router.receive(userInfo: soratomoUserInfo(groupId: "group-1"))
+
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
+        router.reportAccessible(groupId: "group-1")
+        router.reportNotAccessible(groupId: "group-1")
+        router.dismiss()
+
+        XCTAssertEqual(eventLog.events, [.notificationOpened(.notMember)])
+    }
+
+    /// 抜けたグループの通知: 前の通知の結果待ちがあれば、先に `opened` が 1 回記録される
+    func testResolvePending_leftGroupSettlesPreviousAwaitingAsOpenedFirst() {
+        router = makeRouter(leftGroupIds: ["group-left"])
+        receiveAndPresent(groupId: "group-open")
+        XCTAssertEqual(eventLog.events, [], "前の通知はまだ結果待ち")
+
+        router.receive(userInfo: soratomoUserInfo(groupId: "group-left"))
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
+
+        XCTAssertEqual(eventLog.events, [.notificationOpened(.opened), .notificationOpened(.notMember)])
+        XCTAssertEqual(router.path, [])
+        // 前の通知のグループの「読めた」が遅れて届いても、記録は増えない
+        router.reportAccessible(groupId: "group-open")
+        XCTAssertEqual(eventLog.events.count, 2)
+    }
+
+    /// 記録に無いグループの通知は今のまま（タイムラインを開き、結果待ちにする）。判定の口が他のグループだけを真にしていても同じ
+    func testResolvePending_groupNotInLeftRecordOpensTimelineAsBefore() {
+        router = makeRouter(leftGroupIds: ["group-left"])
+        router.receive(userInfo: soratomoUserInfo(groupId: "group-1"))
+
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
+
+        XCTAssertNil(router.pending)
+        XCTAssertEqual(router.path, [.timeline(groupId: "group-1")])
+        XCTAssertTrue(router.isPresented)
+        XCTAssertNil(router.notice)
+        XCTAssertEqual(eventLog.events, [], "結果待ち（記録しない）")
     }
 
     // MARK: - shared

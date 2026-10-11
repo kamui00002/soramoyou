@@ -6,6 +6,8 @@
 //  （tasks 10.2・design.md の Error Handling・要件 12.5・15.1・15.4）
 //  release-gate 8 で、NGワード・利用停止・同意・アプリが古い・投稿がもう無いの 5 つと、通報・ブロック・同意の記録の
 //  操作の文言を足した（.kiro/specs/soratomo-release-gate/design.md の「エラーと計測」。文言は 12.1 で利用者が確認する下書き）
+//  leave-group 6 で、抜けるの片づけ中（leave_pending）と、抜けるの 2 つの操作の文言を足した
+//  （.kiro/specs/soratomo-leave-group/design.md の「SoratomoError・SoratomoAnalytics・SoratomoDependencies」・要件 1.8・4.4・8.5）
 //
 
 import Foundation
@@ -60,6 +62,9 @@ enum SoratomoError: Error, Equatable, CaseIterable {
     case outdatedApp
     /// 対象の投稿がもう無い（通報した投稿が削除済み・release-gate 要件 5.7）
     case skyGone
+    /// このグループを抜けたときの片づけが終わっていないので、まだ参加できない
+    /// （サーバーの `leave_pending`・leave-group 要件 8.4・8.5。待ち時間の案内は利用者の判断 U1 の A）
+    case leavePending
     /// 上のどれでもない
     case unknown
 
@@ -106,6 +111,10 @@ enum SoratomoError: Error, Equatable, CaseIterable {
             "アプリを最新の版にアップデートしてください"
         case .skyGone:
             "この投稿はもうありません"
+        case .leavePending:
+            // 片づけは、アプリの繰り返しか定期実行（仕事C）が続きから終える。アプリが途中で止まると、
+            // 仕事Cが終えるまで最大で約6時間30分かかる（leave-group の design.md の U1）
+            "このグループを抜けたときの片づけが、まだ終わっていません。しばらく時間をおいて（長いときは数時間）、もう一度お試しください"
         case .flagOff, .notOwner, .permissionDenied, .uploadTimeout, .backgroundExpired, .unknown:
             "うまくいきませんでした。時間をおいてもう一度お試しください"
         }
@@ -135,6 +144,10 @@ enum SoratomoFailedAction: CaseIterable {
     case block
     /// ガイドラインへの同意の記録（先へ進ませない・release-gate 要件 10.7）
     case agreeGuideline
+    /// グループを抜ける（メンバーのまま・もう一度選べる・leave-group 要件 4.4）。通信できないときは `SoratomoError.network` の文言
+    case leaveGroup
+    /// 抜けるの確認の材料（グループとメンバー一覧）の読み込み（確認を出さない・leave-group 要件 1.8）
+    case prepareLeave
 
     /// 画面に出す文言（利用者の入力を含めない固定の文言）
     var userMessage: String {
@@ -151,6 +164,10 @@ enum SoratomoFailedAction: CaseIterable {
             "ブロックできませんでした"
         case .agreeGuideline:
             "同意を記録できませんでした"
+        case .leaveGroup:
+            "グループを抜けられませんでした"
+        case .prepareLeave:
+            "グループの情報を読み込めませんでした"
         }
     }
 }
