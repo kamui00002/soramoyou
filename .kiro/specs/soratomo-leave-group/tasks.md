@@ -473,14 +473,15 @@
   - 結果（再確認・2026-10-12 01:21）: main は進んでいない（`git fetch` の後の `HEAD..origin/main` が 0 件・01:05 と 01:21 に確認）ので、取り込みは無し。`functions/` で `npm run lint` 通過・`npm test` 290/290・`npm run test:emulator` 215/215（8080 などが空いていたので標準の設定で。Java は Android Studio 同梱の JDK を `JAVA_HOME` で渡し、Storage エミュレーターの一時置き場は専用の `TMPDIR`）。ルールは `rules_test_soratomo.py` が 116/116・`--mutants` で壊し方 21 個・取りこぼし 0。iOS は 9.2 の最後の記録（直しの後の最終の中身で全体 1,553 本・失敗は main と同じ 34 本だけ）。iOS の `/review-full` と直しは 9.2 に記録。続けて `/security-review`（Workflow `wf_040a5f6f-f07`・ブランチ全体の差分・opus）を通し、高確信の脆弱性の候補は 0 件（誤検知の判定に回すものも無し）。利用者の GO で push した（`1844044`・Draft PR #174 に載った）。残りは PR の本文の更新と Ready への切り替え（どちらも GO を取ってから）
   - 結果（完了・2026-10-12 01:26）: 利用者の GO で `140ca02` を push し、PR #174 のタイトルを「機能: そらとも「グループだけ抜ける」（Functions・ルール・iOS）」に、本文を iOS の変更・テストの数・レビューの結果・public-launch との順番（2026-10-11 19:30 の決定どおり）に更新した（本文は案と一致することを読み返して確認）。続けて GO で Ready に切り替えた。切り替えの後の状態は `MERGEABLE`・`CLEAN`、GitGuardian の検査は通過
 
-- [ ] 11.2 mainへマージする（ユーザーのGOを取ってから実行）
+- [x] 11.2 mainへマージする（ユーザーのGOを取ってから実行）
   - 前提: 11.1
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - マージの前に、PRの差分で、退会の確認と手順（設定画面）・既存のCallableの受け付けの条件・`isSoratomoUser()`・`requireSoratomoUser` の中身・`storage.rules` が変わっていないことを、もう一度見る
   - マージから11.3のデプロイまでの間に、mainからアプリの版を作らない（入口があるのにCallableが無い状態になるため）
   - _Requirements: 10.1, 10.5_
+  - 結果（2026-10-12 01:28）: マージの前に、PR の差分で確かめた: `storage.rules`・設定画面（`SettingsView`・`SettingsViewModel`）・`SoratomoAccountDeletionService` は差分 0 行。Functions の `requireSoratomoUser` とルールの `isSoratomoUser()` は、origin/main と HEAD で本体の指紋が一致。`firestore.rules` で消えた行はコメントの 1 行だけ。既存の Callable の受け付けの条件は変えていない（足したのは新しい Callable の `requireFlag: false` とコメント）。利用者の GO で PR #174 をスカッシュでマージした（`d204a9e`・#170〜#172 と同じ方式・ブランチは消していない）。`d204a9e` の中身はブランチの先頭 `debfc26` と同じ（`git diff --quiet`）
 
-- [ ] 11.3 Functionsをデプロイする（ユーザーのGOを取ってから実行）
+- [x] 11.3 Functionsをデプロイする（ユーザーのGOを取ってから実行）
   - 前提: 11.2
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 出し元: `git fetch` の後、作業ツリーがcleanで `HEAD == origin/main` のところから出す。出し元のコミットを記録する
@@ -488,6 +489,7 @@
   - コマンド: そらともの関数だけを名前で指定して出す。名前は `functions/soratomo.js` の `module.exports` の11本から作る（手で打たない）。`firebase deploy --only functions:<名前>,functions:<名前>,…（11本） --project soramoyou-ios --non-interactive`。変わった3本（抜ける・参加・定期実行）だけにしないのは、共通の部品（`REASON_TO_CODE`・`soratomoStore.js`・`soratomoDeletion.js`）を、そらともの関数がみな読むため
   - 出した後: 出力で、全部の更新が成功し、`soratomoLeaveGroup` が作られた（作成1本・削除なし）。`firebase functions:list` で、追加1行（`soratomoLeaveGroup`）・削除0行・合計22本・リージョンとランタイムが既存と同じ
   - _Requirements: 2.6, 4.1, 9.1, 10.3, 10.5_
+  - 結果（2026-10-12 01:31〜01:34）: 出し元は `d204a9e`（`git fetch` の後に `HEAD == origin/main`・作業ツリーは clean。記録用のブランチ `ドキュメント-そらとも-抜けるの本番反映の記録` を origin/main から切って、何もコミットしていない状態で出した）。出す前の確かめ: `git log b07da6e..origin/main -- functions/ firestore.rules` は #174 の 1 件だけ。本番の `firebase functions:list`（01:30・利用者の GO の後に読んだ）は 21 本・すべて asia-northeast1・nodejs22。名前は `functions/soratomo.js` の `module.exports` から機械で作った 11 本（`soratomoCreateGroup`・`soratomoJoinGroup`・`soratomoRegenerateInviteCode`・`soratomoCreateSky`・`soratomoReportSky`・`soratomoAgreeGuideline`・`soratomoDeleteMyData`・`soratomoLeaveGroup`・`onSoratomoSkyCreated`・`onSoratomoReportCreated`・`soratomoHousekeeping`）で、本番のそらとも系 10 本をすべて含み、本番に無いのは `soratomoLeaveGroup` だけ。利用者の GO で `firebase deploy --only functions:<11 本> --project soramoyou-ios --non-interactive` を実行し、終了コード 0・作成 1（`soratomoLeaveGroup`）・更新 10・すべて `Successful`。ログに公開呼び出しの許可（invoker・IAM）の警告は無い。出した後の `firebase functions:list` は 22 本で、前と比べて追加 1 行（`soratomoLeaveGroup`・callable・asia-northeast1・512MB・nodejs22）・削除 0 行・ほかの行の変化 0。これで、main からアプリの版を作ってよい
 
 - [ ] 11.4 新しいCallableの公開呼び出しの許可を確かめる（要確認Q4。ユーザーのGOを取ってから実行）
   - 前提: 11.3
