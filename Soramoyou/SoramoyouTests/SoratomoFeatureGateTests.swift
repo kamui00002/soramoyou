@@ -81,6 +81,18 @@ final class SoratomoFeatureGateTests: XCTestCase {
         XCTAssertFalse(gate.isEnabled)
     }
 
+    // MARK: - 一般公開（public-launch 6.1）
+
+    func testRegisteredWithoutClaimIsEnabled() async {
+        // 1.15.0 の一般公開: 登録済みでログインしていれば、クレームが無くても有効（public-launch 要件 2.1）。
+        // 判定を変える前の実装（クレームを読む）では、ここが .disabled(.claimMissing) になって赤になる
+        provider.kind = .registered
+        provider.results = [.success([:])]
+        let state = await gate.evaluate()
+        XCTAssertEqual(state, .enabled)
+        XCTAssertTrue(gate.isEnabled)
+    }
+
     // MARK: - 無効になる場合
 
     func testSignedOutIsDisabledWithoutReadingToken() async {
