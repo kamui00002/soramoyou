@@ -239,7 +239,8 @@ CASES += closed_collection_cases()
 # 細かい壊し方（条件を 1 つ外す・境界を 1 つずらす）で「その条件をテストが見ている」ことを、
 # 粗い壊し方（if false を if true に）で「パスや種類の書き間違いで拒否されているだけではない」ことを確かめる。
 # 同じ文字列が複数回出る箇所は、直前の match の行ごと置き換え元にする（インデントも含めて完全一致）。
-CLAIM = "isAuthenticated() && request.auth.token.get('soratomoBeta', false) == true"
+# 関門「登録済みでログイン」（isSoratomoUser() の本文・public-launch 2.2）
+REGISTERED = "isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous'"
 MEMBER_EXISTS = "return exists(/databases/$(database)/documents/soratomoGroups/$(groupId)/members/$(request.auth.uid));"
 # 投稿の作成と更新は同じ「if false」なので、2 行の組で置き換え元を 1 回にする
 SKY_CREATE_UPDATE = "allow create: if false;\n        allow update: if false;"
@@ -252,11 +253,14 @@ PENDING_LEAVES_CLOSED = "match /soratomoPendingLeaves/{markerId} {\n      allow 
 
 MUTANTS = [
     # 共通の判定
-    ("クレームの判定を外す", [(CLAIM, "isAuthenticated()")]),
-    ("クレームの判定を常に偽", [(CLAIM, "false")]),
+    ("匿名の判定を外す", [(REGISTERED, "isAuthenticated()")]),
+    ("匿名の判定を逆にする", [(REGISTERED, REGISTERED.replace("!= 'anonymous'", "== 'anonymous'"))]),
+    ("登録済みの判定を常に偽", [(REGISTERED, "false")]),
+    # 未ログインでは request.auth.token の読み取りがエラーになり、拒否を期待するケースが「エラーで拒否」として期待外れになる
+    ("ログインの判定を外す", [(REGISTERED, "request.auth.token.firebase.sign_in_provider != 'anonymous'")]),
     ("メンバー判定を外す", [(MEMBER_EXISTS, "return true;")]),
     ("メンバー判定を常に偽", [(MEMBER_EXISTS, "return false;")]),
-    ("ログイン・クレーム・メンバーの判定をすべて外す", [(CLAIM, "true"), (MEMBER_EXISTS, "return true;")]),
+    ("ログイン・匿名・メンバーの判定をすべて外す", [(REGISTERED, "true"), (MEMBER_EXISTS, "return true;")]),
     # グループ・メンバー・間引き・招待コード
     ("グループの一覧を許す", [("allow list: if false;", "allow list: if true;")]),
     ("グループの書き込みを許す", [("再発行は Callable のトランザクションだけ（要件 11.8）\n      allow write: if false;",
