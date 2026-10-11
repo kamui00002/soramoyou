@@ -460,7 +460,7 @@
 
 ## (g) 本番への反映
 
-- [ ] 11. 本番へ反映する（すべてユーザーのGOを取ってから）
+- [x] 11. 本番へ反映する（すべてユーザーのGOを取ってから）
 
 - [x] 11.1 出す前の確認と、pushとPRの作成（ユーザーのGOを取ってから実行）
   - 前提: 5, 9.2, 10
@@ -473,14 +473,15 @@
   - 結果（再確認・2026-10-12 01:21）: main は進んでいない（`git fetch` の後の `HEAD..origin/main` が 0 件・01:05 と 01:21 に確認）ので、取り込みは無し。`functions/` で `npm run lint` 通過・`npm test` 290/290・`npm run test:emulator` 215/215（8080 などが空いていたので標準の設定で。Java は Android Studio 同梱の JDK を `JAVA_HOME` で渡し、Storage エミュレーターの一時置き場は専用の `TMPDIR`）。ルールは `rules_test_soratomo.py` が 116/116・`--mutants` で壊し方 21 個・取りこぼし 0。iOS は 9.2 の最後の記録（直しの後の最終の中身で全体 1,553 本・失敗は main と同じ 34 本だけ）。iOS の `/review-full` と直しは 9.2 に記録。続けて `/security-review`（Workflow `wf_040a5f6f-f07`・ブランチ全体の差分・opus）を通し、高確信の脆弱性の候補は 0 件（誤検知の判定に回すものも無し）。利用者の GO で push した（`1844044`・Draft PR #174 に載った）。残りは PR の本文の更新と Ready への切り替え（どちらも GO を取ってから）
   - 結果（完了・2026-10-12 01:26）: 利用者の GO で `140ca02` を push し、PR #174 のタイトルを「機能: そらとも「グループだけ抜ける」（Functions・ルール・iOS）」に、本文を iOS の変更・テストの数・レビューの結果・public-launch との順番（2026-10-11 19:30 の決定どおり）に更新した（本文は案と一致することを読み返して確認）。続けて GO で Ready に切り替えた。切り替えの後の状態は `MERGEABLE`・`CLEAN`、GitGuardian の検査は通過
 
-- [ ] 11.2 mainへマージする（ユーザーのGOを取ってから実行）
+- [x] 11.2 mainへマージする（ユーザーのGOを取ってから実行）
   - 前提: 11.1
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - マージの前に、PRの差分で、退会の確認と手順（設定画面）・既存のCallableの受け付けの条件・`isSoratomoUser()`・`requireSoratomoUser` の中身・`storage.rules` が変わっていないことを、もう一度見る
   - マージから11.3のデプロイまでの間に、mainからアプリの版を作らない（入口があるのにCallableが無い状態になるため）
   - _Requirements: 10.1, 10.5_
+  - 結果（2026-10-12 01:28）: マージの前に、PR の差分で確かめた: `storage.rules`・設定画面（`SettingsView`・`SettingsViewModel`）・`SoratomoAccountDeletionService` は差分 0 行。Functions の `requireSoratomoUser` とルールの `isSoratomoUser()` は、origin/main と HEAD で本体の指紋が一致。`firestore.rules` で消えた行はコメントの 1 行だけ。既存の Callable の受け付けの条件は変えていない（足したのは新しい Callable の `requireFlag: false` とコメント）。利用者の GO で PR #174 をスカッシュでマージした（`d204a9e`・#170〜#172 と同じ方式・ブランチは消していない）。`d204a9e` の中身はブランチの先頭 `debfc26` と同じ（`git diff --quiet`）
 
-- [ ] 11.3 Functionsをデプロイする（ユーザーのGOを取ってから実行）
+- [x] 11.3 Functionsをデプロイする（ユーザーのGOを取ってから実行）
   - 前提: 11.2
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 出し元: `git fetch` の後、作業ツリーがcleanで `HEAD == origin/main` のところから出す。出し元のコミットを記録する
@@ -488,23 +489,26 @@
   - コマンド: そらともの関数だけを名前で指定して出す。名前は `functions/soratomo.js` の `module.exports` の11本から作る（手で打たない）。`firebase deploy --only functions:<名前>,functions:<名前>,…（11本） --project soramoyou-ios --non-interactive`。変わった3本（抜ける・参加・定期実行）だけにしないのは、共通の部品（`REASON_TO_CODE`・`soratomoStore.js`・`soratomoDeletion.js`）を、そらともの関数がみな読むため
   - 出した後: 出力で、全部の更新が成功し、`soratomoLeaveGroup` が作られた（作成1本・削除なし）。`firebase functions:list` で、追加1行（`soratomoLeaveGroup`）・削除0行・合計22本・リージョンとランタイムが既存と同じ
   - _Requirements: 2.6, 4.1, 9.1, 10.3, 10.5_
+  - 結果（2026-10-12 01:31〜01:34）: 出し元は `d204a9e`（`git fetch` の後に `HEAD == origin/main`・作業ツリーは clean。記録用のブランチ `ドキュメント-そらとも-抜けるの本番反映の記録` を origin/main から切って、何もコミットしていない状態で出した）。出す前の確かめ: `git log b07da6e..origin/main -- functions/ firestore.rules` は #174 の 1 件だけ。本番の `firebase functions:list`（01:30・利用者の GO の後に読んだ）は 21 本・すべて asia-northeast1・nodejs22。名前は `functions/soratomo.js` の `module.exports` から機械で作った 11 本（`soratomoCreateGroup`・`soratomoJoinGroup`・`soratomoRegenerateInviteCode`・`soratomoCreateSky`・`soratomoReportSky`・`soratomoAgreeGuideline`・`soratomoDeleteMyData`・`soratomoLeaveGroup`・`onSoratomoSkyCreated`・`onSoratomoReportCreated`・`soratomoHousekeeping`）で、本番のそらとも系 10 本をすべて含み、本番に無いのは `soratomoLeaveGroup` だけ。利用者の GO で `firebase deploy --only functions:<11 本> --project soramoyou-ios --non-interactive` を実行し、終了コード 0・作成 1（`soratomoLeaveGroup`）・更新 10・すべて `Successful`。ログに公開呼び出しの許可（invoker・IAM）の警告は無い。出した後の `firebase functions:list` は 22 本で、前と比べて追加 1 行（`soratomoLeaveGroup`・callable・asia-northeast1・512MB・nodejs22）・削除 0 行・ほかの行の変化 0。これで、main からアプリの版を作ってよい
 
-- [ ] 11.4 新しいCallableの公開呼び出しの許可を確かめる（要確認Q4。ユーザーのGOを取ってから実行）
+- [x] 11.4 新しいCallableの公開呼び出しの許可を確かめる（要確認Q4。ユーザーのGOを取ってから実行）
   - 前提: 11.3
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - release-gate 14.5の要確認4と同じ手順で行う。認証の無い `POST https://asia-northeast1-soramoyou-ios.cloudfunctions.net/soratomoLeaveGroup`（本文 `{"data":{}}`）を1回送り、HTTP 401・`UNAUTHENTICATED`・「ログインが必要です」が返ること（この文言は関数のコードだけが返す。許可が無ければCloud Runが403で止める）。関数のログに `soratomoLeaveGroup: rejected`（reason unauthenticated）が出ること
   - 失敗したら、呼び出し元の設定を見直す（変える前に利用者に相談する）
   - _Requirements: 9.2_
+  - 結果（2026-10-12 01:35・要確認Q4は検証済み）: 利用者の GO で、認証の無い `POST https://asia-northeast1-soramoyou-ios.cloudfunctions.net/soratomoLeaveGroup`（本文 `{"data":{}}`）を 16:35:13Z に 1 回送った。HTTP 401・`{"error":{"message":"ログインが必要です","status":"UNAUTHENTICATED"}}`（関数のコードだけが返す文言なので、Cloud Run の入口は通っている＝公開呼び出しの許可がある）。関数のログに 16:35:13.604Z の `soratomoLeaveGroup: rejected`（`reason: unauthenticated`・`uid: null`）が 1 行
 
-- [ ] 11.5 Firestoreのルールを本番へ出す（ユーザーのGOを取ってから実行）
+- [x] 11.5 Firestoreのルールを本番へ出す（ユーザーのGOを取ってから実行）
   - 前提: 11.2（11.3との順は問わない。新しい `match` は、既定で拒否されていたパスの明示なので、どの順でも挙動は変わらない）
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 出す前: 本番のルールを読み返し、`b07da6e` の `firestore.rules` とハッシュの頭が一致すること、origin/mainとの差が `soratomoPendingLeaves` の `match` とコメントの数だけであることを確かめる。このときのルールの判定は、まだクレームの判定のまま（関門の置き換えはpublic-launch）
   - コマンド: `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive`
   - 出した後: 本番のルールを読み返し（release-gate 17と同じく、RulesのRESTでreleaseとrulesetを読む）、手元の `firestore.rules` とハッシュの頭が一致すること。読み返した本文に `rules_test_soratomo.py` を流して、全件が期待どおりであること
   - _Requirements: 10.4_
+  - 結果（2026-10-12 01:36〜01:38）: 出す前に、本番のルールを Rules の REST で読んだ（release `cloud.firestore` → ruleset。token は表示せず、表示は更新時刻・ruleset の頭・本文の sha256 の頭だけ）。最終更新 2026-10-09T22:09:59Z・ruleset `9b502f6e`・指紋 `f20155b560ce` で、`b07da6e` の `firestore.rules` と一致。origin/main との差は、コメントの数（2 → 3）と `soratomoPendingLeaves` の `match`（読み書きとも false）の 6 行だけ。利用者の GO で、`d204a9e` の上の記録用のブランチ（`firestore.rules` は origin/main と差分 0 行）から `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive` を実行し、終了コード 0・コンパイル成功・release。読み返し: 最終更新 2026-10-11T16:36:45Z・ruleset `8ba8a746`・指紋 `187ac94b5e73` で、手元の `firestore.rules` とバイト一致。読み返した本文を `rules_test_soratomo.py` に渡して 116/116
 
-- [ ] 11.6 最初の定期実行で、仕事Cのクエリが動くことを確かめる（要確認Q1。ユーザーのGOを取ってから実行）
+- [x] 11.6 最初の定期実行で、仕事Cのクエリが動くことを確かめる（要確認Q1。ユーザーのGOを取ってから実行）
   - 前提: 11.3
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 次の予定（6時間ごと）を待つか、Cloud Schedulerの `firebase-schedule-soratomoHousekeeping-asia-northeast1` を、RESTの `:run` で手動で1回起こす（release-gate 14.5の前例）
@@ -512,12 +516,14 @@
   - 印が0件でも、インデックスが要るクエリは件数に関わらず失敗するので、0件の実行も確かめになる。本番で壊れたクエリを流す陽性対照は取らない（そう記録する）
   - 24時間を過ぎても終わらないものの見つけ方（Cloud Loggingで `soratomoLeave: overdue` に絞る・Firestoreのコンソールで `soratomoPendingLeaves` の `leftAt` を見る）を、結果の欄に書いておく
   - _Requirements: 4.6, 4.8, 11.5_
+  - 結果（2026-10-12 01:37〜01:38・要確認Q1は検証済み）: 利用者の GO で、Cloud Scheduler の `firebase-schedule-soratomoHousekeeping-asia-northeast1` を REST の `:run` で 16:37:40Z に 1 回起こした（HTTP 200・`every 6 hours`・UTC・ENABLED のまま）。関数のログ（16:37:42Z）: 仕事C `soratomoHousekeeping: leave_sweep`（scanned 0・completed 0・failed 0・unfinished 0・malformed 0・overdue 0）、仕事A `soratomoHousekeeping: sweep`（scanned 1・completed 0・missingAuth 0・unfinished 0）、仕事B `soratomoHousekeeping: reforward`（attempted 0・sent 0）。同じ時間の WARNING 以上の行は 0 で、`FAILED_PRECONDITION` も無い。インデックスが要るクエリは件数に関わらず失敗するので、印が 0 件の実行でも、仕事Cのクエリが本番で動くことの確かめになる。本番で壊れたクエリを流す陽性対照は取っていない（本番を壊さないため）
+    - 24 時間を過ぎても終わらないものの見つけ方: Cloud Logging で `jsonPayload.message="soratomoLeave: overdue"` に絞る（`soratomoHousekeeping: leave_sweep` の `overdue` の数でも気づける）。Firestore のコンソールで `soratomoPendingLeaves` を開き、`leftAt` が 24 時間より前の文書を見る（文書 ID は `{uid}_{groupId}`）
 
 ## (h) 受け入れの確認
 
-- [ ] 12. 開発版と本番で、抜けるを受け入れる（利用者の操作が要る）
+- [x] 12. 開発版と本番で、抜けるを受け入れる（利用者の操作が要る）
 
-- [ ] 12.1 抜けるを3通り通し、ほかのメンバーの画面を見る（利用者の操作が要る）
+- [x] 12.1 抜けるを3通り通し、ほかのメンバーの画面を見る（利用者の操作が要る）
   - 前提: 11.3, 11.5
   - 利用者の操作が要る。本番の読み取り（件数・項目名）・クレームの付与・端末の操作のお願いは、GOを取ってから行う。1.15.0のTestFlightと審査提出は、この段ではしない（public-launchが持つ）
   - 端末: 始める前に「いまさわれる端末」を利用者に聞き、端末とアカウントの割り当てを決める。入っているアプリが、11.3の出し元から作った開発版（Debugビルド）で、`soratomoLeaveGroup` の名前を含むことを確かめる（release-gate 16.4の前例: アプリの中の文字列を数える）。だれでログインしたかは、Authの最後のログインの時刻で確かめる
@@ -529,8 +535,43 @@
   - 本番の読み取り（GO）: 各回の前と後に、抜けた人のそのグループの投稿の文書と画像（Storage）・所属の写し・印（`soratomoPendingLeaves`）・人数とオーナー・招待コードの対応表（③は404）を読み、件数を記録する。抜けた後は、抜けた人の分が0で、ほかのメンバーの投稿と画像は残る。読み取りの道具は、前例の `~/dev/soratomo-gate-tools/`（リポジトリの外）の形にし、出すのは件数・時刻・IDの頭・ハッシュの頭だけにする
   - ログ: 各回の `soratomoLeaveGroup: ok` が、内部IDと件数だけで出る（`done` が真・`kind`・`ownerTransferred`・`groupDeleted` が場面と合う・`skiesDeleted` と `imagesDeleted` が前に読んだ件数と一致）
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.9, 2.1, 2.2, 3.1, 3.2, 3.6, 3.8, 3.9, 3.10, 3.11, 5.1, 5.2, 5.3, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 7.1, 11.2, 11.4_
+  - 結果（2026-10-12 06:45）:
+    - 端末: 利用者は外出中で、iPhone・iPad は Mac から届かなかった（`devicectl` で unavailable）。利用者の選択で、Mac のシミュレーター 2 台を私が idb で操作し、要所の写しを利用者へ送った。A=`C2E3F752`（iPhone 17e・S3）・B=`BF678DA1`（iPhone 17 Pro・相手役）
+    - 開発版: 作業ツリー `fbe0e86`（アプリ・functions・ルールは `d204a9e` と差分 0）を Debug でビルド（01:56〜01:57・成功）。版は 1.14.1 / 111、`Soramoyou.debug.dylib` に `soratomoLeaveGroup` が 1 個。2 台に入れた中身がビルドの成果物と `cmp` で一致
+    - 相手役（以下 B）: S4 は 16.4 で退会済みのため新しく登録した。`soratomo5@gmail.com`（利用者の選択）・uid `nhYcDQ…`・作成 02:00:49・パスワードは secret の `soratomo-s5-password`（英数字 16 文字・ランダム）・表示名 TestB。`set-soratomo-beta-claim.js` でクレームを付けた（付与前なし → 付与後 `soratomoBeta`・読み返し一致）
+      - ⚠️ 作業中は B を「S5」と呼んだが、public-launch の 10.1 の「S5」（クレームの無いテスト用アカウント・未作成）とは**別人**。`soratomo5@gmail.com` は使用済みでクレームがあるので、public-launch の S5 には使えない
+    - A は S3 のつもりだったが、9.2 のテストの後で別のアカウント（表示名「ユーザー」・投稿 0・正体は不明）になっていた。ログアウトして S3 で入り直し、本番 Auth の最後のログイン 02:14:24 で確かめた
+    - グループ（利用者の選択）: G1 =「空」（`1wd6CJ…`）で①・入り直し、G2 =「解除テスト」（`8fvTID…`）で②、③は S3 が新しく作った「Leave three」（`wmZJEd…`・06:25:48 作成）。当初は G1 で②の予定だったが、②で S3 の「空」の投稿 5 件が消えるため、利用者の判断で G2 に替えた
+    - 本番の読み取りの道具: `~/dev/soratomo-gate-tools/read_12_1.py`（件数・時刻・ID の頭・ハッシュの頭・招待コードの末尾 4 文字だけ）・`read_logs12.py`（Cloud Logging の REST・ID は頭 6 文字）・`auth_times12.py`
+    - ① ただのメンバー（B が G1 を抜ける）:
+      - 前（before1・02:10:14）: 人数 2・S3 owner・B member・B の投稿 2（`66qZZa`・`bPqiGB`）・B の画像 4・B の写し 200・印 0
+      - 確認: 題「空を抜けますか？」・本文は共通の文だけ。確認の間は右上の 4 つが薄い。「キャンセル」で 2 人・投稿 5 件のまま、右上が戻り、メニューを開き直せた
+      - 02:17:59 に「抜ける」→ 覆い「グループを抜けています…」（戻るボタンなし・右上が薄い）→ 02:18:05 に一覧（「まだグループがありません」）と「空を抜けました」。「グループを開けませんでした」は出ていない
+      - S3 の画面: 開いていた B の投稿の詳細が「この投稿は表示できなくなりました」になり、落ちない。戻るとタイムラインが「空、1人」で、B の 2 件が手動の更新なしで消えていた。メンバー一覧は「空3、オーナー」だけ。グループ一覧は「空、1人、最後の空は9 分前」（消えた B の投稿の時刻のまま。`lastActivityAt` は戻さない設計・`functions/soratomoDeletion.js:27`）
+      - 後（after1・02:20:18）: 人数 1・B のメンバー・写し・投稿・画像が 0。S3 の投稿 4・画像 8 は残る。招待コードの対応表は 200・印 0
+      - ログ: 02:18:04.234 `soratomoLeaveGroup: ok`（uid・groupId と件数だけ。`kind: leave`・`done: true`・`ownerTransferred: false`・`groupDeleted: false`・`skiesDeleted: 2`・`imagesDeleted: 4` が前に読んだ件数と一致）
+      - 通知（サーバーのまとめのログ `onSoratomoSkyCreated: summary`）: 陽性対照として、B の 2 枚（02:09:20・02:09:38）はどちらも宛先 1 人（S3・`noToken: 1`）と数えられていた。抜けた後に S3 が G1 へ投稿（02:23:07・`25ZCWy`）すると、まとめは全部 0（宛先なし＝B に送らない）
+    - ② オーナー（S3 が G2 を抜け、B が引き継ぐ）:
+      - B が G2 に参加（02:41:51・2 回目はガイドラインと表示名が出ない）。前（before2・02:42:37）: 人数 2・S3 owner・B member・投稿 0・コード …WEFN → 200・印 0
+      - 確認: 共通の文の後に「オーナーはTestBさんに引き継がれます。」
+      - 02:43:44 に「抜ける」→ 覆い → 02:43:50 に一覧（「空」だけ）と「解除テストを抜けました」
+      - B の画面: タイムラインが「解除テスト、1人」に自動で変わり、メンバー一覧は「TestB、オーナー」、招待の画面に「招待コードを再発行する」が出た。画面の招待コードは前に控えたものと一致（末尾 WEFN・変わっていない）
+      - 後（after2・06:24:02）: 人数 1・オーナー B・S3 の写し 404・コードの対応表 200・印 0。ログ 02:43:49.680 `soratomoLeaveGroup: ok`（`ownerTransferred: true`・`groupDeleted: false`・`skiesDeleted: 0`・`imagesDeleted: 0`・`done: true`）
+    - ③ 最後の 1 人（S3 が「Leave three」を抜ける）:
+      - 名前は「leavethree」と打ったが、iOS の自動修正で「Leave three」になった。作成の直後に通知の案内が出たので「あとで」を押した（端末の通知の許可には触れていない）
+      - 前（before3・06:27:54）: 人数 1・S3 owner・コード …585S → 200・投稿 0・印 0
+      - 確認: 共通の文の後に「あなたが最後のメンバーのため、グループと招待コードも削除され、だれも参加できなくなります。」
+      - 06:29:58 に「抜ける」→ 覆い → 06:30:05 に一覧と「Leave threeを抜けました」
+      - 後（after3・06:31:08）: グループ 404・コードの対応表 404・メンバー 0・S3 の写し 404・印 0。ログ 06:30:04.303 `soratomoLeaveGroup: ok`（`kind: delete_group`・`groupDeleted: true`・`done: true`）
+      - 控えた古いコードで B が参加すると「招待コードが見つかりません」（06:32:02）
+    - 8.5 の申し送り:
+      - (a) 処理中の戻るスワイプ: ③で、覆いを画面の要素から見つけた後（06:30:00.22）に、画面の中ほど（x=140）から右へのスワイプを送った → 戻らず、覆いのまま一覧へ進んだ（シミュレーターで確認）。①②ではスワイプが覆いの前に届いたので数えない
+      - (b) `.preparing` の間に投稿詳細へ進む: idb のタップが 1 回 0.5 秒ほどかかり、確認が先に出た → 未確認
+      - (c) VoiceOver の焦点: 未確認（シミュレーターで VoiceOver を使っていない）
+    - ⚠️ 見えたこと（要相談・直すかは利用者が決める）: 「抜ける」を押してから覆いが出るまでに、**戻るボタンが見えていて、空の案内の「空を投稿」が明るい**画面が写った（②の 02:43:45.82・③の 06:30:00.17。③はスワイプを送っていないので、私の操作のせいではない）。見込みの原因: アラートのボタンの処理は、アラートが閉じきってから呼ばれるので、その間は `.confirming` のまま。戻るボタンは `.leaving` のときだけ隠し（`SoratomoTimelineView.swift:195`）、中身は `.leaving` のときだけ無効（185）。`confirm()` は最初の await より前に `.leaving` にしている（`SoratomoLeaveViewModel.swift:325`）ので、隙間はボタンの処理が呼ばれる前の短い間（0.4 秒ほど）。この間に戻るか投稿を開いたときに何が起きるかは確かめていない
+    - シミュレーターでは見られなかったもの（実機で見る）: 機内モードでメニューを押す・確認の後に機内モードにして抜ける（通信だけを切る手段が無い）。抜けたこと・オーナーになったことの通知が端末に来ないこと（シミュレーターに通知が届かない。サーバーの宛先は上で確認）。(b)・(c)
 
-- [ ] 12.2 入り直し・端末の後片づけ・古い通知・古い版を確かめ、要確認Q2・Q3・Q7を見る（利用者の操作が要る）
+- [x] 12.2 入り直し・端末の後片づけ・古い通知・古い版を確かめ、要確認Q2・Q3・Q7を見る（利用者の操作が要る）
   - 前提: 12.1
   - 利用者の操作が要る。本番の読み取りとCloud Schedulerの手動実行は、GOを取ってから行う
   - 入り直し: 12.1の後に、抜けた人が同じコードで入り直して1枚投稿する。次の定期実行（またはCloud Schedulerの手動実行）の後も、新しい投稿と画像が残る。抜ける前の投稿は戻っていない。人数と所属数が、実際の数と合う（本番の読み取り）
@@ -543,10 +584,31 @@
   - 古い版: 1.14.x（TestFlightの1.14.0 / 111か1.14.1 / 112）のS3で、投稿が通る（`soratomoCreateSky: ok`）。1.14.xには抜けるの入口が無い
   - 受け入れの確認で直しが出たら、別のPRで直し、11と同じ手順で出し直してから、該当の確認をやり直す
   - _Requirements: 5.4, 5.6, 5.7, 8.1, 8.3, 8.4, 8.5, 8.6, 10.5_
+  - 結果（2026-10-12 06:45・端末は 12.1 と同じシミュレーター 2 台）:
+    - 入り直し: B が G1 に同じコードで入り直し（06:37:31）、1 枚投稿した（06:38:14・`wd5ZXC`）。入り直した後（06:38:31）: 人数 2（メンバー 2 人・写し 2 件と一致）・B の投稿は新しい 1 件だけ・B の画像 2。抜ける前の `66qZZa`・`bPqiGB` は戻っていない
+      - 定期実行は Cloud Scheduler（`firebase-schedule-soratomoHousekeeping-asia-northeast1`・every 6 hours・UTC・次は 07:37 JST の予定）を REST で手動実行した（06:39:19）。ログ 06:39:22: `leave_sweep`（scanned 0）・`sweep`（scanned 2・completed 0）・`reforward`（attempted 0）。その後（06:40:06）の G1 は入り直し直後と差なし（新しい投稿と画像が残る）・印 0
+      - 所属の数: G1 は人数 2 ＝ 写し 2（S3・B）、G2 は人数 1 ＝ 写し 1（B）
+    - 要確認Q7: 入り直しの「参加」を押してから 10 秒間、0.45 秒おきに 20 枚撮った。どれにも B の古い投稿は写っていない（0.9 秒後にはタイムラインで、先頭は S3 の投稿）。この粒度では一瞬も出なかった。8.4 の判断（出ても不具合として扱わない）は変えない
+    - 片づけ中の参加（`leave_pending`）: ふつうの操作では起こせない（どの回も、ログより前に読んだ印は 0 件で、抜けた後も 0 件）。C1（2.1）と 8.4 の単体テストを根拠とする
+    - 要確認Q3（シミュレーター）: B（G1 を抜けた）の `Caches/soratomo-images/` は空で、更新の時刻が 02:18（抜けた時刻）。S3（G2・G3 を抜け、G1 は残る）の `soratomo-images/` には G1 のフォルダ（`….soratomo.1wd6CJ…`）が 8 ファイルのまま残る。古い置き場 `com.onevcat.Kingfisher.ImageCache.soratomo` は 2 台とも空のフォルダ。B の端末の抜けた記録 `soratomo.leftGroups.{B}` は G1 だけ
+    - 要確認Q2: 一覧の `membershipOnServer` は「読んだ一覧に、記録にあるグループが混ざったとき」だけ走る（`SoratomoGroupListViewModel.swift:131-135`）。ふつうに抜けた後は写しが消えて一覧に出ないので、この読みは走らず、ブレークポイントでは見られない。代わりに、B で本番の Auth に REST でサインインし（`X-Ios-Bundle-Identifier` 付き。ID トークンは画面に出さない）、Firestore の REST で自分のメンバーの文書を読んだ: G2（メンバー）は 200（陽性対照）、G1（抜けた）は **403 PERMISSION_DENIED**（404 ではない）。7.1 の写し（権限の拒否だけを `.notMember`）は直さない。アプリにデバッガを付けた確かめではない
+    - 古い通知: `simctl push` で G1 の `soratomoPost` を B の端末へ届けたが、この端末のアプリは通知の許可を一度も求めておらず（設定のそらもように「通知」の行が無い）、バナーが出なかった → 見られなかった（実機で見る）
+    - オフライン（抜けた後に機内モードで一覧）: シミュレーターで通信だけを切れないので見られなかった（実機で見る）
+    - 古い版: 1.14.0 の出し元（`0dce8c7`）のビルドは、Mac の負荷（6.4）のため行わなかった（実機の TestFlight 1.14.1 / 112 で見る）。傍証: 投稿を送る `createSky`（`SoratomoSkyService.swift:256`〜）は `0dce8c7`..`d204a9e` の差分の範囲（117〜184 行の監視と 611 行・#172 の直し）の外で、送る中身は同じ。今日の新しい版の投稿 4 回はすべて `soratomoCreateSky: ok`（02:09:16・02:09:38・02:23:08・06:38:18）
+    - 直しが要るものは見つかっていない（12.1 の「見えたこと」は要相談）
 
-- [ ] 13. 受け入れの結果をまとめ、イベントの着弾の確認をpublic-launchへ渡す
+- [x] 13. 受け入れの結果をまとめ、イベントの着弾の確認をpublic-launchへ渡す
   - 前提: 12.1, 12.2
   - 要件12.5（イベントの着弾）は、public-launchのtasks.mdのG4（手順書の段2-3・6-2）で、同じ時点・同じ除外の条件で確かめる。このspecでは行わない
   - public-launchのtasks.mdのG4のイベントの一覧に、`soratomo_group_left`・`soratomo_leave_failed`・`soratomo_join_failed`（`reason` が `leave_pending`）が入っているかを見る（2026-10-11に書かれた版では、G4のタスクに3つとも入っている）。無ければ利用者に伝える（public-launchのファイルは、このタスクでは書き換えない）。`leave_pending` は本番でふつうには起こせない（12.2）ので、その扱いもあわせて伝える
   - public-launchの段0-1が見に来るよう、11と12の結果の要約（出し元のコミット・関数の本数22本・ルールの読み返しの一致・受け入れの確認の日時と結果）を、このタスクの下に書く
   - _Requirements: 12.5_
+  - 結果（2026-10-12 06:45）:
+    - public-launch の tasks.md（`d204a9e` の版）の G4（12.3）に、`soratomo_group_left`（`role`・`group_deleted`・`completed`）・`soratomo_leave_failed`（`reason`）・`soratomo_join_failed` の `leave_pending` が入っている（378 行）。足りないものは無い。public-launch のファイルは書き換えていない
+    - `leave_pending` は本番でふつうには起こせない（12.2）ので、G4 では 0 件が期待どおり。着弾の確かめは単体テスト（C1）を根拠にする
+    - public-launch の段0-1 へ渡す要約:
+      - 出し元: `d204a9e`（PR #174 のスカッシュ）。Functions は本番 22 本（11.3）。ルールは本番の読み返しが main と一致（ruleset `8ba8a746`・11.5）。Q4（公開呼び出しの許可）と Q1（仕事Cのクエリ）は 11.4・11.6 で確認済み
+      - 受け入れ（12.1・12.2）: 2026-10-12 01:56〜06:45、シミュレーター 2 台（開発版 1.14.1 / 111・Debug）と本番。①ただのメンバー・②オーナー・③最後の 1 人・入り直し・定期実行の手動実行の後を、画面・本番の件数・ログで確かめた。ログはどれも内部 ID と件数だけ
+      - 実機で残っているもの（public-launch の TestFlight・実機の通しで見る）: 機内モードの 2 つ・オフラインの一覧・古い通知・抜けたことやオーナーになったことの通知が来ないこと・古い版（1.14.x）での投稿・8.5 の (b)(c)
+      - ⚠️ テスト用アカウントの名前: このテストで作った B（`soratomo5@gmail.com`・uid `nhYcDQ…`・クレームあり）は、public-launch の 10.1 の S5（クレーム無し・未作成）とは別人。public-launch の S5 には別のメールを使う。**B の uid（`nhYcDQ…`）を G4 の除外の条件（`research.md`）に足すこと**。開発版のイベントは本番の PostHog に届いている（2026-10-12 01:50〜07:00 JST を PostHog の SQL で数えた: `soratomo_post_created` 4・`soratomo_group_left` 3・`soratomo_group_joined` 3・`soratomo_members_viewed` 2・`soratomo_opened` 2・`soratomo_join_failed` 1・`soratomo_notification_prompt_result` 1・`soratomo_display_name_saved` 1・`soratomo_group_created` 1・`soratomo_guideline_result` 1。版はすべて 1.14.1 / 111、ID の頭は B（`nhYcDQ`）と S3（`8Ar2DV`））。1.14.1 / 111 は出荷していない組み合わせ（出荷は 1.14.0 / 111 と 1.14.1 / 112）
+      - ⚠️ 要相談: 12.1 の「見えたこと」（確定から覆いまでの短い間、戻るボタンと「空を投稿」が生きている）
