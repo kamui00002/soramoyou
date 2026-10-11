@@ -264,7 +264,7 @@
 
 - [ ] 8. iOSの画面と配線を変える
 
-- [ ] 8.1 抜けるの画面の状態 `SoratomoLeaveViewModel` を作る
+- [x] 8.1 抜けるの画面の状態 `SoratomoLeaveViewModel` を作る
   - 前提: 7.1, 7.2, 7.3
   - `ViewModels/SoratomoLeaveViewModel.swift`: `phase`（`idle`・`preparing`・`confirming`・`leaving`）と `alertMessage`、`requestLeave()`・`cancel()`・`confirm()`・`absorbLostMembership(groupId:)`・純関数の `predict(members:ownerId:uid:)` を、design.mdの形で作る。依存はinitで受け取る（`groupId`・抜けるのサービス・グループのサービスの `fetchMembers`・`currentUid`・`isOnline`・`currentGroup`・`displayName`・`suspendTimeline`・`resumeTimeline`・`onLeft`・`logEvent`）
   - `requestLeave()`: 通信が無ければ、通信の文言だけを出す（計測は記録しない）。`preparing` にして、監視しているグループ（名前と `ownerId`）とメンバー一覧を読む。どれかが無い・失敗・自分がメンバー一覧にいないときは、「グループの情報を読み込めませんでした」を出して確認を出さずに `idle` へ戻る。予測（自分を除いた残りを `SoratomoGroupService.sortedForMembers` で並べ、先頭を引き継ぐ人にする。サーバーの `pickNextOwner` と同じ規則）をして、design.mdの「確認の文言」の表の3通り（共通・オーナーで引き継ぎあり・最後の1人）で確認を作る
@@ -277,6 +277,17 @@
   - `SoratomoLeaveViewModelTests`（新規）: オフラインでは呼ばない・メンバー一覧を読めなければ確認を出さない・キャンセルで何も呼ばない・予測（オーナーで残りあり・参加日時が同じときのuidの順・最後の1人・ただのメンバー）・表示名の代替・成功の順（記録→キャッシュ→計測→ルーター）・計測の値に表示名が入らない・`.member` なら監視を張り直して `leave_failed`・`.notMember` なら `completed: false` で抜けた扱い・`.unknown` の後に監視が `.notMember` を届けたら抜けた扱い・確定の時の通信なしで `leave_failed`（`network`）・処理中の二重の確定を受け付けない
   - 陽性対照: 成功の後の順を入れ替えた実装（ルーターを先に呼ぶ）で、順のテストが赤になることを先に確かめる。`.notMember` を4.4として扱う実装と、計測に表示名を入れた実装で、それぞれ赤になることも確かめる
   - _Requirements: 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 4.3, 4.4, 4.5, 5.1, 5.4, 11.1, 12.1_
+  - 結果（2026-10-11 20:20）:
+    - 書き手と、別の点検役の 2 人で書いた（並列の Workflow `wf_91c2eb82-d64`・名前と型は契約 `.claude/handoffs/2026-10-11-材料/leave-group-8/contract.md` の「3」で固定）。書き手が回したのは構文の確かめ（`swiftc -parse`）だけで、型検査は下のビルドが初めて（20:08・エラーなし）
+    - 陽性対照（20:10〜20:12・C2E3F752・8.1〜8.4 の壊した版 6 本をまとめて当てた 1 回・6 クラス 184 件）: ①成功の後の順を入れ替える（`onLeft` を先に呼ぶ）②`.notMember` を `.member` と同じ失敗として扱う ③計測の `role` を逆にする、を 1 つの壊した版にまとめた。このクラスの赤は `testConfirmSuccessRunsStepsInOrder`・`testGroupLeftEventMatchesExactlyAndCarriesNoNames`・`testFailureButNotMemberFinishesAsLeftWithoutCompletion`・`testUnknownMembershipThenLostMembershipFinishesAsLeft`・`testUnknownMembershipThenMenuWithNotMemberFinishesAsLeft`・`testConfirmIgnoresSecondConfirmWhileLeaving` の 6 本だけ（24 件は通過）。走らせる前に書いた予想と、名前の集合で一致した。どれも assert の失敗で、落ちて止まったテストは無い
+    - ①②③を 1 版にまとめたので、「①だけで順のテストが赤」は単独では確かめていない（`testConfirmSuccessRunsStepsInOrder` は③でも赤になる）。①だけで赤になるのは `testConfirmIgnoresSecondConfirmWhileLeaving`（計測を見ず、呼んだ順だけを見る）で、失敗の文も `onLeft` が `rememberLeft` より前に来たことを示した
+    - 「計測に表示名を入れた実装」は型の上で作れない（`SoratomoEvent.groupLeft` の引数は列挙と真偽値だけで、文字列が入らない）。代わりに③で、計測が `.groupLeft(...)` と完全に一致することを見るテストが赤になることを確かめた。同じテストが、パラメータのキーが `role`・`group_deleted`・`completed` の 3 つだけで、値にグループ名・表示名・グループ ID が無いことも見ている
+    - 正しい版（写しを戻して shasum の一致を確認）で、30/30 通過（20:16〜20:17・`-parallel-testing-enabled NO`・6 クラス 184/184 の回）。件数は xcresult で数えた。ビルドのログで、このファイルとテストのファイルがコンパイルされたことと、警告が無いことを確かめた（同じログに既存の `PaymentService.swift` の警告がファイル名つきで載る＝検査は効いている）
+    - design.md との違い①: design の「ViewModel は計測だけを行い、`onLeft` が記録・キャッシュ・ルーター（1・2・4）を行う」をやめ、記録とキャッシュを別のクロージャ（`rememberLeft`・`purgeLocalData`）に分け、ViewModel が 記録→画像と投稿の覚え→計測→ルーター の順に 1 回ずつ呼ぶ。design の分け方では、この tasks.md の順（計測は記録とキャッシュの後・ルーターの前）を守れないため
+    - 確認の題は `{グループ名}を抜けますか？`（鉤括弧なし）にした。design.md 567 行は「{グループ名}」を抜けますか？（鉤括弧つき）。8.5 の本文の書き方と、既存のブロックの確認（`{表示名}さんをブロックしますか？`）にそろえた。画面に出すのは 8.5
+    - 契約に無い小さな足し: 引き継ぐ人の表示名が空白・改行だけのときも代替の「ユーザー」にする（`RankingDisplayText.authorName` の規則と同じ）。メンバー一覧を読めなかったときは、固定の文脈 `soratomo.prepareLeave` で非致命エラーとして記録する（D1 の `.notMember` の経路では記録しない）。`requestLeave` の各 `await` の後で、`phase` が `.preparing` のままかを確かめ直す（待つ間に `absorbLostMembership` が「抜けた後」へ進めていたら、`.leaving` を上書きしないため）
+    - uid は確認を出すときに読んだものを覚えて、`confirm()`・`absorbLostMembership`・「抜けた後」で使う（`currentUid()` を読み直さない）。テストの代役（処理中で止める門）はテストのファイルの中に `private` で置き、`SoratomoServiceMocks.swift` は変えていない
+    - ⚠️ 陽性対照の回と正しい版の回の終わりに、C2E3F752 の起動と別のセッションの 2 台（BF678DA1・DCFBF2D6）が重なり、1 分平均のロードが一時 195・210 まで上がった。15 未満に落ちるのを待ってから次を回した
 
 - [ ] 8.2 タイムラインのViewModelに、監視を止める口を足す
   - 前提: 6
