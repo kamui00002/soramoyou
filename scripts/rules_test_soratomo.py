@@ -6,6 +6,7 @@ Firebase の rules test API で評価する。評価だけを行うので、本�
 spec: .kiro/specs/soratomo/（tasks.md 2.3・要件 11 の各項目を許可と拒否の両方で確かめる）
       .kiro/specs/soratomo-release-gate/（tasks.md 5・投稿の作成を閉じ、通報の記録と語のリストを誰にも読み書きさせない）
       .kiro/specs/soratomo-leave-group/（tasks.md 4・抜けるの片づけ中の印を誰にも読み書きさせない）
+      .kiro/specs/soratomo-public-launch/（tasks.md 2.1・2.2・関門をクレームでなく「登録済みでログイン」で決める）
 
 使い方:
   python3 scripts/rules_test_soratomo.py [firestore.rules のパス]            # 省略時はリポジトリ直下
@@ -24,6 +25,9 @@ spec: .kiro/specs/soratomo/（tasks.md 2.3・要件 11 の各項目を許可と�
   - 1080 は int、1080.5 は float として届く
   - 一覧（list）は、コレクションの中の文書のパスに method "list" を付けて評価する
   - 未ログインは auth を null で渡す（省くと request.auth が未定義になり、エラーで拒否される）
+  - ログインした利用者のトークンには、ログインの方式 firebase.sign_in_provider を必ず入れる（TOKENS・2026-10-12）。
+    本番の ID トークンには必ずある予約済みの項目で、isSoratomoUser() は既定値なしで読む。
+    入れ忘れると読み取りのエラーで拒否され、許可を期待するケースが期待外れとして見つかる
 
 陽性対照（--mutants）:
   MUTANTS は、ルールの条件を 1 つずつわざと壊す置き換え。壊したルールで全ケースを流し、
@@ -48,13 +52,26 @@ SKY = GROUP + "/skies/s1"
 T = "2026-10-01T03:00:00Z"
 DEVICE_T = "2026-10-01T02:59:00Z"
 
-# 登場人物
+# 登場人物（ログインの方式とクレームは下の TOKENS で決める）
 AUTHOR = "author"      # g1 のメンバー・投稿者
 OWNER = "owner"        # g1 のオーナー（メンバー）
 MEMBER = "member"      # g1 のほかのメンバー
-NOCLAIM = "noclaim"    # g1 のメンバーの文書はあるが、機能フラグのクレームが無い
-OUTSIDER = "outsider"  # クレームはあるが g1 のメンバーではない
-G1_MEMBERS = {AUTHOR, OWNER, MEMBER, NOCLAIM}
+NOCLAIM = "noclaim"    # g1 のメンバー。登録済みだが、クレーム soratomoBeta が無い（別のクレーム skyMotionBeta だけ持つ）
+ANON = "anon"          # g1 のメンバーの文書はあるが、匿名でログインしている（クレームも無い）
+OUTSIDER = "outsider"  # 登録済みでクレームもあるが、g1 のメンバーではない
+G1_MEMBERS = {AUTHOR, OWNER, MEMBER, NOCLAIM, ANON}
+
+# ログインした利用者の ID トークン: (ログインの方式 firebase.sign_in_provider, クレーム)
+# 関門は 1.15.0 から「登録済みでログイン」で、クレーム soratomoBeta は見ない。1.14.x でクレームを付けた人も
+# 通ることを確かめるため、クレームのある登場人物は残す（public-launch 要件 1.9）
+TOKENS = {
+    AUTHOR: ("password", {"soratomoBeta": True}),
+    OWNER: ("password", {"soratomoBeta": True}),
+    MEMBER: ("password", {"soratomoBeta": True}),
+    OUTSIDER: ("password", {"soratomoBeta": True}),
+    NOCLAIM: ("password", {"skyMotionBeta": True}),
+    ANON: ("anonymous", {}),
+}
 
 # 旧ルールで正しかった投稿（5 項目）。作成日時は要求の時刻と同じ。
 # 作成は Callable（soratomoCreateSky）だけになったので、これもアプリからは拒否される（release-gate 5）
@@ -73,22 +90,34 @@ def sky(**fields):
 
 
 def case(name, expect, uid, method, path, data=None, existing=None):
-    """1 ケース。uid=None は未ログイン。uid=NOCLAIM は soratomoBeta の無い利用者（別のクレームは持つ）"""
-    return {"name": name, "expect": expect, "uid": uid, "claim": uid != NOCLAIM,
+    """1 ケース。uid=None は未ログイン。ログインした利用者の方式とクレームは TOKENS から引く
+    （TOKENS に無い uid は KeyError で止め、方式の書き忘れを評価の前に見つける）"""
+    provider, claims = TOKENS[uid] if uid else (None, None)
+    return {"name": name, "expect": expect, "uid": uid, "provider": provider, "claims": claims,
             "method": method, "path": path, "data": data, "existing": existing}
 
 
 ALLOW, DENY = "ALLOW", "DENY"
 
 CASES = [
-    # --- 機能フラグ（要件 1.6）---
-    case("フラグ クレーム有りのメンバーがグループを取得", ALLOW, MEMBER, "get", GROUP),
-    case("フラグ クレーム無しのメンバーがグループを取得", DENY, NOCLAIM, "get", GROUP),
-    case("フラグ クレーム無しのメンバーがメンバー一覧を取得", DENY, NOCLAIM, "list", GROUP + "/members/x"),
-    case("フラグ クレーム無しのメンバーが投稿一覧を取得", DENY, NOCLAIM, "list", GROUP + "/skies/x"),
-    case("フラグ クレーム無しのメンバーが投稿を作成", DENY, NOCLAIM, "create", SKY, sky(authorId=NOCLAIM)),
-    case("フラグ クレーム無しの投稿者が自分の投稿を削除", DENY, NOCLAIM, "delete", SKY, existing=sky(authorId=NOCLAIM)),
-    case("フラグ クレーム無しの本人が所属数を取得", DENY, NOCLAIM, "get", D + "/soratomoUsers/" + NOCLAIM),
+    # --- ログインの種類（public-launch 要件 1.1・1.6・1.7・1.9）---
+    # 関門は「登録済みでログイン」。クレームの有無では決めず、匿名は（メンバーの文書があっても）拒否する
+    case("種類 クレーム有り（1.14.x）のメンバーがグループを取得", ALLOW, MEMBER, "get", GROUP),
+    case("種類 クレーム無しのメンバーがグループを取得", ALLOW, NOCLAIM, "get", GROUP),
+    case("種類 クレーム無しのメンバーがメンバー一覧を取得", ALLOW, NOCLAIM, "list", GROUP + "/members/x"),
+    case("種類 クレーム無しのメンバーが投稿一覧を取得", ALLOW, NOCLAIM, "list", GROUP + "/skies/x"),
+    case("種類 クレーム無しの投稿者が自分の投稿を削除", ALLOW, NOCLAIM, "delete", SKY, existing=sky(authorId=NOCLAIM)),
+    case("種類 クレーム無しの本人が所属数を取得", ALLOW, NOCLAIM, "get", D + "/soratomoUsers/" + NOCLAIM),
+    case("種類 クレーム無しの本人が所属の写しの一覧を取得", ALLOW, NOCLAIM, "list",
+         D + "/soratomoUsers/" + NOCLAIM + "/groups/x"),
+    # 作成は Callable だけなので、クレームが無くても拒否のまま（release-gate 5）
+    case("種類 クレーム無しのメンバーが投稿を作成", DENY, NOCLAIM, "create", SKY, sky(authorId=NOCLAIM)),
+    case("種類 匿名のメンバーがグループを取得", DENY, ANON, "get", GROUP),
+    case("種類 匿名のメンバーがメンバー一覧を取得", DENY, ANON, "list", GROUP + "/members/x"),
+    case("種類 匿名のメンバーが投稿一覧を取得", DENY, ANON, "list", GROUP + "/skies/x"),
+    case("種類 匿名の投稿者が自分の投稿を削除", DENY, ANON, "delete", SKY, existing=sky(authorId=ANON)),
+    case("種類 匿名の本人が所属数を取得", DENY, ANON, "get", D + "/soratomoUsers/" + ANON),
+    case("種類 匿名の本人が所属の写しの一覧を取得", DENY, ANON, "list", D + "/soratomoUsers/" + ANON + "/groups/x"),
 
     # --- 読み取り（要件 11.1・11.2）---
     case("読取 メンバーがメンバー一覧を取得", ALLOW, MEMBER, "list", GROUP + "/members/x"),
@@ -263,8 +292,9 @@ def build_test_case(c):
     request = {"path": c["path"], "method": c["method"], "time": T, "auth": None}
     mocks = []
     if c["uid"]:
-        # 別のクレーム（skyMotionBeta）を持たせ、soratomoBeta 以外では通らないことも同時に見る
-        token = {"soratomoBeta": True} if c["claim"] else {"skyMotionBeta": True}
+        # ID トークン = ログインの方式（firebase.sign_in_provider）＋クレーム（TOKENS）。
+        # NOCLAIM は別のクレーム（skyMotionBeta）だけを持ち、別のクレームに左右されないことも同時に見る
+        token = {"firebase": {"sign_in_provider": c["provider"]}, **c["claims"]}
         request["auth"] = {"uid": c["uid"], "token": token}
         # メンバー判定（g1 のメンバーの文書の存在）。全ケースで明示する
         mocks.append({"function": "exists",
