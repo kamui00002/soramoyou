@@ -1430,3 +1430,222 @@ test("停止中の人: アカウントの無い人の後始末（account_deleted
   assert.equal((await deletion.deleteSoratomoUserData(deps, { uid: "plain", trigger: "self", deadlineMs: DEADLINE })).done, true);
   assert.equal(await userData("plain"), null);
 });
+
+// MARK: - 抜けるの手順1（leaveSoratomoGroup の beginLeaveTx・leave-group タスク 1.2）
+
+const PENDING = "soratomoPendingLeaves";
+const LEFT_AT = 5_000;
+
+/** 抜けるの依存（印の札と時計を決めて渡す）。 */
+function leaveDeps(episodeIds = ["e1", "e2", "e3"], { now = LEFT_AT } = {}) {
+  const ids = [...episodeIds];
+  return { db, storage: fakeStorage([]).gateway, nowMs: () => now, newEpisodeId: () => ids.shift() };
+}
+const leaveReq = (uid, groupId, origin = "self") => ({ uid, groupId, deadlineMs: DEADLINE, origin });
+
+async function markerData(uid, groupId) {
+  const snap = await db.collection(PENDING).doc(`${uid}_${groupId}`).get();
+  if (!snap.exists) return null;
+  const d = snap.data();
+  return { ...d, leftAt: d.leftAt.toMillis() };
+}
+async function seedMarker(uid, groupId, episodeId, leftAtMs = LEFT_AT) {
+  await db.collection(PENDING).doc(`${uid}_${groupId}`).set({ uid, groupId, episodeId, leftAt: Timestamp.fromMillis(leftAtMs) });
+}
+/** グループ・メンバー・招待コード・所属の写し・利用者の文書・印を丸ごと読む（1バイトも変わらないことの読み比べ用）。 */
+async function dumpAll() {
+  const out = {};
+  for (const coll of [GROUPS, CODES, USERS, PENDING]) {
+    const snap = await db.collection(coll).get();
+    for (const doc of snap.docs) {
+      out[doc.ref.path] = JSON.stringify(doc.data());
+      for (const sub of await doc.ref.listCollections()) {
+        for (const child of (await sub.get()).docs) out[child.ref.path] = JSON.stringify(child.data());
+      }
+    }
+  }
+  return out;
+}
+
+test("抜ける手順1: ただのメンバーは、外れて人数が残りの数（ずれていても数え直す）になり、オーナーは変わらず、印を書く", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    memberCount: 7, // わざとずらす
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+      { uid: "bob", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedUser("amy", ["g1"]);
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("amy", "g1"));
+  assert.equal(result.state, "started");
+  assert.equal(result.kind, "leave");
+  assert.equal(result.removed, true);
+  assert.equal(result.ownerTransferred, false);
+  assert.equal(result.groupDeleted, false);
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner", bob: "member" });
+  assert.equal((await groupData("g1")).memberCount, 2);
+  await assertGroupInvariants("g1");
+  assert.deepEqual(await markerData("amy", "g1"), { uid: "amy", groupId: "g1", episodeId: "e1", leftAt: LEFT_AT });
+  // 写しと利用者の文書は手順4まで残す
+  assert.deepEqual(await copyIds("amy"), ["g1"]);
+  assert.equal((await userData("amy")).groupCount, 1);
+});
+
+test("抜ける手順1: ほかにメンバーがいるオーナーは、参加の古い人（同じなら uid の昇順）へ引き継ぎ、オーナーは1人・招待コードは同じ", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "zed", role: "member", joinedAtMs: T(5) },
+      { uid: "bob", role: "member", joinedAtMs: T(5) },
+      { uid: "new", role: "member", joinedAtMs: T(9) },
+    ],
+  });
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("owner", "g1"));
+  assert.equal(result.state, "started");
+  assert.equal(result.ownerTransferred, true);
+  const group = await groupData("g1");
+  assert.equal(group.ownerId, "bob");
+  assert.equal(group.inviteCode, "SKYAAAAA");
+  assert.equal((await db.collection(CODES).doc("SKYAAAAA").get()).get("groupId"), "g1");
+  assert.deepEqual(await memberRoles("g1"), { bob: "owner", zed: "member", new: "member" });
+  await assertGroupInvariants("g1");
+  assert.equal((await markerData("owner", "g1")).episodeId, "e1");
+});
+
+test("抜ける手順1: 最後の1人なら、グループと招待コードを消し、印を書く", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }] });
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("owner", "g1"));
+  assert.equal(result.state, "started");
+  assert.equal(result.kind, "delete_group");
+  assert.equal(result.groupDeleted, true);
+  assert.equal(await groupData("g1"), null);
+  assert.equal((await db.collection(CODES).doc("SKYAAAAA").get()).exists, false);
+  assert.deepEqual(await memberRoles("g1"), {});
+  assert.equal((await markerData("owner", "g1")).episodeId, "e1");
+});
+
+test("抜ける手順1: 写しだけが残った人（印なし）の self は、人数とオーナーを整え、印を新しく書いて続ける（continued）", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "gone",
+    inviteCode: "SKYAAAAA",
+    memberCount: 4,
+    members: [
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+      { uid: "bob", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedUser("gone", ["g1"]);
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("gone", "g1"));
+  assert.equal(result.state, "continued");
+  assert.equal(result.removed, false);
+  assert.equal((await groupData("g1")).memberCount, 2);
+  assert.equal((await groupData("g1")).ownerId, "amy");
+  await assertGroupInvariants("g1");
+  assert.deepEqual(await markerData("gone", "g1"), { uid: "gone", groupId: "g1", episodeId: "e1", leftAt: LEFT_AT });
+});
+
+test("抜ける手順1: 印が残っている人（メンバーでない）は、印をそのまま使って続ける。self でも sweep でも同じ", async () => {
+  for (const origin of ["self", "sweep"]) {
+    await seedGroup({ groupId: "g1", ownerId: "amy", inviteCode: "SKYAAAAA", memberCount: 3, members: [{ uid: "amy", role: "owner", joinedAtMs: T(2) }] });
+    await seedUser("gone", ["g1"]);
+    await seedMarker("gone", "g1", "old", 1_000);
+    const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("gone", "g1", origin));
+    assert.equal(result.state, "continued", origin);
+    assert.equal((await groupData("g1")).memberCount, 1, origin);
+    assert.deepEqual(await markerData("gone", "g1"), { uid: "gone", groupId: "g1", episodeId: "old", leftAt: 1_000 }, origin);
+  }
+});
+
+test("抜ける手順1（陽性対照C4）: メンバーでない人（写しも印も無い）は、ずれた人数とオーナーを書き直さず、何も変えない（nothing）", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "gone",
+    inviteCode: "SKYAAAAA",
+    memberCount: 9,
+    members: [
+      { uid: "amy", role: "owner", joinedAtMs: T(2) },
+      { uid: "bob", role: "owner", joinedAtMs: T(3) },
+    ],
+  });
+  await seedUser("amy", ["g1"]);
+  await seedUser("stranger", ["g9"]);
+  const before = await dumpAll();
+  for (const origin of ["self", "sweep"]) {
+    const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("stranger", "g1", origin));
+    assert.deepEqual(result, {
+      done: true, state: "nothing", kind: null, removed: false, ownerTransferred: false,
+      groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+    }, origin);
+  }
+  assert.deepEqual(await dumpAll(), before);
+});
+
+test("抜ける手順1: sweep でメンバーの文書がある（入り直した後の古い印）なら、印だけを消し、メンバーは外さない（stale_marker）", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(9) },
+    ],
+  });
+  await seedUser("amy", ["g1"]);
+  await seedMarker("amy", "g1", "old");
+  const before = await dumpAll();
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("amy", "g1", "sweep"));
+  assert.equal(result.state, "stale_marker");
+  assert.equal(result.done, true);
+  assert.equal(result.removed, false);
+  assert.equal(await markerData("amy", "g1"), null);
+  const after = await dumpAll();
+  delete before[`${PENDING}/amy_g1`];
+  assert.deepEqual(after, before);
+});
+
+test("抜ける手順1: sweep でメンバーの文書があり印が無いときは、何も書かない（nothing）", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedUser("amy", ["g1"]);
+  const before = await dumpAll();
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("amy", "g1", "sweep"));
+  assert.equal(result.state, "nothing");
+  assert.deepEqual(await dumpAll(), before);
+});
+
+test("抜ける手順1: self でメンバーの文書と古い印があれば、新しい回として外し、印を上書きする", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(9) }] });
+  await seedMarker("amy", "g1", "old", 1_000);
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(["e7"]), leaveReq("amy", "g1"));
+  assert.equal(result.state, "started");
+  assert.equal(result.removed, true);
+  assert.deepEqual(await markerData("amy", "g1"), { uid: "amy", groupId: "g1", episodeId: "e7", leftAt: LEFT_AT });
+});
+
+test("抜ける手順0・引数: 締め切りを過ぎていれば何もせず done: false。引数の誤りは TypeError で何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedUser("amy", ["g1"]);
+  const before = await dumpAll();
+  const late = await deletion.leaveSoratomoGroup(leaveDeps([], { now: DEADLINE }), leaveReq("amy", "g1"));
+  assert.equal(late.done, false);
+  assert.equal(late.state, null);
+  const bad = [
+    [leaveDeps(), { ...leaveReq("amy", "g1"), uid: "a/b" }],
+    [leaveDeps(), { ...leaveReq("amy", "g1"), groupId: "g-1" }],
+    [leaveDeps(), { ...leaveReq("amy", "g1"), deadlineMs: Infinity }],
+    [leaveDeps(), { ...leaveReq("amy", "g1"), origin: "admin" }],
+    [{ ...leaveDeps(), newEpisodeId: "e1" }, leaveReq("amy", "g1")],
+    [{ ...leaveDeps(), nowMs: undefined }, leaveReq("amy", "g1")],
+  ];
+  for (const [i, [deps, req]] of bad.entries()) {
+    await assert.rejects(deletion.leaveSoratomoGroup(deps, req), TypeError, `引数 ${i}`);
+  }
+  assert.deepEqual(await dumpAll(), before);
+});
