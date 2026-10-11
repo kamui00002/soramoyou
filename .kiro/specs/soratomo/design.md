@@ -4,7 +4,7 @@
 
 **Purpose**: そらともは、親しい友達だけの小さなグループで空の写真を見せ合う場を、既存の公開SNSとは別に提供する。グループの作成、招待コードでの参加、写真1枚の投稿、グループ別のタイムライン、新着のプッシュ通知までをv1で届ける。
 
-**Users**: 機能フラグ`soratomoBeta`を付与された開発者とテスト用アカウントが、グループの作成・参加・投稿・閲覧に使う。一般利用者には、公開前ゲート（要件17）がすべて完了するまで、入口と画面を見せない。
+**Users**: 機能フラグ`soratomoBeta`を付与された開発者とテスト用アカウントが、グループの作成・参加・投稿・閲覧に使う。一般利用者には、公開前ゲート（要件17）がすべて完了するまで、入口と画面を見せない。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件1・2）で、1.15.0から登録済みでログインした全員が使う。クレームは判定に使わない）
 
 **Impact**: 新しいFirestoreのコレクション群（`soratomoGroups`ほか）・Storageのパス`soratomo/`・Callable関数3本・Firestoreトリガー1本を加える。既存のルート`posts`、既存の通知、既存の退会処理、既存の3つの通知設定の挙動は変えない。iOSにはFirebaseFunctionsのSPM製品を新たに加える。
 
@@ -27,7 +27,7 @@
 | Requirement | Summary | Components | Interfaces | Flows |
 |-------------|---------|------------|------------|-------|
 | 1.1, 1.2, 1.4, 1.5 | 入口の表示条件 | SoratomoFeatureGate・SoratomoEntryButton | `SoratomoFeatureGate.state` | — |
-| 1.3, 17.1, 17.2 | テスト用アカウントだけON | クレームの付与スクリプト | `scripts/set-soratomo-beta-claim.js` | 公開の手順 |
+| 1.3, 17.1, 17.2 | テスト用アカウントだけON | クレームの付与スクリプト | `scripts/set-soratomo-beta-claim.js` | 公開の手順（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件6）で、1.15.0からは利用に影響しない。公開の後は新しく付けない） |
 | 1.6 | フラグOFFの読み書きを拒否 | Firestoreのルール・Storageのルール・Callable | `isSoratomoUser()` | 作成と参加 |
 | 1.7, 9.11 | フラグOFFへ送らない・数を記録 | onSoratomoSkyCreated・soratomoCore | `classifyRecipient` | 投稿と通知 |
 | 2.1, 2.4 | 作成して共有画面へ・オーナー記録 | SoratomoGroupFormViewModel・soratomoCreateGroup | `createGroup` | 作成と参加 |
@@ -320,14 +320,14 @@ stateDiagram-v2
 
 | Field | Detail |
 |-------|--------|
-| Intent | 利用者とビルドにかかわらず、クレーム`soratomoBeta`の有無だけで入口を出すかを決める |
+| Intent | 利用者とビルドにかかわらず、クレーム`soratomoBeta`の有無だけで入口を出すかを決める（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件2）で、クレームでなく、登録済みでログインかで決める形に変わった） |
 | Requirements | 1.1, 1.2, 1.4, 1.5, 10.10, 10.14 |
 
 **Responsibilities & Constraints**
 - ログインしていない、または匿名アカウント（`email == nil`、`SettingsViewModel`の先例）なら無効。
-- IDトークンのクレーム`soratomoBeta == true`なら有効。取得の失敗は無効に倒す。
-- DEBUGビルドでも例外を設けない。クレームの無い開発者に入口を出すと、書き込みがすべてルールで拒否されるため。
-- 起動ごとの最初の評価だけトークンを強制的に更新する（クレームの付与の直後でも、再ログインなしで使えるようにするため）。以後はキャッシュ済みのトークンを読む。
+- IDトークンのクレーム`soratomoBeta == true`なら有効。取得の失敗は無効に倒す。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件2）で、クレームは見ない。登録済みでログインなら有効）
+- DEBUGビルドでも例外を設けない。クレームの無い開発者に入口を出すと、書き込みがすべてルールで拒否されるため。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件2）で、クレームが要らなくなったため、この理由は無くなった。DEBUGでも例外を設けない点は変わらない）
+- 起動ごとの最初の評価だけトークンを強制的に更新する（クレームの付与の直後でも、再ログインなしで使えるようにするため）。以後はキャッシュ済みのトークンを読む。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件2）で、クレームを見なくなったため、トークンの強制更新は判定に使わない）
 - 状態をアプリ全体で共有する（`SoramoyouApp`で環境オブジェクトとして注入）。`GuestTabView`も`HomeView`を使うため、ゲスト中も同じオブジェクトを読む。
 
 **Contracts**: State
@@ -795,7 +795,7 @@ enum SoratomoAnalytics {
 |------|----------------|
 | `functions/soratomoCore.js` | 純関数（コードの生成と正規化・名前の検証・通知文・宛先の分類・間引きの判定・集計） |
 | `functions/soratomoStore.js` | `db`を受け取るAdminのトランザクション（作成・参加・再発行・通知の枠の確保）。エミュレーターでテストする |
-| `functions/soratomo.js` | `onCall` 3本と`onDocumentCreated` 1本の配線、クレームの確認、エラーの写像、ログ |
+| `functions/soratomo.js` | `onCall` 3本と`onDocumentCreated` 1本の配線、クレームの確認、エラーの写像、ログ（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件1）で、クレームの確認は、登録済みでログインかの確認に変わった） |
 | `functions/pushHelpers.js`（追加） | `sendToTokenGrouped`。`sendToToken`と`isInvalidTokenError`は変えない |
 
 #### soratomo callables
@@ -808,7 +808,7 @@ enum SoratomoAnalytics {
 **選定の理由**: Callableは送信キューを持たず、オフラインでは即座に失敗する。非メンバーにグループを読ませないまま、理由ごとのエラーを返せる。要求文書とトリガーの方式は採らない。要求文書の作成はオフラインでも端末内で成功し、通信が戻ったときに利用者の知らないうちに実行されるため（2.6、4.9、12.2に反する）。クライアントのトランザクションだけの方式は、理由の区別とコードの一意性を守れないため採らない（比較は`research.md`）。
 
 **Responsibilities & Constraints**
-- すべての呼び出しで、`request.auth`があり、`request.auth.token.soratomoBeta === true`であることを確かめる。無ければ`permission-denied`（`reason: "flag_off"`）。
+- すべての呼び出しで、`request.auth`があり、`request.auth.token.soratomoBeta === true`であることを確かめる。無ければ`permission-denied`（`reason: "flag_off"`）。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件1）で、クレームでなく、登録済みでログインか（匿名は`permission-denied`）に変わった）
 - 招待コードは`crypto.randomInt`で字種`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`から8文字を作る。トランザクションの中で`soratomoInviteCodes/{code}`の不在を確かめ、あれば作り直す（最大5回）。期限は持たない。
 - 参加の判定は次の順で行う: コードの不在、既存のメンバー、所属10個、満員。既存のメンバーなら、上限とは無関係に成功として返す（4.8）。
 - 所属数（`soratomoUsers/{uid}.groupCount`）とメンバー数（`soratomoGroups/{groupId}.memberCount`）は、メンバーの文書・写しと同じトランザクションで増やす。同時の参加でも上限を超えない。
@@ -915,7 +915,7 @@ function classifyRecipient({ hasFlag, userData, posterId }) {}
 
 既存の`match`は変えず、新しい`match`だけを足す（13.8）。共通の関数は次の2つ。
 
-- `isSoratomoUser()`: `request.auth != null && request.auth.token.soratomoBeta == true`
+- `isSoratomoUser()`: `request.auth != null && request.auth.token.soratomoBeta == true`（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件1）で、登録済みでログイン（`sign_in_provider`が`anonymous`でない）に変わった）
 - `isSoratomoMember(groupId)`: Firestoreでは`exists(/databases/$(database)/documents/soratomoGroups/$(groupId)/members/$(request.auth.uid))`。Storageでは`firestore.exists(/databases/(default)/documents/soratomoGroups/$(groupId)/members/$(request.auth.uid))`（1回の評価で1件）
 
 #### Firestoreのルール（追加）
@@ -954,7 +954,7 @@ function classifyRecipient({ hasFlag, userData, posterId }) {}
 
 ### 運用: 機能フラグの付与
 
-- `scripts/set-soratomo-beta-claim.js <uid> [--revoke]`を新しく作る。Admin SDKで`getUser(uid).customClaims`を読み、`soratomoBeta`だけを足すか消して、合成した結果を`setCustomUserClaims`で書く。`setCustomUserClaims`は既存のクレームを上書きするため、合成しないと`skyMotionBeta`が消える。
+- `scripts/set-soratomo-beta-claim.js <uid> [--revoke]`を新しく作る。Admin SDKで`getUser(uid).customClaims`を読み、`soratomoBeta`だけを足すか消して、合成した結果を`setCustomUserClaims`で書く。`setCustomUserClaims`は既存のクレームを上書きするため、合成しないと`skyMotionBeta`が消える。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件6）で、1.15.0からは利用に影響しない。公開の後は新しく付けない。取り消すときも`skyMotionBeta`は消さない）
 - 認証はApplication Default Credentials（`gcloud auth application-default login`）を使う。鍵ファイルはリポジトリに置かない。出力はuidと付与後のクレーム名だけにする。
 - ADCでAdmin SDKのAuthを呼ぶと、quota projectの設定を求められることがある。手順書には`gcloud auth application-default set-quota-project soramoyou-ios`を書き添える。
 - 付与されたテスターは、アプリの次の起動でトークンが更新されて入口が出る。
@@ -1083,7 +1083,7 @@ enum SoratomoError: Error, Equatable {
 - `SoratomoTextRules`: 30・31文字の名前、絵文字と結合文字を含む数え方、改行の除去、20文字の表示名。
 - `SoratomoDaySection`: 今日・昨日・今年・去年の見出し、日付の境界（端末のタイムゾーン）。
 - `SoratomoNotificationPayload.parse`と`SoratomoRouter`: 既存の`type`（`like`・`comment`・`newPost`・`follow`・`recommend`）とゴールデンアワーを無視すること。`signed_out`・`flag_off`・`not_member`・`opened`の分岐。
-- `SoratomoFeatureGate`: 匿名・未ログイン・クレーム無し・取得失敗が無効になること。DEBUGでも有効にならないこと。
+- `SoratomoFeatureGate`: 匿名・未ログイン・クレーム無し・取得失敗が無効になること。DEBUGでも有効にならないこと。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件10）で、クレームの有無でなく、登録済み・匿名・未ログインの結果を確かめる形に変わった）
 - 各ViewModel（モックのサービス）: 二重の確定を受け付けないこと、失敗で入力を残すこと、作成の`requestId`の再利用、日次件数の数え方の失敗で投稿を止めないこと。
 
 ### Unit Tests（Functions・node:test）
@@ -1096,13 +1096,13 @@ enum SoratomoError: Error, Equatable {
 
 | 項目 | 許可されるべき操作 | 拒否されるべき操作 | 層 |
 |------|--------------------|--------------------|----|
-| 1.6 | クレーム有りのメンバーの読み取り | クレーム無しのメンバーの読み取りと投稿 | Firestore・Storage |
+| 1.6 | クレーム有りのメンバーの読み取り | クレーム無しのメンバーの読み取りと投稿 | Firestore・Storage（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件10）で、クレームの有無でなく、登録済みか匿名かで確かめる形に変わった） |
 | 11.1, 11.2 | メンバーのグループ・メンバー・投稿・画像の読み取り | 非メンバーと未ログインの読み取り・`soratomoGroups`の`list` | Firestore・Storage |
 | 11.3 | メンバーが自分の`authorId`で作成 | 非メンバーの作成・他人の`authorId` | Firestore |
 | 11.4 | 許可された5項目だけの作成 | `imagePath`や`url`の項目を足した作成 | Firestore |
 | 11.5 | 自分のパスへの1.5MB以下と200KB以下のJPEG | 他人のパス・PNG・上限超え・他のファイル名・非メンバー | Storage |
 | 11.6, 11.15 | 投稿者による投稿と画像の削除 | 他のメンバーとオーナーによる削除 | Firestore・Storage |
-| 11.7 | 内容の無い削除の要求が、投稿者本人なら通る | 他人のパスの削除・クレームの無い削除。どちらも`request.resource`を参照せずに拒否されること | Storage |
+| 11.7 | 内容の無い削除の要求が、投稿者本人なら通る | 他人のパスの削除・クレームの無い削除。どちらも`request.resource`を参照せずに拒否されること | Storage（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件10）で、クレームの有無でなく、メンバーかどうかと登録済みかで確かめる形に変わった） |
 | 11.8 | Callableによる参加でメンバーが増える | クライアントからの`members`の作成・`memberCount`の更新 | Firestore・トランザクション |
 | 11.9 | メンバーによるグループの`inviteCode`の読み取り | `soratomoInviteCodes`の`list`と`get`・非メンバーのグループの読み取り | Firestore |
 | 11.10 | 19人のグループへの1人の参加 | 25件の同時参加でメンバーが21人以上・所属が11個以上になること | トランザクション |
@@ -1116,7 +1116,7 @@ enum SoratomoError: Error, Equatable {
 - エミュレーターを使う場合は`firebase.json`に`emulators`の設定（Firestore・Storage・Auth）を足す。デプロイには影響しない。
 
 ### E2E/UI Tests（実機）
-- 2台の実機（クレーム付与済みの2アカウント）で、作成→コードの共有→参加→投稿→もう一方に通知→タップでタイムライン（起動中とコールドスタートの両方）。
+- 2台の実機（クレーム付与済みの2アカウント）で、作成→コードの共有→参加→投稿→もう一方に通知→タップでタイムライン（起動中とコールドスタートの両方）。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件8）で、1.15.0の確認ではクレームの無い登録済みのアカウントで通す）
 - 表示名が空のアカウントで、作成の前に表示名を求められ、保存後にタイムラインと通知に名前が出ること。
 - 機内モードで、作成・参加・投稿・削除・表示名の保存が始まらないか失敗として出ること。機内モードを解いても後から実行されないこと。
 - 既存の通知（いいね・コメント・フォロー・ゴールデンアワー）のタップの挙動が変わらないこと。
@@ -1133,7 +1133,7 @@ enum SoratomoError: Error, Equatable {
 
 - **メンバー判定**: 読み取りはすべてメンバーの文書の存在で判定する。画像もStorageのルールで同じ判定を経る。トークン付きのURLは作らず保存しない。
 - **ダウンロードトークン**: アップロード時に自動で付く場合、メンバーは改造したアプリから共有用のURLを作れる。これはメンバーが画像を保存して渡すのと同等の残余リスクとして受け入れる（`research.md`の要確認の3）。
-- **機能フラグ**: アプリ・ルール・Functionsの3か所で同じクレームを要求する。一般公開の際にクレームの運用をやめるなら、3か所を同時に変える（ずれると、入口は出るのに書き込みが拒否される）。
+- **機能フラグ**: アプリ・ルール・Functionsの3か所で同じクレームを要求する。一般公開の際にクレームの運用をやめるなら、3か所を同時に変える（ずれると、入口は出るのに書き込みが拒否される）。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件1・2）で、3か所を同時に変えた（1.15.0）。Android 版のアカウントを含むログインした全員に開いている）
 - **招待コード**: 32文字種の8桁。一覧の取得と非メンバーの読み取りはルールで拒否する。`not_found`の件数を監視する。
 - **個人情報**: アプリとFunctionsのログ・計測に、グループ名・表示名・キャプション・招待コード・トークンを出さない。通知の本文には名前とキャプションが含まれる（要件9の2と9の3のとおり）。
 - **既知の受け入れ**: 改造したアプリによる1日20件の超過（v1はアプリ側の判定だけ）。投稿の失敗時に削除しきれなかった画像の取り残し（⚠️2026-10-09 上書き: 退会と利用停止では、その人の分を消す。soratomo-release-gateの要件1.3）。
@@ -1167,7 +1167,7 @@ flowchart LR
 - Functionsは、mainを取り込んだブランチからデプロイする（古いブランチからデプロイすると、既存の関数の設定が戻る）。
 - Storageのルールの初回デプロイで、StorageからFirestoreを読む権限の付与を求められる。付与しないとメンバーの読み取りも拒否される。
 - インデックスは、デプロイの後に作成の完了を確かめてからアプリを配る（`docs/pre-release-checklist.md`§1）。
-- 一般向けのONを判断するときは、G1〜G5の完了を確かめた記録を残す（17.2）。それまでクレームはテスト用アカウントにだけ付ける（17.1）。
+- 一般向けのONを判断するときは、G1〜G5の完了を確かめた記録を残す（17.2）。それまでクレームはテスト用アカウントにだけ付ける（17.1）。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件8）で、G1〜G5の記録は1.15.0の公開判断で残した。クレームは判定に使わない）
 - `docs/firestore-schema.md`に新しいコレクションと`users.notifySoratomo`（既定値の一致の規則）を書き足す。
 
 ## 要確認（実装時に現物で確かめる）
@@ -1200,5 +1200,5 @@ flowchart LR
 あわせて、次の値の追加も、同じく2026-10-01に承認され、要件14に反映した。
 
 - `soratomo_post_failed`の`stage`に`precheck`を足し、`reason`に`offline`と`daily_limit`を足す（6.12、12.2の発生を数える）。`reason`の値は`network`・`unreadable`・`too_large`・`permission`・`timeout`・`background`・`unknown`とする（要件14の表では未定義）。
-- `soratomo_create_failed`と`soratomo_join_failed`の`reason`に`flag_off`を足す（クレームの付与漏れの切り分け）。
+- `soratomo_create_failed`と`soratomo_join_failed`の`reason`に`flag_off`を足す（クレームの付与漏れの切り分け）。（⚠️2026-10-xx 上書き: 一般公開（`.kiro/specs/soratomo-public-launch/`の要件1）で、`flag_off`は返さなくなる。匿名などの拒否の理由は`registration_required`になる）
 - 画面名に「そらともメンバー一覧」と「そらとも投稿詳細」を足す（14.5）。
