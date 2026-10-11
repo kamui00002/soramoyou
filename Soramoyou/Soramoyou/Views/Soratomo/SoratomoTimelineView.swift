@@ -12,6 +12,8 @@
 //  - 自分の投稿だけに削除の操作を出し、確認の後に削除する（13.6）
 //  - 自分以外の投稿には通報とブロックの操作を出す。通報は 5 つの理由から選び、ブロックは確認の後に行う
 //    （release-gate 10.2・要件 5.1〜5.3・9.1・9.2・9.10）
+//  - 右上のメニューから、このグループだけを抜ける。確認・処理中の覆いを出し、抜けた後の後片づけをつなぐ
+//    （leave-group 8.5・要件 1.1〜1.3・1.6・1.9・5.1・5.4・5.5）
 //  ⚠️ init のシグネチャは変えない（呼び出し側の SoratomoRootView が使う）
 //
 
@@ -36,6 +38,8 @@ struct SoratomoTimelineView: View {
 
     /// タイムラインの ViewModel
     @StateObject private var viewModel: SoratomoTimelineViewModel
+    /// グループを抜ける画面の状態（タイムラインの ViewModel と、互いを弱参照でつないだ 1 組で作る・leave-group 8.5）
+    @StateObject private var leaveViewModel: SoratomoLeaveViewModel
     /// 投稿者の表示名とアイコン（容れ物越しには変化が伝わらないので、別に持つ）
     @ObservedObject private var profileStore: SoratomoProfileStore
     /// 通信の有無（オフラインの表示に使う）
@@ -49,6 +53,12 @@ struct SoratomoTimelineView: View {
     @State private var skyPendingReport: SoratomoSky?
     /// ブロックの確認を出している投稿（nil なら出していない）
     @State private var skyPendingBlock: SoratomoSky?
+    /// 抜けるの確認に出している内容（nil なら出していない・leave-group 8.5）
+    ///
+    /// ⚠️ アラートの isPresented を `leaveViewModel.phase` から直接作らない。「抜ける」の本体は Task で後から走るので、
+    ///    閉じた時点の setter で `cancel()` を呼ぶと `confirm()` が何もしなくなり、getter を phase にすると
+    ///    閉じた直後もまだ `.confirming` なので出し直しうる。phase の変化でここへ写し、setter はここを消すだけにする
+    @State private var leaveConfirmation: SoratomoLeaveConfirmation?
 
     // MARK: - Init
 
@@ -63,26 +73,102 @@ struct SoratomoTimelineView: View {
         _profileStore = ObservedObject(wrappedValue: dependencies.profileStore)
         _network = ObservedObject(wrappedValue: dependencies.network)
 
-        // ViewModel には容れ物を渡さず、中身（protocol とクロージャ）を取り出して渡す
+        // タイムラインと抜けるの ViewModel は、互いを弱参照でつないだ 1 組として作る（leave-group 8.5）。
+        // `StateObject` の中身（オートクロージャ）は、画面が最初に置かれたときに 1 回だけ評価され、
+        // 作り直しの init では評価されない。2 つの `@StateObject` が同じ組を受け取れるように、組をこの init の
+        // ローカル変数に覚え、最初に取り出したときにだけ作る（別々に作ると、互いに別の相手とつながってしまう）
+        var pair: ViewModelPair?
+        func makePair() -> ViewModelPair {
+            if let pair {
+                return pair
+            }
+            let made = Self.makeViewModels(groupId: groupId, router: router, dependencies: dependencies)
+            pair = made
+            return made
+        }
+        _viewModel = StateObject(wrappedValue: makePair().timeline)
+        _leaveViewModel = StateObject(wrappedValue: makePair().leave)
+    }
+
+    // MARK: - ViewModel の組
+
+    /// タイムラインと抜けるの ViewModel の組
+    private typealias ViewModelPair = (timeline: SoratomoTimelineViewModel, leave: SoratomoLeaveViewModel)
+
+    /// タイムラインと抜けるの ViewModel を、互いを弱参照でつないだ 1 組として作る（leave-group 8.5）
+    ///
+    /// - タイムラインの「読めなかった」の知らせは、先に抜けるの ViewModel に渡す（`absorbLostMembership`）。
+    ///   未確定の抜けるが実は済んでいたと分かったら、そちらが「抜けた後」へ進めるので、ルーターへは知らせない（D1）
+    /// - 抜けるの ViewModel は、タイムラインが監視しているグループを読み、監視を止める・張り直す（8.2）
+    /// - どちらの向きも弱参照にして、輪を作らない（それぞれを強く持つのは、自分の `@StateObject` だけ）
+    /// - ViewModel には容れ物を渡さず、中身（protocol とクロージャ）を取り出して渡す
+    private static func makeViewModels(
+        groupId: String,
+        router: SoratomoRouter,
+        dependencies: SoratomoDependencies
+    ) -> ViewModelPair {
         let network = dependencies.network
         let skyLookup = dependencies.skyLookup
-        _viewModel = StateObject(
-            wrappedValue: SoratomoTimelineViewModel(
-                groupId: groupId,
-                groupService: dependencies.groupService,
-                skyService: dependencies.skyService,
-                imageStore: dependencies.imageStore,
-                currentUid: dependencies.currentUid,
-                isOnline: { network.isOnline },
-                reportAccessible: { [weak router] id in router?.reportAccessible(groupId: id) },
-                reportNotAccessible: { [weak router] id in router?.reportNotAccessible(groupId: id) },
-                rememberSkies: { skies in skyLookup.remember(skies) },
-                forgetSky: { groupId, skyId in skyLookup.forget(groupId: groupId, skyId: skyId) },
-                moderationService: dependencies.moderationService,
-                blockedAuthors: dependencies.blockedAuthors,
-                reportedSkies: dependencies.reportedSkies
-            )
+        let profileStore = dependencies.profileStore
+        let leftGroups = dependencies.leftGroups
+
+        // タイムラインを作る時点では、抜けるの ViewModel はまだ無い。作った後で入れる（弱参照）
+        weak var weakLeave: SoratomoLeaveViewModel?
+
+        let timeline = SoratomoTimelineViewModel(
+            groupId: groupId,
+            groupService: dependencies.groupService,
+            skyService: dependencies.skyService,
+            imageStore: dependencies.imageStore,
+            currentUid: dependencies.currentUid,
+            isOnline: { network.isOnline },
+            reportAccessible: { [weak router] id in router?.reportAccessible(groupId: id) },
+            reportNotAccessible: { [weak router] id in
+                // D1: 張り直した監視が「メンバーでない」を届けた。未確定の抜けるが実は済んでいたなら、
+                //     抜けるの ViewModel が「抜けた後」へ進めるので、「グループを開けませんでした」は出さない
+                if weakLeave?.absorbLostMembership(groupId: id) == true {
+                    return
+                }
+                router?.reportNotAccessible(groupId: id)
+            },
+            rememberSkies: { skies in skyLookup.remember(skies) },
+            forgetSky: { groupId, skyId in skyLookup.forget(groupId: groupId, skyId: skyId) },
+            moderationService: dependencies.moderationService,
+            blockedAuthors: dependencies.blockedAuthors,
+            reportedSkies: dependencies.reportedSkies
         )
+
+        let leave = SoratomoLeaveViewModel(
+            groupId: groupId,
+            leaveService: dependencies.leaveService,
+            groupService: dependencies.groupService,
+            currentUid: dependencies.currentUid,
+            isOnline: { network.isOnline },
+            currentGroup: { [weak timeline] in timeline?.group },
+            displayName: { uid in
+                // 引き継ぐ人の表示名（確認に出すだけ）。読めない・取れていないときは nil を返し、代替の「ユーザー」にさせる（D2）。
+                // ⚠️ 同じ uid を別の読み込みが取りに行っている最中なら、prefetch は待たずに戻るので nil になりうる（D2 の範囲）
+                await profileStore.prefetch(uids: [uid])
+                return profileStore.profiles[uid] != nil ? profileStore.displayName(for: uid) : nil
+            },
+            suspendTimeline: { [weak timeline] in timeline?.suspendObservation() },
+            resumeTimeline: { [weak timeline] in
+                guard let timeline else { return }
+                Task { await timeline.start() }
+            },
+            rememberLeft: { groupId, uid in leftGroups.insert(groupId, uid: uid) },
+            purgeLocalData: { groupId in
+                // 画像のキャッシュ（メモリとディスク）と投稿の覚えだけを消す。ブロックの一覧・通報の記録・
+                // 表示名とアイコンの覚えには触れない（要件 5.4）。2 回目は画面の onDisappear
+                SoratomoImageCache.removeGroup(groupId)
+                skyLookup.forget(groupId: groupId)
+            },
+            onLeft: { [weak router] context in
+                router?.finishLeaving(groupId: context.groupId, notice: context.notice)
+            }
+        )
+        weakLeave = leave
+        return (timeline: timeline, leave: leave)
     }
 
     // MARK: - Body
@@ -95,13 +181,29 @@ struct SoratomoTimelineView: View {
                     offlineBanner
                 }
             }
+            // 抜けるの処理の間は、中身を無効にして VoiceOver からも隠し、覆いだけを出す（leave-group 8.5・要件 1.9）
+            .disabled(isLeaving)
+            .accessibilityHidden(isLeaving)
+            .overlay {
+                if isLeaving {
+                    leavingOverlay
+                }
+            }
             .navigationTitle(viewModel.group?.name ?? "")
             .navigationBarTitleDisplayMode(.inline)
+            // 抜けるの処理の間は戻らせない（戻るボタンを隠すと、端からのスワイプで戻る操作も止まる）
+            .navigationBarBackButtonHidden(isLeaving)
             .toolbar {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    // 抜けるの途中（確認の材料を読む間・確認・処理中）は、ほかの画面へ進ませない（leave-group 8.5）
                     membersButton
+                        .disabled(isLeaveInProgress)
                     inviteButton
+                        .disabled(isLeaveInProgress)
                     composeButton
+                        .disabled(isLeaveInProgress)
+                    leaveMenu
+                        .disabled(isLeaveInProgress)
                 }
             }
             .sheet(isPresented: $isComposing) {
@@ -166,6 +268,37 @@ struct SoratomoTimelineView: View {
             ) {
                 Button("OK", role: .cancel) {}
             }
+            // グループを抜ける確認（leave-group 8.5・要件 1.2〜1.6）。既存のブロックの確認と同じ型。
+            // 題のグループ名と本文の引き継ぐ人の表示名は、画面に出すだけで、ログと計測には渡さない（要件 11.1）
+            .alert(
+                leaveConfirmation?.title ?? "",
+                isPresented: isConfirmingLeave,
+                presenting: leaveConfirmation
+            ) { _ in
+                Button("キャンセル", role: .cancel) {
+                    leaveViewModel.cancel()
+                }
+                Button("抜ける", role: .destructive) {
+                    Task { await leaveViewModel.confirm() }
+                }
+            } message: { confirmation in
+                Text(confirmation.message)
+            }
+            // 抜けるの知らせ（通信が無い・グループの情報を読めない・抜けられなかった。要件 1.7・1.8・4.4）
+            .alert(
+                leaveViewModel.alertMessage ?? "",
+                isPresented: isShowingLeaveAlert
+            ) {
+                Button("OK", role: .cancel) {}
+            }
+            // 確認の内容は phase の変化で @State に写す（`leaveConfirmation` の ⚠️ を参照）
+            .onChange(of: leaveViewModel.phase) { phase in
+                if case let .confirming(confirmation) = phase {
+                    leaveConfirmation = confirmation
+                } else {
+                    leaveConfirmation = nil
+                }
+            }
             .task {
                 // 投稿詳細が同じ ViewModel で削除できるように、いま開いているタイムラインとして知らせる
                 dependencies.activeTimelineViewModel = viewModel
@@ -174,6 +307,16 @@ struct SoratomoTimelineView: View {
             // 投稿者の表示名とアイコンを、まだ持っていない分だけ取りに行く
             .task(id: authorIds) {
                 await profileStore.prefetch(uids: authorIds)
+            }
+            // 抜けた後の、2 回目の画像のキャッシュの消去（leave-group 8.5・要件 5.4）。
+            // 1 回目は抜けるの ViewModel の後片づけ（`purgeLocalData`）。閉じるまでの間の再描画と読み込み途中の画像で、
+            // Kingfisher がこのグループのキャッシュとフォルダを作り直しうるので、閉じた時点でもう 1 回消す。
+            // 判定は端末の記録で行う（処理中に閉じた＝抜けられたか未確定のときは、記録が無いので消さない）。
+            // 投稿詳細を上に積んだときにも呼ばれるが、そのときは記録に無いので何もしない
+            .onDisappear {
+                if let uid = dependencies.currentUid(), dependencies.leftGroups.contains(groupId, uid: uid) {
+                    SoratomoImageCache.removeGroup(groupId)
+                }
             }
             // 画面名の記録は根の画面（SoratomoRootView）がパスの変化で 1 回だけ行う（14.3 の点検で集約）
     }
@@ -390,6 +533,27 @@ struct SoratomoTimelineView: View {
             .accessibilityElement(children: .combine)
     }
 
+    /// 抜けるの処理中の覆い（leave-group 8.5・要件 1.9）
+    ///
+    /// 画面全体を半透明で覆って下の中身を押させず、回る印と「グループを抜けています…」を出す。
+    /// VoiceOver では 1 つの要素として読む（下の中身は `accessibilityHidden` で隠している）
+    private var leavingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("グループを抜けています…")
+                    .font(.subheadline)
+            }
+            .padding(24)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("グループを抜けています")
+        .accessibilityAddTraits(.isModal)
+    }
+
     // MARK: - ツールバーの導線
 
     /// メンバー一覧への導線（メンバー数も出す）
@@ -420,6 +584,20 @@ struct SoratomoTimelineView: View {
             Image(systemName: "plus")
         }
         .accessibilityLabel("空を投稿する")
+    }
+
+    /// その他の操作のメニュー（いまは「グループを抜ける」だけ・leave-group 8.5・要件 1.1）
+    private var leaveMenu: some View {
+        Menu {
+            Button(role: .destructive) {
+                Task { await leaveViewModel.requestLeave() }
+            } label: {
+                Label("グループを抜ける", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityLabel("その他の操作")
     }
 
     // MARK: - 補助
@@ -489,6 +667,57 @@ struct SoratomoTimelineView: View {
             set: { isPresented in
                 if !isPresented {
                     viewModel.moderationNotice = nil
+                }
+            }
+        )
+    }
+
+    /// 抜けるの処理中か（覆いを出し、中身と戻るを止める）
+    private var isLeaving: Bool {
+        leaveViewModel.phase == .leaving
+    }
+
+    /// 抜けるの途中か（確認の材料を読む間・確認・処理中。右上のボタンとメニューを止める）
+    ///
+    /// ⚠️ 8.5 の本文は「処理中（`.leaving`）の間だけ」と書くが、確認の材料を読む間（`.preparing`）に
+    ///    別の画面へ進むと、確認がその画面の下で出ようとするので、`.idle` 以外のすべてで止める
+    private var isLeaveInProgress: Bool {
+        leaveViewModel.phase != .idle
+    }
+
+    /// 抜けるの確認と知らせを、いま出してよいか
+    ///
+    /// 確認の材料を読む間（`.preparing`）は中身を止めないので、その間に投稿詳細へ進む・投稿のシートや
+    /// 投稿の確認を開くことがある。そのときは出さずに待ち、覆っていたものが閉じてタイムラインが一番上に
+    /// 戻った時点で出す（確認の内容は `@State` に、知らせは ViewModel に残っているので消えない）。
+    /// 既存の削除の失敗・通報とブロックの知らせと同じく、タイムラインが一番上のときだけ出す
+    private var canPresentLeaveDialogs: Bool {
+        router.path.last == .timeline(groupId: groupId)
+            && !isComposing
+            && skyPendingDeletion == nil
+            && skyPendingReport == nil
+            && skyPendingBlock == nil
+    }
+
+    /// 抜けるの確認を出しているか（閉じたら内容を消すだけ。キャンセルと確定は、それぞれのボタンが呼ぶ）
+    private var isConfirmingLeave: Binding<Bool> {
+        Binding(
+            get: { leaveConfirmation != nil && canPresentLeaveDialogs },
+            set: { isPresented in
+                if !isPresented {
+                    leaveConfirmation = nil
+                }
+            }
+        )
+    }
+
+    /// 抜けるの知らせを出しているか（閉じたら文言を消す）
+    private var isShowingLeaveAlert: Binding<Bool> {
+        Binding(
+            get: { leaveViewModel.alertMessage != nil && canPresentLeaveDialogs },
+            set: { isPresented in
+                if !isPresented {
+                    leaveViewModel.alertMessage = nil
                 }
             }
         )

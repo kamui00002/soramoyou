@@ -262,7 +262,7 @@
     - design.mdの「`live` で `SoratomoRouter.shared.isLeftGroup` を配線する」は、ここではしない。`isLeftGroup` は8.3で作り、配線も8.3の本文が持つ（`live` は `static let` なので、ルーターへの代入を置く場所は8.3で決める）
     - ⚠️ テストの終わりに、1分平均のロードが一時253まで上がった（別のセッションのシミュレーターの起動と重なった）
 
-- [ ] 8. iOSの画面と配線を変える
+- [x] 8. iOSの画面と配線を変える
 
 - [x] 8.1 抜けるの画面の状態 `SoratomoLeaveViewModel` を作る
   - 前提: 7.1, 7.2, 7.3
@@ -336,7 +336,7 @@
     - `leave_pending` の失敗は、ViewModel を変えずに既存の失敗の表示（`showSubmitFailure`・`SoratomoJoinFailReason(error)`）のまま通ることを、テストで固定した
     - 書き手の報告の「`makeViewModel` に `leftGroups` の引数を足した」は誤りで、現物は毎回テストの suite の記録を渡す（コードの問題ではない）
 
-- [ ] 8.5 タイムラインの画面に入口・確認・処理中の表示を置き、抜けた後の後片づけを配線する
+- [x] 8.5 タイムラインの画面に入口・確認・処理中の表示を置き、抜けた後の後片づけを配線する
   - 前提: 8.1, 8.2, 8.3, 8.4
   - 入口: 右上の `ToolbarItemGroup` の最後に `Menu`（`ellipsis.circle`）を足し、中身は「グループを抜ける」（`role: .destructive`）だけにする。既存の3つのボタン（メンバー一覧・招待・投稿）と、タイムラインの `init` の形は変えない。`SoratomoLeaveViewModel` は、タイムラインの `init` で `@StateObject` として作る
   - 確認: `phase` が `confirming` のとき、`.alert` に見出し「{グループ名}を抜けますか？」と本文、「キャンセル」（`.cancel`）と「抜ける」（`.destructive`）を出す（既存のブロックの確認と同じ型）。`alertMessage` はOKだけのアラートで出す
@@ -346,6 +346,22 @@
   - 確認と処理中は、新しい画面にしない（画面名を足さない）
   - シミュレーター（`C2E3F752`）でビルドして、メニューと、見られる組み合わせの確認の文言（キャンセルまで）を目視する。テスト用アカウントでのログインと、本番のデータの表示は、利用者のGOを取ってから行う。「抜ける」の確定は、本番にCallableがまだ無いのでここでは押さない（12.1で行う）
   - _Requirements: 1.1, 1.2, 1.3, 1.6, 1.9, 5.1, 5.4, 5.5_
+  - 結果（2026-10-11 21:00）:
+    - 入口: 右上の `ToolbarItemGroup` の最後に `Menu`（`ellipsis.circle`・VoiceOver は「その他の操作」）を足し、中身は「グループを抜ける」（`role: .destructive`）だけにした。既存の 3 つのボタンと、タイムラインの `init` の形は変えていない。画面名は足していない
+    - 2 つの `@StateObject`: `init` のローカルの `var pair` と入れ子の関数 `makePair()` で、`_viewModel` と `_leaveViewModel` が同じ組を受け取る（オートクロージャは画面が最初に置かれたときだけ評価される）。組は `static makeViewModels` が作り、互いを弱参照でつなぐ（`weak var weakLeave`・`[weak timeline]`・`[weak router]`）。タイムラインの `reportNotAccessible` は先に `absorbLostMembership` を呼び、真ならルーターへ知らせない（D1）
+    - 配線: `suspendTimeline` は `suspendObservation()`、`resumeTimeline` は `start()`、`rememberLeft` は `SoratomoLeftGroups.insert`、`purgeLocalData` は `SoratomoImageCache.removeGroup` と `SoratomoSkyLookup.forget(groupId:)`、`onLeft` は `SoratomoRouter.finishLeaving`。`displayName` は `profileStore.prefetch` の後、読めた人だけ表示名を返す（読めなければ nil → 代替の「ユーザー」・D2）
+    - 確認: `.alert` に題 `confirmation.title`・本文 `confirmation.message`・「キャンセル」（`.cancel`・`cancel()`）と「抜ける」（`.destructive`・`Task { await confirm() }`）を出す。isPresented は `phase` から直接作らず、`phase` の変化（`onChange`）で `@State` の `leaveConfirmation` に写し、setter はそれを消すだけにした。setter で `cancel()` を呼ぶと確定が空振りし、getter を `phase` にすると閉じた直後に出し直しうるため。`alertMessage` は OK だけのアラートで出す
+    - 処理中: `.leaving` の間、中身に `.disabled` と `.accessibilityHidden` を掛け、覆い（黒 30% の上に、素材の角丸で `ProgressView` と「グループを抜けています…」。VoiceOver では 1 つの要素で `.isModal`）を出し、`navigationBarBackButtonHidden` で戻るを隠す。投稿のシートは、右上の投稿と空の案内のボタンがどちらも無効なので開けない（D3）
+    - `purgeLegacyIfNeeded()` の置き場: `SoratomoRootView` の `.task { await checkEntry() }` の先頭（変更前の 67 行の `.task`）。61 行の `.task(id: router.notice)` は一時表示のたびに走り、179 行の `.task` は一覧を出した後にしか走らないので使わない。一覧と通知の行き先は `checkEntry` の後に出るので、そらともの画像を読む前になる
+    - design.md との違い⑥: 右上の 4 つ（メンバー・招待・投稿・メニュー）を、`.leaving` だけでなく `phase != .idle` の間（確認の材料を読む間と、確認を出している間を含む）無効にした。`.preparing` の間に別の画面へ進むと、確認がその画面の下で出ようとするため。中身は `.preparing` の間は止めない（止めると、読み込みの間に画面が固まって見えるため）
+    - design.md との違い⑦: 確認と知らせは、タイムラインが一番上（`router.path.last`）で、投稿のシートと投稿の削除・通報・ブロックの確認が出ていないときだけ出す（`canPresentLeaveDialogs`）。既存の削除の失敗・通報とブロックの知らせと同じ門に、`.preparing` の間に開きうるシートと確認を足した。覆っていたものが閉じた時点で出る（内容は `@State` と ViewModel に残る）
+    - design.md との違い⑧: 画像のキャッシュの消去を 2 回にした。1 回目は 8.1 の後片づけ（`purgeLocalData`）、2 回目はタイムラインの `.onDisappear` で、端末の記録にあるときだけ。閉じるまでの再描画と読み込み途中の画像で、Kingfisher がフォルダを作り直しうるため（7.3 の申し送り）。判定を記録で行うので、抜けられたか未確定のまま画面が閉じたときは消さない。投稿詳細を上に積んだときにも呼ばれるが、記録に無いので何もしない
+    - ビルド（20:35・C2E3F752・`build-for-testing`）: エラー 0。ログで、変更した 2 ファイルがコンパイルされたことと、2 ファイルに警告が無いことを確かめた（同じログに既存の `PaymentService.swift` の警告が載る）。画面の配線だけなので、テストは足していない。全体のテストは 9.2 で回す
+    - 敵対的な点検（Workflow `wf_b2af29a3-e3f`・opus）: 4 観点の点検役（① 2 つの `@StateObject` の組と弱参照 ② 確認と `phase` の競合 ③ 後片づけの順・2 回目の消去・purge の置き場・`.leaving` の画面 ④ 個人情報と VoiceOver）と、指摘ごとの反証役で見た。指摘 6 件（①0・②3・③2・④1）は、すべて反証された。直したものは無い
+    - 反証された指摘のうち、実機で見る価値があるとされたもの: (a) iOS 26 の画面の中ほどからの戻るスワイプが、`.leaving` の間に止まるか（戻るボタンを隠すと止まる見込み・未確認）(b) `.preparing` の間に投稿詳細へ進んで戻ると、確認が出るか (c) 覆いが出たときに、VoiceOver の焦点が覆いへ移るか（改善の候補で、不具合ではない）。(a) と (c) は確定を押さないと見られないので 12.1 で見る
+    - シミュレーターの目視（利用者の GO・20:38〜20:59・C2E3F752・テスト用アカウント S3）: このビルドを入れて起動し、前から入っていたアカウントはログアウトした（シミュレーターの中だけ）。最初の 3 回はログインに失敗した（記録の「+soratomo3」に、無いはずの頭を付けて推測したメールで 2 回、S4 で 1 回。どれも「メールアドレスまたはパスワードが正しくありません」）。利用者に正しいメールを聞いて、4 回目で入れた
+    - 見たこと: メンバー 1 人のグループのタイムラインで、右上に 4 つ（メンバー・招待・投稿・「…」）が潰れずに並ぶ。「…」のメニューには赤字の「グループを抜ける」だけが出る。押すと、題「{グループ名}を抜けますか？」と、本文（共通の文＋空行＋最後の 1 人の文）、「キャンセル」と赤字の「抜ける」の確認が出る。確認の間は右上の 4 つが薄く（無効に）なる。「キャンセル」で確認が閉じ、タイムラインと人数は変わらず、右上が戻り、メニューをもう一度開ける。画面の写しは利用者へ送った。「抜ける」は押していない
+    - 見られなかったもの（検証済みでない）: 確認の 3 通りのうち、オーナーで引き継ぎがある文と、ただのメンバーの文（S3 の 2 つのグループは、どちらもメンバーが 1 人のため）。`.leaving` の覆い・戻るの禁止・右上の無効（確定を押さないと出ない）。上の (a)〜(c)。どれも 12.1 で見る
 
 - [ ] 9. iOS全体を点検する
 
