@@ -107,7 +107,7 @@ TEMPLATE = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>プライバシーポリシー — そらもよう</title>
-<meta name="description" content="iOSアプリ「そらもよう」のプライバシーポリシー">
+<meta name="description" content="アプリ「そらもよう」（iOS 版・Android 版）のプライバシーポリシー">
 <style>
   :root {{ --bg:#fff; --fg:#1c1c1e; --muted:#6b7280; --accent:#3b82f6; --line:#e5e7eb; --card:#f7f8fa; }}
   @media (prefers-color-scheme: dark) {{
