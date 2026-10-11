@@ -491,22 +491,24 @@
   - _Requirements: 2.6, 4.1, 9.1, 10.3, 10.5_
   - 結果（2026-10-12 01:31〜01:34）: 出し元は `d204a9e`（`git fetch` の後に `HEAD == origin/main`・作業ツリーは clean。記録用のブランチ `ドキュメント-そらとも-抜けるの本番反映の記録` を origin/main から切って、何もコミットしていない状態で出した）。出す前の確かめ: `git log b07da6e..origin/main -- functions/ firestore.rules` は #174 の 1 件だけ。本番の `firebase functions:list`（01:30・利用者の GO の後に読んだ）は 21 本・すべて asia-northeast1・nodejs22。名前は `functions/soratomo.js` の `module.exports` から機械で作った 11 本（`soratomoCreateGroup`・`soratomoJoinGroup`・`soratomoRegenerateInviteCode`・`soratomoCreateSky`・`soratomoReportSky`・`soratomoAgreeGuideline`・`soratomoDeleteMyData`・`soratomoLeaveGroup`・`onSoratomoSkyCreated`・`onSoratomoReportCreated`・`soratomoHousekeeping`）で、本番のそらとも系 10 本をすべて含み、本番に無いのは `soratomoLeaveGroup` だけ。利用者の GO で `firebase deploy --only functions:<11 本> --project soramoyou-ios --non-interactive` を実行し、終了コード 0・作成 1（`soratomoLeaveGroup`）・更新 10・すべて `Successful`。ログに公開呼び出しの許可（invoker・IAM）の警告は無い。出した後の `firebase functions:list` は 22 本で、前と比べて追加 1 行（`soratomoLeaveGroup`・callable・asia-northeast1・512MB・nodejs22）・削除 0 行・ほかの行の変化 0。これで、main からアプリの版を作ってよい
 
-- [ ] 11.4 新しいCallableの公開呼び出しの許可を確かめる（要確認Q4。ユーザーのGOを取ってから実行）
+- [x] 11.4 新しいCallableの公開呼び出しの許可を確かめる（要確認Q4。ユーザーのGOを取ってから実行）
   - 前提: 11.3
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - release-gate 14.5の要確認4と同じ手順で行う。認証の無い `POST https://asia-northeast1-soramoyou-ios.cloudfunctions.net/soratomoLeaveGroup`（本文 `{"data":{}}`）を1回送り、HTTP 401・`UNAUTHENTICATED`・「ログインが必要です」が返ること（この文言は関数のコードだけが返す。許可が無ければCloud Runが403で止める）。関数のログに `soratomoLeaveGroup: rejected`（reason unauthenticated）が出ること
   - 失敗したら、呼び出し元の設定を見直す（変える前に利用者に相談する）
   - _Requirements: 9.2_
+  - 結果（2026-10-12 01:35・要確認Q4は検証済み）: 利用者の GO で、認証の無い `POST https://asia-northeast1-soramoyou-ios.cloudfunctions.net/soratomoLeaveGroup`（本文 `{"data":{}}`）を 16:35:13Z に 1 回送った。HTTP 401・`{"error":{"message":"ログインが必要です","status":"UNAUTHENTICATED"}}`（関数のコードだけが返す文言なので、Cloud Run の入口は通っている＝公開呼び出しの許可がある）。関数のログに 16:35:13.604Z の `soratomoLeaveGroup: rejected`（`reason: unauthenticated`・`uid: null`）が 1 行
 
-- [ ] 11.5 Firestoreのルールを本番へ出す（ユーザーのGOを取ってから実行）
+- [x] 11.5 Firestoreのルールを本番へ出す（ユーザーのGOを取ってから実行）
   - 前提: 11.2（11.3との順は問わない。新しい `match` は、既定で拒否されていたパスの明示なので、どの順でも挙動は変わらない）
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 出す前: 本番のルールを読み返し、`b07da6e` の `firestore.rules` とハッシュの頭が一致すること、origin/mainとの差が `soratomoPendingLeaves` の `match` とコメントの数だけであることを確かめる。このときのルールの判定は、まだクレームの判定のまま（関門の置き換えはpublic-launch）
   - コマンド: `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive`
   - 出した後: 本番のルールを読み返し（release-gate 17と同じく、RulesのRESTでreleaseとrulesetを読む）、手元の `firestore.rules` とハッシュの頭が一致すること。読み返した本文に `rules_test_soratomo.py` を流して、全件が期待どおりであること
   - _Requirements: 10.4_
+  - 結果（2026-10-12 01:36〜01:38）: 出す前に、本番のルールを Rules の REST で読んだ（release `cloud.firestore` → ruleset。token は表示せず、表示は更新時刻・ruleset の頭・本文の sha256 の頭だけ）。最終更新 2026-10-09T22:09:59Z・ruleset `9b502f6e`・指紋 `f20155b560ce` で、`b07da6e` の `firestore.rules` と一致。origin/main との差は、コメントの数（2 → 3）と `soratomoPendingLeaves` の `match`（読み書きとも false）の 6 行だけ。利用者の GO で、`d204a9e` の上の記録用のブランチ（`firestore.rules` は origin/main と差分 0 行）から `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive` を実行し、終了コード 0・コンパイル成功・release。読み返し: 最終更新 2026-10-11T16:36:45Z・ruleset `8ba8a746`・指紋 `187ac94b5e73` で、手元の `firestore.rules` とバイト一致。読み返した本文を `rules_test_soratomo.py` に渡して 116/116
 
-- [ ] 11.6 最初の定期実行で、仕事Cのクエリが動くことを確かめる（要確認Q1。ユーザーのGOを取ってから実行）
+- [x] 11.6 最初の定期実行で、仕事Cのクエリが動くことを確かめる（要確認Q1。ユーザーのGOを取ってから実行）
   - 前提: 11.3
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 次の予定（6時間ごと）を待つか、Cloud Schedulerの `firebase-schedule-soratomoHousekeeping-asia-northeast1` を、RESTの `:run` で手動で1回起こす（release-gate 14.5の前例）
@@ -514,6 +516,8 @@
   - 印が0件でも、インデックスが要るクエリは件数に関わらず失敗するので、0件の実行も確かめになる。本番で壊れたクエリを流す陽性対照は取らない（そう記録する）
   - 24時間を過ぎても終わらないものの見つけ方（Cloud Loggingで `soratomoLeave: overdue` に絞る・Firestoreのコンソールで `soratomoPendingLeaves` の `leftAt` を見る）を、結果の欄に書いておく
   - _Requirements: 4.6, 4.8, 11.5_
+  - 結果（2026-10-12 01:37〜01:38・要確認Q1は検証済み）: 利用者の GO で、Cloud Scheduler の `firebase-schedule-soratomoHousekeeping-asia-northeast1` を REST の `:run` で 16:37:40Z に 1 回起こした（HTTP 200・`every 6 hours`・UTC・ENABLED のまま）。関数のログ（16:37:42Z）: 仕事C `soratomoHousekeeping: leave_sweep`（scanned 0・completed 0・failed 0・unfinished 0・malformed 0・overdue 0）、仕事A `soratomoHousekeeping: sweep`（scanned 1・completed 0・missingAuth 0・unfinished 0）、仕事B `soratomoHousekeeping: reforward`（attempted 0・sent 0）。同じ時間の WARNING 以上の行は 0 で、`FAILED_PRECONDITION` も無い。インデックスが要るクエリは件数に関わらず失敗するので、印が 0 件の実行でも、仕事Cのクエリが本番で動くことの確かめになる。本番で壊れたクエリを流す陽性対照は取っていない（本番を壊さないため）
+    - 24 時間を過ぎても終わらないものの見つけ方: Cloud Logging で `jsonPayload.message="soratomoLeave: overdue"` に絞る（`soratomoHousekeeping: leave_sweep` の `overdue` の数でも気づける）。Firestore のコンソールで `soratomoPendingLeaves` を開き、`leftAt` が 24 時間より前の文書を見る（文書 ID は `{uid}_{groupId}`）
 
 ## (h) 受け入れの確認
 
