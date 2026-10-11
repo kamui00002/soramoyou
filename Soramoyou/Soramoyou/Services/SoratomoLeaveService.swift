@@ -69,7 +69,8 @@ final class SoratomoLeaveService: SoratomoLeaveServiceProtocol {
     /// - 戻り値の `groupDeleted` は、どれか 1 回で真なら真にする
     ///   （再試行の間にほかの人が抜けてグループが消えると、後の回で真に変わる・design.md の API Contract）
     func leave(groupId: String) async throws(SoratomoLeaveError) -> SoratomoLeaveResult {
-        // 自動 ID の形でない値は送らない（サーバーも invalid_input で断る。アプリは自動 ID しか持たない）
+        // 文書の ID として使えない値（空・「/」を含む）は送らない。自動 ID の形か（英数字 1〜64 文字）は
+        // サーバーが確かめて invalid_input で断る（アプリは自動 ID しか持たない）
         guard SoratomoGroupService.isUsableDocumentId(groupId) else {
             throw SoratomoLeaveError.unknown
         }

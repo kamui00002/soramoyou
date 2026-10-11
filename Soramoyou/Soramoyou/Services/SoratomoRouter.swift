@@ -147,7 +147,7 @@ final class SoratomoRouter: ObservableObject {
     ///
     /// 通知のグループがここで真なら、タイムラインを開かずに「開けませんでした」の扱いにする。
     /// 本物は `SoratomoDependencies.live.isLeftGroup`（`shared` の組み立てで渡す）。
-    var isLeftGroup: @MainActor (String) -> Bool
+    private let isLeftGroup: @MainActor (String) -> Bool
 
     /// - Parameters:
     ///   - logEvent: 計測の記録の関数。既定は本番の `SoratomoAnalytics.log`
@@ -315,7 +315,8 @@ final class SoratomoRouter: ObservableObject {
     /// 計測はしない（`group_left` は抜けるの ViewModel が記録する）。
     /// - Parameters:
     ///   - groupId: 抜けたグループの ID
-    ///   - notice: 一時表示の文言（`SoratomoError.notMember.userMessage` とは違う固定の文）
+    ///   - notice: 一時表示の文言（抜けたグループの名前を含む。出すのは画面と VoiceOver の読み上げだけで、
+    ///     計測・ログには渡さない。`SoratomoError.notMember.userMessage` とは違う文）
     func finishLeaving(groupId: String, notice: String) {
         guard path.contains(where: { $0.belongsTo(groupId: groupId) }) else { return }
 

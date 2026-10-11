@@ -314,7 +314,7 @@ struct SoratomoTimelineView: View {
             // 判定は端末の記録で行う（処理中に閉じた＝抜けられたか未確定のときは、記録が無いので消さない）。
             // 投稿詳細を上に積んだときにも呼ばれるが、そのときは記録に無いので何もしない
             .onDisappear {
-                if let uid = dependencies.currentUid(), dependencies.leftGroups.contains(groupId, uid: uid) {
+                if dependencies.isLeftGroup(groupId) {
                     SoratomoImageCache.removeGroup(groupId)
                 }
             }
