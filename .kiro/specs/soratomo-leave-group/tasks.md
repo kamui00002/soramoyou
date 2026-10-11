@@ -470,6 +470,7 @@
   - 初回のpushは `git push -u origin 機能-そらとも-グループだけ抜ける`（上流を自分のブランチにする）。PRの本文に、要件・設計・tasks.mdの場所と、public-launchとの順番（このPRのマージ・本番への反映・受け入れの確認の後に、public-launchへ進む）を書く
   - _Requirements: 10.2, 10.3, 10.4, 10.6_
   - 結果（途中・2026-10-11 16:45）: Functions とルール（1〜5）の後に `/review-full`（指摘 F5・F7・F8 を直した）と `/security-review`（指摘なし）を通し、GO を取って push した（`3cb318d`・上流は自分のブランチ）。前提の 9.2 と 10 がまだなので、PR は下書き（Draft）の #174 で作った。iOS と文書をこのブランチに足し、済んだらこのタスクの再確認（main の取り込み・全テスト）を通してから Ready に切り替える。このタスクはまだ完了ではない
+  - 結果（再確認・2026-10-12 01:21）: main は進んでいない（`git fetch` の後の `HEAD..origin/main` が 0 件・01:05 と 01:21 に確認）ので、取り込みは無し。`functions/` で `npm run lint` 通過・`npm test` 290/290・`npm run test:emulator` 215/215（8080 などが空いていたので標準の設定で。Java は Android Studio 同梱の JDK を `JAVA_HOME` で渡し、Storage エミュレーターの一時置き場は専用の `TMPDIR`）。ルールは `rules_test_soratomo.py` が 116/116・`--mutants` で壊し方 21 個・取りこぼし 0。iOS は 9.2 の最後の記録（直しの後の最終の中身で全体 1,553 本・失敗は main と同じ 34 本だけ）。iOS の `/review-full` と直しは 9.2 に記録。続けて `/security-review`（Workflow `wf_040a5f6f-f07`・ブランチ全体の差分・opus）を通し、高確信の脆弱性の候補は 0 件（誤検知の判定に回すものも無し）。利用者の GO で push した（`1844044`・Draft PR #174 に載った）。残りは PR の本文の更新と Ready への切り替え（どちらも GO を取ってから）
 
 - [ ] 11.2 mainへマージする（ユーザーのGOを取ってから実行）
   - 前提: 11.1
