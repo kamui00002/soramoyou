@@ -148,6 +148,26 @@ final class SoratomoImageCacheTests: XCTestCase {
         XCTAssertFalse(caches.cache(forStoragePath: keyA) === cacheA)
     }
 
+    func testLateStoreAfterRemoveGroupDoesNotRecreateFolder() {
+        // 抜けた後に届いた読み込み途中の画像は、消す前に受け取ったキャッシュ（覚えから外れたインスタンス）へ
+        // 保存しに来る。Kingfisher の provider の読み込みは取り消せないため（leave-group /review-full D2）
+        let key = path("gA")
+        let inFlight = caches.cache(forStoragePath: key)
+        waitForCompletion { caches.removeGroup("gA", completion: $0) }
+        // 陽性対照の前提: 消した直後はフォルダが無い
+        XCTAssertNil(fileCount(in: caches.directoryURL(forGroup: "gA")))
+
+        // 読み込みが終わり、Kingfisher がそのインスタンスへ保存する（本物の保存の入口・ディスクにも書く）
+        let stored = expectation(description: "保存を終える")
+        inFlight.store(makeImage(), original: Data([0x01, 0x02, 0x03]), forKey: key, toDisk: true) { _ in
+            stored.fulfill()
+        }
+        wait(for: [stored], timeout: 5)
+
+        XCTAssertNil(fileCount(in: caches.directoryURL(forGroup: "gA")), "抜けたグループのフォルダが作り直された")
+        XCTAssertFalse(inFlight.memoryStorage.isCached(forKey: key), "抜けたグループの画像がメモリに戻った")
+    }
+
     func testRemoveGroupDeletesFolderLeftByPreviousLaunch() throws {
         // 前の起動で書いたフォルダ（この起動の覚えには無い）も消す
         let key = path("gA")

@@ -247,6 +247,12 @@ final class SoratomoGroupImageCaches: @unchecked Sendable {
         lock.lock()
         let cache = caches.removeValue(forKey: groupId)
         lock.unlock()
+        // 外したインスタンスを「もう期限切れ」にしてから空にする（leave-group /review-full D2）。
+        // 抜けた後に届いた読み込み途中の画像は、消す前に受け取ったこのインスタンスへ保存しに来る
+        // （Kingfisher の provider の読み込みは取り消せない）。期限切れなら Kingfisher 8.6.2 の保存は
+        // 書く前に戻るので（DiskStorage.swift:162・MemoryStorage.swift:146）、消したフォルダを作り直さない
+        cache?.diskStorage.config.expiration = .expired
+        cache?.memoryStorage.config.expiration = .expired
         cache?.clearMemoryCache()
 
         let directory = directoryURL(forGroup: groupId)
