@@ -398,4 +398,10 @@ protocol SoratomoLeaveDataSource: Sendable {
 
     /// 自分のメンバーの文書がサーバーにあるか（権限の拒否・通信の失敗は元のエラーのまま投げる）
     func memberDocumentExistsOnServer(groupId: String, uid: String) async throws -> Bool
+
+    /// いまサインインしている利用者の uid（サインインしていなければ nil）
+    ///
+    /// Callable は呼ぶたびに、その時点の利用者のトークンで送られる。抜けるの繰り返しの途中で
+    /// アカウントが替わっていないかを、回ごとに確かめるために使う（leave-group /review-full D1）。
+    func currentUid() -> String?
 }

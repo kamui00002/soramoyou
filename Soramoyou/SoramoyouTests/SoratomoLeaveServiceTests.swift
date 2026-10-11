@@ -26,10 +26,13 @@ private final class FakeLeaveDataSource: SoratomoLeaveDataSource, @unchecked Sen
     // 返す結果（Callable は呼ばれた順）
     var results: [Result<Any, Error>] = [.success(["done": true, "groupDeleted": false])]
     var memberDocumentResult: Result<Bool, Error> = .success(true)
+    // 返す uid（読まれた順。使い切ったら最後の値を返し続ける）
+    var uids: [String?] = ["uAbCdEfGhIjKlMnOpQrStUvWxYz1"]
 
     // 呼ばれた引数
     private(set) var calls: [(name: String, payload: [String: Any], timeout: TimeInterval)] = []
     private(set) var memberDocumentCalls: [(groupId: String, uid: String)] = []
+    private(set) var uidReads = 0
 
     func callCallable(_ name: String, payload: [String: Any], timeout: TimeInterval) async throws -> Any {
         calls.append((name, payload, timeout))
@@ -40,6 +43,11 @@ private final class FakeLeaveDataSource: SoratomoLeaveDataSource, @unchecked Sen
     func memberDocumentExistsOnServer(groupId: String, uid: String) async throws -> Bool {
         memberDocumentCalls.append((groupId, uid))
         return try memberDocumentResult.get()
+    }
+
+    func currentUid() -> String? {
+        uidReads += 1
+        return uids[min(uidReads - 1, uids.count - 1)]
     }
 }
 
@@ -222,6 +230,25 @@ final class SoratomoLeaveServiceTests: XCTestCase {
 
             XCTAssertEqual(outcome, .failure(.unknown), "\(failure)")
             XCTAssertEqual(dataSource.calls.count, 1, "失敗したら呼び直さない: \(failure)")
+        }
+    }
+
+    /// ⭐️ 繰り返しの途中でアカウントが替わったら（サインアウトを含む）、次の回を送らずに止める（/review-full D1）
+    ///
+    /// Callable は回ごとにその時点の利用者のトークンで送られる。止めないと、同じグループに入っている
+    /// 別のアカウントが、確認なしに抜けてしまう（投稿も消えて戻せない）。
+    func testLeaveStopsWhenAccountChangesBetweenCalls() async {
+        let cases: [(label: String, after: String?)] = [("別のアカウント", "uZyXwVuTsRqPoNmLkJiHgFeDcBa9"), ("サインアウト", nil)]
+        for (label, after) in cases {
+            resetParts()
+            dataSource.results = [response(done: false)]
+            // 1 回目の前までは同じ利用者、2 回目の前から替わる（読み口は回の前に 1 回ずつ・最初に覚えるので 1 回多い）
+            dataSource.uids = [Self.uid, Self.uid, after]
+
+            let outcome = await leaveOutcome()
+
+            XCTAssertEqual(outcome, .failure(.unknown), label)
+            XCTAssertEqual(dataSource.calls.count, 1, "\(label): 替わった後に呼んだ")
         }
     }
 

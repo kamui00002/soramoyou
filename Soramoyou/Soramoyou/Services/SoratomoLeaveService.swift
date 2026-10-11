@@ -14,6 +14,7 @@
 //  ⚠️ 失敗の記録（SoratomoError.record）の文脈は固定の文字列だけ。グループ ID も入れない（要件 11.1）。
 //
 
+import FirebaseAuth
 import FirebaseFirestore
 import FirebaseFunctions
 import Foundation
@@ -26,6 +27,8 @@ private enum SoratomoLeaveFailure: LocalizedError {
     case malformedResponse
     /// 最大回数まで呼んでも、完了が返らなかった
     case incomplete
+    /// 繰り返しの途中で、サインインしているアカウントが替わった（またはサインアウトした）
+    case accountChanged
 
     var errorDescription: String? {
         switch self {
@@ -33,6 +36,8 @@ private enum SoratomoLeaveFailure: LocalizedError {
             "soratomo: 抜けるの戻り値の形が違う"
         case .incomplete:
             "soratomo: 抜けるの片づけが最大回数で終わらなかった"
+        case .accountChanged:
+            "soratomo: 抜けるの途中でアカウントが替わったので止めた"
         }
     }
 }
@@ -69,7 +74,16 @@ final class SoratomoLeaveService: SoratomoLeaveServiceProtocol {
             throw SoratomoLeaveError.unknown
         }
         var groupDeleted = false
+        // 最初に、いまの利用者を覚える。回ごとに同じかを確かめ、替わっていたら次を送らない（/review-full D1）。
+        // Callable は回ごとにその時点の利用者のトークンで送られる。途中でサインアウトして、同じグループに入っている
+        // 別のアカウントで入り直すと、確認なしにその人が抜けてしまう（投稿も消えて戻せない）。
+        // 最初からサインインしていない（nil のまま）ときは、今までどおり呼んでサーバーに断らせる
+        let startUid = dataSource.currentUid()
         for _ in 0 ..< Self.maxCalls {
+            guard dataSource.currentUid() == startUid else {
+                SoratomoError.record(SoratomoLeaveFailure.accountChanged, context: "soratomo.leaveGroup.accountChanged")
+                throw SoratomoLeaveError.unknown
+            }
             let response: Any
             do {
                 response = try await dataSource.callCallable(
@@ -183,5 +197,9 @@ struct SoratomoLeaveFirebaseDataSource: SoratomoLeaveDataSource {
             .document(uid)
             .getDocument(source: .server)
         return snapshot.exists
+    }
+
+    func currentUid() -> String? {
+        Auth.auth().currentUser?.uid
     }
 }
