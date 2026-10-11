@@ -211,13 +211,19 @@
     - モックは `MockSoratomoLeaveService`（`SoratomoServiceMocks.swift`。グループごとの結果と `onLeave` を持つ・8.1と8.4用）。窓口の偽物は、退会のテストの前例に合わせてテストのファイルの中に置いた
     - ⚠️ 陽性対照の回で、C2E3F752の起動と別のセッションの2台（BF678DA1・DCFBF2D6）が重なり、1分平均のロードが一時300まで上がった（メモリの空きは27%）。15未満に落ちるのを待ってから正しい版を回した
 
-- [ ] 7.2 抜けたグループの端末の記録 `SoratomoLeftGroups` を作る
+- [x] 7.2 抜けたグループの端末の記録 `SoratomoLeftGroups` を作る
   - 前提: 6
   - `Services/SoratomoLeftGroups.swift`: 利用者ごとのUserDefaultsのキー `soratomo.leftGroups.{uid}` に、グループIDのJSONの配列を持つ。上限は50件で、超えたら古いものから捨てる。メモリに持たず、毎回読む。保存の仕方は `SoratomoReportedSkies`（`SoratomoHiddenContent.swift`）にそろえる
   - 口は `contains`・`insert`・`remove`（どれも `uid` つき）。サインアウトでは消さない（同じ人が入り直したときも隠す）。退会の手順には足さない（退会を変えないため）
   - `SoratomoLeftGroupsTests`（新規）: 利用者ごとに分かれる（AのものがBに見えない）・作り直しても残る・上限50件・外せる
   - 陽性対照: 利用者ごとに分けず1つのキーに入れる実装で、「AのものがBに見えない」が赤になることを先に確かめる
   - _Requirements: 5.3, 5.6, 5.7_
+  - 結果（2026-10-11 18:29）:
+    - 陽性対照（18:14〜18:26・C2E3F752・`SoratomoLeftGroupsTests` 7件）: 読み書きのキーを `uid` によらず1つにした実装で、`testLeftGroupsAreSeparatedPerUser`（「Aの記録がBに見えている」）・`testRemoveTakesOutOnlyThatGroupOfThatUser`（「Aが外したらBの記録まで消えた」）・`testRemoveOfUnknownGroupDoesNothing` が赤。赤はこの3本だけ（上限・作り直し・キーの名前・読めない記録の4本は通過）。走らせる前に書いた予想と一致した
+    - 正しい版（写しを戻してshasumの一致を確認）で、7/7通過（18:26〜18:28・`-parallel-testing-enabled NO`）。件数はxcresultで数えた。変更した2ファイルに警告なし（同じログに既存の `PaymentService.swift` の警告がファイル名つきで載ることで、検査が効いていることも確かめた）
+    - design.mdとの違い: 型は `struct SoratomoLeftGroups: Sendable` でなく `@unchecked Sendable` にした。`UserDefaults` が `Sendable` でないため、素の `Sendable` だとSwift 5のモードでも警告が出る（`swiftc -typecheck` で確かめた）。`UserDefaults` はスレッド安全で、この型が持つのはその参照1本だけ（前例は `SoratomoProfileFirestoreFetcher`）。口（`maxCount`・`storageKey`・`init(defaults:)`・`contains`・`insert`・`remove`）は design のまま
+    - 同じグループを足し直したら最新の扱いに移す（`SoratomoReportedSkies.add` と同じ）。消す口（`clear`・`erase`）は作らない（サインアウトで消さない・退会に足さない、を型で守る）
+    - ⚠️ 陽性対照の回で、C2E3F752の起動と別のセッションの2台（BF678DA1・DCFBF2D6）が重なり、1分平均のロードが一時230まで上がった（メモリの空きは29%）。正しい版の回の終わりにも一時190を見た
 
 - [ ] 7.3 画像のキャッシュをグループごとに分け、投稿の覚えをグループ単位で消せるようにする（要確認Q3の前半）
   - 前提: 6
