@@ -6,6 +6,7 @@
 //  - サインアウトで、ブロックの一覧と通報の記録のメモリが空になる（別のアカウントに前の人の隠す集合が残らない）
 //  - 端末の通報の記録は残る（同じ人が入り直したときに隠したままにする）
 //  - 投稿の覚え（SoratomoSkyLookup）は、抜けたグループの分だけを忘れる（leave-group 7.3）
+//  - 抜けたグループの判定（`isLeftGroup`）は、いまの利用者が記録したグループだけを真にする（未ログインは偽・leave-group 8.3・要件 5.7）
 //
 //  ⚠️ Firebase には接続しない。サービスはすべてモック、通報の記録の置き場はテスト用の UserDefaults。
 //
@@ -62,6 +63,27 @@ final class SoratomoDependenciesTests: XCTestCase {
             leaveService: MockSoratomoLeaveService(),
             leftGroups: SoratomoLeftGroups(defaults: defaults),
             currentUid: { nil }
+        )
+    }
+
+    /// 利用者を切り替えられる組み立て口を作る（`isLeftGroup` のテスト用。記録の置き場は同じテスト用の UserDefaults）
+    private func makeDependencies(uid: @escaping () -> String?) -> SoratomoDependencies {
+        SoratomoDependencies(
+            groupService: MockSoratomoGroupService(),
+            skyService: MockSoratomoSkyService(),
+            imageStore: MockSoratomoImageStore(),
+            profileService: MockSoratomoProfileService(),
+            profileStore: SoratomoProfileStore(fetcher: DependenciesProfileFetcherStub()),
+            primer: DependenciesPrimerStub(),
+            network: .shared,
+            skyLookup: SoratomoSkyLookup(),
+            moderationService: MockSoratomoModerationService(),
+            guidelineService: MockSoratomoGuidelineService(),
+            blockedAuthors: SoratomoBlockedAuthors(notificationCenter: NotificationCenter()),
+            reportedSkies: SoratomoReportedSkies(defaults: defaults),
+            leaveService: MockSoratomoLeaveService(),
+            leftGroups: SoratomoLeftGroups(defaults: defaults),
+            currentUid: uid
         )
     }
 
@@ -133,6 +155,33 @@ final class SoratomoDependenciesTests: XCTestCase {
         XCTAssertNil(lookup.sky(groupId: "g1", skyId: "s1"))
         XCTAssertNil(lookup.sky(groupId: "g1", skyId: "s2"))
         XCTAssertNotNil(lookup.sky(groupId: "g2", skyId: "s1"), "抜けていないグループの投稿まで忘れた")
+    }
+
+    // MARK: - 抜けたグループの判定（leave-group 8.3）
+
+    /// 記録にあるグループは、記録した利用者でログインしているときだけ真
+    func testIsLeftGroupIsTrueForRecordedGroupOfCurrentUser() {
+        SoratomoLeftGroups(defaults: defaults).insert("g1", uid: "userA")
+        let deps = makeDependencies(uid: { "userA" })
+
+        XCTAssertTrue(deps.isLeftGroup("g1"))
+        XCTAssertFalse(deps.isLeftGroup("g2"), "記録に無いグループは偽")
+    }
+
+    /// 別の利用者が抜けたグループは、いまの利用者には偽（記録は利用者ごと）
+    func testIsLeftGroupIsFalseForGroupLeftByAnotherUser() {
+        SoratomoLeftGroups(defaults: defaults).insert("g1", uid: "userA")
+        let deps = makeDependencies(uid: { "userB" })
+
+        XCTAssertFalse(deps.isLeftGroup("g1"))
+    }
+
+    /// 未ログインなら、記録があっても偽
+    func testIsLeftGroupIsFalseWhenSignedOut() {
+        SoratomoLeftGroups(defaults: defaults).insert("g1", uid: "userA")
+        let deps = makeDependencies(uid: { nil })
+
+        XCTAssertFalse(deps.isLeftGroup("g1"))
     }
 
     private func makeSky(id: String, groupId: String) -> SoratomoSky {

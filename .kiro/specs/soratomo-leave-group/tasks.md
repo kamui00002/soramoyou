@@ -302,7 +302,7 @@
     - 札は `cancel()` してから nil にする（ほかが札を持っていても止まるように）。再開は既存の `start()`（札が無いので、グループもタイムラインも張り直す）。張っていないときや 2 回続けて呼んでも何も起きない
     - ファイルの先頭のヘッダーの 8.2 の行は、点検役が足した（書き手が書き忘れていた）
 
-- [ ] 8.3 ルーターに、抜けた後の遷移と、抜けたグループの通知の扱いを足す（陽性対照C6の前半）
+- [x] 8.3 ルーターに、抜けた後の遷移と、抜けたグループの通知の扱いを足す（陽性対照C6の前半）
   - 前提: 7.2, 7.4
   - `SoratomoRouter.finishLeaving(groupId:notice:)` を足す。パスにそのグループの画面があれば `path = []` にし、`notice` を出す（既存の3秒の一時表示）。文言は「{グループ名}を抜けました」で、`SoratomoError.notMember.userMessage` とは違う固定の文にする
   - `resolvePending` の「フラグが有効」の枝で、行き先の `groupId` が抜けたグループの記録にあれば、タイムラインを開かない。`pending = nil`・`path = []`・`isPresented = true`・`notice = SoratomoError.notMember.userMessage` にして、`notificationOpened(.notMember)` を1回記録する。判定の口は `isLeftGroup: @MainActor (String) -> Bool` のプロパティ（既定は常に偽）。本物は `SoratomoLeftGroups` と `currentUid` から作り、`SoratomoDependencies.live` の組み立てで `SoratomoRouter.shared` に入れる
@@ -310,6 +310,13 @@
   - `SoratomoRouterTests`: `finishLeaving` は `path = []` にして、文言が「グループを開けませんでした」でない。抜けたグループの通知はタイムラインを開かず、`notificationOpened(.notMember)` を1回記録する
   - 陽性対照（C6）: 今の現物で、抜けたグループの通知がタイムラインを開くことを先に確かめる
   - _Requirements: 5.1, 5.2, 5.7_
+  - 結果（2026-10-11 20:20）:
+    - 陽性対照（20:10〜20:12・C2E3F752・8.1〜8.4 の壊した版 6 本をまとめて当てた 1 回・6 クラス 184 件・C6 の前半）: `resolvePending` の抜けたグループの枝を消し、`finishLeaving` の文言を `SoratomoError.notMember.userMessage` にした版で、`testResolvePending_leftGroupDoesNotOpenTimelineAndLogsNotMember`・`testResolvePending_leftGroupIsLoggedOnlyOnceEvenWhenCalledAgainOrClosed`・`testResolvePending_leftGroupSettlesPreviousAwaitingAsOpenedFirst`・`testFinishLeaving_clearsPathAndShowsLeftNoticeForTimeline`・`testFinishLeaving_clearsPathWhenMembersOrSkyDetailOfSameGroupIsOnPath`・`testFinishLeaving_clearsPathWhenInviteOfSameGroupIsOnPath` の 6 本が赤。「タイムラインを開かない」は `[.timeline(groupId: …)]` が開いて赤になった（＝今の現物では、抜けたグループの通知がタイムラインを開く）。緑のまま残る想定の 4 本（開けない間は保留のまま・別のグループの画面なら変えない・計測しない・記録に無いグループは今のまま）は通過
+    - 容れ物: `isLeftGroup` が常に偽の版で `testIsLeftGroupIsTrueForRecordedGroupOfCurrentUser` だけが赤。走らせる前に書いた予想と、どちらも一致した
+    - 正しい版（写しを戻して shasum の一致を確認）で、`SoratomoRouterTests` 53/53・`SoratomoDependenciesTests` 6/6 通過（20:16〜20:17・同じ 184/184 の回）。件数は xcresult で数えた。変更した 4 ファイルに警告なし
+    - design.md との違い②: design と上の本文の「`SoratomoDependencies.live` の組み立てで `SoratomoRouter.shared` に入れる」をやめ、`SoratomoRouter.shared` の組み立てで、判定のたびに `SoratomoDependencies.live.isLeftGroup` を引く。`live` は遅延で初期化され、最初に触るのはそらともの全画面のカバーの中身（`MainTabView.swift:107`）なので、通知で冷えた起動をすると `resolvePending` が `live` より先に走り、`live` の中で代入すると判定が間に合わないため（引いた時点で `live` が作られる）
+    - 初期化の輪が無いこと: `SoratomoRouter.shared` に触れるのは、View（`MainTabView`・`ContentView`・`SoratomoEntryButton`）と、通知のタップのデリゲートの `receive`（`GoldenHourNotificationManager.swift:253`）だけで、`live` に並ぶサービスの init からは触れない（grep で確認）。ルーターのファイルの先頭のヘッダーに、そらともの型 `SoratomoDependencies` を引くようになったことを書いた
+    - パスの判定は `SoratomoRouter.swift` の末尾の `private extension SoratomoDestination`（`belongsTo(groupId:)`）。点検役が、メンバー一覧と投稿詳細のテストのパスにタイムラインを一緒に入れていた（`.timeline` だけを見る実装でも通ってしまう）のを、1 つずつ置く形に直した
 
 - [ ] 8.4 グループ一覧で抜けたグループを隠し、参加で記録を外す（陽性対照C6の後半・要確認Q7の判断）
   - 前提: 6, 7.1, 7.4

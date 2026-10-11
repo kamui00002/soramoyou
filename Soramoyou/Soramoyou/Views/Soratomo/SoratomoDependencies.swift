@@ -168,6 +168,16 @@ final class SoratomoDependencies {
         reportedSkies.clear()
     }
 
+    /// いまの利用者が、この端末でそのグループを抜けたか（未ログインなら偽・leave-group 8.3）
+    ///
+    /// 通知のタップで、ルーターが抜けたグループのタイムラインを開かないための判定の口。
+    /// 本物は `SoratomoRouter.shared` の組み立てが、判定のたびに `live` を引いて呼ぶ。
+    /// - Parameter groupId: 調べるグループの ID
+    func isLeftGroup(_ groupId: String) -> Bool {
+        guard let uid = currentUid() else { return false }
+        return leftGroups.contains(groupId, uid: uid)
+    }
+
     /// アプリ全体で使う本物の容れ物
     ///
     /// サインアウト時は、ContentView が `live.clearSessionState()` と `SoratomoImageCache.clear()` を呼ぶ。
