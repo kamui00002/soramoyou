@@ -482,11 +482,84 @@ async function beginLeaveTx(db, { uid, groupId, origin, nowMs, newEpisodeId }) {
 }
 
 /**
+ * 照合の規則（leave-group design の isLeaveEpisodeCurrent）: 印があり、episodeId が同じ回で、メンバーの文書が無いか。
+ * 手順2〜3の「消す前」（isLeaveEpisodeCurrent）と、手順4のトランザクション（finishLeaveTx）が、同じこの規則を使う。
+ * - 印が無い: 別の実行が手順4まで終えた（その後に入り直したかもしれない）
+ * - episodeId が違う: 抜けて、入り直して、また抜けた（新しい回の片づけは、その回の実行が進める）
+ * - メンバーの文書がある: 入り直した後（このときの投稿と画像は、入り直した後のものかもしれない）
+ * @param {FirebaseFirestore.DocumentSnapshot} markerSnap
+ * @param {FirebaseFirestore.DocumentSnapshot} memberSnap
+ * @param {string} episodeId この実行の回の札（beginLeaveTx がコミットした値）
+ * @returns {boolean}
+ */
+function episodeMatches(markerSnap, memberSnap, episodeId) {
+  return markerSnap.exists && markerSnap.get("episodeId") === episodeId && !memberSnap.exists;
+}
+
+/**
+ * 消す前の照合（leave-group design の isLeaveEpisodeCurrent・要件8.6）。印とメンバーの文書を getAll で2件読む。
+ * 「読む（クエリか一覧）→照合→消す」の順で呼ぶ。照合が通った時点で入り直しが起きていなければ、それより前に読んだ
+ * 投稿と画像は、すべて入り直す前のもの（メンバーの文書が無い間は、新しい投稿も画像も作れない・P4）。
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ uid: string, groupId: string, episodeId: string }} params
+ * @returns {Promise<boolean>}
+ */
+async function isLeaveEpisodeCurrent(db, { uid, groupId, episodeId }) {
+  const memberRef = db.collection(GROUPS).doc(groupId).collection(MEMBERS).doc(uid);
+  const [markerSnap, memberSnap] = await db.getAll(pendingLeaveRef(db, uid, groupId), memberRef);
+  return episodeMatches(markerSnap, memberSnap, episodeId);
+}
+
+/**
+ * 抜けるの手順4（leave-group design の finishLeaveTx・要件3.3・3.4・3.5・3.12）。removeMembershipCopyTx を型にした
+ * トランザクションで、利用者の文書・写しの全件・メンバーの文書・印を読む。
+ * - 照合（episodeMatches）が通ったときだけ、写し・印・（残るメンバーがいれば）通知の間引き notifyState/{uid} を消し、
+ *   所属数を残りの写しの数で代入する（1減らすのではなく数え直す）。delete_group の通知の間引きは recursiveDelete が消した
+ * - 照合が通らなければ、何も書かずに false（別の実行が終えた・入り直した。呼び手は superseded にする）
+ * - 写しが既に無くても（退会の手順4が先に消した）失敗しない。利用者の文書が無ければ作らない
+ * - finishUserTx は呼ばない（抜けるは利用者の文書を消さない・同意と停止の項目を残す）
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ uid: string, groupId: string, episodeId: string, kind: "leave"|"delete_group" }} params
+ * @returns {Promise<boolean>} 片づけを終えたら true
+ */
+async function finishLeaveTx(db, { uid, groupId, episodeId, kind }) {
+  const userRef = db.collection(USERS).doc(uid);
+  const copyRef = userRef.collection(USER_GROUPS).doc(groupId);
+  const groupRef = db.collection(GROUPS).doc(groupId);
+  const memberRef = groupRef.collection(MEMBERS).doc(uid);
+  const markerRef = pendingLeaveRef(db, uid, groupId);
+  return db.runTransaction(async (tx) => {
+    const [userSnap, memberSnap, markerSnap] = await tx.getAll(userRef, memberRef, markerRef);
+    const copiesSnap = await tx.get(userRef.collection(USER_GROUPS));
+    if (!episodeMatches(markerSnap, memberSnap, episodeId)) return false;
+    const remaining = copiesSnap.docs.filter((doc) => doc.id !== groupId).length;
+
+    // ここから書き込み
+    tx.delete(copyRef);
+    tx.delete(markerRef);
+    if (kind === "leave") tx.delete(groupRef.collection(NOTIFY_STATE).doc(uid));
+    if (userSnap.exists) {
+      tx.update(userRef, { groupCount: remaining, updatedAt: FieldValue.serverTimestamp() });
+    }
+    return true;
+  });
+}
+
+/**
  * 1人の1グループ分の抜けるを、印つきで冪等に進める（leave-group design の leaveSoratomoGroup）。
  * 退会の deleteUserDataInGroup を直接は呼ばない（メンバーでない人の要求で人数とオーナーを書き直す P1・
  * 入り直しを見ない P3 のため）。同じ部品を使い、印と照合を足す。
  * - 手順0: 締め切りを過ぎていれば、何もせずに done: false
- * - 手順1: beginLeaveTx
+ * - 手順1: beginLeaveTx（nothing・stale_marker なら done: true で終える）
+ * - 手順2: 残るメンバーがいれば本人の投稿（authorId の一致）を、最後の1人ならグループの全投稿を、300件ずつ読み、照合し、消す
+ * - 手順3: 残るメンバーがいれば soratomo/{groupId}/{uid}/ の下（取り残しの画像を含む）を、最後の1人なら
+ *   soratomo/{groupId}/ の下を、100件ずつ一覧し、照合し、消す。最後の1人なら、照合の後に残りの記録を recursiveDelete で消す
+ * - 手順4: finishLeaveTx（写し・印・通知の間引き・所属数）
+ * - 照合（isLeaveEpisodeCurrent）が外れたら、その区切りを消さずに state: "superseded"・done: true で止める（8.6）。
+ *   それまでに消した件数は結果に残す
+ * - 締め切りは、手順0・投稿300件ごと・画像100件ごとに確かめる（deleteUserDataInGroup と同じ位置）。過ぎたら done: false で
+ *   返し、印と写しが残る。次の呼び出し（アプリの繰り返しか定期実行）が、印の回のまま続きから進める
+ * - 途中の失敗（Firestore・Storage）は投げる。印と写しは残る
  * - 引数の誤りは TypeError で、何も書かない。ログは出さない（呼び手が出す）
  * @param {{ db: FirebaseFirestore.Firestore, storage: import("./soratomoStorage").SoratomoStorageGateway,
  *   nowMs: () => number, newEpisodeId?: () => string }} deps newEpisodeId は省略したら crypto.randomUUID
@@ -494,10 +567,11 @@ async function beginLeaveTx(db, { uid, groupId, origin, nowMs, newEpisodeId }) {
  * @returns {Promise<{ done: boolean, state: "nothing"|"started"|"continued"|"stale_marker"|"superseded",
  *   kind: "leave"|"delete_group"|null, removed: boolean, ownerTransferred: boolean, groupDeleted: boolean,
  *   skiesDeleted: number, imagesDeleted: number }>}
- *   state は手順0で止まったときだけ null。groupDeleted はこの実行でグループの文書を消したか
+ *   state は手順0で止まったときだけ null。started・continued は、締め切りで止まれば done: false、終えれば done: true。
+ *   removed・ownerTransferred・groupDeleted は手順1の値（この実行でメンバーの文書・グループの文書を消したか）
  */
 async function leaveSoratomoGroup(deps, { uid, groupId, deadlineMs, origin }) {
-  const { db, nowMs } = assertDeps(deps, { needsClock: true });
+  const { db, storage, nowMs } = assertDeps(deps, { needsClock: true });
   const newEpisodeId = deps.newEpisodeId === undefined ? () => crypto.randomUUID() : deps.newEpisodeId;
   if (typeof newEpisodeId !== "function") throw new TypeError("soratomo: newEpisodeId が関数でない");
   if (!isUid(uid)) throw new TypeError("soratomo: uid が文書IDとして使えない");
@@ -531,7 +605,44 @@ async function leaveSoratomoGroup(deps, { uid, groupId, deadlineMs, origin }) {
   result.ownerTransferred = step1.ownerTransferred;
   result.groupDeleted = step1.kind === "delete_group" && step1.groupExisted;
 
-  // 手順2〜4（照合・finishLeaveTx）は leave-group タスク 1.3 で足す。それまでは片づけが残るので done: false
+  // 照合が外れたら、その区切りを消さずに止める（別の実行が終えた・入り直した）
+  const episode = { uid, groupId, episodeId: step1.episodeId };
+  const stillCurrent = () => isLeaveEpisodeCurrent(db, episode);
+  const superseded = () => {
+    result.state = "superseded";
+    result.done = true;
+    return result;
+  };
+
+  // 手順2
+  const groupRef = db.collection(GROUPS).doc(groupId);
+  const wholeGroup = step1.kind === "delete_group";
+  const skies = await deleteSkiesByQuery(
+    db,
+    wholeGroup ? groupRef.collection(SKIES) : groupRef.collection(SKIES).where("authorId", "==", uid),
+    pastDeadline,
+    stillCurrent
+  );
+  result.skiesDeleted = skies.deleted;
+  if (skies.stopped) return superseded();
+  if (!skies.done) return result;
+
+  // 手順3
+  const prefix = wholeGroup ? `soratomo/${groupId}/` : `soratomo/${groupId}/${uid}/`;
+  const images = await deleteImagesByPrefix(storage, prefix, pastDeadline, stillCurrent);
+  result.imagesDeleted = images.deleted;
+  if (images.stopped) return superseded();
+  if (!images.done) return result;
+
+  if (wholeGroup) {
+    // 残りの子（メンバー・通知の間引き）を消す。親の文書は手順1で消えている（要確認1）
+    if (!(await stillCurrent())) return superseded();
+    await db.recursiveDelete(groupRef);
+  }
+
+  // 手順4（最後）
+  if (!(await finishLeaveTx(db, { ...episode, kind: step1.kind }))) return superseded();
+  result.done = true;
   return result;
 }
 
@@ -730,5 +841,6 @@ module.exports = {
   // leave-group
   PENDING_LEAVES,
   LEAVE_ORIGINS,
+  beginLeaveTx, // テストで手順1の印（episodeId・leftAt）を直接見るため（leaveOrDeleteGroupTx と同じ扱い）
   leaveSoratomoGroup,
 };

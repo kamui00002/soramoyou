@@ -1436,12 +1436,24 @@ test("停止中の人: アカウントの無い人の後始末（account_deleted
 const PENDING = "soratomoPendingLeaves";
 const LEFT_AT = 5_000;
 
-/** 抜けるの依存（印の札と時計を決めて渡す）。 */
-function leaveDeps(episodeIds = ["e1", "e2", "e3"], { now = LEFT_AT } = {}) {
+/**
+ * 抜けるの依存（印の札と時計を決めて渡す）。storage は fakeStorage の戻り値（省略すると画像の無い偽物）。
+ * nowMs を渡すと now より優先する（締め切りを途中で過ぎさせるため）。
+ */
+function leaveDeps(episodeIds = ["e1", "e2", "e3"], { now = LEFT_AT, nowMs = () => now, storage = fakeStorage([]) } = {}) {
   const ids = [...episodeIds];
-  return { db, storage: fakeStorage([]).gateway, nowMs: () => now, newEpisodeId: () => ids.shift() };
+  return { db, storage: storage.gateway, nowMs, newEpisodeId: () => ids.shift() };
 }
 const leaveReq = (uid, groupId, origin = "self") => ({ uid, groupId, deadlineMs: DEADLINE, origin });
+
+/**
+ * 手順1（beginLeaveTx）だけを呼ぶ。leaveSoratomoGroup は手順4（タスク 1.3）で印と写しを消すので、手順1が書いた印
+ * （episodeId・leftAt）と、手順4まで残す写しは、ここで直接見る。
+ */
+function beginLeave(uid, groupId, { origin = "self", episodeIds = ["e1", "e2", "e3"], now = LEFT_AT } = {}) {
+  const ids = [...episodeIds];
+  return deletion.beginLeaveTx(db, { uid, groupId, origin, nowMs: () => now, newEpisodeId: () => ids.shift() });
+}
 
 async function markerData(uid, groupId) {
   const snap = await db.collection(PENDING).doc(`${uid}_${groupId}`).get();
@@ -1480,12 +1492,11 @@ test("抜ける手順1: ただのメンバーは、外れて人数が残りの�
     ],
   });
   await seedUser("amy", ["g1"]);
-  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("amy", "g1"));
-  assert.equal(result.state, "started");
-  assert.equal(result.kind, "leave");
-  assert.equal(result.removed, true);
-  assert.equal(result.ownerTransferred, false);
-  assert.equal(result.groupDeleted, false);
+  const step1 = await beginLeave("amy", "g1");
+  assert.deepEqual(step1, {
+    state: "started", kind: "leave", removed: true, ownerTransferred: false, groupExisted: true,
+    episodeId: "e1", leftAtMs: LEFT_AT,
+  });
   assert.deepEqual(await memberRoles("g1"), { owner: "owner", bob: "member" });
   assert.equal((await groupData("g1")).memberCount, 2);
   await assertGroupInvariants("g1");
@@ -1507,9 +1518,9 @@ test("抜ける手順1: ほかにメンバーがいるオーナーは、参加�
       { uid: "new", role: "member", joinedAtMs: T(9) },
     ],
   });
-  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("owner", "g1"));
-  assert.equal(result.state, "started");
-  assert.equal(result.ownerTransferred, true);
+  const step1 = await beginLeave("owner", "g1");
+  assert.equal(step1.state, "started");
+  assert.equal(step1.ownerTransferred, true);
   const group = await groupData("g1");
   assert.equal(group.ownerId, "bob");
   assert.equal(group.inviteCode, "SKYAAAAA");
@@ -1521,10 +1532,10 @@ test("抜ける手順1: ほかにメンバーがいるオーナーは、参加�
 
 test("抜ける手順1: 最後の1人なら、グループと招待コードを消し、印を書く", async () => {
   await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }] });
-  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("owner", "g1"));
-  assert.equal(result.state, "started");
-  assert.equal(result.kind, "delete_group");
-  assert.equal(result.groupDeleted, true);
+  const step1 = await beginLeave("owner", "g1");
+  assert.equal(step1.state, "started");
+  assert.equal(step1.kind, "delete_group");
+  assert.equal(step1.groupExisted, true);
   assert.equal(await groupData("g1"), null);
   assert.equal((await db.collection(CODES).doc("SKYAAAAA").get()).exists, false);
   assert.deepEqual(await memberRoles("g1"), {});
@@ -1543,9 +1554,10 @@ test("抜ける手順1: 写しだけが残った人（印なし）の self は�
     ],
   });
   await seedUser("gone", ["g1"]);
-  const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("gone", "g1"));
-  assert.equal(result.state, "continued");
-  assert.equal(result.removed, false);
+  const step1 = await beginLeave("gone", "g1");
+  assert.equal(step1.state, "continued");
+  assert.equal(step1.removed, false);
+  assert.equal(step1.episodeId, "e1");
   assert.equal((await groupData("g1")).memberCount, 2);
   assert.equal((await groupData("g1")).ownerId, "amy");
   await assertGroupInvariants("g1");
@@ -1557,8 +1569,10 @@ test("抜ける手順1: 印が残っている人（メンバーでない）は�
     await seedGroup({ groupId: "g1", ownerId: "amy", inviteCode: "SKYAAAAA", memberCount: 3, members: [{ uid: "amy", role: "owner", joinedAtMs: T(2) }] });
     await seedUser("gone", ["g1"]);
     await seedMarker("gone", "g1", "old", 1_000);
-    const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("gone", "g1", origin));
-    assert.equal(result.state, "continued", origin);
+    const step1 = await beginLeave("gone", "g1", { origin });
+    assert.equal(step1.state, "continued", origin);
+    assert.equal(step1.episodeId, "old", `${origin}: 印の回のまま照合する`);
+    assert.equal(step1.leftAtMs, 1_000, origin);
     assert.equal((await groupData("g1")).memberCount, 1, origin);
     assert.deepEqual(await markerData("gone", "g1"), { uid: "gone", groupId: "g1", episodeId: "old", leftAt: 1_000 }, origin);
   }
@@ -1623,9 +1637,10 @@ test("抜ける手順1: sweep でメンバーの文書があり印が無いと�
 test("抜ける手順1: self でメンバーの文書と古い印があれば、新しい回として外し、印を上書きする", async () => {
   await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(9) }] });
   await seedMarker("amy", "g1", "old", 1_000);
-  const result = await deletion.leaveSoratomoGroup(leaveDeps(["e7"]), leaveReq("amy", "g1"));
-  assert.equal(result.state, "started");
-  assert.equal(result.removed, true);
+  const step1 = await beginLeave("amy", "g1", { episodeIds: ["e7"] });
+  assert.equal(step1.state, "started");
+  assert.equal(step1.removed, true);
+  assert.equal(step1.episodeId, "e7");
   assert.deepEqual(await markerData("amy", "g1"), { uid: "amy", groupId: "g1", episodeId: "e7", leftAt: LEFT_AT });
 });
 
@@ -1648,4 +1663,235 @@ test("抜ける手順0・引数: 締め切りを過ぎていれば何もせず d
     await assert.rejects(deletion.leaveSoratomoGroup(deps, req), TypeError, `引数 ${i}`);
   }
   assert.deepEqual(await dumpAll(), before);
+});
+
+// MARK: - 抜けるの手順2〜4（照合・finishLeaveTx・時間の予算・leave-group タスク 1.3）
+
+/** 抜けるの時計: 最初の n 回は LEFT_AT、その後は締め切り（数える順は 手順0 → 手順1の leftAt → 投稿の1ページ目の後）。 */
+function leaveClockPastAfter(n) {
+  let calls = 0;
+  return () => (++calls <= n ? LEFT_AT : DEADLINE);
+}
+/** そらもよう本体の利用者の文書（users/{uid}）。そらともの通知の設定を持つ。 */
+async function appUserData(uid) {
+  const snap = await db.collection("users").doc(uid).get();
+  return snap.exists ? snap.data() : null;
+}
+const NOTHING = Object.freeze({
+  done: true, state: "nothing", kind: null, removed: false, ownerTransferred: false,
+  groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+});
+
+test("抜ける手順2〜4: ただのメンバーは、本人の投稿・画像（取り残しも）・通知の間引き・写し・印を消し、ほかの人とほかのグループ・通報・利用者の文書の項目・users の設定は残す", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+      { uid: "bob", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedGroup({
+    groupId: "g2",
+    ownerId: "amy",
+    inviteCode: "SKYBBBBB",
+    members: [
+      { uid: "amy", role: "owner", joinedAtMs: T(1) },
+      { uid: "carl", role: "member", joinedAtMs: T(2) },
+    ],
+  });
+  await seedSkies("g1", "amy", ["a1", "a2"]);
+  await seedSkies("g1", "owner", ["o1"]);
+  await seedSkies("g1", "bob", ["b1"]);
+  await seedSkies("g2", "amy", ["x1"]);
+  await seedNotify("g1", ["amy", "owner"]);
+  await seedNotify("g2", ["amy", "carl"]);
+  await seedUser("amy", ["g1", "g2"]);
+  const suspendedAt = Timestamp.fromMillis(T(50));
+  await db.collection(USERS).doc("amy").update({ suspendedAt });
+  await db.collection("users").doc("amy").set({ [core.SORATOMO_PREF_KEY]: false, displayName: "種の名前" });
+  await seedReport("r1", { groupId: "g1", skyId: "a1", authorId: "amy", reporterId: "owner" });
+  await seedReport("r2", { groupId: "g1", skyId: "o1", authorId: "owner", reporterId: "amy" });
+  const amyImages = [...imagesOf("g1", "amy", "a1"), ...imagesOf("g1", "amy", "a2"), ...imagesOf("g1", "amy", "orphan")];
+  const keptImages = [
+    ...imagesOf("g1", "owner", "o1"),
+    ...imagesOf("g1", "bob", "b1"),
+    ...imagesOf("g1", "amy2", "z1"), // 接頭辞の境目（amy の後ろに文字が続く別の人）
+    ...imagesOf("g2", "amy", "x1"),
+  ].sort();
+  const storage = fakeStorage([...amyImages, ...keptImages]);
+  const g2Before = await groupSnapshot("g2");
+
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("amy", "g1"));
+  assert.deepEqual(result, {
+    done: true, state: "started", kind: "leave", removed: true, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: 2, imagesDeleted: 6,
+  });
+  assert.deepEqual(await skyAuthors("g1"), ["bob:b1", "owner:o1"], "ほかのメンバーの投稿は残す（2.5）");
+  assert.deepEqual([...storage.files].sort(), keptImages, "ほかの人の画像・ほかのグループの画像は残す（2.5）");
+  assert.deepEqual(storage.prefixes, ["soratomo/g1/amy/"], "画像は本人のパスの接頭辞だけを一覧する（2.2・2.3）");
+  assert.deepEqual(await notifyIds("g1"), ["owner"], "本人あての通知の間引きだけを消す（3.3）");
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner", bob: "member" });
+  assert.equal((await groupData("g1")).memberCount, 2, "人数は残りの数（3.1）");
+  await assertGroupInvariants("g1");
+  assert.deepEqual(await copyIds("amy"), ["g2"], "このグループの写しだけを消す（3.3）");
+  const user = await userData("amy");
+  assert.equal(user.groupCount, 1, "所属数は残りの写しの数（3.4）");
+  assert.equal(user.guidelineVersion, core.GUIDELINE_VERSION, "同意の項目は残す（3.5）");
+  assert.equal(user.suspendedAt.toMillis(), suspendedAt.toMillis(), "停止の項目は残す（3.5）");
+  assert.equal(await markerData("amy", "g1"), null, "印は手順4で消える");
+  assert.deepEqual(await groupSnapshot("g2"), g2Before, "ほかのグループ（投稿・メンバー・通知の間引き）には触れない");
+  assert.deepEqual(await skyAuthors("g2"), ["amy:x1"]);
+  assert.deepEqual(await notifyIds("g2"), ["amy", "carl"]);
+  assert.equal((await db.collection(REPORTS).get()).size, 2, "通報の記録には触れない（2.7）");
+  assert.deepEqual(await appUserData("amy"), { [core.SORATOMO_PREF_KEY]: false, displayName: "種の名前" }, "users の設定には触れない（3.5）");
+
+  // 2回目は状態が変わらず、件数が0（印も写しも無いので nothing）
+  const before = await dumpAll();
+  const again = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage }), leaveReq("amy", "g1"));
+  assert.deepEqual(again, NOTHING);
+  assert.deepEqual(await dumpAll(), before);
+  assert.deepEqual([...storage.files].sort(), keptImages);
+});
+
+test("抜ける手順2〜4: 最後の1人なら、グループ・招待コード・全投稿・グループのパスの全画像・残りの記録を消し、その後の同じコードの参加は not_found", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }] });
+  await seedGroup({ groupId: "g2", ownerId: "owner", inviteCode: "SKYBBBBB", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }] });
+  await seedSkies("g1", "owner", ["o1", "o2"]);
+  await seedSkies("g1", "old", ["x1"]); // 前のメンバーの投稿
+  await seedNotify("g1", ["owner", "old"]);
+  await seedUser("owner", ["g1", "g2"]);
+  await seedUser("carol", []); // 参加を試す人（同意済み）
+  await seedReport("r1", { groupId: "g1", skyId: "o1", authorId: "owner", reporterId: "old" });
+  const groupImages = [...imagesOf("g1", "owner", "o1"), ...imagesOf("g1", "owner", "o2"), ...imagesOf("g1", "old", "x1"), ...imagesOf("g1", "old", "orphan")];
+  const keptImages = [...imagesOf("g10", "owner", "y1"), ...imagesOf("g2", "owner", "y2")].sort();
+  const storage = fakeStorage([...groupImages, ...keptImages]);
+
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("owner", "g1"));
+  assert.deepEqual(result, {
+    done: true, state: "started", kind: "delete_group", removed: true, ownerTransferred: false,
+    groupDeleted: true, skiesDeleted: 3, imagesDeleted: 8,
+  });
+  const groupRef = db.collection(GROUPS).doc("g1");
+  assert.equal(await groupData("g1"), null);
+  assert.deepEqual((await groupRef.listCollections()).map((c) => c.id), [], "グループの下に何も残らない（3.10）");
+  assert.equal((await db.collection(CODES).doc("SKYAAAAA").get()).exists, false, "招待コードも消える");
+  assert.equal((await db.collection(CODES).doc("SKYBBBBB").get()).get("groupId"), "g2", "ほかのグループの招待コードは残す");
+  assert.deepEqual([...storage.files].sort(), keptImages, "隣のグループ g10・ほかのグループ g2 の画像は残す");
+  assert.deepEqual(storage.prefixes, ["soratomo/g1/"]);
+  assert.deepEqual(await copyIds("owner"), ["g2"]);
+  assert.equal((await userData("owner")).groupCount, 1);
+  assert.equal(await markerData("owner", "g1"), null);
+  assert.equal((await db.collection(REPORTS).get()).size, 1, "通報の記録には触れない（2.7）");
+
+  // 消えたグループのコードでの参加は not_found（ほかの人も、抜けた本人も・3.11）
+  for (const uid of ["carol", "owner"]) {
+    await assert.rejects(
+      store.joinGroupTx(db, { uid, code: "SKYAAAAA", policy: JOIN_POLICY }),
+      (err) => err instanceof store.SoratomoDomainError && err.reason === "not_found",
+      uid
+    );
+  }
+
+  const again = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage }), leaveReq("owner", "g1"));
+  assert.deepEqual(again, NOTHING);
+});
+
+test("抜ける時間の予算: 投稿300件を消した後に締め切りを過ぎたら、印と写しを残して done: false。続きは印の回のまま消し切り、その後は件数0", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  const skyIds = Array.from({ length: 301 }, (_, i) => `a${String(i).padStart(3, "0")}`);
+  await seedSkies("g1", "amy", skyIds);
+  await seedNotify("g1", ["amy"]);
+  await seedUser("amy", ["g1"]);
+  const storage = fakeStorage(imagesOf("g1", "amy", "a000"));
+
+  const first = await deletion.leaveSoratomoGroup(
+    leaveDeps(["e1"], { storage, nowMs: leaveClockPastAfter(2) }),
+    leaveReq("amy", "g1")
+  );
+  assert.deepEqual(first, {
+    done: false, state: "started", kind: "leave", removed: true, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: deletion.SKY_PAGE_SIZE, imagesDeleted: 0,
+  });
+  assert.equal((await skyAuthors("g1")).length, 1);
+  assert.equal(storage.calls, 0, "画像はまだ消していない");
+  assert.deepEqual(await notifyIds("g1"), ["amy"]);
+  assert.deepEqual(await copyIds("amy"), ["g1"], "写しが残る（片づけ中の参加を断る手がかり）");
+  assert.deepEqual(await markerData("amy", "g1"), { uid: "amy", groupId: "g1", episodeId: "e1", leftAt: LEFT_AT }, "印が残る（続きの手がかり）");
+
+  // 続き（アプリの繰り返しか定期実行）。新しい札を渡しても、印の回 e1 のまま進む
+  const second = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage }), leaveReq("amy", "g1"));
+  assert.deepEqual(second, {
+    done: true, state: "continued", kind: "leave", removed: false, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+  });
+  assert.deepEqual(await skyAuthors("g1"), []);
+  assert.equal(storage.files.size, 0);
+  assert.deepEqual(await notifyIds("g1"), []);
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.equal((await userData("amy")).groupCount, 0);
+  assert.equal(await markerData("amy", "g1"), null);
+  await assertGroupInvariants("g1");
+
+  const before = await dumpAll();
+  const third = await deletion.leaveSoratomoGroup(leaveDeps(["e3"], { storage }), leaveReq("amy", "g1"));
+  assert.deepEqual(third, NOTHING);
+  assert.deepEqual(await dumpAll(), before);
+});
+
+test("抜ける時間の予算: 画像100件を消した後に締め切りを過ぎたら、印・写し・通知の間引きを残して done: false。続きで消し切る", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedNotify("g1", ["amy"]);
+  await seedUser("amy", ["g1"]);
+  const paths = Array.from({ length: 101 }, (_, i) => `soratomo/g1/amy/orphan${String(i).padStart(3, "0")}/display.jpg`);
+  let now = LEFT_AT;
+  const storage = fakeStorage(paths, { onDelete: (count) => { if (count >= deletion.IMAGE_CHECK_EVERY) now = DEADLINE; } });
+
+  const first = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage, nowMs: () => now }), leaveReq("amy", "g1"));
+  assert.equal(first.done, false);
+  assert.equal(first.state, "started");
+  assert.equal(first.imagesDeleted, deletion.IMAGE_CHECK_EVERY);
+  assert.equal(storage.files.size, 1);
+  assert.deepEqual(await notifyIds("g1"), ["amy"], "手順4はまだ");
+  assert.deepEqual(await copyIds("amy"), ["g1"], "写しは最後");
+  assert.equal((await markerData("amy", "g1")).episodeId, "e1");
+
+  now = LEFT_AT;
+  const second = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage, nowMs: () => now }), leaveReq("amy", "g1"));
+  assert.equal(second.done, true);
+  assert.equal(second.state, "continued");
+  assert.equal(second.imagesDeleted, 1);
+  assert.equal(storage.files.size, 0);
+  assert.deepEqual(await notifyIds("g1"), []);
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.equal(await markerData("amy", "g1"), null);
+});
+
+test("抜ける途中の失敗: 画像の削除が失敗したら投げ、印と写しと通知の間引きは残る。再実行で消し切る", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1", "a2"]);
+  await seedNotify("g1", ["amy"]);
+  await seedUser("amy", ["g1"]);
+  const images = [...imagesOf("g1", "amy", "a1"), ...imagesOf("g1", "amy", "a2")];
+  const failing = fakeStorage(images, { failAt: 3 });
+
+  await assert.rejects(deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage: failing }), leaveReq("amy", "g1")), /わざと失敗/);
+  assert.ok(failing.files.size >= 1, "失敗した画像は残っている");
+  assert.deepEqual(await copyIds("amy"), ["g1"], "写しが残る（片づけ中の参加を断る手がかり）");
+  assert.deepEqual(await markerData("amy", "g1"), { uid: "amy", groupId: "g1", episodeId: "e1", leftAt: LEFT_AT }, "印が残る（続きの手がかり）");
+  assert.deepEqual(await notifyIds("g1"), ["amy"], "手順4へ進まない");
+  assert.equal((await userData("amy")).groupCount, 1);
+
+  const healthy = fakeStorage([...failing.files]);
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage: healthy }), leaveReq("amy", "g1"));
+  assert.equal(result.done, true);
+  assert.equal(result.state, "continued");
+  assert.equal(healthy.files.size, 0);
+  assert.deepEqual(await skyAuthors("g1"), []);
+  assert.deepEqual(await copyIds("amy"), []);
+  assert.deepEqual(await notifyIds("g1"), []);
+  assert.equal(await markerData("amy", "g1"), null);
+  assert.equal((await userData("amy")).groupCount, 0);
 });
