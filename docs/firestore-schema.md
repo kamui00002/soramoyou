@@ -331,8 +331,10 @@
 | `soratomoUsers/{uid}/groups` | groupId | `groupId`・`joinedAt` | Functions |
 | `soratomoReports` | `{groupId}_{skyId}_{通報者の uid}` | `groupId`・`skyId`・`authorId`（受け付けたときの実際の投稿者）・`reporterId`・`reason`（5つ）・`createdAt`・`forwardStatus`（`pending` / `sent`）・`forwardAttempts`・`forwardedAt`・`reviewedAt`・`reviewResult`（`no_violation` / `violation`） | Functions（通報の Callable・転送）・運用スクリプト（確認の結果） |
 | `soratomoConfig` | `ngWords` | `words`（NG ワードの文字列の配列・最大 5,000）・`updatedAt` | 運用スクリプト（`scripts/soratomo-ngwords.js`）だけ |
+| `soratomoPendingLeaves` | `{uid}_{groupId}` | `uid`・`groupId`・`episodeId`（回の札）・`leftAt`（回を始めた時刻・Functions の時計） | Functions だけ（抜ける Callable `soratomoLeaveGroup` が書き、片づけが終わると消す。定期実行 `soratomoHousekeeping` が続きを進める）。ルールで誰にも読み書きさせない |
 
 - 画像は Storage の `soratomo/{groupId}/{authorId}/{skyId}/display.jpg` と `thumb.jpg`。パスは iOS の `SoratomoImagePaths` だけが作る。`skies` には画像のパスや URL の項目を持たない（`soratomoCreateSky` の入力検査が書かせない）。公開前ゲートでも Storage のパスの形と `storage.rules` は変えていない。退会と利用停止では、その人の画像を共通の削除（`functions/soratomoDeletion.js`）が消す。
+- 抜ける（Callable の `soratomoLeaveGroup`・leave-group spec）では、抜けた人のそのグループの投稿と画像・通知の間引き（`notifyState`）・所属の写し（`soratomoUsers/{uid}/groups/{groupId}`）を共通の削除（`functions/soratomoDeletion.js` の `leaveSoratomoGroup`）が消す。最後の 1 人が抜けるときはグループごと消える。ほかのグループと通報の記録（`soratomoReports`）には触れない。片づけが終わるまで `soratomoPendingLeaves` の印が残り、その間の同じグループへの参加は `leave_pending` で断る。
 - 投稿の作成は `firestore.rules` で閉じた（`allow create: if false`）。項目・キャプション・幅と高さの検査は `functions/soratomoCore.js` の `validateSkyInput`、利用停止・メンバー・NG ワードの検査は `soratomoStore.js` の `createSkyTx` が行う。アプリから直接書けると、利用停止と NG ワードの検査を飛ばせるため（release-gate 要件 11.5）。
 - 利用者の記録（`soratomoUsers/{uid}`）は本人だけが読める（同意と利用停止の項目を含む）。書き込みはルールで拒否（release-gate 要件 8.9・10.14）。
 - 通報の記録（`soratomoReports`）と語のリスト（`soratomoConfig`）は、ルールで誰にも読み書きさせない（通報者本人も読めない・release-gate 要件 6.10・11.10）。語のリストのファイルはリポジトリに置かない（投入スクリプトがリポジトリと Git の作業ツリーの中のファイルを拒否する）。Functions は 5 分キャッシュして読む。

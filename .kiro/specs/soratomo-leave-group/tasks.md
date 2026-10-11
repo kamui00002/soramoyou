@@ -372,21 +372,28 @@
 
 ## (f) ドキュメントの反映
 
-- [ ] 10. ドキュメントを実装に合わせる
+- [x] 10. ドキュメントを実装に合わせる
 
-- [ ] 10.1 (P) データの置き場の記録と、release-gateの契約の表を直す
+- [x] 10.1 (P) データの置き場の記録と、release-gateの契約の表を直す
   - 前提: 1〜4（実装が設計どおりであること）
   - `docs/firestore-schema.md` のそらともの表に、`soratomoPendingLeaves`（文書ID `{uid}_{groupId}`・`uid`・`groupId`・`episodeId`・`leftAt`・書き手はFunctionsだけ）の行を足す。抜けるで消すもの（抜けた人のそのグループの投稿と画像・通知の間引き・所属の写し。最後の1人ならグループごと）の1文も足す
   - release-gate specのdesign.mdの「API Contract（そらとものCallableのまとめ）」の表に、`soratomoLeaveGroup` の行と、`soratomoJoinGroup` の `failed-precondition`・`leave_pending` を足す（または、このspecのdesign.mdを指す1行を足す）
   - 書き終えたら、変更した識別子で検索し、実装と食い違う記述が残っていないことを確かめる
   - _Requirements: 4.6, 8.4, 10.3, 10.4_
+  - 結果（2026-10-11 20:20）:
+    - `docs/firestore-schema.md` のそらともの表に `soratomoPendingLeaves` の行（334 行）と、抜けるで消すものの 1 文（337 行）を足した。release-gate の design.md の API Contract の表に `soratomoLeaveGroup` の行を足し、`soratomoJoinGroup` の行の末尾に `leave_pending` を足した（置き換えたのはこの 1 行だけで、ほかは追加だけ）
+    - 実装との照合: `functions/soratomo.js`（`leave_pending` は `failed-precondition`・`soratomoLeaveGroup` は `requireFlag: false` で応答は `{ done, groupDeleted }`・メンバーでない人にも `{ done: true, groupDeleted: false }`）・`functions/soratomoDeletion.js`（印の項目 `uid`・`groupId`・`episodeId`・`leftAt`）・`firestore.rules`（`soratomoPendingLeaves` は読み書きとも false）と一致。書き手と点検役が別々に照らした
+    - 変えた識別子（`soratomoPendingLeaves`・`soratomoLeaveGroup`・`leave_pending`）で docs と soratomo の spec を検索し、実装と食い違う記述が残っていないことを確かめた。`git diff -U0` で、md は足した行と上の 1 行だけが変わったことを確かめた。`textlint --fix` は掛けていない
 
-- [ ] 10.2 (P) 「退出は対象外」と書いた既存のspecに、上書きの注記を足す
+- [x] 10.2 (P) 「退出は対象外」と書いた既存のspecに、上書きの注記を足す
   - 前提: 3.1
   - 既存の「⚠️2026-10-09 上書き（soratomo-release-gate …）: …」の書き方にそろえ、本文は書き換えずに1行を足す。場所は、soratomo specのrequirements.md 6行（対象外（v1）の「退出」）と373行・design.md 19行（Non-Goalsの「退出」）、release-gate specのrequirements.md 347行・tasks.md 536行（「グループから抜ける機能は無い」の記録）の5か所
   - 書く内容: 本人が1つのグループだけを抜けることは、soratomo-leave-groupで対象に入れた。オーナーによるグループの削除・除名・オーナーの手動の譲渡は、引き続き対象外
   - 行番号は書く前に現物で確かめる（ほかの作業で行がずれていれば、文で探す）
   - _Requirements: 1.1, 3.13_
+  - 結果（2026-10-11 20:20）:
+    - 5 か所（soratomo の requirements.md 6 行・373 行、design.md 19 行、release-gate の requirements.md 347 行・tasks.md 536 行）の直後に「⚠️2026-10-11 上書き（soratomo-leave-group）: …」を 1 行ずつ足した。行番号は現物と一致していた。本文は書き換えていない。箇条の中は子の箇条にし、requirements.md 6 行目は段落なので行頭から書いた
+    - `git diff -U0` で、5 か所とも追加の 1 行だけであることを確かめた
 
 ## (g) 本番への反映
 

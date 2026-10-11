@@ -630,11 +630,12 @@ function createNgWordProvider({ db, ttlMs, nowMs }) {}
 | Callable | Request | Response | Errors（`HttpsError`の`code`と`details.reason`） |
 |----------|---------|----------|------------------------------------------------|
 | `soratomoCreateGroup`（変更） | `{ name, requestId }` | 変更なし | 既存＋`permission-denied`・`suspended`／`failed-precondition`・`consent_required`（`currentVersion`）／`invalid-argument`・`ng_word`／`internal`（語のリストが読めない） |
-| `soratomoJoinGroup`（変更） | `{ code }` | 変更なし | 既存＋`permission-denied`・`suspended`／`failed-precondition`・`consent_required`（`currentVersion`） |
+| `soratomoJoinGroup`（変更） | `{ code }` | 変更なし | 既存＋`permission-denied`・`suspended`／`failed-precondition`・`consent_required`（`currentVersion`）・`leave_pending`（抜ける片づけの途中。leave-group spec） |
 | `soratomoCreateSky` | `{ groupId: string, skyId: string, caption?: string, width: number, height: number }` | `{ skyId: string, created: boolean }` | `unauthenticated`／`permission-denied`・`flag_off`・`suspended`・`not_member`／`invalid-argument`・`invalid_input`・`ng_word`／`internal` |
 | `soratomoReportSky` | `{ groupId: string, skyId: string, reason: string }` | `{ accepted: true }` | `unauthenticated`／`permission-denied`・`flag_off`・`not_member`／`invalid-argument`・`invalid_input`・`invalid_reason`／`not-found`・`sky_not_found`／`failed-precondition`・`self_report`／`internal` |
 | `soratomoAgreeGuideline` | `{ version: number }` | `{ version: number }` | `unauthenticated`／`permission-denied`・`flag_off`／`invalid-argument`・`invalid_input`／`failed-precondition`・`outdated_guideline`（`currentVersion`）／`internal` |
 | `soratomoDeleteMyData` | `{}` | `{ done: boolean }` | `unauthenticated`／`internal` |
+| `soratomoLeaveGroup`（leave-group spec） | `{ groupId: string }` | `{ done: boolean, groupDeleted: boolean }` | `unauthenticated`／`invalid-argument`・`invalid_input`／`internal`（フラグ・利用停止・同意は見ない。メンバーでない人にも `{ done: true, groupDeleted: false }`） |
 
 - `SoratomoDomainError`に任意の`details`（`currentVersion`だけ）を持てるようにし、`toHttpsError`が`{ reason, ...details }`を返す。gRPCのcodeは持たせない（既存の決まり）。
 - `REASON_TO_CODE`に、上の表の理由を足す。
