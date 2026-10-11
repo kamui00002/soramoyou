@@ -143,7 +143,7 @@
 
 ## (c) Firestoreのルール
 
-- [ ] 4. (P) Firestoreのルールに、片づけ中の印の拒否を足す（要確認Q5）
+- [x] 4. (P) Firestoreのルールに、片づけ中の印の拒否を足す（要確認Q5）
   - `firestore.rules` の `soratomoConfig` の節の直後（いまの657行目の閉じかっこの前）に、`match /soratomoPendingLeaves/{markerId} { allow read, write: if false; }` を、design.mdの2行のコメントつきで足す。既存の行は、641行目のコメントの数（「次の 2 つは」→「次の 3 つは」）を直すだけにする。行番号は、書く前に現物で確かめる
   - `isSoratomoUser()` とその呼び出しの行には触れない（public-launchが変える）。`storage.rules` と `firestore.indexes.json` は変えない
   - `scripts/rules_test_soratomo.py`: `closed_collection_cases()` の `targets` に `soratomoPendingLeaves`（文書IDは `{uid}_{groupId}` の形・項目は印の4つ）を足し、get・list・create・update・deleteが、本人（クレームあり）・ほかのメンバー・未ログインのどれでも拒否されるケースにする。docstringとファイルの先頭のspecの一覧に、このspecを足す
@@ -152,6 +152,7 @@
   - 陽性対照: `--mutants` で、新しい壊し方が新しいケースを期待外れにすること。どの壊し方でも期待外れにならないケースが0件であること。通常の実行がすべて期待どおりであること
   - ここではルールをデプロイしない（11.5で行う）
   - _Requirements: 10.4_
+  - 結果（2026-10-11 14:16）: 行番号を現物で確かめた（641行目のコメント・654〜656行目の `soratomoConfig`・657行目の閉じかっこ。design のとおり）。`soratomoConfig` の節の直後に `match /soratomoPendingLeaves/{markerId}` を design の2行のコメントつきで足し、641行目のコメントを「次の 3 つは」に直した。差分はこの2か所だけで、既存の `match` の条件・`isSoratomoUser()`・`storage.rules`・`firestore.indexes.json` は変えていない（`git diff --stat` で firestore.rules とテストのスクリプトの2ファイルだけ）。`scripts/rules_test_soratomo.py`: 閉じたコレクションに「片づけ中の印」（文書IDは `member_g1`・項目は印の4つ）を足し、本人（クレームあり）・ほかのメンバー・投稿者・未ログインの get・list・create・update・delete の20件を拒否のケースにした（印のときだけ立場の呼び名を「本人」にし、既存のケースの名前は変えていない）。docstringとファイルの先頭のspecの一覧に、このspecを足した。要確認Q5: `MUTANTS` に「片づけ中の印の読み書きを許す」（`match` の行から `if false` までを置き換え元）を足し、置き換え元が1回だけ現れる検査を通った。変更前の基準は通常 96/96・壊し方20個で取りこぼし0（401 が返ったので `firebase projects:list` を一度実行してから回した）。陽性対照: `--mutants` で、新しい壊し方が新しい20件をすべて期待外れにした。壊し方21個で、どの壊し方でも期待外れにならないケースは0件（終了コード0）。通常の実行は 116/116（終了コード0）。ルールはデプロイしていない
 
 ## (d) Functionsとルールのまとめ
 

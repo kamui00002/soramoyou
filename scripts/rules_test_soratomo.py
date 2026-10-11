@@ -5,6 +5,7 @@ firestore.rules の「そらとも」（招待制の小さなグループで空�
 Firebase の rules test API で評価する。評価だけを行うので、本番のデータにも deploy 済みのルールにも触れない。
 spec: .kiro/specs/soratomo/（tasks.md 2.3・要件 11 の各項目を許可と拒否の両方で確かめる）
       .kiro/specs/soratomo-release-gate/（tasks.md 5・投稿の作成を閉じ、通報の記録と語のリストを誰にも読み書きさせない）
+      .kiro/specs/soratomo-leave-group/（tasks.md 4・抜けるの片づけ中の印を誰にも読み書きさせない）
 
 使い方:
   python3 scripts/rules_test_soratomo.py [firestore.rules のパス]            # 省略時はリポジトリ直下
@@ -174,21 +175,25 @@ CASES = [
 
 
 def closed_collection_cases():
-    """通報の記録と語のリスト（release-gate 要件 6.10・11.10）。
+    """通報の記録と語のリスト（release-gate 要件 6.10・11.10）と、抜けるの片づけ中の印（leave-group 要件 10.4）。
     Functions（Admin SDK）だけが読み書きする。どの立場の利用者にも get・list・create・update・delete を許さない"""
     report = {"groupId": "g1", "skyId": "s1", "authorId": AUTHOR, "reporterId": MEMBER, "reason": "spam",
               "createdAt": T, "forwardStatus": "pending", "forwardAttempts": 0}
     ng_words = {"words": ["てすとごい"]}  # ダミーの語（実在の語は書かない）
+    pending_leave = {"uid": MEMBER, "groupId": "g1", "episodeId": "e1", "leftAt": T}
+    roles = [("通報者", MEMBER), ("投稿者", AUTHOR), ("ほかのメンバー", OWNER), ("未ログイン", None)]
+    leave_roles = [("本人", MEMBER), ("ほかのメンバー", OWNER), ("投稿者", AUTHOR), ("未ログイン", None)]
     targets = [
         # 通報の記録の ID は「グループ ID_投稿 ID_通報者」（soratomoCore.reportDocId）
-        ("通報の記録", "soratomoReports", "g1_s1_" + MEMBER, report, dict(report, forwardStatus="sent")),
-        ("語のリスト", "soratomoConfig", "ngWords", ng_words, {"words": []}),
+        ("通報の記録", "soratomoReports", "g1_s1_" + MEMBER, report, dict(report, forwardStatus="sent"), roles),
+        ("語のリスト", "soratomoConfig", "ngWords", ng_words, {"words": []}, roles),
+        # 片づけ中の印の ID は「uid_グループ ID」。印の本人（クレームあり）でも拒否する
+        ("片づけ中の印", "soratomoPendingLeaves", MEMBER + "_g1", pending_leave, dict(pending_leave, episodeId="e2"), leave_roles),
     ]
-    roles = [("通報者", MEMBER), ("投稿者", AUTHOR), ("ほかのメンバー", OWNER), ("未ログイン", None)]
     cases = []
-    for label, collection, doc_id, data, updated in targets:
+    for label, collection, doc_id, data, updated, target_roles in targets:
         doc = D + "/" + collection + "/" + doc_id
-        for role, uid in roles:
+        for role, uid in target_roles:
             cases += [
                 case(f"{label} {role}が 1 件取得", DENY, uid, "get", doc),
                 case(f"{label} {role}が一覧を取得", DENY, uid, "list", D + "/" + collection + "/x"),
@@ -214,6 +219,7 @@ USERS_READ = "match /soratomoUsers/{uid} {\n      allow read: if isSoratomoUser(
 USER_GROUPS_READ = "match /groups/{groupId} {\n        allow read: if isSoratomoUser() && isOwner(uid);"
 REPORTS_CLOSED = "match /soratomoReports/{reportId} {\n      allow read, write: if false;"
 CONFIG_CLOSED = "match /soratomoConfig/{docId} {\n      allow read, write: if false;"
+PENDING_LEAVES_CLOSED = "match /soratomoPendingLeaves/{markerId} {\n      allow read, write: if false;"
 
 MUTANTS = [
     # 共通の判定
@@ -246,6 +252,8 @@ MUTANTS = [
     # 通報の記録と語のリスト
     ("通報の記録の読み書きを許す", [(REPORTS_CLOSED, REPORTS_CLOSED.replace("if false", "if true"))]),
     ("語のリストの読み書きを許す", [(CONFIG_CLOSED, CONFIG_CLOSED.replace("if false", "if true"))]),
+    # 抜けるの片づけ中の印（leave-group 要確認Q5）
+    ("片づけ中の印の読み書きを許す", [(PENDING_LEAVES_CLOSED, PENDING_LEAVES_CLOSED.replace("if false", "if true"))]),
 ]
 
 
