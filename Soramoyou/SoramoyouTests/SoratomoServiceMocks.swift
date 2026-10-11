@@ -350,3 +350,39 @@ final class MockSoratomoGuidelineService: SoratomoGuidelineServiceProtocol, @unc
         try agreeResult.soratomoValue()
     }
 }
+
+// MARK: - グループを抜ける（leave-group 7.1）
+
+/// `SoratomoLeaveServiceProtocol` のモック
+///
+/// ⚠️ 失敗の型が `SoratomoError` でないので、上の `soratomoValue()` は使わない。
+final class MockSoratomoLeaveService: SoratomoLeaveServiceProtocol, @unchecked Sendable {
+    // 返す結果
+    var leaveResult: Result<SoratomoLeaveResult, SoratomoLeaveError> = .failure(.unknown)
+    /// `membershipOnServer` が返す結果（`membershipResultsByGroup` に無いグループの分）
+    var membershipResult: SoratomoMembershipCheck = .unknown
+    /// グループごとに変えたいときの結果（一覧のように、複数のグループを確かめるテスト用）
+    var membershipResultsByGroup: [String: SoratomoMembershipCheck] = [:]
+    /// `leave` が呼ばれたとき、結果を返す前に流す処理（順序の確かめや、処理中で止めておくのに使う）
+    var onLeave: (@Sendable () async -> Void)?
+
+    // 呼ばれた引数
+    private(set) var leaveCalls: [String] = []
+    private(set) var membershipCalls: [(groupId: String, uid: String)] = []
+
+    func leave(groupId: String) async throws(SoratomoLeaveError) -> SoratomoLeaveResult {
+        leaveCalls.append(groupId)
+        await onLeave?()
+        switch leaveResult {
+        case let .success(result):
+            return result
+        case let .failure(error):
+            throw error
+        }
+    }
+
+    func membershipOnServer(groupId: String, uid: String) async -> SoratomoMembershipCheck {
+        membershipCalls.append((groupId, uid))
+        return membershipResultsByGroup[groupId] ?? membershipResult
+    }
+}

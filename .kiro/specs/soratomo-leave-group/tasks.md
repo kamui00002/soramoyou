@@ -193,7 +193,7 @@
 
 - [ ] 7. iOSの部品を作る
 
-- [ ] 7.1 抜けるのサービス `SoratomoLeaveService` を作る（要確認Q2の前半）
+- [x] 7.1 抜けるのサービス `SoratomoLeaveService` を作る（要確認Q2の前半）
   - 前提: 6
   - `SoratomoServiceContracts.swift` に、`SoratomoLeaveResult`・`SoratomoLeaveError`（`network`・`incomplete`・`unknown`）・`SoratomoMembershipCheck`（`member`・`notMember`・`unknown`）・`SoratomoLeaveServiceProtocol`・`SoratomoLeaveDataSource` を、design.mdの形で置く。既存の `SoratomoGroupServiceProtocol` にはメソッドを足さない
   - `Services/SoratomoLeaveService.swift`: 型は `SoratomoAccountDeletionService` にそろえる（Callableの窓口はDataSourceで差し替える）。`soratomoLeaveGroup` を、1回75秒・最大8回で、`done` が真になるまで呼ぶ。8回で終わらなければ `.incomplete`。失敗したら呼び直さずに投げる。応答の `groupDeleted` は、どれか1回で真なら真にする。戻り値の形の違いは `.unknown`
@@ -203,6 +203,13 @@
   - テスト用のモックは、`SoratomoServiceMocks.swift` に新しいクラスとして足す。`SoratomoLeaveServiceTests`（新規・DataSourceのモック）: `done` まで呼ぶ・8回で `.incomplete`・通信の失敗は `.network`・形の違いは `.unknown`・`groupDeleted` はどれか1回で真なら真・権限の拒否は `.notMember`・通信の失敗は `.unknown`
   - 陽性対照: 1回で戻る実装で、繰り返しのテストが赤になることを先に確かめる。権限の拒否を `.unknown` に写す実装で、`.notMember` のテストが赤になることも確かめる
   - _Requirements: 4.3, 4.4, 4.5_
+  - 結果（2026-10-11 18:07）:
+    - 陽性対照（17:58〜18:02・C2E3F752・`SoratomoLeaveServiceTests` 16件＋`SoratomoServiceContractsTests` 16件＝32件）: 繰り返しを1回で戻す実装（`0 ..< Self.maxCalls` を `0 ..< 1`）で、`testLeaveCallsAgainUntilDone`・`testLeaveGivesUpAfterMaxCallsWithIncomplete`・`testLeaveSucceedsWhenDoneOnLastCall`・`testLeaveGroupDeletedIsTrueIfAnyCallSaysTrue`・`testLeaveStopsOnFailureAfterPartialProgress` が赤。権限の拒否を `.unknown` に写す実装で、`testMembershipIsNotMemberWhenPermissionDenied` が赤。赤はこの6本だけ（26件は通過）
+    - 正しい版（写しを戻してshasumの一致を確認）で、同じ32/32通過（18:05〜18:07・`-parallel-testing-enabled NO`）。件数はxcresultで数えた。変更した4ファイルに警告なし
+    - 下書きの判断: 「読めて文書が無い」は、design.mdに無い枝。ルールは読みを同じ文書の存在で許すので本番では起きないが、`resolveObservedGroup` の前例に合わせて `.notMember` にし、テスト（`testMembershipIsNotMemberWhenDocumentIsAbsentOnServer`）で固定した
+    - `notFound` は `.unknown` にして記録に残す（文脈 `soratomo.leaveGroup.membership`）。12.2で `notFound` が来たかは、Crashlyticsのこの文脈で見られる。要確認Q2は未確認（検証済みでない）
+    - モックは `MockSoratomoLeaveService`（`SoratomoServiceMocks.swift`。グループごとの結果と `onLeave` を持つ・8.1と8.4用）。窓口の偽物は、退会のテストの前例に合わせてテストのファイルの中に置いた
+    - ⚠️ 陽性対照の回で、C2E3F752の起動と別のセッションの2台（BF678DA1・DCFBF2D6）が重なり、1分平均のロードが一時300まで上がった（メモリの空きは27%）。15未満に落ちるのを待ってから正しい版を回した
 
 - [ ] 7.2 抜けたグループの端末の記録 `SoratomoLeftGroups` を作る
   - 前提: 6
