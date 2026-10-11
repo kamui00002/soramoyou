@@ -293,6 +293,7 @@ flowchart TB
 
 - `done`: 片づけが終わったか。`false`なら、同じ要求をもう一度送ると続きから進む（4.1）。
 - `groupDeleted`: この抜けるでグループごと消える（消えた）か。`leaveSoratomoGroup`の`kind === "delete_group"`。再試行でも同じ値になる。メンバーでなく残りも無い場合は`false`（3.14の「同じ結果」は`{ done: true, groupDeleted: false }`）。
+  - ただし、再試行の間にほかの人が抜けてグループが消えると、続きの実行が`kind`を数え直すので`true`に変わる。影響はiOSの計測の値だけ（/review-fullの指摘F8・2026-10-11）。
 - `not_member`は返さない。メンバーでない人にも、完了と同じ応答を返す（3.14・グループの有無を知らせない）。
 - 成功のログ（`okLogFields`・11.3・11.4）: `soratomoLeaveGroup: ok`。項目は`uid`・`groupId`・`done`・`state`・`kind`・`removed`・`ownerTransferred`・`groupDeleted`・`skiesDeleted`・`imagesDeleted`。
   - ここの`groupDeleted`は「この実行でグループの文書を消したか」（既存の`deleteUserDataInGroup`と同じ意味）。
@@ -843,6 +844,8 @@ struct SoratomoLeftGroups: Sendable {
 ### U1: アプリの片づけが途中で止まった人が、すぐ入り直そうとしたときの待ち時間（8.4・8.5）
 
 ふつうは、アプリが片づけの完了まで待つので、入り直しは断られない。アプリが手順1の後に止まった場合（アプリを閉じた・通信が切れた）だけ、仕事Cが終えるまで`leave_pending`で断られる。最大で約6時間30分。
+
+- 例外（受け入れる）: 退会を手順1の後に放棄し、アカウントを残した人は、印が無いので仕事A（アカウントの無い人だけ）も仕事C（印だけ）も拾わない。退会をやり直すまで、そのグループへの入り直しは`leave_pending`で断られ続け、断る文言の「長いときは数時間」とも合わない。この差分の前も`internal`で入れなかったので退行ではなく、起きる頻度も低いので、別の手当てはしない（/review-fullの指摘F7・2026-10-11・利用者が案aを選択）。
 
 | 選択肢 | 帰結 |
 |---|---|

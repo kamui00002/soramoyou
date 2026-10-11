@@ -286,6 +286,7 @@ const soratomoDeleteMyData = soratomoCallable(
  * - 1回の予算は退会と同じ45秒。終わらなければ done: false。片づけ中の印と写しが残るので、次の呼び出しが続ける（要件4.1）
  * - メンバーでない人にも { done: true, groupDeleted: false } を返し、not_member は返さない（グループの有無を知らせない・要件3.14）
  * - 応答の groupDeleted は「この抜けるでグループごと消える（消えた）か」＝kind が delete_group（同じ回の再試行でも同じ値）。
+ *   ただし再試行の間にほかの人が抜けてグループが消えると、kind を数え直すので true に変わる（影響は iOS の計測の値だけ）。
  *   成功のログの groupDeleted は「この実行でグループの文書を消したか」（退会の groupsDeleted と同じ意味・design の API Contract）
  * - 成功のログは内部IDと件数だけ（要件11.2〜11.4）。グループ名・表示名・キャプション・招待コードは出さない
  */
