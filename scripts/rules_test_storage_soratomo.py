@@ -29,6 +29,9 @@ spec: .kiro/specs/soratomo/（tasks.md 4.2・要件 1.6 と 11 の各項目を�
     （本番の ID トークンには予約済みの項目 firebase.sign_in_provider が必ずある。匿名は "anonymous"、メールとパスワードは "password"）。
     方式は PROVIDERS で決まり、ログインしたケースには必ず入る。入れ忘れると、ルールの読み取りがエラーになり、
     許可を期待するケースが「エラーで拒否」で見つかる
+    入れ子の項目は rules test API にそのまま届く（2026-10-12 に確認。public-launch 要確認2）。匿名のメンバーでは
+    式の報告で比較が 'anonymous' を読んで false になり、エラーは出ない（条件で拒否）。firebase を抜いたトークンでは
+    「Property firebase is undefined」のエラーで拒否され、期待外れとして数えられる
   - クレームの無い利用者（NOCLAIM）には別のクレーム（skyMotionBeta）だけを持たせ、クレームに左右されず、
     登録済みなら通ることも同時に見る。1.14.x でクレームを持つ利用者（MEMBER など）も通ることを見る（public-launch 要件 1.9）
 
@@ -146,7 +149,8 @@ CASES = [
 # 細かい壊し方（条件を 1 つ外す・境界を 1 つずらす）で「その条件をテストが見ている」ことを、
 # 粗い壊し方（条件を true に）で「パスや種類の書き間違いで拒否されているだけではない」ことを確かめる。
 # 投稿者 ID の一致（request.auth.uid == authorId）は作成と削除の 2 か所にあるので、作成の側は改行とインデントごと置き換え元にする。
-CLAIM = "isAuthenticated() && request.auth.token.get('soratomoBeta', false) == true"
+# 登録済みでログイン（isSoratomoUser() の本文。public-launch 2.4）
+REGISTERED = "isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous'"
 MEMBER_EXISTS = ("return firestore.exists(/databases/(default)/documents/soratomoGroups/$(groupId)"
                  "/members/$(request.auth.uid));")
 READ = "allow read: if isSoratomoUser() && isSoratomoMember();"
@@ -163,16 +167,18 @@ UPDATE = "allow update: if false;"
 DELETE = "allow delete: if isSoratomoUser() && request.auth.uid == authorId;"
 
 MUTANTS = [
-    # 機能フラグ（クレーム）
-    ("クレームの判定を外す", [(CLAIM, "isAuthenticated()")]),
-    ("クレームの判定を常に偽", [(CLAIM, "false")]),
-    ("クレームを直接読む（token.soratomoBeta）", [(CLAIM, "isAuthenticated() && request.auth.token.soratomoBeta == true")]),
+    # 登録済みでログイン（public-launch 2.4）
+    ("匿名の判定を外す", [(REGISTERED, "isAuthenticated()")]),
+    ("匿名の判定を逆にする", [(REGISTERED, REGISTERED.replace("!= 'anonymous'", "== 'anonymous'"))]),
+    ("登録済みの判定を常に偽", [(REGISTERED, "false")]),
+    # 未ログインでは request.auth が null なので、トークンの読み取りがエラーで拒否されて見つかる
+    ("ログインの判定を外す", [(REGISTERED, "request.auth.token.firebase.sign_in_provider != 'anonymous'")]),
     # メンバー判定（読み取りと保存の共通）
     ("メンバー判定を外す", [(MEMBER_EXISTS, "return true;")]),
     ("メンバー判定を常に偽", [(MEMBER_EXISTS, "return false;")]),
     # 読み取り
     ("読み取りのメンバー判定を外す", [(READ, "allow read: if isSoratomoUser();")]),
-    ("読み取りのクレーム判定を外す", [(READ, "allow read: if isAuthenticated() && isSoratomoMember();")]),
+    ("読み取りの登録済み判定を外す", [(READ, "allow read: if isAuthenticated() && isSoratomoMember();")]),
     ("読み取りを全員に許す", [(READ, "allow read: if true;")]),
     # 保存
     ("保存の条件をすべて外す", [(CREATE, "allow create: if true;")]),
@@ -191,7 +197,7 @@ MUTANTS = [
     ("上書きを許す", [(UPDATE, "allow update: if true;")]),
     # 削除
     ("削除の投稿者判定を外す", [(DELETE, "allow delete: if isSoratomoUser();")]),
-    ("削除のクレーム判定を外す", [(DELETE, "allow delete: if isAuthenticated() && request.auth.uid == authorId;")]),
+    ("削除の登録済み判定を外す", [(DELETE, "allow delete: if isAuthenticated() && request.auth.uid == authorId;")]),
     ("削除の条件をすべて外す", [(DELETE, "allow delete: if true;")]),
     # 要件 11.7: 削除に内容の検査を混ぜる。後ろに足しても前に足しても、投稿者本人の削除（許可を期待）がエラーで拒否されて見つかる。
     # 拒否を期待するケースは、前に足しても期待外れにならない。Rules の && は、もう片方が false ならエラーを捨てて false を返す
