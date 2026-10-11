@@ -181,8 +181,9 @@ struct SoratomoTimelineView: View {
                     offlineBanner
                 }
             }
-            // 抜けるの処理の間は、中身を無効にして VoiceOver からも隠し、覆いだけを出す（leave-group 8.5・要件 1.9）
-            .disabled(isLeaving)
+            // 確認を出している間と処理の間は、中身を無効にする（`locksContentAndBack(during:)` を参照）。
+            // VoiceOver から隠して覆いを出すのは、処理の間だけ（leave-group 8.5・要件 1.9）
+            .disabled(isContentAndBackLocked)
             .accessibilityHidden(isLeaving)
             .overlay {
                 if isLeaving {
@@ -191,8 +192,8 @@ struct SoratomoTimelineView: View {
             }
             .navigationTitle(viewModel.group?.name ?? "")
             .navigationBarTitleDisplayMode(.inline)
-            // 抜けるの処理の間は戻らせない（戻るボタンを隠すと、端からのスワイプで戻る操作も止まる）
-            .navigationBarBackButtonHidden(isLeaving)
+            // 確認を出している間と処理の間は戻らせない（戻るボタンを隠すと、端からのスワイプで戻る操作も止まる）
+            .navigationBarBackButtonHidden(isContentAndBackLocked)
             .toolbar {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     // 抜けるの途中（確認の材料を読む間・確認・処理中）は、ほかの画面へ進ませない（leave-group 8.5）
@@ -672,9 +673,32 @@ struct SoratomoTimelineView: View {
         )
     }
 
-    /// 抜けるの処理中か（覆いを出し、中身と戻るを止める）
+    /// 抜けるの処理中か（覆いを出し、中身を VoiceOver から隠す）
     private var isLeaving: Bool {
         leaveViewModel.phase == .leaving
+    }
+
+    /// 中身と戻るを止めるか（いまの段で `locksContentAndBack(during:)` を見る）
+    private var isContentAndBackLocked: Bool {
+        Self.locksContentAndBack(during: leaveViewModel.phase)
+    }
+
+    /// 抜けるの段ごとに、中身と戻るを止めるかを決める（テストで固定する）
+    ///
+    /// - 確認を出している間（`.confirming`）と処理の間（`.leaving`）は止める
+    /// - メニューを受け付ける間（`.idle`）と確認の材料を読む間（`.preparing`）は止めない。`.preparing` を止めると、
+    ///   読み込みの間に画面が固まって見える（8.5 の違い⑥）
+    ///
+    /// ⚠️ `.confirming` を外さない。アラートのボタンの処理は、アラートが閉じきってから呼ばれる。
+    ///    「抜ける」を押してから `confirm()` が `.leaving` にするまでの約 0.4 秒は `.confirming` のままなので、
+    ///    `.leaving` だけで止めると、その間に戻るボタンが見え、空の案内の「空を投稿」が押せる（12.1 で写った隙間）
+    static func locksContentAndBack(during phase: SoratomoLeaveViewModel.Phase) -> Bool {
+        switch phase {
+        case .confirming, .leaving:
+            true
+        case .idle, .preparing:
+            false
+        }
     }
 
     /// 抜けるの途中か（確認の材料を読む間・確認・処理中。右上のボタンとメニューを止める）

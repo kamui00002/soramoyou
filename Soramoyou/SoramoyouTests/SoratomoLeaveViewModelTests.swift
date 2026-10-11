@@ -13,6 +13,7 @@
 //  - D4: 確定の時に通信が無ければ `leave_failed`（network）
 //  - 処理中の二重の確定を受け付けない
 //  - 確認の文言・題・抜けた後の一時表示の文言
+//  - タイムラインの画面が中身と戻るを止める段（確認と処理中。確定から覆いまでの隙間の直し）
 //
 //  順は、4 つのクロージャ（監視の停止と再開・記録・キャッシュ・ルーター）と計測が、同じ配列に名前を積む記録係で見る。
 //
@@ -832,5 +833,40 @@ final class SoratomoLeaveViewModelTests: XCTestCase {
 
         XCTAssertNotEqual(completed.notice, SoratomoError.notMember.userMessage)
         XCTAssertNotEqual(incomplete.notice, SoratomoError.notMember.userMessage)
+    }
+
+    // MARK: - タイムラインの画面が中身と戻るを止める段（確定から覆いまでの隙間の直し）
+
+    func testTimelineLocksContentAndBackOnlyWhileConfirmingAndLeaving() {
+        let confirmation = SoratomoLeaveConfirmation(
+            groupName: groupName,
+            prediction: SoratomoLeavePrediction(isOwner: false, isLastMember: false, successorUid: nil),
+            successorName: nil
+        )
+        // 確認を出している間は止める。アラートの「抜ける」の処理は閉じきってから呼ばれるので、
+        // 押してから `.leaving` になるまでの約 0.4 秒もこの段のまま（12.1 で戻るボタンが写った隙間）
+        XCTAssertTrue(SoratomoTimelineView.locksContentAndBack(during: .confirming(confirmation)))
+        // 処理の間は止める（要件 1.9）
+        XCTAssertTrue(SoratomoTimelineView.locksContentAndBack(during: .leaving))
+        // メニューを受け付ける間は止めない
+        XCTAssertFalse(SoratomoTimelineView.locksContentAndBack(during: .idle))
+        // 確認の材料を読む間は止めない（止めると、読み込みの間に画面が固まって見える・8.5 の違い⑥）
+        XCTAssertFalse(SoratomoTimelineView.locksContentAndBack(during: .preparing))
+    }
+
+    func testTimelineLockFollowsPhaseThroughCancelAndConfirm() async {
+        // キャンセル: 確認の間は止め、キャンセルの後は戻せる（確認を閉じた後に画面が止まったままにならない）
+        let cancelled = await makeConfirmingFixture()
+        XCTAssertTrue(SoratomoTimelineView.locksContentAndBack(during: cancelled.viewModel.phase))
+        cancelled.viewModel.cancel()
+        XCTAssertFalse(SoratomoTimelineView.locksContentAndBack(during: cancelled.viewModel.phase))
+
+        // 確定: 確認の間から処理の間（抜けた後も `.leaving` のまま）まで、止めたまま途切れない
+        let confirmed = await makeConfirmingFixture()
+        confirmed.leaveService.leaveResult = .success(SoratomoLeaveResult(groupDeleted: false))
+        XCTAssertTrue(SoratomoTimelineView.locksContentAndBack(during: confirmed.viewModel.phase))
+        await confirmed.viewModel.confirm()
+        XCTAssertEqual(confirmed.viewModel.phase, .leaving)
+        XCTAssertTrue(SoratomoTimelineView.locksContentAndBack(during: confirmed.viewModel.phase))
     }
 }
