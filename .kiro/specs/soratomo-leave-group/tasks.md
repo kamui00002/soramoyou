@@ -37,13 +37,14 @@
 
 - [ ] 1. 共通の削除の部品を分け、1グループ版の片づけ（`leaveSoratomoGroup`）を作る
 
-- [ ] 1.1 共通の削除の部品を分け、消す前の照合の口を足す（退会の動きは変えない）
+- [x] 1.1 共通の削除の部品を分け、消す前の照合の口を足す（退会の動きは変えない）
   - `functions/soratomoDeletion.js` の手順1（`leaveOrDeleteGroupTx`）を、読みの半分（グループ・メンバーの全文書・招待コードを読み、`core.planMembershipRemoval` で計画する）と、書きの半分（計画どおりに書く）の2つの内部関数に分ける。`leaveOrDeleteGroupTx` は、この2つを1つのトランザクションで呼ぶだけにする（戻り値と書き込みは今と同じ）
   - `deleteSkiesByQuery` と `deleteImagesByPrefix` に、省略できる引数 `beforeDelete`（消す前に呼ぶ。偽なら消さずに `{ done: true, deleted, stopped: true }` を返す）を足す。省略したとき（退会・利用停止・後始末・投稿1件の削除）は今と同じ動きにする
   - `deleteUserDataInGroup`・`deleteSoratomoUserData`・`removeMembershipCopyTx`・`finishUserTx` の中身と呼び方は変えない
   - 既存の `soratomoDeletion.test.js`（手順1・手順2〜4・時間の予算・要確認3・統合）と、`scripts/soratomo-admin` の単体とエミュレーターのテストが、無修正のまま通る
   - 陽性対照: `beforeDelete` を省略したときに消さない（既定で偽を返す）実装で、既存の退会のテスト（投稿と画像が消える）が赤になることを先に確かめる。書きの半分に計画を渡し忘れた実装で、既存の手順1のテストが赤になることも確かめる
   - _Requirements: 10.2_
+  - 結果（2026-10-11 10:00）: 変更前の基準は `soratomoDeletion.test.js`＋`scripts/soratomo-admin.emulator.test.js` で 49/49（8080 が別セッションで使用中のため、ポート 8180/9160/9299/4420/4520 の設定を `--config` で渡した）。陽性対照 (a) `beforeDelete` の既定を偽にした実装で削除テスト 39 件中 19 件が赤（手順2〜4・時間の予算・利用者単位・投稿1件・統合・要確認3）。(b) 書きの半分で人数とオーナーを書かない実装で 11 件が赤（手順1の 5 件を含む）。正しい実装に戻して（shasum の頭 `dc888c240ff2` で一致を確認）`npm run lint` 通過・`npm test` 290/290・エミュレーター 49/49。テストのファイルは無修正
 
 - [ ] 1.2 片づけの手順1（`beginLeaveTx`）と、片づけ中の印を作る（陽性対照C4）
   - 前提: 1.1

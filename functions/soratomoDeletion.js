@@ -106,6 +106,77 @@ function millisOf(value) {
 // MARK: - 手順1: メンバーを外す・オーナーの引き継ぎ・グループごとの削除
 
 /**
+ * 手順1の読みの半分（leave-group 要件10.2・design の「共通の削除の部品」）。トランザクションの中で、グループの文書・
+ * メンバーの全文書・（グループごと消すときだけ）招待コードの文書を読み、planMembershipRemoval で計画する。
+ * 書きの半分（applyRemovalPlan）が要るもの（参照・読んだ文書・計画）を全部返す。
+ * - 退会（leaveOrDeleteGroupTx）と抜ける（leave-group の beginLeaveTx）が、同じ読み方と同じ計画を使うために分けた
+ * - 招待コードの読みもここで済ませる。書きの半分に読みを残すと「読みを全部終えてから書く」決まりが崩れる
+ * @param {FirebaseFirestore.Transaction} tx
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ uid: string, groupId: string }} params 形は呼び手が確かめておく
+ * @returns {Promise<{ groupRef: FirebaseFirestore.DocumentReference, selfRef: FirebaseFirestore.DocumentReference,
+ *   groupExisted: boolean, plan: ReturnType<typeof core.planMembershipRemoval>,
+ *   codeRef: FirebaseFirestore.DocumentReference|null, codeSnap: FirebaseFirestore.DocumentSnapshot|null }>}
+ */
+async function readRemovalPlan(tx, db, { uid, groupId }) {
+  const groupRef = db.collection(GROUPS).doc(groupId);
+  const selfRef = groupRef.collection(MEMBERS).doc(uid);
+  const groupSnap = await tx.get(groupRef);
+  const membersSnap = await tx.get(groupRef.collection(MEMBERS));
+  const members = membersSnap.docs.map((doc) => ({
+    uid: doc.id,
+    role: doc.get("role"),
+    joinedAtMs: millisOf(doc.get("joinedAt")),
+  }));
+  const plan = core.planMembershipRemoval({
+    uid,
+    ownerId: groupSnap.exists ? groupSnap.get("ownerId") : null,
+    members,
+  });
+
+  // 招待コードの文書は、グループごと消すときだけ読む（消すかどうかは書きの半分が「このグループを指しているか」で決める）
+  let codeRef = null;
+  let codeSnap = null;
+  if (groupSnap.exists && plan.kind === "delete_group") {
+    const code = groupSnap.get("inviteCode");
+    codeRef = isUid(code) ? db.collection(INVITE_CODES).doc(code) : null;
+    codeSnap = codeRef ? await tx.get(codeRef) : null;
+  }
+  return { groupRef, selfRef, groupExisted: groupSnap.exists, plan, codeRef, codeSnap };
+}
+
+/**
+ * 手順1の書きの半分。readRemovalPlan の計画どおりに書くだけで、tx.get は呼ばない（読みは全部済んでいる）。
+ * 分岐と書き込みは、分ける前の leaveOrDeleteGroupTx と同じ（下の leaveOrDeleteGroupTx の説明を参照）。
+ * @param {FirebaseFirestore.Transaction} tx
+ * @param {Awaited<ReturnType<typeof readRemovalPlan>>} read
+ * @param {string} groupId 招待コードが「このグループを指しているか」の確かめに使う
+ * @returns {{ kind: "leave"|"delete_group", removed: boolean, ownerTransferred: boolean, groupExisted: boolean }}
+ */
+function applyRemovalPlan(tx, { groupRef, selfRef, groupExisted, plan, codeRef, codeSnap }, groupId) {
+  if (!groupExisted) {
+    if (plan.removed) tx.delete(selfRef);
+    return { kind: plan.kind, removed: plan.removed, ownerTransferred: false, groupExisted: false };
+  }
+
+  if (plan.kind === "delete_group") {
+    // 招待コードの文書は、このグループを指しているときだけ消す（他のグループのコードを消さないため・再発行と同じ）
+    if (codeSnap && codeSnap.exists && codeSnap.get("groupId") === groupId) tx.delete(codeRef);
+    tx.delete(groupRef);
+    if (plan.removed) tx.delete(selfRef);
+    return { kind: "delete_group", removed: plan.removed, ownerTransferred: false, groupExisted: true };
+  }
+
+  // leave
+  if (plan.removed) tx.delete(selfRef);
+  tx.update(groupRef, { memberCount: plan.memberCount, ownerId: plan.ownerId });
+  for (const update of plan.roleUpdates) {
+    tx.update(groupRef.collection(MEMBERS).doc(update.uid), { role: update.role });
+  }
+  return { kind: "leave", removed: plan.removed, ownerTransferred: plan.ownerTransferred, groupExisted: true };
+}
+
+/**
  * グループ1つ分の手順1（release-gate 要件2.1・2.2・2.5・2.6・2.7・2.9・2.11・3.4）。
  * グループの文書・メンバーの全文書・（グループごと消すときは）招待コードの文書をトランザクションで読み、
  * planMembershipRemoval の計画どおりに書く。
@@ -127,48 +198,10 @@ async function leaveOrDeleteGroupTx(db, { uid, groupId }) {
   if (!isUid(uid)) throw new TypeError("soratomo: uid が文書IDとして使えない");
   if (!core.isAutoId(groupId)) throw new TypeError("soratomo: groupId が自動IDの形でない");
 
-  const groupRef = db.collection(GROUPS).doc(groupId);
-  const selfRef = groupRef.collection(MEMBERS).doc(uid);
-
+  // 読みの半分と書きの半分を、1つのトランザクションで続けて呼ぶ（戻り値と書き込みは分ける前と同じ）
   return db.runTransaction(async (tx) => {
-    const groupSnap = await tx.get(groupRef);
-    const membersSnap = await tx.get(groupRef.collection(MEMBERS));
-    const members = membersSnap.docs.map((doc) => ({
-      uid: doc.id,
-      role: doc.get("role"),
-      joinedAtMs: millisOf(doc.get("joinedAt")),
-    }));
-    const plan = core.planMembershipRemoval({
-      uid,
-      ownerId: groupSnap.exists ? groupSnap.get("ownerId") : null,
-      members,
-    });
-
-    if (!groupSnap.exists) {
-      if (plan.removed) tx.delete(selfRef);
-      return { kind: plan.kind, removed: plan.removed, ownerTransferred: false, groupExisted: false };
-    }
-
-    if (plan.kind === "delete_group") {
-      // 招待コードの文書は、このグループを指しているときだけ消す（他のグループのコードを消さないため・再発行と同じ）
-      const code = groupSnap.get("inviteCode");
-      const codeRef = isUid(code) ? db.collection(INVITE_CODES).doc(code) : null;
-      const codeSnap = codeRef ? await tx.get(codeRef) : null;
-
-      // ここから書き込み
-      if (codeSnap && codeSnap.exists && codeSnap.get("groupId") === groupId) tx.delete(codeRef);
-      tx.delete(groupRef);
-      if (plan.removed) tx.delete(selfRef);
-      return { kind: "delete_group", removed: plan.removed, ownerTransferred: false, groupExisted: true };
-    }
-
-    // ここから書き込み（leave）
-    if (plan.removed) tx.delete(selfRef);
-    tx.update(groupRef, { memberCount: plan.memberCount, ownerId: plan.ownerId });
-    for (const update of plan.roleUpdates) {
-      tx.update(groupRef.collection(MEMBERS).doc(update.uid), { role: update.role });
-    }
-    return { kind: "leave", removed: plan.removed, ownerTransferred: plan.ownerTransferred, groupExisted: true };
+    const read = await readRemovalPlan(tx, db, { uid, groupId });
+    return applyRemovalPlan(tx, read, groupId);
   });
 }
 
@@ -179,16 +212,21 @@ async function leaveOrDeleteGroupTx(db, { uid, groupId }) {
  * - 読むのは文書の参照だけ（select() で項目を読まない）
  * - 1ページは WriteBatch で消す（300件は1回の上限500件に収まり、失敗はページごと投げる）
  * - 消した文書はクエリに再び当たらないので、カーソルは要らない
+ * - beforeDelete（省略できる・leave-group の照合）: 1ページを読んだ後、消す前に呼ぶ。偽なら消さずに stopped: true で返す。
+ *   「読む→照合→消す」の順なので、照合が通れば、消すのは照合より前に読んだものだけ。省略したとき（退会・利用停止・
+ *   後始末）は、分ける前と同じく確かめずに消す
  * @param {FirebaseFirestore.Firestore} db
  * @param {FirebaseFirestore.Query} query 消す投稿のクエリ（退会者の投稿か、グループの全投稿）
  * @param {() => boolean} pastDeadline
- * @returns {Promise<{ done: boolean, deleted: number }>}
+ * @param {(() => Promise<boolean>)|undefined} [beforeDelete]
+ * @returns {Promise<{ done: boolean, deleted: number, stopped?: true }>}
  */
-async function deleteSkiesByQuery(db, query, pastDeadline) {
+async function deleteSkiesByQuery(db, query, pastDeadline, beforeDelete) {
   let deleted = 0;
   for (;;) {
     const snap = await query.select().limit(SKY_PAGE_SIZE).get();
     if (snap.empty) return { done: true, deleted };
+    if (beforeDelete && !(await beforeDelete())) return { done: true, deleted, stopped: true };
     const batch = db.batch();
     for (const doc of snap.docs) batch.delete(doc.ref);
     await batch.commit();
@@ -223,22 +261,30 @@ async function deleteImageChunk(storage, paths) {
 /**
  * 接頭辞の下の画像を一覧し、IMAGE_CHECK_EVERY 件ずつ区切って消す。区切りごとに締め切りを確かめる。
  * 投稿の文書の無い取り残しの画像も、接頭辞で拾うので一緒に消える（要件1.3）。
+ * - beforeDelete（省略できる・leave-group の照合）: 区切り（100件と、最後の端数）を一覧した後、消す前に呼ぶ。偽なら
+ *   その区切りを消さずに stopped: true で返す。省略したとき（退会・利用停止・後始末・投稿1件）は、分ける前と同じ
  * @param {import("./soratomoStorage").SoratomoStorageGateway} storage
  * @param {string} prefix 末尾が "/" の接頭辞（soratomo/{groupId}/{uid}/ か soratomo/{groupId}/）
  * @param {() => boolean} pastDeadline
- * @returns {Promise<{ done: boolean, deleted: number }>}
+ * @param {(() => Promise<boolean>)|undefined} [beforeDelete]
+ * @returns {Promise<{ done: boolean, deleted: number, stopped?: true }>}
  */
-async function deleteImagesByPrefix(storage, prefix, pastDeadline) {
+async function deleteImagesByPrefix(storage, prefix, pastDeadline, beforeDelete) {
   let deleted = 0;
   let chunk = [];
   for await (const path of storage.listFiles(prefix)) {
     chunk.push(path);
     if (chunk.length < IMAGE_CHECK_EVERY) continue;
+    // 途中で返すと for await が一覧（ジェネレーター）を閉じる
+    if (beforeDelete && !(await beforeDelete())) return { done: true, deleted, stopped: true };
     deleted += await deleteImageChunk(storage, chunk);
     chunk = [];
     if (pastDeadline()) return { done: false, deleted };
   }
-  if (chunk.length > 0) deleted += await deleteImageChunk(storage, chunk);
+  if (chunk.length > 0) {
+    if (beforeDelete && !(await beforeDelete())) return { done: true, deleted, stopped: true };
+    deleted += await deleteImageChunk(storage, chunk);
+  }
   return { done: true, deleted };
 }
 
