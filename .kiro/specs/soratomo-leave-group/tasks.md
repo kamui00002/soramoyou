@@ -156,7 +156,7 @@
 
 ## (d) Functionsとルールのまとめ
 
-- [ ] 5. Functionsとルールのテストをすべて通し、既存の動きを変えていないことを点検する
+- [x] 5. Functionsとルールのテストをすべて通し、既存の動きを変えていないことを点検する
   - 前提: 1〜4
   - `functions/` で `npm run lint`・`npm test`・`npm run test:emulator` を通す。リポジトリの直下で `rules_test_soratomo.py`（通常と `--mutants`）を通す。ルールを変えていない `rules_test_post_update.py` と `rules_test_storage_soratomo.py` も通ることを見る
   - 差分で確かめる:
@@ -169,6 +169,7 @@
   - 既存のテストのうちmainで既に落ちているものは、変更前のmainでも同じく落ちることを確かめて区別する
   - 陽性対照: 差分の確認は、わざと既存のルールに1行足して、確認に引っかかることを先に確かめる。ログの確認は、わざと新しいログに `name` を足して、確認に引っかかることを先に確かめる
   - _Requirements: 6.6, 6.8, 7.1, 9.6, 10.2, 10.3, 10.4, 10.5, 10.6, 11.2_
+  - 結果（2026-10-11 14:24）: `functions/` で `npm run lint` 通過・`npm test` 290/290。`npm run test:emulator` に登録した7ファイルは、8080 が別セッションで使用中のため別ポートの設定（`--config`）で回して 213/213。ルールは `rules_test_soratomo.py` が通常 116/116・`--mutants` で壊し方21個・取りこぼし0。変えていない `rules_test_post_update.py` は 13/13、`rules_test_storage_soratomo.py` は 24/24。差分の確かめ（`git diff origin/main...HEAD`）: 既存のテストで消した行は、偽のゲートウェイの引数の説明と宣言（省略できる `onList` を足した）・`CALLABLES` のコメント1行・ルールのテストのループの組み方だけで、確かめ（assertion）は1行も消していない（退会・利用停止・後始末・開発者の削除と、作成・参加・投稿・通報・同意・退会の既存のテストが無修正で通った）。実装で消した行は、コメント・`require` の行（足すための書き換え）・参加の2行（写しの読みと作成の参照）だけで、既存のそらとものCallableの受け付けの条件と応答は、参加の `leave_pending` を除いて変わっていない。`onSoratomoSkyCreated` と通知の送信には差分が無く、抜けるで通知を送る処理も足していない。`storage.rules` と `firestore.indexes.json` は差分なし。検査（scratchpad の `check5.py`）: (1) 新しいログ7種（`soratomoLeaveGroup: ok`・`soratomoLeave:` の4つ・`soratomoHousekeeping: leave_sweep` と `leave_sweep_failed`）の項目をコードから抜き出し、内部IDと件数の許可リストと突き合わせた。グループ名・表示名・キャプション・招待コードの項目は無い。(2) firestore.rules の main との差分が、新しい `match` の6行とコメントの数の1行だけであることを確かめた。陽性対照: ログの検査は、仕事Cの `swept` に `name` を足した写しで引っかかった（終了コード1）。差分の検査は、通報の記録の `match` に `allow read: if isSoratomoUser();` を1行足した写しで「想定外に足した」と引っかかった（終了コード1）。本物はどちらも終了コード0。mainで既に落ちているテストは、このspecの範囲（Functionsとルール）には無かった（すべて通った）
 
 ## (e) iOSアプリ
 
