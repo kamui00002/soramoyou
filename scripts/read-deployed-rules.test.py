@@ -28,6 +28,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 import urllib.error
@@ -258,6 +259,9 @@ class ReadDeployedRulesTest(unittest.TestCase):
 
     def test_保存先がリポジトリの中なら本番を読まずに断る(self):
         inside = os.path.join(rdr.REPO_ROOT, "読み返しの保存先-テスト")
+        self.assertFalse(os.path.exists(inside), "前の実行の残り")
+        # 道具が断らずに作ってしまったときも、リポジトリの中に残さない（次の実行の巻き添えを防ぐ）
+        self.addCleanup(shutil.rmtree, inside, True)
         code, out = self.run_tool([inside, "--firestore", self.local_fs, "--storage", self.local_st])
         self.assertEqual(code, 2, out)
         self.assertFalse(os.path.exists(inside))
