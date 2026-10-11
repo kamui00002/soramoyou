@@ -1077,6 +1077,176 @@ test("定期実行: 6時間ごと・制限時間540秒・メモリ512MiB・同�
   assert.deepEqual(endpoint.region, ["asia-northeast1"]);
 });
 
+// MARK: - 定期実行の仕事C: 途中で止まった抜けるを終える（leave-group 3.2）
+
+const MINUTE = 60 * 1000;
+const LEAVE_SECRETS = Object.freeze(["ひみつの抜ける会", "SKYLEAVA", "SKYLEAVB", "ひみつのキャプション", "そらのボブ"]);
+
+/**
+ * 抜けるの途中で止まった人を入れる。groupId のグループ（オーナーは owner）から uid が外れた後で、片づけ中の印（leftAt は
+ * ageMs 前）・所属の写し・利用者の文書・投稿1件（キャプションつき）と画像2枚が残っている。
+ * member が真なら、入り直した後（メンバーの文書がある・印だけが古いまま残った）。
+ */
+async function seedPendingLeave({ uid, groupId, owner, code, ageMs, member = false }) {
+  await seedGroup({ groupId, ownerId: owner, inviteCode: code, memberIds: member ? [owner, uid] : [owner], name: "ひみつの抜ける会" });
+  await seedMembership(uid, groupId, `s${uid}`);
+  await db.collection("soratomoGroups").doc(groupId).collection("skies").doc(`s${uid}`).update({ caption: "ひみつのキャプション" });
+  await db.collection("soratomoPendingLeaves").doc(`${uid}_${groupId}`).set({ uid, groupId, episodeId: "e1", leftAt: Timestamp.fromMillis(Date.now() - ageMs) });
+}
+/** 印・写し・投稿・画像が残っているか。 */
+async function leaveLeftovers(uid, groupId) {
+  return {
+    marker: (await db.collection("soratomoPendingLeaves").doc(`${uid}_${groupId}`).get()).exists,
+    copy: (await db.collection("soratomoUsers").doc(uid).collection("groups").doc(groupId).get()).exists,
+    sky: (await db.collection("soratomoGroups").doc(groupId).collection("skies").doc(`s${uid}`).get()).exists,
+    images: [...storageFiles].filter((p) => p.startsWith(`soratomo/${groupId}/${uid}/`)).length,
+  };
+}
+/** swept のログから、実行のたびに変わる ageMs を外して返す（ageMs は別に確かめる）。 */
+function sweptLogs() {
+  return logFieldsOf("soratomoLeave: swept").map(({ ageMs, ...rest }) => rest);
+}
+
+test("定期実行の仕事C: 確定から30分を過ぎた印を sweep で終えて swept を出し、30分より新しい印には触らない。仕事Aより先に動き、ログに名前などを出さない", async () => {
+  await seedPendingLeave({ uid: "bob", groupId: "gl1", owner: "alice", code: "SKYLEAVA", ageMs: 31 * MINUTE });
+  await seedPendingLeave({ uid: "carl", groupId: "gl2", owner: "alice", code: "SKYLEAVB", ageMs: 5 * MINUTE });
+  await db.collection("users").doc("bob").set({ displayName: "そらのボブ" });
+  claims = new Map([["alice", ON], ["bob", ON], ["carl", {}]]); // 仕事Aに消されないよう、アカウントはある
+
+  await runHousekeeping();
+
+  assert.deepEqual(await leaveLeftovers("bob", "gl1"), { marker: false, copy: false, sky: false, images: 0 }, "30分を過ぎた印は終える");
+  assert.equal((await db.collection("soratomoUsers").doc("bob").get()).get("groupCount"), 0);
+  assert.deepEqual(await leaveLeftovers("carl", "gl2"), { marker: true, copy: true, sky: true, images: 2 }, "30分より新しい印には触らない");
+  assert.deepEqual(sweptLogs(), [
+    {
+      uid: "bob", groupId: "gl1", done: true, state: "continued", kind: "leave", removed: false,
+      ownerTransferred: false, groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+    },
+  ]);
+  const ageMs = logFieldsOf("soratomoLeave: swept")[0].ageMs;
+  assert.ok(ageMs >= 31 * MINUTE && ageMs < 40 * MINUTE, `ageMs は確定からの時間（${ageMs}）`);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: leave_sweep"), [
+    { scanned: 1, completed: 1, unfinished: 0, overdue: 0, malformed: 0, failed: 0 },
+  ]);
+  const order = record.logs.map((l) => l.args[0]);
+  assert.ok(
+    order.indexOf("soratomoHousekeeping: leave_sweep") < order.indexOf("soratomoHousekeeping: sweep"),
+    "仕事Cは仕事Aより先に動く"
+  );
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: sweep"), [{ scanned: 2, missingAuth: 0, completed: 0, unfinished: 0 }]);
+  const logs = allLogs();
+  for (const secret of LEAVE_SECRETS) assert.ok(!logs.includes(secret), `ログに「${secret}」を出さない`);
+});
+
+test("定期実行の仕事C（陽性対照C2のサーバー版）: 入り直した後の古い印は、印だけを消してメンバーを外さない（stale_marker）", async () => {
+  await seedPendingLeave({ uid: "bob", groupId: "gl1", owner: "alice", code: "SKYLEAVA", ageMs: 31 * MINUTE, member: true });
+  claims = new Map([["alice", ON], ["bob", ON]]);
+
+  await runHousekeeping();
+
+  const groupRef = db.collection("soratomoGroups").doc("gl1");
+  assert.equal((await groupRef.collection("members").doc("bob").get()).exists, true, "入り直したメンバーを外し直さない（8.6）");
+  assert.equal((await groupRef.get()).get("memberCount"), 2);
+  assert.deepEqual(await leaveLeftovers("bob", "gl1"), { marker: false, copy: true, sky: true, images: 2 }, "印だけが消える");
+  assert.equal((await db.collection("soratomoUsers").doc("bob").get()).get("groupCount"), 1);
+  assert.deepEqual(sweptLogs(), [
+    {
+      uid: "bob", groupId: "gl1", done: true, state: "stale_marker", kind: null, removed: false,
+      ownerTransferred: false, groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+    },
+  ]);
+});
+
+test("定期実行の仕事C: 24時間を過ぎて終わらない（失敗した）ものに overdue と sweep_item_failed を出し、印と写しを残す。次の実行で終える", async () => {
+  await seedPendingLeave({ uid: "bob", groupId: "gl1", owner: "alice", code: "SKYLEAVA", ageMs: 25 * 60 * MINUTE });
+  claims = new Map([["alice", ON], ["bob", ON]]);
+  const originalDelete = fakeStorageGateway.deleteFile;
+  fakeStorageGateway.deleteFile = async () => {
+    throw new Error("偽物: 画像の削除の失敗");
+  };
+  try {
+    await runHousekeeping();
+  } finally {
+    fakeStorageGateway.deleteFile = originalDelete;
+  }
+
+  const left = await leaveLeftovers("bob", "gl1");
+  assert.equal(left.marker, true, "印が残る（次の実行が拾う）");
+  assert.equal(left.copy, true, "写しが残る");
+  const failed = logFieldsOf("soratomoLeave: sweep_item_failed");
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].uid, "bob");
+  assert.equal(failed[0].groupId, "gl1");
+  assert.equal(failed[0].errorName, "Error");
+  const overdue = logFieldsOf("soratomoLeave: overdue");
+  assert.equal(overdue.length, 1);
+  assert.deepEqual(Object.keys(overdue[0]).sort(), ["ageMs", "groupId", "uid"]);
+  assert.ok(overdue[0].ageMs > 24 * 60 * MINUTE);
+  assert.equal(record.logs.find((l) => l.args[0] === "soratomoLeave: overdue").level, "warn");
+  assert.equal(record.logs.find((l) => l.args[0] === "soratomoLeave: sweep_item_failed").level, "error");
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: leave_sweep"), [
+    { scanned: 1, completed: 0, unfinished: 0, overdue: 1, malformed: 0, failed: 1 },
+  ]);
+
+  // ゲートウェイが直った後の次の実行で終える
+  record.logs = [];
+  await runHousekeeping();
+  assert.deepEqual(await leaveLeftovers("bob", "gl1"), { marker: false, copy: false, sky: false, images: 0 });
+  assert.equal(sweptLogs()[0].done, true);
+  assert.deepEqual(logFieldsOf("soratomoLeave: overdue"), []);
+});
+
+test("定期実行の仕事C: 形の違う印は消さずに飛ばして malformed_marker を出し、ほかには触らない", async () => {
+  const old = Timestamp.fromMillis(Date.now() - 31 * MINUTE);
+  const markers = {
+    bad1: { uid: "bob", groupId: "gl1" }, // 文書IDが「uid_groupId」でない
+    "bob_gl-1": { uid: "bob", groupId: "gl-1" }, // groupId が自動IDの形でない
+    "a_gl1": { uid: "a/b", groupId: "gl1" }, // uid に「/」
+    nouid_gl1: { groupId: "gl1" }, // uid が無い
+  };
+  for (const [id, fields] of Object.entries(markers)) {
+    await db.collection("soratomoPendingLeaves").doc(id).set({ ...fields, episodeId: "e1", leftAt: old });
+  }
+  await seedGroup({ groupId: "gl1", ownerId: "alice", inviteCode: "SKYLEAVA", memberIds: ["alice", "bob"], name: "ひみつの抜ける会" });
+
+  await runHousekeeping();
+
+  assert.deepEqual(logFieldsOf("soratomoLeave: malformed_marker").map((f) => f.markerId).sort(), Object.keys(markers).sort());
+  assert.equal(record.logs.find((l) => l.args[0] === "soratomoLeave: malformed_marker").level, "warn");
+  assert.equal((await db.collection("soratomoPendingLeaves").get()).size, 4, "消さない（開発者が確かめる）");
+  assert.equal((await db.collection("soratomoGroups").doc("gl1").collection("members").doc("bob").get()).exists, true);
+  assert.deepEqual(sweptLogs(), []);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: leave_sweep"), [
+    { scanned: 4, completed: 0, unfinished: 0, overdue: 0, malformed: 4, failed: 0 },
+  ]);
+});
+
+test("定期実行: 仕事Cが例外で止まっても、仕事Aと仕事Bは動く", async () => {
+  await seedSweepScene();
+  await seedReportRecord("rold", { ageMs: 11 * MINUTE });
+  const originalCollection = db.collection;
+  db.collection = function (name) {
+    if (name === "soratomoPendingLeaves") {
+      return {
+        where: () => {
+          throw new Error("クエリの失敗");
+        },
+      };
+    }
+    return originalCollection.call(this, name);
+  };
+  try {
+    await runHousekeeping();
+  } finally {
+    db.collection = originalCollection;
+  }
+  assert.equal(logFieldsOf("soratomoHousekeeping: leave_sweep_failed").length, 1);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: leave_sweep"), []);
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: sweep"), [{ scanned: 5, missingAuth: 3, completed: 3, unfinished: 0 }], "仕事Aは動く");
+  assert.deepEqual(logFieldsOf("soratomoHousekeeping: reforward"), [{ attempted: 1, sent: 1 }], "仕事Bは動く");
+});
+
 // MARK: - Callable の拒否と要確認6（release-gate 4.5）
 
 test("退会: 要求の本文に他人の uid を書いても、消すのは認証の uid だけ（要件3.5）", async () => {

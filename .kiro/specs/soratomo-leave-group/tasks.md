@@ -110,7 +110,7 @@
 
 ## (b) Functions: Callableと定期実行の配線
 
-- [ ] 3. 抜けるのCallableと、定期実行の仕事Cを配線する
+- [x] 3. 抜けるのCallableと、定期実行の仕事Cを配線する
 
 - [x] 3.1 抜けるのCallable `soratomoLeaveGroup` を作る
   - 前提: 1.3, 2.1（同じ `functions/soratomo.js` を触る）
@@ -125,7 +125,7 @@
   - _Requirements: 2.6, 3.13, 3.14, 4.1, 9.1, 9.2, 9.3, 9.4, 9.6, 11.2, 11.3, 11.4_
   - 結果（2026-10-11 14:05）: `soratomoDeleteMyData` の直後に `soratomoLeaveGroup` を置いた（`requireFlag: false`・120秒・512MiB・予算45秒・`origin: "self"`）。`groupId` が自動IDの形でなければ `invalid_input`。応答は `{ done, groupDeleted }`（`groupDeleted` は `kind === "delete_group"`）、成功のログは design の10項目。ヘッダーの本数（Callable 8本・公開11本）・説明・`soratomoCallable` の `requireFlag` の説明（false にしてよいのは退会と抜けるだけ）・`index.js:550`（Callable 8本）を直した。`CALLABLES` には足さず、そのコメントだけ「退会と抜ける以外」に直した。テストは `soratomo.test.js` に6件（未ログイン・クレーム無し/false/利用停止/未同意の4通り・`invalid_input` の7通りで印も書かず internal にもしない・他人の uid とメンバーでない人・最後の1人の `groupDeleted: true` とログの項目と名前などが出ないこと・関数の設定と公開する関数が11本）。陽性対照: (a) `requireFlag: false` を外した実装で、クレーム無しのテストが `permission-denied`（`flag_off`）で赤（クレーム `{}` の人を使う他人のテストも赤・2件）。(b) 本文の `uid` を使う実装で、他人のテストだけが赤（alice が外れた）。(c) 成功のログにグループ名を混ぜた実装で、ログのテストだけが赤。正しい実装に戻して shasum の頭 `d55a373db2a4` で一致を確認。正しい実装で `npm run lint` 通過・`npm test` 290/290・エミュレーター（store・soratomo・削除・管理）183/183
 
-- [ ] 3.2 定期実行に、途中で止まった抜けるを終える仕事Cを足す（陽性対照C2のサーバー版）
+- [x] 3.2 定期実行に、途中で止まった抜けるを終える仕事Cを足す（陽性対照C2のサーバー版）
   - 前提: 1.4, 3.1
   - `soratomoHousekeeping` の中で、仕事Aより先に、別の `try` で囲んで実行する（失敗しても仕事Aと仕事Bを止めない）。予算は開始から `LEAVE_SWEEP_BUDGET_MS`（120秒）。仕事Aの締め切り（開始から480秒）は今のまま
   - 印を `where("leftAt", "<=", 今−30分)`・`orderBy("leftAt")`・`limit(50)` で読み、`startAfter` で次のページへ進む。30分より新しい印は扱わない（アプリの繰り返し、最大8回×75秒と重ねないため）。`firestore.indexes.json` は変えない（単一項目の自動インデックスで動く見込み。本番では要確認Q1で確かめる）
@@ -139,6 +139,7 @@
   - テスト（`soratomo.test.js`）: 30分より前の印を終えて `swept` を出す。30分より新しい印は触らない。24時間を過ぎて終わらないものに `overdue` を出す（終わらない状態は、偽のゲートウェイの失敗で作る）。形の違う印は飛ばして `malformed_marker` を出す。仕事Cが例外で止まっても、仕事Aと仕事Bは動く。仕事Cは仕事Aより先に動く。ログに名前などが無い
   - 陽性対照（C2のサーバー版）: `origin: "self"` で呼ぶ実装で、メンバーの文書がある印（入り直した後）のテストが、メンバーを外して赤になることを先に確かめる。30分の条件を外した実装で、新しい印のテストが赤になることも確かめる
   - _Requirements: 4.6, 4.8, 11.2, 11.3, 11.5_
+  - 結果（2026-10-11 14:12）: `functions/soratomo.js` に `sweepPendingLeaves` を足し、`soratomoHousekeeping` の中で仕事Aより先に別の `try` で呼ぶ（失敗のログは `soratomoHousekeeping: leave_sweep_failed`）。印は `where("leftAt", "<=", 開始−30分)`・`orderBy("leftAt")`・`limit(50)`・`startAfter` で読む。`firestore.indexes.json` は変えていない（エミュレーターでは単一項目で動いた。本番は要確認Q1＝11.6）。印の形の検査には `soratomoDeletion.js` の `isUid` を export して同じ規則を使った。ヘッダーと `soratomoHousekeeping` のコメントに仕事Cを足した。テストは `soratomo.test.js` に5件（30分より前の印を終えて `swept`・30分より新しい印は触らない・仕事Aより先・ログに名前などが出ない／入り直した後の印は `stale_marker` でメンバーを外さない／24時間を過ぎて失敗したものに `overdue`（warn）と `sweep_item_failed`（error）・印と写しが残り次の実行で終える／形の違う印4通りを消さずに `malformed_marker`／仕事Cがクエリで例外を投げても仕事Aと仕事Bが動く）。仕事Cのテストでは、印の人のアカウントを `claims` に入れて、仕事Aに消されないようにした。陽性対照: (C2のサーバー版) 仕事Cが `origin: "self"` で呼ぶ実装で、入り直した後の印のテストだけが「入り直したメンバーを外し直さない」で赤。30分の条件を外した実装で、30分より前の印のテストだけが「30分より新しい印には触らない」で赤（新しい印の片づけまで進んだ）。正しい実装に戻して shasum の頭 `5fd09cad4ac2` で一致を確認。正しい実装で `npm run lint` 通過・`npm test` 290/290・エミュレーター（store・soratomo・削除・管理）188/188
 
 ## (c) Firestoreのルール
 

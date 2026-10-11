@@ -16,7 +16,8 @@
 // - onSoratomoReportCreated（release-gate 4.3）: 通報の記録を、開発者の Discord（フィードバックとは別の送り先）へ
 //   ID・理由・時刻だけで送る。失敗は記録の状態で追い、例外を投げない。
 // - soratomoHousekeeping（release-gate 4.4）: 6時間ごとの定期実行。仕事A＝Auth のアカウントが無い人のデータを
-//   共通の削除で消す。仕事B＝転送に失敗した通報を送り直す。
+//   共通の削除で消す。仕事B＝転送に失敗した通報を送り直す。仕事C（leave-group 3.2・仕事Aより先）＝途中で止まった
+//   抜けるを、片づけ中の印（soratomoPendingLeaves）から続けて終える。
 //
 // index.js の末尾の Object.assign(exports, require("./soratomo")) で公開する（tasks 8.3）。
 // ここで公開するのは Cloud Functions の 11 本だけにする（ほかの値を exports に混ぜない）。
@@ -34,13 +35,13 @@ const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 const core = require("./soratomoCore");
 const store = require("./soratomoStore");
 const { createNgWordProvider } = require("./soratomoNgWords");
 const { createStorageGateway } = require("./soratomoStorage");
-const { deleteSoratomoUserData, leaveSoratomoGroup } = require("./soratomoDeletion");
+const { deleteSoratomoUserData, leaveSoratomoGroup, PENDING_LEAVES, isUid } = require("./soratomoDeletion");
 const { sendToTokenGrouped } = require("./pushHelpers");
 
 /** 既存の Functions と同じリージョン（index.js の setGlobalOptions と同じ値を明示する）。 */
@@ -601,10 +602,91 @@ async function reforwardPendingReports(webhookUrl) {
   return result;
 }
 
+// MARK: - 途中で止まった抜けるを終える（leave-group 3.2）
+
+/** 仕事Cの予算（開始からのミリ秒）。仕事Aの締め切り（開始から480秒）は変えない（仕事Aに残る時間は、仕事Cが使った分だけ減る）。 */
+const LEAVE_SWEEP_BUDGET_MS = 120_000;
+/** 抜けるの確定（leftAt）からこの時間を過ぎた印だけを扱う。アプリの繰り返し（最大8回×75秒）と同じ回を重ねて進めないため。 */
+const LEAVE_SWEEP_MIN_AGE_MS = 30 * 60 * 1000;
+/** 1回に読む印の数。 */
+const LEAVE_SWEEP_PAGE = 50;
+/** 抜けるの確定からこの時間を過ぎても終わらなければ overdue を出す（要件4.8）。 */
+const LEAVE_OVERDUE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 仕事C: 途中で止まった抜けるを、片づけ中の印から続けて終える（leave-group 要件4.6・4.8・11.5）。
+ * - 印を leftAt が30分より前のものだけ、古い順に50件ずつ読む（leftAt の単一項目のクエリ。複合インデックスは増やさない）
+ * - 印の形（uid が isUid・groupId が自動ID・文書IDが「uid_groupId」）が違えば、消さずに飛ばして malformed_marker を出す
+ *   （開発者が確かめる。書き手は Functions だけなので、ふつうは起きない）
+ * - 各印で leaveSoratomoGroup を origin: "sweep" で呼ぶ。手順1でメンバーを外さないので、入り直した後の古い印は
+ *   印だけを消して終わる（stale_marker・遅れた片づけが入り直した人を外し直さない＝要件8.6）
+ * - 1件の失敗で残りを止めない。終わらなかった印は残り、次の実行が拾う。予算を過ぎたら、残りは次の実行に回す
+ * - ログは内部IDと件数だけ（要件11.2・11.5）: 1件ごとに swept、終わらないか失敗して24時間を過ぎたものに overdue（warn）、
+ *   失敗に sweep_item_failed（error）。グループ名・表示名・キャプション・招待コードは出さない
+ * @param {number} startedMs 定期実行の開始の時刻
+ * @returns {Promise<{ scanned: number, completed: number, unfinished: number, overdue: number, malformed: number,
+ *   failed: number }>} scanned は形を確かめた印の数（malformed を含む）
+ */
+async function sweepPendingLeaves(startedMs) {
+  const deadlineMs = startedMs + LEAVE_SWEEP_BUDGET_MS;
+  const cutoff = Timestamp.fromMillis(startedMs - LEAVE_SWEEP_MIN_AGE_MS);
+  const summary = { scanned: 0, completed: 0, unfinished: 0, overdue: 0, malformed: 0, failed: 0 };
+  let last = null;
+  while (Date.now() < deadlineMs) {
+    let query = db.collection(PENDING_LEAVES).where("leftAt", "<=", cutoff).orderBy("leftAt").limit(LEAVE_SWEEP_PAGE);
+    if (last) query = query.startAfter(last);
+    const snap = await query.get();
+    for (const doc of snap.docs) {
+      if (Date.now() >= deadlineMs) break;
+      summary.scanned += 1;
+      const uid = doc.get("uid");
+      const groupId = doc.get("groupId");
+      if (!isUid(uid) || !core.isAutoId(groupId) || doc.id !== `${uid}_${groupId}`) {
+        summary.malformed += 1;
+        logger.warn("soratomoLeave: malformed_marker", { markerId: doc.id });
+        continue;
+      }
+      const leftAtMs = millisOf(doc.get("leftAt"));
+      let done = false;
+      try {
+        const result = await leaveSoratomoGroup({ db, storage, nowMs: Date.now }, { uid, groupId, deadlineMs, origin: "sweep" });
+        done = result.done;
+        logger.info("soratomoLeave: swept", {
+          uid,
+          groupId,
+          done: result.done,
+          state: result.state,
+          kind: result.kind,
+          removed: result.removed,
+          ownerTransferred: result.ownerTransferred,
+          groupDeleted: result.groupDeleted,
+          skiesDeleted: result.skiesDeleted,
+          imagesDeleted: result.imagesDeleted,
+          ageMs: Date.now() - leftAtMs,
+        });
+        if (done) summary.completed += 1;
+        else summary.unfinished += 1;
+      } catch (err) {
+        summary.failed += 1;
+        logger.error("soratomoLeave: sweep_item_failed", { uid, groupId, errorName: err && err.name, errorCode: err && err.code });
+      }
+      const ageMs = Date.now() - leftAtMs;
+      if (!done && ageMs > LEAVE_OVERDUE_MS) {
+        summary.overdue += 1;
+        logger.warn("soratomoLeave: overdue", { uid, groupId, ageMs });
+      }
+    }
+    if (snap.size < LEAVE_SWEEP_PAGE) break;
+    last = snap.docs[snap.docs.length - 1];
+  }
+  return summary;
+}
+
 /**
  * 6時間ごとの後始末と再送（design の soratomoHousekeeping）。同時に1つだけ動く（maxInstances: 1）。
- * 仕事A→仕事Bの順に、別々の try で囲む（片方の失敗で他方を止めない）。仕事Aは締め切りを持ち、仕事Bの時間を残す。
+ * 仕事C→仕事A→仕事Bの順に、別々の try で囲む（どれかの失敗で他を止めない）。仕事Aは締め切りを持ち、仕事Bの時間を残す。
  * 6時間ごとなので、Auth の削除から最悪6時間で拾い、途中で止まっても24時間の間に4回の機会がある（要件4.1）。
+ * 仕事C（leave-group 3.2）は予算120秒で先に動く。途中で止まった抜けるは、確定から最大6時間30分で最初の機会が来る（要件4.6）。
  */
 const soratomoHousekeeping = onSchedule(
   {
@@ -617,6 +699,11 @@ const soratomoHousekeeping = onSchedule(
   },
   async () => {
     const startedMs = Date.now();
+    try {
+      logger.info("soratomoHousekeeping: leave_sweep", await sweepPendingLeaves(startedMs));
+    } catch (err) {
+      logger.error("soratomoHousekeeping: leave_sweep_failed", { errorName: err && err.name, errorCode: err && err.code });
+    }
     try {
       logger.info("soratomoHousekeeping: sweep", await sweepUsersWithoutAccount(startedMs + SWEEP_BUDGET_MS));
     } catch (err) {

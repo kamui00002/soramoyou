@@ -841,6 +841,7 @@ module.exports = {
   // leave-group
   PENDING_LEAVES,
   LEAVE_ORIGINS,
+  isUid, // 定期実行の仕事C（soratomo.js）が、印の uid の形を同じ規則で確かめるため
   beginLeaveTx, // テストで手順1の印（episodeId・leftAt）を直接見るため（leaveOrDeleteGroupTx と同じ扱い）
   leaveSoratomoGroup,
 };
