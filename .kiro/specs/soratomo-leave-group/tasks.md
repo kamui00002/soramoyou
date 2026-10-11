@@ -174,7 +174,7 @@
 
 ## (e) iOSアプリ
 
-- [ ] 6. iOSのエラーと計測の土台を作る（陽性対照C5）
+- [x] 6. iOSのエラーと計測の土台を作る（陽性対照C5）
   - 前提: なし（Functionsと別のセッションで並行してよい）
   - `SoratomoError.leavePending` を足す。文言は「このグループを抜けたときの片づけが、まだ終わっていません。しばらく時間をおいて（長いときは数時間）、もう一度お試しください」（利用者の判断U1のA）。`SoratomoGroupService.reasonToError` に `"leave_pending"` を足す
   - `SoratomoFailedAction` に、`.leaveGroup`（「グループを抜けられませんでした」）と `.prepareLeave`（「グループの情報を読み込めませんでした」）を足す。通信できないときは `SoratomoError.network.userMessage` を出す
@@ -185,6 +185,11 @@
   - 単体テスト: `SoratomoGroupServiceTests`（`leave_pending` の写し）・`SoratomoErrorTests`（文言）・`SoratomoAnalyticsTests`（新しい2つのイベントの名前とパラメータ・`leave_pending` の値）
   - 陽性対照（C5）: 今の現物で、`mapCallableError` が `leave_pending` を `.unknown` にすることを先に確かめる。イベントのパラメータ名を1つ変えた実装で、計測のテストが赤になることも確かめる
   - _Requirements: 8.5, 11.1, 12.1, 12.2, 12.3, 12.4_
+  - 結果（2026-10-11 17:19）:
+    - 陽性対照（17:02〜17:16・C2E3F752・3クラス58件）: `reasonToError` に `leave_pending` が無い現物のままで、`SoratomoGroupServiceTests.testMapCallableError_leavePending` が赤（`.unknown` ≠ `.leavePending`＝C5）。計測の `group_deleted` を `groupDeleted` に変えた実装で `testLeaveGroupEventsHaveFixedNamesAndParameters` と `testNamesAndParameterKeysAreLowerSnakeCase` が赤。参加の写しから `.leavePending` を外した実装で `testJoinFailReasonMapping` が赤。赤はこの4本だけ（54件は通過）
+    - 正しい版（写しを戻してshasumの一致を確認・`reasonToError` に1行）で、同じ3クラス58/58通過（17:16〜17:18・`-parallel-testing-enabled NO`）。件数はxcresultで数えた。変更した3ファイルに警告なし
+    - `SoratomoLeaveFailReason` には `init(_:)` を付けていない（写す元の `SoratomoLeaveError` は7.1で作り、写し方は8.1で決める）
+    - ⚠️ 1回目は並列テストでシミュレーターが複製され、5分平均のロードが一時72まで上がった。以後のiOSのテストは `-parallel-testing-enabled NO` を付ける
 
 - [ ] 7. iOSの部品を作る
 

@@ -8,6 +8,7 @@
 //  イベント名・パラメータ名・値は要件 14 の表と 1 対 1 で対応する。表を変えるときは、
 //  SoratomoAnalyticsTests の期待値と requirements.md の表も同時に変えること。
 //  release-gate 8 で足した値・イベント・画面名は、.kiro/specs/soratomo-release-gate/requirements.md の要件 15 の表と対応する。
+//  leave-group 6 で足した値・イベントは、.kiro/specs/soratomo-leave-group/requirements.md の要件 12 の表と対応する。
 //
 
 import Foundation
@@ -64,6 +65,8 @@ enum SoratomoJoinFailReason: String, CaseIterable {
     case userLimit = "user_limit", network, flagOff = "flag_off", unknown
     /// release-gate 要件 15.2 で足した値（既存の値と並びは変えない。参加には NG ワードの検査が無い）
     case suspended, consentRequired = "consent_required"
+    /// leave-group 要件 12.3 で足した値（抜けたときの片づけが終わっていない。既存の値と並びは変えない）
+    case leavePending = "leave_pending"
 
     /// 失敗の種類から理由を決める（表に無い組み合わせは unknown）
     init(_ error: SoratomoError) {
@@ -77,6 +80,7 @@ enum SoratomoJoinFailReason: String, CaseIterable {
         case .suspended: self = .suspended
         // 作成と同じく、アプリが古いときは consent_required として数える
         case .consentRequired, .outdatedApp: self = .consentRequired
+        case .leavePending: self = .leavePending
         default: self = .unknown
         }
     }
@@ -229,7 +233,20 @@ enum SoratomoGuidelineChoice: String, CaseIterable {
     case decline
 }
 
-// MARK: - イベント（要件 14 の表の 17 個と、release-gate 要件 15.1 の表の 4 個）
+/// 抜ける前の役割（`soratomo_group_left` の `role`・leave-group 要件 12.1）
+enum SoratomoLeaveRole: String, CaseIterable {
+    case owner, member
+}
+
+/// `soratomo_leave_failed` の `reason`（leave-group 要件 12.1）
+///
+/// 抜けるのサービスの失敗（leave-group 7.1 の `SoratomoLeaveError`）からの写し方は、抜けるの ViewModel（8.1）が決める。
+/// 通信できない・制限時間切れは `network`、それ以外は `unknown`（design.md の Error Categories の表）。
+enum SoratomoLeaveFailReason: String, CaseIterable {
+    case network, unknown
+}
+
+// MARK: - イベント（要件 14 の表の 17 個と、release-gate 要件 15.1 の表の 4 個と、leave-group 要件 12 の表の 2 個）
 
 /// そらともの計測イベント
 enum SoratomoEvent: Equatable {
@@ -275,6 +292,12 @@ enum SoratomoEvent: Equatable {
     case userBlocked(source: SoratomoModerationSource)
     /// ガイドラインの全文で操作を選んだ（release-gate。`version` はアプリの版 `SoratomoGuideline.currentVersion`）
     case guidelineResult(choice: SoratomoGuidelineChoice, trigger: SoratomoGuidelineTrigger, version: Int)
+    /// グループを抜けた（leave-group。メンバーでなくなったと確かめて抜けた扱いにした場合を含む・要件 4.5）
+    /// - `groupDeleted`: 最後の 1 人でグループごと消えた（消える）か
+    /// - `completed`: アプリが片づけの完了まで確かめたか（偽なら残りは定期実行が終える）
+    case groupLeft(role: SoratomoLeaveRole, groupDeleted: Bool, completed: Bool)
+    /// グループを抜けられなかった（leave-group。メンバーのまま・要件 4.4）
+    case leaveFailed(SoratomoLeaveFailReason)
 
     /// イベント名（英小文字のスネークケース・`soratomo_` で始める・要件 14.2）
     var name: String {
@@ -300,6 +323,8 @@ enum SoratomoEvent: Equatable {
         case .reportFailed: "soratomo_report_failed"
         case .userBlocked: "soratomo_user_blocked"
         case .guidelineResult: "soratomo_guideline_result"
+        case .groupLeft: "soratomo_group_left"
+        case .leaveFailed: "soratomo_leave_failed"
         }
     }
 
@@ -349,6 +374,11 @@ enum SoratomoEvent: Equatable {
             ["source": .value(source.rawValue)]
         case let .guidelineResult(choice, trigger, version):
             ["choice": .value(choice.rawValue), "trigger": .value(trigger.rawValue), "version": .int(version)]
+        case let .groupLeft(role, groupDeleted, completed):
+            // グループ名・引き継ぐ人の表示名は、型の上で入らない（leave-group 要件 12.4）
+            ["role": .value(role.rawValue), "group_deleted": .bool(groupDeleted), "completed": .bool(completed)]
+        case let .leaveFailed(reason):
+            ["reason": .value(reason.rawValue)]
         }
     }
 }

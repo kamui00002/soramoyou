@@ -333,6 +333,7 @@ final class SoratomoGroupService: SoratomoGroupServiceProtocol, @unchecked Senda
     /// | `details["reason"]` が `flag_off`・`invalid_name`・`invalid_format`・`not_found`・`group_full`・`user_limit`・`not_owner` | 同名の種類 |
     /// | `details["reason"]` が `ng_word`・`suspended`・`not_member` | `.ngWord`・`.suspended`・`.notMember`（release-gate） |
     /// | `details["reason"]` が `sky_not_found` | `.skyGone`（release-gate） |
+    /// | `details["reason"]` が `leave_pending` | `.leavePending`（leave-group・参加の `failed-precondition`） |
     /// | `details["reason"]` が `consent_required` | `details["currentVersion"]` がアプリの版より大きければ `.outdatedApp`、それ以外は `.consentRequired` |
     /// | `details["reason"]` が `outdated_guideline` | `details["currentVersion"]` がアプリの版より大きければ `.outdatedApp`、それ以外は `.unknown` |
     /// | `details["reason"]` が `invalid_input`・`invalid_reason`・`self_report` | 種類を作らない（下の code の行で `.unknown`） |
@@ -409,6 +410,9 @@ final class SoratomoGroupService: SoratomoGroupServiceProtocol, @unchecked Senda
             .notMember
         case "sky_not_found":
             .skyGone
+        // leave-group（抜けたときの片づけが終わっていない人の参加・failed-precondition）
+        case "leave_pending":
+            .leavePending
         case "consent_required":
             // サーバーの版がアプリより新しいと、全文を出して同意しても outdated_guideline で拒否され続ける。
             // そのときは全文を出さずに、アップデートを案内する（design.md の「古い版のアプリ」）

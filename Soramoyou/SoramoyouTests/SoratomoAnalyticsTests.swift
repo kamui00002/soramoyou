@@ -2,10 +2,11 @@
 //  SoratomoAnalyticsTests.swift
 //  SoramoyouTests
 //
-//  そらともの計測（SoratomoEvent・SoratomoScreen と理由の写し方）のテスト ⭐️（tasks 10.2・release-gate 8）
+//  そらともの計測（SoratomoEvent・SoratomoScreen と理由の写し方）のテスト ⭐️（tasks 10.2・release-gate 8・leave-group 6）
 //
 //  期待値は requirements.md の要件 14 の表を写したもの。表を変えたら、ここも同時に変えること。
 //  release-gate で足したものは .kiro/specs/soratomo-release-gate/requirements.md の要件 15 の表を写したもの。
+//  leave-group で足したものは .kiro/specs/soratomo-leave-group/requirements.md の要件 12 の表を写したもの。
 //
 
 @testable import Soramoyou
@@ -86,13 +87,38 @@ final class SoratomoAnalyticsTests: XCTestCase {
         XCTAssertEqual(Set((table + releaseGateTable).map(\.name)).count, 21)
     }
 
+    // MARK: - leave-group の 2 イベントの名前とパラメータ（leave-group 要件 12 の表）
+
+    /// leave-group 要件 12 の表の 2 イベント（値の組み合わせを変えた例）と、期待する名前・パラメータ
+    private let leaveGroupTable: [(event: SoratomoEvent, name: String, parameters: [String: SoratomoAnalyticsValue])] = [
+        (
+            .groupLeft(role: .owner, groupDeleted: false, completed: true), "soratomo_group_left",
+            ["role": .value("owner"), "group_deleted": .bool(false), "completed": .bool(true)]
+        ),
+        (
+            .groupLeft(role: .member, groupDeleted: true, completed: false), "soratomo_group_left",
+            ["role": .value("member"), "group_deleted": .bool(true), "completed": .bool(false)]
+        ),
+        (.leaveFailed(.network), "soratomo_leave_failed", ["reason": .value("network")]),
+        (.leaveFailed(.unknown), "soratomo_leave_failed", ["reason": .value("unknown")]),
+    ]
+
+    func testLeaveGroupEventsHaveFixedNamesAndParameters() {
+        for row in leaveGroupTable {
+            XCTAssertEqual(row.event.name, row.name)
+            XCTAssertEqual(row.event.parameters, row.parameters, "\(row.name) のパラメータが表と違う")
+        }
+        // 既存の 21 個と合わせても名前は重複しない（2 個増えて 23 個）
+        XCTAssertEqual(Set((table + releaseGateTable + leaveGroupTable).map(\.name)).count, 23)
+    }
+
     func testNamesAndParameterKeysAreLowerSnakeCase() {
         // 要件 14.2: 英小文字のスネークケース。そらとものイベントは soratomo_ で始める
         let pattern = try! NSRegularExpression(pattern: "^[a-z]+(_[a-z]+)*$")
         func isSnakeCase(_ text: String) -> Bool {
             pattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
         }
-        for row in table + releaseGateTable {
+        for row in table + releaseGateTable + leaveGroupTable {
             XCTAssertTrue(row.name.hasPrefix("soratomo_"), row.name)
             XCTAssertTrue(isSnakeCase(row.name), row.name)
             for key in row.event.parameters.keys {
@@ -113,6 +139,8 @@ final class SoratomoAnalyticsTests: XCTestCase {
             [
                 "invalid_format", "not_found", "group_full", "user_limit", "network", "flag_off", "unknown",
                 "suspended", "consent_required",
+                // leave-group 要件 12.3（末尾に足す・既存の値と並びは変えない）
+                "leave_pending",
             ]
         )
         XCTAssertEqual(SoratomoPostFailStage.allCases.map(\.rawValue), ["precheck", "image", "upload", "save"])
@@ -143,6 +171,9 @@ final class SoratomoAnalyticsTests: XCTestCase {
         XCTAssertEqual(SoratomoReportFailReason.allCases.map(\.rawValue), ["network", "not_found", "unknown"])
         XCTAssertEqual(SoratomoGuidelineChoice.allCases.map(\.rawValue), ["agree", "decline"])
         XCTAssertEqual(SoratomoGuidelineTrigger.allCases.map(\.rawValue), ["create", "join", "entry"])
+        // leave-group 要件 12 の表の値
+        XCTAssertEqual(SoratomoLeaveRole.allCases.map(\.rawValue), ["owner", "member"])
+        XCTAssertEqual(SoratomoLeaveFailReason.allCases.map(\.rawValue), ["network", "unknown"])
     }
 
     // MARK: - 画面名（要件 14.5・release-gate 要件 15.3）
@@ -191,6 +222,8 @@ final class SoratomoAnalyticsTests: XCTestCase {
                 .userLimit: .userLimit, .network: .network, .flagOff: .flagOff,
                 // release-gate 要件 15.2。参加には NG ワードの検査が無い（ng_word は作成と投稿だけ）
                 .suspended: .suspended, .consentRequired: .consentRequired, .outdatedApp: .consentRequired,
+                // leave-group 要件 12.3
+                .leavePending: .leavePending,
             ],
             unknown: SoratomoJoinFailReason.unknown,
             SoratomoJoinFailReason.init
