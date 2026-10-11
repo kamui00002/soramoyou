@@ -47,26 +47,10 @@ final class SoratomoDependenciesTests: XCTestCase {
         super.setUp()
         defaultsSuiteName = "SoratomoDependenciesTests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: defaultsSuiteName)
-        dependencies = SoratomoDependencies(
-            groupService: MockSoratomoGroupService(),
-            skyService: MockSoratomoSkyService(),
-            imageStore: MockSoratomoImageStore(),
-            profileService: MockSoratomoProfileService(),
-            profileStore: SoratomoProfileStore(fetcher: DependenciesProfileFetcherStub()),
-            primer: DependenciesPrimerStub(),
-            network: .shared,
-            skyLookup: SoratomoSkyLookup(),
-            moderationService: MockSoratomoModerationService(),
-            guidelineService: MockSoratomoGuidelineService(),
-            blockedAuthors: SoratomoBlockedAuthors(notificationCenter: NotificationCenter()),
-            reportedSkies: SoratomoReportedSkies(defaults: defaults),
-            leaveService: MockSoratomoLeaveService(),
-            leftGroups: SoratomoLeftGroups(defaults: defaults),
-            currentUid: { nil }
-        )
+        dependencies = makeDependencies(uid: { nil })
     }
 
-    /// 利用者を切り替えられる組み立て口を作る（`isLeftGroup` のテスト用。記録の置き場は同じテスト用の UserDefaults）
+    /// 利用者を切り替えられる組み立て口を作る（setUp と `isLeftGroup` のテスト用。記録の置き場は同じテスト用の UserDefaults）
     private func makeDependencies(uid: @escaping () -> String?) -> SoratomoDependencies {
         SoratomoDependencies(
             groupService: MockSoratomoGroupService(),
