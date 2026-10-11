@@ -365,7 +365,7 @@
 
 - [ ] 9. iOS全体を点検する
 
-- [ ] 9.1 ログと個人情報・変更なしで満たすこと・既存の挙動を点検する
+- [x] 9.1 ログと個人情報・変更なしで満たすこと・既存の挙動を点検する
   - 前提: 6〜8
   - そらともの端末のログ・クラッシュ記録・計測のパラメータに、グループ名・表示名（確認に出す引き継ぐ人の表示名を含む）・キャプション・招待コードが出ていないことを、コードの検索で確かめる。検索は、わざと1か所に該当の文字列を入れて、引っかかることを先に確かめる（陽性対照）
   - 変更なしで満たす要件を、コードで確かめる:
@@ -377,6 +377,32 @@
     - ガイドラインに未同意のメンバーの入口で、一覧より先に全文が出る判定を変えていない
   - 差分で確かめる: 退会の確認の文言・手順・結果（設定画面と `SoratomoAccountDeletionService`）が変わっていない。新しいイベントと理由が、要件12の表と名前・パラメータ名で一致している
   - _Requirements: 3.9, 3.11, 6.1, 6.2, 6.3, 6.4, 6.5, 6.7, 7.3, 9.5, 10.1, 11.1, 12.2, 12.4_
+  - 結果（2026-10-11 23:21）:
+    - ログと個人情報の検索（scratchpad の `check91.py`）: キーワードではなく、そらともの Swift 48 本（`Soratomo*.swift`）の外へ出る口を全部拾い、渡す中身を許可リストと突き合わせた。A: print 系の補間と文字列でない引数（7 か所・許すのは内部 ID のパス・uid・エラーの説明だけ）、B: `SoratomoEvent` の連想値の型（23 種・Int・Bool・String の生の値を持つ列挙だけ）と `.value(` の中身（22 か所・`<名前>.rawValue` か固定の文字列だけ）、C: `LoggingService`・`ErrorHandler`・Crashlytics・PostHog・Analytics への直接の送信（4 か所だけ許す）、D: `SoratomoError.record` の context（47 か所・固定の文字列か、`StaticString` の引数をそのまま渡す形だけ）。本物は終了コード 0
+    - 陽性対照（21:31）: 写しに 5 種類を 1 つずつ植えた（print に `\(groupName)`・`.value(displayName)`・`case leakTest(groupName: String)`・`LoggingService.shared.logEvent(..., ["name": groupName])`・record の context に `\(groupName)`）。どれも終了コード 1 で、違反は植えた行の 1 件だけ。数は grep と一致した（print 7・record はコメントの例を除いて 47）
+    - 消毒（`LoggingService` の sanitize）はメール・パスワード・トークンしか消さず、名前は消えない。守っているのは型（計測は列挙と真偽値だけ・記録の文脈は `StaticString`）と、出口の数
+    - 間接の経路（Workflow `wf_8049c519-79c` の点検と反証・opus・コードを読むだけで実行はしていない）: record に渡るエラーは、ViewModel 側は連想値の無い `SoratomoError` だけ、サービス側の失敗の型（新しい `SoratomoLeaveFailure`・`SoratomoImageCacheFailure` を含む）は固定の文か内部 ID のパスだけ。サーバーの `HttpsError` の文言は固定か理由のコードで、details は `currentVersion`（数字）だけ（`functions/soratomo.js:91,94,109,111`）。SDK の `FunctionsError` の userInfo も、サーバーの文言・region・url・details だけで要求の本文を含まない（firebase-ios-sdk 12.6.0 の `FunctionsError.swift:185-235`）。確認の題（グループ名）と本文（引き継ぐ人の表示名）はアラートにしか渡らない。抜けた後の一時表示（グループ名を含む）は画面の Text と VoiceOver の読み上げにしか渡らない。端末に新しく書くもの（`soratomo.leftGroups.{uid}` の groupId の配列・画像のキャッシュのフォルダ `soratomo.{groupId}`・古いキャッシュを消したかの印）は内部 ID と固定のキーだけ。壊れた投稿の記録（`soratomo_sky_decode_failed`）に入るのは、case 名と項目名と内部 ID のパスだけ
+    - 検査器の限界: 点検役と反証役が、検査器をすり抜ける書き方を合わせて 15 種類挙げた（生の文字列 `#"…\#(…)"#` の補間・`$0` を print に渡す・`logger?.`・複数行の case・型名を付けた `SoratomoAnalyticsValue.value(`・`FileHandle` への書き出し・既存の `malformedDocument(path:)` に値を入れる、など）。本物の 48 本に、どれも無いことを検索で確かめた（`#"`・`\#(`・`logger?.`・`Logger`・`os_log`・`OSLog`・`SoratomoAnalyticsValue.value(`・`FileHandle`・`fputs`・`fwrite`・`NSLog`・`debugPrint`・`dump(`・print に `$0` が 0 件・SoratomoEvent の case はすべて 1 行）。この検索の陽性対照として、同じ検索が `LoggingService.swift` では当たる（`#"` 3・`Logger` 1・`logger.` 10）ことを確かめた。`malformedDocument` を作る 3 か所（`SoratomoGroupService.swift:217・251・313`）はどれも内部 ID のパス
+    - 変更なしで満たす要件（同じ Workflow・点検役の主張 26 件はすべて反証役が現物で確認・違反 0）:
+      - 3.9: 画面から画面へ渡るのは groupId だけ（`SoratomoRouter.swift:67-75` の行き先は groupId しか持たない）。招待画面の ViewModel が自分でグループの文書を監視し、届くたびに `isOwner = currentUid() == group.ownerId` を決め直す（`SoratomoInviteViewModel.swift:93-109`）。サーバーは引き継ぎで同じ文書の ownerId を書き換える（`functions/soratomoDeletion.js` の applyRemovalPlan）。`SoratomoInviteViewModel`・`SoratomoInviteView` は差分なし
+      - 3.11: 最後の 1 人ではグループと招待コードの文書を同じトランザクションで消し、`joinGroupTx` はコードの文書が無くてもグループの文書が無くても `not_found`（`functions/soratomoStore.js:274・282`。`leave_pending` の判定はその後ろ）。iOS は `not_found` → `.notFound` →「招待コードが見つかりません」（`SoratomoGroupService.swift:396-397`・`SoratomoError.swift:83-84`）。差分はこの写しを変えていない
+      - 6.1・6.3: タイムラインは投稿のクエリとグループの文書をスナップショットで監視し、届くたびに作り直す。`SoratomoTimelineViewModel` の差分は行を足しただけで、既存の行と a922c92 の監視の処理は変えていない
+      - 6.2: 投稿詳細は `.gone`・`.notMember` で「この投稿は表示できなくなりました」を出す（`SoratomoSkyDetailView.swift:136-154`）。差分は画像のキャッシュの指定 2 か所とコメントだけ
+      - 6.4: メンバー一覧は開くたびに読み直し、オーナーの印はメンバーの文書の role（引き継ぎでサーバーが書き換える）。`SoratomoMembersViewModel`・`SoratomoMembersView` は差分なし
+      - 6.5: グループ一覧は表示・戻ったとき・引き下げで読み直し、memberCount を出す。差分で変えた既存の行は、読んだ結果を `visibleGroups` に通す 1 行だけ（外すのは、この端末・この uid で抜けた記録のあるグループだけ）
+      - 6.7: 差分で足した知らせ（`router.notice` の 2 経路・覆い・確認）は、どれも抜けた本人の端末で、本人の操作か本人の端末だけにある抜けた記録がきっかけ。ほかのメンバーの端末では出ない
+      - 7.3: アプリの差分を通知の許可・登録・カテゴリ・トークン・配信済みの通知・バッジの識別子で検索して 0 件（同じ検索が、写しに `requestAuthorization` を足すと当たることを確かめた）。通知の API に触れるファイル（`AppDelegate`・`PushNotificationManager`・`GoldenHourNotificationManager`・`SoratomoNotificationPrimer` など）は差分なし
+      - 9.5: `SoratomoRootView` の差分は、`await checkEntry()` の直前の同期の呼び出し `SoratomoImageCache.purgeLegacyIfNeeded()` だけ。間に await・return・guard が無いので、全文と一覧の判定の順は変わらない
+    - 差分で確かめたこと:
+      - 10.1: 退会の確認の文言・手順・そらとも分の削除（`SettingsView`・`SettingsViewModel`・`SoratomoAccountDeletionService`・`AuthService`・`ContentView`）は差分なし。退会に触れる 13 本のうち差分に入る 4 本（`SoratomoLeaveService`・`SoratomoLeftGroups`・`SoratomoServiceContracts`・`SoratomoDependencies`）は、削除の行が 0 で、退会に触れるのは足したコメントだけ。退会が呼ぶ部品の変化: 失敗の写しに `leave_pending` の行が増えたが、退会の Callable は返さず、返っても結果は前と同じ `.unknown`。サインアウトの `SoratomoImageCache.clear()` は、グループごとのキャッシュに合わせて中身が変わったが、消す範囲はそらともの画像キャッシュ全部のまま。抜けた記録 `SoratomoLeftGroups` は設計どおり退会では消さない（design.md の 7.2）
+      - 12: `soratomo_group_left`（`role`＝`owner`/`member`・`group_deleted`・`completed`）・`soratomo_leave_failed`（`reason`＝`network`/`unknown`）・`soratomo_join_failed` の新しい値 `leave_pending` が、要件 12 の表と名前・パラメータ名・値で一致（`SoratomoAnalytics.swift:69・298・300・377-381`。テストは `testLeaveGroupEventsHaveFixedNamesAndParameters`・`testJoinFailReasonMapping`）。既存のイベント・値・並びは変わっていない（計測のファイルで消えた行は MARK のコメント 1 行だけ）。記録を呼ぶのは、抜けた後 1 回（`SoratomoLeaveViewModel.swift:426`）と、抜けられなかったとき 1 回
+    - 違反ではないが記録すること（12・13 と /review-full で扱う）:
+      - `SoratomoRouter.swift:318` のコメントは一時表示を「固定の文」と書いているが、実際の値はグループ名を差し込んだ文（出口は画面と VoiceOver だけで漏れではない）
+      - 3.9 の引き継ぎそのもの（監視の途中で ownerId が自分に替わると再発行が出る）の単体テストは無い（`SoratomoInviteViewModelTests` は最初の 1 回の判定だけ）
+      - 6.5 の境界: この端末で抜けた後、別の端末で入り直した人は、この端末に抜けた記録が残る。圏外でサーバーに確かめられない間は、そのグループが一覧に出ない（設計 5.6 の「確かめるまで出さない」どおり）
+      - 抜けた記録はサーバーで確かめないので、別の端末で入り直した後、この端末で一覧を開く前に新着通知を開くと、「開けませんでした」の一時表示と `not_member` の計測になりうる（その後の一覧の読み直しで記録が外れる）。12.2 で見る
+      - D1 の失敗の後、監視の `.notMember` が届く前に一覧へ戻ると、ViewModel の中の未確定の覚えが消え、`soratomo_group_left` が記録されない。13 の集計で、抜けた件数が少なく出うる
+      - `leave_pending` は、退会の途中で写しだけが残った人の参加でも返る（設計で受け入れ済み・/review-full の F7）
 
 - [ ] 9.2 iOSのビルドとテストを通す
   - 前提: 9.1
