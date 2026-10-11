@@ -2155,6 +2155,77 @@ test("抜ける: 退会の後に残った印は、本人が同意し直して入
   assert.deepEqual(swept, { ...NOTHING, state: "stale_marker" });
 });
 
+/**
+ * 抜けるの実行A（回 e1）を画像の一覧で止めている間に、本人の退会（self）が最後まで走り、本人が同意し直して入り直す
+ * （/review-full の指摘 F5）。退会は写しと利用者の文書を消すが、印 e1 は残す。A が照合する時点では、印も札も一致し、
+ * メンバーの文書だけがある（照合の「メンバーの文書が無い」だけが外れる）。
+ * - withPost: 入り直した後に投稿1件と画像2枚を作る。A は画像の区切りを消す前の照合（isLeaveEpisodeCurrent）で止まる
+ * - withPost でない: 一覧に何も出ないので、消す前の照合は一度も呼ばれない。手順4の finishLeaveTx の照合だけが守り
+ * @returns {Promise<{ a: object, scene: object|null, storage: object }>} scene は入り直した直後に控えた状態
+ */
+async function leaveWhileQuitAndRejoin({ withPost }) {
+  await seedGroup({ groupId: "g1", ownerId: "owner", inviteCode: "SKYAAAAA", members: [{ uid: "owner", role: "owner", joinedAtMs: T(1) }, { uid: "amy", role: "member", joinedAtMs: T(2) }] });
+  await seedSkies("g1", "amy", ["a1"]);
+  await seedUser("amy", ["g1"]);
+  let scene = null;
+  const storage = fakeStorage(imagesOf("g1", "amy", "a1"), {
+    onList: async (prefix, count) => {
+      if (count !== 1) return; // A の一覧だけで止める（退会の一覧は止めない）
+      const quit = await deletion.deleteSoratomoUserData({ db, storage: storage.gateway, nowMs: steadyClock() }, { uid: "amy", trigger: "self", deadlineMs: DEADLINE });
+      await store.agreeGuidelineTx(db, { uid: "amy", input: { version: core.GUIDELINE_VERSION }, policy: JOIN_POLICY });
+      const joined = withPost
+        ? await rejoinAndPost(storage, "n1")
+        : await store.joinGroupTx(db, { uid: "amy", code: "SKYAAAAA", policy: JOIN_POLICY });
+      scene = {
+        quit,
+        joined,
+        marker: await markerData("amy", "g1"),
+        roles: await memberRoles("g1"),
+        before: await dumpAll(),
+        files: sortedPaths(storage, "soratomo/"),
+      };
+    },
+  });
+  const a = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("amy", "g1"));
+  return { a, scene, storage };
+}
+
+/** leaveWhileQuitAndRejoin の場面ができていて、A が何も消さずに superseded で止まったことを確かめる（投稿の有無で同じ部分）。 */
+async function assertLeaveSupersededAfterRejoin({ a, scene, storage }) {
+  assert.equal(scene && scene.quit.done, true, "退会が A の途中で最後まで走った（この場面を作れている）");
+  assert.deepEqual(scene.joined, { groupId: "g1", alreadyMember: false }, "A の途中で入り直しが通った");
+  assert.equal(scene.marker.episodeId, "e1", "退会の手順4は印を消さない（A の照合で印も札も一致する）");
+  assert.deepEqual(scene.roles, { owner: "owner", amy: "member" });
+
+  assert.deepEqual(a, {
+    done: true, state: "superseded", kind: "leave", removed: true, ownerTransferred: false,
+    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 0,
+  });
+  assert.deepEqual(await dumpAll(), scene.before, "A は入り直した後に何も書かない（メンバー・投稿・写し・所属数・印）");
+  assert.deepEqual(sortedPaths(storage, "soratomo/"), scene.files, "入り直した後の画像は残る");
+  assert.equal(storage.calls, 2, "消しにいったのは退会の a1 の2枚だけ");
+  assert.deepEqual(storage.prefixes, ["soratomo/g1/amy/", "soratomo/g1/amy/"]);
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner", amy: "member" });
+  assert.deepEqual(await copyIds("amy"), ["g1"], "入り直した後の新しい写しは残る（メンバーの文書だけが残る孤児にしない）");
+  assert.equal((await userData("amy")).groupCount, 1);
+  assert.equal((await markerData("amy", "g1")).episodeId, "e1", "印は残る（後で sweep が stale_marker で消す）");
+  await assertGroupInvariants("g1");
+}
+
+test("抜ける: 抜けるの途中で退会が終わり、同意し直して入り直して投稿しても、Aは画像を消す前の照合で止まり、入り直した後の投稿・画像・写しと印を消さない", async () => {
+  const run = await leaveWhileQuitAndRejoin({ withPost: true });
+  assert.deepEqual(run.scene.files, imagesOf("g1", "amy", "n1").sort(), "A の一覧に入り直した後の画像が出る");
+  await assertLeaveSupersededAfterRejoin(run);
+  assert.deepEqual(await skyAuthors("g1"), ["amy:n1"]);
+});
+
+test("抜ける: 抜けるの途中で退会が終わり、同意し直して入り直しただけ（消すものが残っていない）でも、Aは手順4の照合で止まり、写し・所属数・印を消さない", async () => {
+  const run = await leaveWhileQuitAndRejoin({ withPost: false });
+  assert.deepEqual(run.scene.files, [], "A の一覧には何も出ない（消す前の照合は呼ばれない）");
+  await assertLeaveSupersededAfterRejoin(run);
+  assert.deepEqual(await skyAuthors("g1"), []);
+});
+
 // MARK: - 抜けるの後の入り直しと、同時実行（leave-group タスク 2.2）
 // tasks.md は soratomoStore.test.js を置き場にしているが、要確認3 の型と、そのための部品（偽のゲートウェイ・参加日時つきの
 // 種・印の読み）がこのファイルにあるので、ここに置く（部品を写して二重に持たないため）。
