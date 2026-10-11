@@ -74,6 +74,7 @@ struct SoratomoGroupFormView: View {
                 primer: dependencies.primer,
                 isOnline: { network.isOnline },
                 currentUid: dependencies.currentUid,
+                leftGroups: dependencies.leftGroups,
                 onCompleted: onCompleted,
                 // 「同意しない」は、何もせずに閉じるのと同じく一覧へ戻す（同意は記録しない）
                 onDeclined: onCancel

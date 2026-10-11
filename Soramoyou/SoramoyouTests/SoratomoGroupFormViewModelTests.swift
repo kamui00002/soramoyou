@@ -10,6 +10,7 @@
 //  - 作成・参加に失敗したら、固定の文言を出し、入力が残ること
 //  - 作成の要求 ID を、名前を変えるまで再利用すること（変えたら新しい ID）
 //  - 成功の後の行き先と、事前説明の判定
+//  - 【leave-group 8.4】参加の成功で「抜けた」記録から外れること／`leave_pending` では入力が残り記録も残ること
 //
 
 @testable import Soramoyou
@@ -125,6 +126,25 @@ private final class SoratomoGroupFormGatedGroupService: SoratomoGroupServiceProt
 
 @MainActor
 final class SoratomoGroupFormViewModelTests: XCTestCase {
+    /// テストごとの UserDefaults の suite 名（本物の記録を汚さない・`SoratomoLeftGroupsTests` と同じ作り方）
+    private var suiteName = ""
+    private var defaults: UserDefaults!
+
+    override func setUp() async throws {
+        suiteName = "SoratomoGroupFormViewModelTests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+    }
+
+    override func tearDown() async throws {
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
+    }
+
+    /// このテストの suite に書く「抜けたグループの記録」（ViewModel と同じ置き場を指す）
+    private func makeLeftGroups() -> SoratomoLeftGroups {
+        SoratomoLeftGroups(defaults: defaults)
+    }
+
     /// 記録した計測と、成功の後に渡された行き先を覚える
     private final class Recorder {
         var events: [SoratomoEvent] = []
@@ -160,6 +180,7 @@ final class SoratomoGroupFormViewModelTests: XCTestCase {
             primer: primer ?? SoratomoGroupFormPrimerStub(),
             isOnline: { online },
             currentUid: { "me" },
+            leftGroups: makeLeftGroups(),
             logEvent: { recorder.events.append($0) },
             onCompleted: { recorder.completed.append($0) },
             onDeclined: { recorder.declined += 1 }
@@ -465,6 +486,53 @@ final class SoratomoGroupFormViewModelTests: XCTestCase {
             XCTAssertEqual(recorder.events, [.joinFailed(SoratomoJoinFailReason(error))], "error=\(error)")
             XCTAssertTrue(recorder.completed.isEmpty, "error=\(error)")
         }
+    }
+
+    // MARK: - 抜けたグループの記録（leave-group 8.4・要件 5.6・8.1・8.5）
+
+    func testJoinLeavePendingKeepsInviteCodeAndLeftRecord() async {
+        // 抜けたときの片づけが終わっていない人の参加: 既存の失敗の表示のまま、入力した招待コードを残す
+        let groupService = MockSoratomoGroupService()
+        groupService.joinGroupResult = .failure(.leavePending)
+        makeLeftGroups().insert("g1", uid: "me")
+        let recorder = Recorder()
+        let viewModel = makeViewModel(
+            mode: .join, groupService: groupService, profileService: profileWithName(), recorder: recorder
+        )
+        await viewModel.start()
+
+        viewModel.inviteCodeInput = "ABCD-EFGH"
+        await viewModel.submit()
+
+        XCTAssertEqual(viewModel.inviteCodeInput, "ABCD-EFGH", "入力した招待コードが消えている")
+        XCTAssertEqual(viewModel.errorMessage, SoratomoError.leavePending.userMessage)
+        XCTAssertEqual(viewModel.phase, .idle)
+        XCTAssertEqual(recorder.events, [.joinFailed(.leavePending)])
+        XCTAssertTrue(recorder.completed.isEmpty)
+        XCTAssertTrue(makeLeftGroups().contains("g1", uid: "me"), "失敗したのに記録から外れている")
+    }
+
+    func testJoinSuccessRemovesGroupFromLeftRecord() async {
+        // 入り直しに成功したら、そのグループだけ記録から外す（ほかのグループ・ほかの利用者の記録は残す）
+        let groupService = MockSoratomoGroupService()
+        groupService.joinGroupResult = .success(SoratomoJoinResult(groupId: "g1", alreadyMember: false))
+        let left = makeLeftGroups()
+        left.insert("g1", uid: "me")
+        left.insert("g2", uid: "me")
+        left.insert("g1", uid: "other")
+        let recorder = Recorder()
+        let viewModel = makeViewModel(
+            mode: .join, groupService: groupService, profileService: profileWithName(), recorder: recorder
+        )
+        await viewModel.start()
+
+        viewModel.inviteCodeInput = "ABCD-EFGH"
+        await viewModel.submit()
+
+        XCTAssertEqual(recorder.completed, [[.timeline(groupId: "g1")]])
+        XCTAssertFalse(makeLeftGroups().contains("g1", uid: "me"), "参加に成功したのに記録に残っている")
+        XCTAssertTrue(makeLeftGroups().contains("g2", uid: "me"), "別のグループの記録が消えている")
+        XCTAssertTrue(makeLeftGroups().contains("g1", uid: "other"), "別の利用者の記録が消えている")
     }
 
     func testOfflineDoesNotStartAndKeepsInput() async {

@@ -318,7 +318,7 @@
     - 初期化の輪が無いこと: `SoratomoRouter.shared` に触れるのは、View（`MainTabView`・`ContentView`・`SoratomoEntryButton`）と、通知のタップのデリゲートの `receive`（`GoldenHourNotificationManager.swift:253`）だけで、`live` に並ぶサービスの init からは触れない（grep で確認）。ルーターのファイルの先頭のヘッダーに、そらともの型 `SoratomoDependencies` を引くようになったことを書いた
     - パスの判定は `SoratomoRouter.swift` の末尾の `private extension SoratomoDestination`（`belongsTo(groupId:)`）。点検役が、メンバー一覧と投稿詳細のテストのパスにタイムラインを一緒に入れていた（`.timeline` だけを見る実装でも通ってしまう）のを、1 つずつ置く形に直した
 
-- [ ] 8.4 グループ一覧で抜けたグループを隠し、参加で記録を外す（陽性対照C6の後半・要確認Q7の判断）
+- [x] 8.4 グループ一覧で抜けたグループを隠し、参加で記録を外す（陽性対照C6の後半・要確認Q7の判断）
   - 前提: 6, 7.1, 7.4
   - 一覧（`SoratomoGroupListViewModel.load()`）: 読んだグループのうち、記録にあるものは `membershipOnServer` を呼ぶ。`.member` なら記録から外して出す（別の端末で入り直した場合）。`.notMember` と `.unknown` なら出さない。オフラインでは `.unknown` になるので、端末のキャッシュに残った抜けたグループは出ない。記録に無いグループは今のまま（呼ばない）
   - 参加（`SoratomoGroupFormViewModel.submitJoin()`）: 成功したら、そのグループを記録から外す。`leave_pending` の失敗は、既存の失敗の表示で文言を出し、入力した招待コードを残す。`soratomo_join_failed` の `reason` は `leave_pending`
@@ -326,6 +326,15 @@
   - `SoratomoGroupListViewModelTests`: 記録にあるグループは `.member` のときだけ出して記録から外す・`.notMember` と `.unknown` では出さない・記録に無いグループでは再確認を呼ばない。`SoratomoGroupFormViewModelTests`: `leave_pending` で入力が残り、`reason` が `leave_pending`・参加の成功で記録から外れる
   - 陽性対照（C6）: 今の現物で、記録にあるグループが（端末のキャッシュから）一覧に出ることを先に確かめる。参加の失敗で入力を消す実装で、テストが赤になることも確かめる
   - _Requirements: 5.3, 5.6, 8.1, 8.5, 12.3_
+  - 結果（2026-10-11 20:20）:
+    - 陽性対照（20:10〜20:12・C2E3F752・8.1〜8.4 の壊した版 6 本をまとめて当てた 1 回・6 クラス 184 件・C6 の後半）: 新しい init のまま、`load()` が記録を見ずに読んだグループをすべて出す版（前の一覧からも外さない）で、`testLeftGroupIsShownOnlyWhenServerSaysMemberAndRemovedFromRecord`・`testLeftGroupIsHiddenWhenServerSaysNotMember`・`testLeftGroupIsHiddenWhenMembershipUnknown`・`testOnlyMemberGroupAppearsWhenTwoAreRecorded`・`testOpenedGroupCountIsCountAfterHiding`・`testLeftGroupDisappearsFromPreviousListBeforeReloadFinishes` の 6 本が赤（＝今の現物の振る舞いでは、記録にあるグループが一覧に出る）。`testGroupNotInRecordIsShownWithoutMembershipCheck` は通過
+    - 参加: 新しい init のまま、失敗のときに `inviteCodeInput = ""` にし、成功で記録を外さない版で、`testJoinLeavePendingKeepsInviteCodeAndLeftRecord`・`testJoinSuccessRemovesGroupFromLeftRecord` と、既存の `testJoinFailureKeepsInputAndShowsFixedMessage`・`testConsentRequiredOnJoinKeepsInviteCode`・`testRejectionMessagesKeepInputAndDoNotRevealWord` の 5 本が赤。走らせる前に書いた予想と、どちらも一致した
+    - 正しい版（写しを戻して shasum の一致を確認）で、`SoratomoGroupListViewModelTests` 17/17・`SoratomoGroupFormViewModelTests` 33/33 通過（20:16〜20:17・同じ 184/184 の回）。件数は xcresult で数えた。View の 2 ファイルを含め、変更した 4 つのソースと 2 つのテストのファイルに警告なし
+    - 要確認Q7の判断（design.md との違い④の扱い）: 入り直しの成功では、端末の画像のキャッシュと投稿の覚えを消さない。この端末で抜けたなら、抜けたときにもう消している。Q7 の「古い投稿が一瞬出る」は Firestore の端末のキャッシュ由来で、画像のキャッシュを消しても防げない。理由は `submitJoin` のコメントに残した。実機での確かめは 12.2（検証済みでない）
+    - `leftGroups` の引数には既定値を付けていない（既定の `SoratomoLeftGroups()` は本物の UserDefaults に書くので、テストが本物の記録を汚す）。呼び出し（View の 2 か所・テスト）は全部直した。テストはテストごとの UserDefaults の suite を使い、`tearDown` で消す
+    - design.md との違い⑤（点検役が足し、メインが残すと決めた）: `load()` で、最初の `await` より前に、前に読んだ一覧から記録にあるグループを外す。抜けた直後に一覧へ戻ると、読み直し（一覧の問い合わせと所属の確認）が終わるまで前の一覧が出たままになり、抜けたグループのカードを押すと「グループを開けませんでした」が出るため（要件 5.2・5.3）。サーバーで `.member` と分かったグループは読み直しで戻る。計測（`soratomo_opened` の 1 回）には触れない。テストは `testLeftGroupDisappearsFromPreviousListBeforeReloadFinishes`（問い合わせを止めておける代役をテストのファイルの中に置いた）
+    - `leave_pending` の失敗は、ViewModel を変えずに既存の失敗の表示（`showSubmitFailure`・`SoratomoJoinFailReason(error)`）のまま通ることを、テストで固定した
+    - 書き手の報告の「`makeViewModel` に `leftGroups` の引数を足した」は誤りで、現物は毎回テストの suite の記録を渡す（コードの問題ではない）
 
 - [ ] 8.5 タイムラインの画面に入口・確認・処理中の表示を置き、抜けた後の後片づけを配線する
   - 前提: 8.1, 8.2, 8.3, 8.4
