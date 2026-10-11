@@ -289,13 +289,18 @@
     - uid は確認を出すときに読んだものを覚えて、`confirm()`・`absorbLostMembership`・「抜けた後」で使う（`currentUid()` を読み直さない）。テストの代役（処理中で止める門）はテストのファイルの中に `private` で置き、`SoratomoServiceMocks.swift` は変えていない
     - ⚠️ 陽性対照の回と正しい版の回の終わりに、C2E3F752 の起動と別のセッションの 2 台（BF678DA1・DCFBF2D6）が重なり、1 分平均のロードが一時 195・210 まで上がった。15 未満に落ちるのを待ってから次を回した
 
-- [ ] 8.2 タイムラインのViewModelに、監視を止める口を足す
+- [x] 8.2 タイムラインのViewModelに、監視を止める口を足す
   - 前提: 6
   - `SoratomoTimelineViewModel` に `suspendObservation()` を足す。グループとタイムラインの監視の札（`groupToken`・`timelineToken`）を手放して、監視を止める。再開は、既存の `start()` をもう一度呼ぶ（札が無いときだけ張る）
   - 止めた後は、監視の結果（`.notMember` を含む）がルーターへ届かず、「グループを開けませんでした」が出ない
   - `SoratomoTimelineViewModelTests`: `suspendObservation()` の後は監視の結果が届かない・`start()` で張り直す
   - 陽性対照: 札を手放さない実装で、止めた後に結果が届いてテストが赤になることを先に確かめる
   - _Requirements: 5.2_
+  - 結果（2026-10-11 20:20）:
+    - 陽性対照（20:10〜20:12・C2E3F752・8.1〜8.4 の壊した版 6 本をまとめて当てた 1 回・6 クラス 184 件）: `suspendObservation()` の中身を空にした版（札を手放さない）で、`testSuspendObservationStopsGroupResultsFromReachingRouter`・`testSuspendObservationStopsTimelineResultsFromReachingScreen`・`testSuspendObservationCancelsBothObservations`・`testStartAfterSuspendObservationObservesAgain`・`testSuspendObservationWithoutObservationDoesNotCrash` の 5 本が赤（既存の 40 件は通過）。走らせる前に書いた予想と一致した
+    - 正しい版（写しを戻して shasum の一致を確認）で、45/45 通過（20:16〜20:17・同じ 184/184 の回）。件数は xcresult で数えた。変更した 2 ファイルに警告なし
+    - 札は `cancel()` してから nil にする（ほかが札を持っていても止まるように）。再開は既存の `start()`（札が無いので、グループもタイムラインも張り直す）。張っていないときや 2 回続けて呼んでも何も起きない
+    - ファイルの先頭のヘッダーの 8.2 の行は、点検役が足した（書き手が書き忘れていた）
 
 - [ ] 8.3 ルーターに、抜けた後の遷移と、抜けたグループの通知の扱いを足す（陽性対照C6の前半）
   - 前提: 7.2, 7.4

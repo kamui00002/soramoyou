@@ -8,6 +8,8 @@
 //  - 上限を 20 → 40 → 60 と伸ばし、引き下げの更新で 20 に戻すこと
 //  - 同じ内容のスナップショットは何もしないこと
 //  - 自分の投稿の削除の、成功と各失敗の分岐（通信の確認・結果が確定しない失敗の確かめ・画像の後始末）
+//  - ⭐️ 監視を止める口（leave-group 8.2・design.md の SoratomoTimelineView・SoratomoTimelineViewModel（変更・要約）・要件 5.2）:
+//    suspendObservation() の後は監視の結果（`.notMember` を含む）が届かず、start() をもう一度呼ぶと張り直すこと
 //
 
 @testable import Soramoyou
@@ -229,6 +231,77 @@ final class SoratomoTimelineViewModelTests: XCTestCase {
         fixture.viewModel.loadMoreIfNeeded()
 
         XCTAssertEqual(fixture.skyService.observeTimelineCalls.map(\.limit), [20])
+    }
+
+    // MARK: - 監視を止める口（leave-group 8.2・要件 5.2）
+
+    func testSuspendObservationStopsGroupResultsFromReachingRouter() async {
+        let fixture = makeFixture()
+        await fixture.viewModel.start()
+
+        fixture.viewModel.suspendObservation()
+        // 抜ける処理の途中でメンバーでなくなった、という結果が届いても、ルーターへ知らせない
+        fixture.groupService.emitGroup(groupId: groupId, .failure(.notMember))
+
+        XCTAssertTrue(fixture.recorder.notAccessible.isEmpty)
+        XCTAssertTrue(fixture.recorder.accessible.isEmpty)
+    }
+
+    func testSuspendObservationStopsTimelineResultsFromReachingScreen() async {
+        let fixture = makeFixture()
+        await fixture.viewModel.start()
+        fixture.skyService.emitTimeline(.success(makeSnapshot(count: 2, mayHaveMore: false)))
+        XCTAssertEqual(fixture.viewModel.skies.map(\.id), ["s0", "s1"])
+
+        fixture.viewModel.suspendObservation()
+        fixture.skyService.emitTimeline(.success(makeSnapshot(count: 4, mayHaveMore: false)))
+
+        // 止めた後の結果は届かず、表示は変わらない
+        XCTAssertEqual(fixture.viewModel.skies.map(\.id), ["s0", "s1"])
+    }
+
+    func testSuspendObservationCancelsBothObservations() async {
+        let fixture = makeFixture()
+        await fixture.viewModel.start()
+        XCTAssertTrue(fixture.groupService.cancelledGroupObservations.isEmpty)
+        XCTAssertTrue(fixture.skyService.cancelledTimelineIndexes.isEmpty)
+
+        fixture.viewModel.suspendObservation()
+
+        XCTAssertEqual(fixture.groupService.cancelledGroupObservations, [groupId])
+        XCTAssertEqual(fixture.skyService.cancelledTimelineIndexes, [0])
+    }
+
+    func testStartAfterSuspendObservationObservesAgain() async {
+        let fixture = makeFixture()
+        await fixture.viewModel.start()
+        fixture.viewModel.suspendObservation()
+        fixture.groupService.emitGroup(groupId: groupId, .failure(.notMember))
+        XCTAssertTrue(fixture.recorder.notAccessible.isEmpty)
+
+        await fixture.viewModel.start()
+
+        // グループもタイムラインも張り直される
+        XCTAssertEqual(fixture.groupService.observeGroupCalls, [groupId, groupId])
+        XCTAssertEqual(fixture.skyService.observeTimelineCalls.map(\.limit), [20, 20])
+        // 張り直した後は、結果がルーターへ届く
+        fixture.groupService.emitGroup(groupId: groupId, .failure(.notMember))
+        XCTAssertEqual(fixture.recorder.notAccessible, [groupId])
+    }
+
+    func testSuspendObservationWithoutObservationDoesNotCrash() async {
+        let fixture = makeFixture()
+
+        // まだ start() していない（札が無い）ときに呼んでも、何も起きない
+        fixture.viewModel.suspendObservation()
+        XCTAssertTrue(fixture.groupService.observeGroupCalls.isEmpty)
+        XCTAssertTrue(fixture.groupService.cancelledGroupObservations.isEmpty)
+
+        // 2 回続けて呼んでも、止める処理は 1 回だけ
+        await fixture.viewModel.start()
+        fixture.viewModel.suspendObservation()
+        fixture.viewModel.suspendObservation()
+        XCTAssertEqual(fixture.groupService.cancelledGroupObservations, [groupId])
     }
 
     // MARK: - 同じ内容のスナップショット

@@ -13,6 +13,9 @@
 //  - ⭐️ 通報・ブロック・隠す・続き読み（release-gate 10.1・要件 1.6・5.1〜5.8・9.1〜9.9・15.1）:
 //    自分以外の投稿だけに通報とブロックを許し、隠す集合（ブロックした投稿者・この端末で通報した投稿）で表示を絞る。
 //    全部隠れても続きを読む（自動で連続 3 回まで、その後は「さらに読み込む」）
+//  - ⭐️ 監視を止める口（leave-group 8.2・design.md の SoratomoTimelineView・SoratomoTimelineViewModel（変更・要約）・要件 5.2）:
+//    グループを抜ける処理の間は suspendObservation() で 2 本の監視を止め、`.notMember` をルーターへ届けない。
+//    再開は start() をもう一度呼ぶ（札が無いので張り直される）
 //
 //  ⚠️ この ViewModel はサービスの容れ物（SoratomoDependencies）を受け取らない。
 //     protocol とクロージャと、隠す集合の 2 つの部品（SoratomoBlockedAuthors・SoratomoReportedSkies）だけを受け取り、
@@ -308,6 +311,20 @@ final class SoratomoTimelineViewModel: ObservableObject {
         if groupToken == nil {
             observeGroup()
         }
+    }
+
+    /// グループとタイムラインの監視を止める（グループを抜ける処理の間・leave-group 8.2・要件 5.2）
+    ///
+    /// 抜ける処理の途中で自分がメンバーでなくなると、グループの監視に `.notMember` が届き、
+    /// ルーターが「グループを開けませんでした」を出してしまう。それを防ぐため、処理の間は監視そのものを止める。
+    /// - 札は `cancel()` で明示的に止めてから手放す（札を別の場所が持っていても、確実に止まるように）
+    /// - 張っていないとき（すでに止めた後・失敗で札が無いとき）に呼んでも何も起きない
+    /// - 再開は `start()` をもう一度呼ぶ（札が無いので、グループもタイムラインも張り直される）
+    func suspendObservation() {
+        groupToken?.cancel()
+        groupToken = nil
+        timelineToken?.cancel()
+        timelineToken = nil
     }
 
     // MARK: - 表示用
