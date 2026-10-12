@@ -253,44 +253,69 @@
     - 完了の処理（`completeOnboarding`）は変えていない。スクリーンショットの画像はリポジトリに入れただけで ASC には触れていない。#163 を閉じるのは 9.3
     - 緑（14:22・`C2E3F752`・`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`）: `SoratomoFeatureGateTests`・`SoratomoRouterTests`・`SettingsViewDeleteAccountMessageTests`・`WhatsNewGateTests` の **68 件すべて通過**（xcresult の集計 passed 68・failed 0）。触ったファイルの警告 0 件。ログ `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/6-7-green.log`（オンボの画面のファイルもこのビルドでコンパイルされた）
 
-- [ ] 8. ポリシーの本文・版数・説明を直す
+- [x] 8. ポリシーの本文・版数・説明を直す
 
-- [ ] 8.1 プライバシーポリシーの本文に、そらともで変わる内容を足す（G5 のアプリ側）
+- [x] 8.1 プライバシーポリシーの本文に、そらともで変わる内容を足す（G5 のアプリ側）
   - 前提: 1
   - 原本は `SettingsView.privacyPolicyText`。足す内容（下書き。確定は9.1）: そらとも（招待したグループのメンバーだけに見える投稿・画像・表示名）・退会でそらともの投稿と参加も消える・通報の記録は通報者や投稿者が退会しても残す・通報の内部IDと理由と時刻を、開発者の通知用の Discord へ送る（キャプション・名前・画像は送らない）・ガイドラインへの同意の版と日時を残す。最終更新日を直す
   - release-gate spec の「後続への引き継ぎ（G5）」（`docs/firestore-schema.md` のそらともの節）の内容が、すべて入っていることを確かめる
   - `python3 scripts/build-privacy-policy-html.py` で、git で追跡している `hosting/privacy/index.html` を作り直し、PR-B に含める（アプリ内とホストの本文をずらさない）。hosting へのデプロイは13.3で行う
   - 利用規約の本文と、設定の「お問い合わせ」は変えない
   - _Requirements: 8.3, 8.4_
+  - 結果（2026-10-12 14:36・本番に触れない・hosting へは出していない）:
+    - #175（`88247fa9`）を取り込んだ上に足した（`c23c7b95`）。足した所: ■収集する情報に「8. そらとも（iOS 版のみ。招待コードで参加する非公開のグループ）」（投稿の写真・キャプション 100 文字まで・幅と高さ／表示名＝プロフィールの表示名／参加グループ・役割・参加日時／ガイドラインに同意した版と日時／通報の記録＝通報した人と投稿した人の内部 ID・理由・時刻／同じグループのメンバーにだけ表示）・■利用目的に 1 行・■第三者の **#175 の 6 番 Discord に通報の 1 行**（通報・投稿・グループ・投稿者・通報者の内部 ID と理由・時刻。キャプション・グループ名・表示名・招待コード・写真は送らない）・■保存期間に「そらともの投稿（写真を含む）・参加・同意の記録はアカウントの削除で削除（iOS のアプリで削除しても写真は消える）・グループを抜けるとそのグループの自分の投稿と参加を削除」の行と、**#175 の通報の行に「そらともの通報を含む」をまとめた**・■ユーザーの権利に 1 行。公開文の言い回しは #175 の「アプリでは削除せずに」のまま
+    - 事実の確かめ（現物）: Discord へ送る中身は `functions/soratomoCore.js` の `buildReportForwardPayload`（理由・reportId・groupId・skyId・投稿者と通報者の uid・時刻だけ）／**同意の記録は退会で消える**: `functions/soratomoDeletion.js` の `finishUserTx`（681 行）が `soratomoUsers/{uid}` を消す（利用停止中の人だけは、アカウント削除の後に定期実行が `account_deleted` で消す）＝下書き係の申し送り「消えない見込み」は違った／表示名は `SoratomoProfileService.saveDisplayName` が `users` と `publicProfiles` に保存＝プロフィールの表示名／自分の投稿の削除は `SoratomoTimelineView`・`SoratomoSkyDetailView` にある／Android 版の本体に soratomo は 0 件（`~/dev/soramoyou-android/android/app/src/main`）＝「iOS 版のみ」
+    - G5 の引き継ぎ（`docs/firestore-schema.md`）との対応: 1 通報の記録を退会後も保持＝保存期間の通報の行／2 Discord へ内部 ID・理由・時刻＝6 番の行／3 送らない 5 つ＝同じ行／4 通報専用のチャンネル＝利用者に意味が無いので書かない（下書き係の案のとおり）／5 保持と第三者への送信をポリシーに＝上の 2 行
+    - `python3 scripts/build-privacy-policy-html.py` で `hosting/privacy/index.html` を作り直した（同じコミット）。アカウント削除の受付ページ（`hosting/delete-account/index.html`・手書き）にも、「削除されるデータ」にそらとも・保持の通報の記録に「そらともの通報を含む」・英語の要約に同じ内容を足した（`923217b3`）。hosting の deploy は 13.3。利用規約とお問い合わせは変えていない（9.2 の差分で確認）
+    - 最終更新日: 9.1 の決定で、**12.1（archive の直前）にその日の日付へ直す**。いまは #175 の 2026年10月12日のまま（ポリシーと削除ページの両方）
 
-- [ ] 8.2 版数を1.15.0にする
+- [x] 8.2 版数を1.15.0にする
   - 前提: 1
   - `project.pbxproj` の `MARKETING_VERSION` を 1.15.0、`CURRENT_PROJECT_VERSION` を 113 にする（アプリとウィジェットの4か所とも。テスト用のターゲットは変えない）。コマンドの上書きで上げず、値をコミットする
   - 113 は仮の値。App Store Connect の最大の build（2026-10-11 の時点で112＝1.14.1・TestFlight だけ）より大きければよい。archive の直前に、ASC の実測で決め直す（12.1）
   - 1.14.1（build 112）は審査に出さない
   - _Requirements: 12.1, 12.2_
+  - 結果（2026-10-12 14:36・`c2912100`）: `project.pbxproj` の `MARKETING_VERSION` 1.14.1→1.15.0・`CURRENT_PROJECT_VERSION` 111→113 を、アプリとウィジェットの 4 か所ずつ（置換の前に 4 回ずつ現れることを確かめた）。テスト用のターゲット（1.0／1）の 8 か所は変えていない。113 は仮で、12.1 で ASC の実測から決め直す
 
-- [ ] 8.3 そのほかの説明を直し、残りを検索する
+- [x] 8.3 そのほかの説明を直し、残りを検索する
   - 前提: 6.1, 6.2, 7.1
   - `SoratomoEntryButton` の説明（判定の意味＝登録済みでログイン）、`SoratomoError` の `flagOff` の説明（「1.14.x までのサーバーの理由。1.15.0 のサーバーは返さない」）、`SoratomoGroupService` の `flag_off` の写しの説明を直す。計測の列挙の `flagOff` は残す（1.14.x から届くイベントと同じ集計で数えるため）
   - `grep -rn "soratomoIntroID\|claimMissing\|tokenUnavailable\|soratomoBeta" Soramoyou/Soramoyou` が0件（段0-4の検査）。陽性対照: 写しのファイルに1つ入れて、検査が引っかかることを先に確かめる。`Soramoyou/SoramoyouTests` に残る該当は、テストの意図（クレームがあっても結果が変わらない）として残したものだけであることを見る
   - _Requirements: 6.1, 9.4, 9.5_
+  - 結果（2026-10-12 14:36・`b6a6ad03`）:
+    - `SoratomoEntryButton`（判定の意味＝登録済みのアカウントでログイン・1.14.x まではクレーム）・`SoratomoError.flagOff`（1.14.x までのサーバーの理由。1.15.0 のサーバーは返さない。種類は残す）・`SoratomoGroupService` の `flag_off` の写し（同じ趣旨のコメント）・`MainTabView` の判定の説明の「フラグ」を直した。計測の `flagOff` は残した
+    - 段0-4 の検索 `grep -rn "soratomoIntroID\|claimMissing\|tokenUnavailable\|soratomoBeta" Soramoyou/Soramoyou` は **0 件**（いま書いた `SoratomoError` の説明に `soratomoBeta` が 1 件入ったので、言い方を変えて 0 件にした）。`Soramoyou/SoramoyouTests` も 0 件（判定のテストを書き直したので、クレームの意図のテストも残っていない）。陽性対照: `Utils` の写し（`/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/grepcheck`）の 1 ファイルに `claimMissing` を 1 行足すと、同じ検索が 1 件を返した
+    - 本体に残る「クレーム」は、1.14.x までの経緯の説明だけ（`SoratomoFeatureGate`・`WhatsNewContent`・`SoratomoAccountDeletionService` など）
 
 - [ ] 9. PR-B（アプリ）を点検し、main へ入れる
 
-- [ ] 9.1 新しい文言を確認してもらう（ユーザーの入力が要る）
+- [x] 9.1 新しい文言を確認してもらう（ユーザーの入力が要る）
   - 前提: 7.1, 7.2, 8.1
   - 利用者に読んでもらう文言は3つ。①全員向けの What's New の2ページ ②オンボのそらとものページ ③プライバシーポリシーに足す文と最終更新日。細切れに聞かず、1回にまとめて選択肢つきで聞く
   - 見せる前に、文言が1.15.0 の画面（入口の位置と名前・抜けるの操作の名前）と一致していることを確かめる
   - 1.15.0 のアプリに入る文字列なので、PR-B を main へ入れる前に承認を取り、直しがあれば反映する。承認した日時を記録する（13.5 の G3 で使う）
   - _Requirements: 7.7, 7.10, 8.3_
+  - 結果（**2026-10-12 14:36 に利用者が AskUserQuestion の 1 回で承認**・13.5 の G3 で使う）:
+    - 見せる前に画面の現物と照らした: 入口＝ホーム右上の `person.2.circle`（`SoratomoEntryButton`）・抜ける＝タイムライン右上のメニュー（`ellipsis.circle`）の「グループを抜ける」（`SoratomoTimelineView`）。7.1 の文はこの名前を使っている
+    - ① What's New の 2 ページ: **案のまま承認**（7.1 の結果の文のまま）
+    - ② オンボのそらとものページ: **画面ごとの口調のまま**（オンボ「ホーム右上のボタンから始めよう」・What's New「…始めましょう」。場所の言い方は同じ）
+    - ③ ポリシーと削除ページに足す文: **案どおり承認**（8.1 の結果の内容。Discord の行は ID の種類まで書く版）
+    - ④ 最終更新日: **12.1（archive の直前）にその日の日付へ直し、HTML も作り直す**（アプリ内とページを同じ日付・同じ本文にし、公開中の #175 の 10/12 版と区別する）。12.1 の手順に足した
+    - 直しは無かったので、文字列は変えていない
 
-- [ ] 9.2 アプリのビルドとテストを通し、変えていないものを差分で確かめる
+- [x] 9.2 アプリのビルドとテストを通し、変えていないものを差分で確かめる
   - 前提: 6.1〜6.3, 7.1, 7.2, 8.1〜8.3, 9.1
   - origin/main を取り込む。ビルドにエラーと新しい警告が無く、そらともと既存のテストが通る（`C2E3F752`・`uptime` と `pgrep -x xcodebuild` で負荷を見てから・`nice -n 19`・`-jobs 4`・1本ずつ）。既存のテストのうち main で既に落ちているものは、変更前の main でも同じく落ちることを確かめて区別する
   - 6〜8 の各テストが、陽性対照で赤になった記録があることを確かめる（記録の無いテストは取り直す）
   - 差分で確かめる: 退会の既存の8手順の対象と順序・既存の3つの通知設定・既存の通知のタップの挙動と計測・ゲストのホーム・計測のイベントの名前とパラメータの値（`flag_off` を含む）・利用規約とお問い合わせが、変わっていない
   - _Requirements: 2.1, 9.4, 13.2, 13.3, 13.4_
+  - 結果（2026-10-12 14:30〜14:33・`b6a6ad03`・`C2E3F752`・`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`・`-only-testing:SoramoyouTests`・時間切れ 60 秒）:
+    - origin/main は 6.3 の前に取り込み済みで、その後の先行は 0（`git fetch` の後 `HEAD..origin/main` が空）
+    - 全単体テスト 1545 件: passed 1507・failed 34・skipped 4（xcresult の集計）。**失敗 34 本は、leave-group 9.x（tasks.md 417 行）で変更前の main でも同じく落ちると確かめた 34 本と、クラスごとの数が完全に一致**（`FirestoreServiceTests` 20・`StorageServiceTests` 4（`testUploadProgress` の時間切れを含む・今回も 60 秒で切れて続きから再開）・`ProfileViewModelTests` 2（`testLoadProfile`・`testLoadEditTools`）・`FilterGraphBuilderTests` 2・`AuthServiceTests`・`AuthViewModelTests`・`EditViewModelTests`（`testRealtimeEditingFlag`）・`ImageServiceTests`（`testGeneratePreviewWithRecipe`）・`IntegrationTests`・`UserModelTests` が各 1）。main はその後 #177（そらともの抜けるの画面）と #175（ポリシーの文字列と docs）しか変わっておらず、どちらもこれらのテストの対象に触れないので、main で取り直していない。そらとも・What's New・設定・オンボのテストの失敗は 0。一覧 `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/9.2-failed.txt`・ログ `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/9.2-all.log`
+    - 警告: このビルドでコンパイルした 5 ファイル（`MainTabView`・`SettingsView`・`SoratomoEntryButton`・`SoratomoError`・`SoratomoGroupService`）と、6〜7 の緑で確かめた残りの触ったファイルの警告は 0。ログの警告は既存の `GeneratedAssetSymbols.swift`・`PaymentService.swift` だけ
+    - 6〜8 の陽性対照の記録: 6.1（赤 14:12）・6.2（Mac の使い捨てパッケージで 4 本赤）・6.3 と 7.1（赤 14:19）・8.3（写しの検索で 1 件）。7.2 はコメントの直しだけで新しいテストは無い。8.1・8.2 は文字列と値の変更で、ビルドが通ることを確かめた
+    - 差分で確かめた（`git diff origin/main`）: 退会の既存の 8 手順（`SettingsViewModel`・`SoratomoAccountDeletionService`・`AuthService`）の差分 0 行・既存の 3 つの通知設定と通知のタップの計測（`SoratomoAnalytics`・`LoggingService` の差分 0 行。`flag_off` の値も同じ）・ゲストのホーム（`GuestTabView` の差分は見本の窓口の 2 行だけ）・`SettingsView` の差分は退会の文の静的関数とポリシーの本文だけで、利用規約・お問い合わせに触れた行は 0
+    - 匿名から登録への昇格（`link(with:)`）の経路はアプリに無い（`Services`・`ViewModels`・`Views` を検索して 0 件）ので、判定し直す契機は「ログインの確定」（`ContentView` の `.task(id:)`）だけでよい（6.1 で前面復帰の再評価を消した影響の確認）
 
 - [ ] 9.3 PR-B を main へ入れる（段0-4・ユーザーのGOを取ってから実行）
   - 前提: 1, 9.2。10.4 でプライバシーマニフェストを変えることになった場合は、その変更も PR-B に入れる（マージの前に10.4を済ませるのが望ましい。マージの後なら、12.1 の archive より前に小さな PR で main へ入れる。1.15.0 のまま）
@@ -407,6 +432,7 @@
 - [ ] 12. 1.15.0 を TestFlight で確かめる
 
 - [ ] 12.1 build 番号を決めて archive し、内部の TestFlight へ出す（段2-1・ユーザーのGOを取ってから実行）
+  - 9.1 の決定（2026-10-12）: archive の直前に、`privacyPolicyText` と `hosting/delete-account/index.html` の最終更新日をその日の日付に直し、`python3 scripts/build-privacy-policy-html.py` で HTML を作り直して、build 番号と同じ小さな PR で main へ入れてから archive する（アプリ内とページを同じ日付・同じ本文にする）
   - 前提: 11.5（クレームの無いアカウントが1.15.0を手にする前に、3か所を開け終えて確かめる）
   - App Store Connect の最大の build を実測で読む（GO）。113以上でまだ使っていない番号に決め、main の pbxproj の値（8.2）と違えば、小さな PR で main の値を直してから出す（コマンドの上書きで上げない）
   - git の管理外の `ExportOptions.plist` が worktree に無ければ、本体の checkout から写す
