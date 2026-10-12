@@ -294,7 +294,7 @@
   - 測る前に決める（`docs/roadmap.md` の段階Bの判定ゲートと同じ）。変えるなら、公開の前にこのタスクに書き直す
   - _Requirements: 5.4, 11.5_
 
-- [ ] 10.4 G5 の文案を用意し、開発者の承認を取る（段0-5・ユーザーの入力が要る）
+- [x] 10.4 G5 の文案を用意し、開発者の承認を取る（段0-5・ユーザーの入力が要る）
   - 前提: 1（PR-B のマージより前に済ませるのが望ましい。プライバシーマニフェストを変える場合に PR-B へ入れられる）
   - プライバシーラベル: `docs/app-privacy-label.md`（ASC の入力表）と `PrivacyInfo.xcprivacy` を読み、増える項目があるかを確かめた案を作る（写真・その他のユーザーコンテンツ・ユーザーID・名前は申告済み。通報の理由と同意の記録が「その他のユーザーコンテンツ」に入るか）。変えるなら、表とマニフェストを同時に直す。マニフェストの XML のコメントに連続のハイフンを入れない（ITMS-91056 の前例）
   - 年齢区分: ユーザー生成コンテンツと、利用者どうしのやりとり（非公開のグループ）の答えを、そらともを含めて見直した案を作る
@@ -308,6 +308,18 @@
   - デモのアカウント（既存・uid `FvPXCf…`）は、表示名が無ければ参加の前に入力を求められ、ガイドラインに未同意なら全文が出る。文案の2の手順に入れてある
   - ラベル・年齢区分・審査メモの案を利用者に見せ、1回で承認を取る。承認の日時を記録する（13.5 の G5 で使う）。ASC への入力は13.3で開発者が行う
   - _Requirements: 8.3, 8.4, 8.5, 8.7_
+  - 結果（2026-10-12 10:48 に利用者が AskUserQuestion で 1 回で承認・PR-A のセッション `5f8447b6…` で取った GO を、引き継ぎメモ `2026-10-12-そらとも-public-launch-下書き-G5とポリシー.md` から PR-B のセッションが 14:10 に写した）:
+    - 承認の日時: **2026-10-12 10:48**（13.5 の G5 で使う）。案は Workflow `wf_72e4c078-b6b` の下書き係が作り、ASC は読んでいない
+    - (1) プライバシーラベル: **案どおり承認**。種類は増やさない（9 種類のまま）・`PrivacyInfo.xcprivacy` も変えない（→ 9.3 でマニフェストを PR-B に入れる必要は無い）。13.3 で `docs/app-privacy-label.md` の「各項目の根拠」の文（2＝そらともの参加・通報の記録の uid・ガイドライン同意の版と日時、3＝投稿者名とメンバー一覧の表示名、4＝Storage の `soratomo/` 配下の投稿画像、5＝そらともの投稿のキャプション）と、表の後の注記（通報の理由は 5 つの固定の選択肢で自由記述は無い・Discord へは内部ID・理由・時刻だけを送る・新しい種類は足さない）と、最終確認の日付だけを直す。根拠: 表とマニフェストの 9 種類が一致・通報の理由は `functions/soratomoCore.js` の `REPORT_REASONS`（固定 5 つ）・Discord への送信は `buildReportForwardPayload` で内部ID・理由・時刻だけ
+    - (2) 年齢区分: **13.3 で ASC の質問文の現物を見て確定**。方針はユーザー生成コンテンツ＝はい。利用者どうしのやりとりは質問文を見て決める。今の答えが 4+／ユーザー生成コンテンツ＝いいえ なら、そこも直す（そらともの前からのコメント機能と食い違っているため）
+    - (3) 審査メモ: **案どおり承認（日本語＋英語の併記）**。日本語は上の文案 1〜4（2 は手順を (1)〜(8) に分けた形）。招待コードは書かず、13.3 で ASC にだけ入れる。英語（13.3 で ASC に入れる本文）:
+      - 1. New feature "Soratomo": a private group of up to 20 people who join with an invite code and share sky photos with each other. Open it from the button at the top right of the Home screen (the two-people icon).
+      - 2. How to try it (with the demo account): log in with the demo account and tap the top-right button on Home. Tap "同意する" (Agree) on the full guideline. Enter this invite code in "招待コードで参加" (Join with invite code): (code is written only in App Store Connect). Enter a display name if asked. Post one photo on the timeline. From the "..." menu (or long press) on another member's post you can try "通報" (Report) and "ブロック" (Block). In the menu at the top right of the timeline (ellipsis in a circle; VoiceOver reads it as "その他の操作") choose "グループを抜ける" (Leave group) to leave the group. In the group list, "グループを作る" (Create group) makes a new group.
+      - 3. Account deletion: deleting the demo account would make it unusable for later reviews, so please test "Settings > アカウントの削除" (Delete account) with a newly registered account (sign-up does not send a confirmation email, so it works immediately). Soratomo posts and group memberships are deleted as well.
+      - 4. Moderation (Guideline 1.2): group names and captions that contain inappropriate words are rejected. Reports are reviewed within 24 hours. Posts by blocked users are hidden. Users who violate the rules are suspended from Soratomo. Contact: "お問い合わせ" in Settings and the support URL.
+    - 画面の名前は現物で確かめた: 入口 `SoratomoEntryButton.swift` の `person.2.circle`・「同意する」`SoratomoGuidelineView.swift`・「招待コードで参加」「グループを作る」`SoratomoGroupListView.swift`・「グループを抜ける」`SoratomoTimelineView.swift`（親のメニューは `ellipsis.circle`・読み上げ「その他の操作」）・「通報」「ブロック」`SoratomoSkyDetailView.swift`（投稿詳細の「…」）
+    - 迷った点の解決: 長押し＝タイムラインのカードに `.contextMenu` があり通報とブロックが出る（`SoratomoTimelineView.swift` 412 行）ので「（または長押し）」は残す。24 時間＝release-gate requirements.md の要件 5 の約束と同じ
+    - 8.1 への申し送り（利用者の決定）: PR #175 を先に main へ入れ、8.1 はその上に足す（#175 は `88247fa9` でマージ・hosting deploy 済み。8.1 の結果に書く）
 
 ## (g) 切り替えの当日（段1-1〜1-5）
 
