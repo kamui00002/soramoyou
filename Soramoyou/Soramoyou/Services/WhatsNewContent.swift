@@ -45,7 +45,7 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（1.15.0: そらともの一般公開）の新機能紹介ページ。文言は下書き（soratomo-public-launch 9.1 で利用者が確認する）。
+    /// 今回（1.15.0: そらともの一般公開）の新機能紹介ページ。文言は soratomo-public-launch 9.1 で利用者が承認済み（2026-10-12）。変えるときは承認を取り直す。
     /// アイコンは実UIと揃えている（person.2.circle = ホーム右上のそらともの入口 `SoratomoEntryButton`、
     /// rectangle.portrait.and.arrow.right = タイムライン右上のメニューの「グループを抜ける」）。
     /// ⚠️ 1.12.0 のページ（ランキング・おすすめの空・空優先AE）は出し切った（既読）ので載せない。

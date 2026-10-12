@@ -71,7 +71,8 @@ final class SoratomoFeatureGateTests: XCTestCase {
     }
 
     func testAnonymousIsDisabled() {
-        // 匿名アカウント（ゲスト）は無効。ゲストと匿名のホームに入口が出ないことは、この判定が受け持つ
+        // 匿名アカウント（Firebase の匿名ログイン）は無効。ゲスト（未ログイン）は評価されず unknown のまま隠れる
+        // （testStartsUnknownAndHidden）
         provider.kind = .anonymous
         let state = gate.evaluate()
         XCTAssertEqual(state, .disabled(.anonymous))

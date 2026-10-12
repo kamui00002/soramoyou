@@ -50,8 +50,8 @@ struct FirebaseSoratomoAccountProvider: SoratomoAccountProviding {
 /// 起動時に通信できなくても、登録済みなら入口が出る（soratomo-public-launch 要件 2.1〜2.3）。
 ///
 /// - 未ログイン・匿名アカウントは無効
-/// - 判定が済むまで（`unknown` の間）は入口を出さない。`unknown` は、ログインが確定してから最初の
-///   `evaluate()` までの一瞬だけになる
+/// - 判定が済むまで（`unknown` の間）は入口を出さない。ログイン中の `unknown` は、ログインが確定してから
+///   最初の `evaluate()` までの一瞬だけ。未ログイン・ゲストの間は評価しないので `unknown` のまま（入口は隠れる）
 /// - ルール（`isSoratomoUser()`）と Functions（`requireSoratomoUser`）も、同じ「登録済みでログイン（匿名は拒否）」を
 ///   要求する。3 か所は同じ条件にしておく（ずれると、入口は出るのに読み書きが拒否される）
 /// - 1.14.x まではカスタムクレームで判定していた。1.15.0 で一般公開した（soratomo-public-launch）

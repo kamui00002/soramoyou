@@ -187,7 +187,7 @@ final class SoratomoRouterTests: XCTestCase {
         XCTAssertEqual(eventLog.events, [.notificationOpened(.signedOut)])
     }
 
-    /// 未ログインのとき、フラグは「無効（未ログイン）」や「未判定」になる。それでも結果は signed_out
+    /// 未ログインのとき、判定は「無効（未ログイン）」や「未判定」になる。それでも結果は signed_out
     func testResolvePending_signedOutWinsOverGateState() {
         let gates: [SoratomoFeatureGate.State] = [.disabled(.signedOut), .unknown]
         for gate in gates {
@@ -213,7 +213,7 @@ final class SoratomoRouterTests: XCTestCase {
 
     // MARK: - resolvePending: flag_off
 
-    /// フラグが無効なら、理由に関わらず、破棄して flag_off を記録する。そらともの画面は出さない
+    /// 判定が無効なら、理由に関わらず、破棄して flag_off を記録する。そらともの画面は出さない
     func testResolvePending_disabledGateDiscardsAndLogsFlagOff() {
         let reasons: [SoratomoFeatureGate.DisabledReason] = [.signedOut, .anonymous]
         for reason in reasons {
@@ -237,7 +237,7 @@ final class SoratomoRouterTests: XCTestCase {
         XCTAssertFalse(MainTabView.canShowWhatsNewAfterDelay(lastSeenID: "new", currentID: "new", isSoratomoPresented: false))
     }
 
-    /// フラグが無効なら、ほかの全画面が出ている間（canPresent == false）でも待たずに破棄する
+    /// 判定が無効なら、ほかの全画面が出ている間（canPresent == false）でも待たずに破棄する
     func testResolvePending_disabledGateDiscardsEvenWhenCannotPresent() {
         router.receive(userInfo: soratomoUserInfo())
 
@@ -247,7 +247,7 @@ final class SoratomoRouterTests: XCTestCase {
         XCTAssertEqual(eventLog.events, [.notificationOpened(.flagOff)])
     }
 
-    /// フラグがまだ判定されていない間は、flag_off を記録せず保留のまま待つ。判定が済んだら続きを行う
+    /// まだ判定されていない間は、flag_off を記録せず保留のまま待つ。判定が済んだら続きを行う
     func testResolvePending_unknownGateKeepsPendingUntilDecided() {
         router.receive(userInfo: soratomoUserInfo())
 
