@@ -237,6 +237,36 @@ test("soratomoPrefEnabled: 既存の3つの通知設定は見ない（そらと�
 });
 
 // ============================================================
+// isRegisteredToken（そらともの関門・public-launch 要件1.7。ルールの isSoratomoUser() と同じ規則）
+// ============================================================
+
+test("isRegisteredToken: ログインの方式が匿名でなければ真（password・apple.com）", () => {
+  assert.equal(core.isRegisteredToken({ firebase: { sign_in_provider: "password" } }), true);
+  assert.equal(core.isRegisteredToken({ firebase: { sign_in_provider: "apple.com" } }), true);
+});
+
+test("isRegisteredToken: 匿名は偽", () => {
+  assert.equal(core.isRegisteredToken({ firebase: { sign_in_provider: "anonymous" } }), false);
+  // クレームがあっても、匿名なら偽（クレームを読まない）
+  assert.equal(core.isRegisteredToken({ soratomoBeta: true, firebase: { sign_in_provider: "anonymous" } }), false);
+});
+
+test("isRegisteredToken: トークン・firebase の項目が無い、方式が文字列でないときは偽（閉じる側に倒す）", () => {
+  for (const token of [undefined, null, {}, { firebase: null }, { firebase: {} }, { firebase: "password" }]) {
+    assert.equal(core.isRegisteredToken(token), false, JSON.stringify(token));
+  }
+  for (const provider of [123, true, null, { id: "password" }, ["password"]]) {
+    assert.equal(core.isRegisteredToken({ firebase: { sign_in_provider: provider } }), false, JSON.stringify(provider));
+  }
+});
+
+test("isRegisteredToken: クレーム soratomoBeta を読まない（あっても無くても、方式だけで決まる）", () => {
+  assert.equal(core.isRegisteredToken({ soratomoBeta: true }), false);
+  assert.equal(core.isRegisteredToken({ soratomoBeta: false, firebase: { sign_in_provider: "password" } }), true);
+  assert.equal(core.isRegisteredToken({ soratomoBeta: true, firebase: { sign_in_provider: "password" } }), true);
+});
+
+// ============================================================
 // classifyRecipient
 // ============================================================
 
@@ -246,42 +276,33 @@ function worstUser(posterId) {
 }
 
 test("classifyRecipient: 送れる宛先は eligible", () => {
-  assert.equal(
-    core.classifyRecipient({ hasFlag: true, userData: { fcmToken: "t" }, posterId: "P" }),
-    "eligible"
-  );
+  assert.equal(core.classifyRecipient({ userData: { fcmToken: "t" }, posterId: "P" }), "eligible");
 });
 
-test("classifyRecipient: 順序は フラグOFF → 設定OFF → ブロック → トークン無し", () => {
-  // すべてに当てはまるときは、最初の理由（フラグOFF）になる。
-  assert.equal(core.classifyRecipient({ hasFlag: false, userData: worstUser("P"), posterId: "P" }), "flag_off");
-  // フラグを満たすと、次の理由（設定OFF）になる。
-  assert.equal(core.classifyRecipient({ hasFlag: true, userData: worstUser("P"), posterId: "P" }), "pref_off");
-  // 設定も満たすと、ブロック。
-  assert.equal(
-    core.classifyRecipient({ hasFlag: true, userData: { blockedUserIds: ["P"] }, posterId: "P" }),
-    "blocked"
-  );
+test("classifyRecipient: 順序は 設定OFF → ブロック → トークン無し", () => {
+  // すべてに当てはまるときは、最初の理由（設定OFF）になる。
+  assert.equal(core.classifyRecipient({ userData: worstUser("P"), posterId: "P" }), "pref_off");
+  // 設定を満たすと、ブロック。
+  assert.equal(core.classifyRecipient({ userData: { blockedUserIds: ["P"] }, posterId: "P" }), "blocked");
   // ブロックも外すと、トークン無し。
-  assert.equal(core.classifyRecipient({ hasFlag: true, userData: { blockedUserIds: ["X"] }, posterId: "P" }), "no_token");
+  assert.equal(core.classifyRecipient({ userData: { blockedUserIds: ["X"] }, posterId: "P" }), "no_token");
 });
 
 test("classifyRecipient: 利用者の文書が無ければ（設定は既定ON・ブロック無し）トークン無し", () => {
-  assert.equal(core.classifyRecipient({ hasFlag: true, userData: null, posterId: "P" }), "no_token");
+  assert.equal(core.classifyRecipient({ userData: null, posterId: "P" }), "no_token");
 });
 
 test("classifyRecipient: blockedUserIds が配列でなければブロックとみなさない（既存の isBlocked と同じ規則）", () => {
-  assert.equal(
-    core.classifyRecipient({ hasFlag: true, userData: { blockedUserIds: "P", fcmToken: "t" }, posterId: "P" }),
-    "eligible"
-  );
+  assert.equal(core.classifyRecipient({ userData: { blockedUserIds: "P", fcmToken: "t" }, posterId: "P" }), "eligible");
 });
 
-test("classifyRecipient: hasFlag は true のときだけフラグ ON（truthy の値では通さない）", () => {
-  assert.equal(
-    core.classifyRecipient({ hasFlag: "true", userData: { fcmToken: "t" }, posterId: "P" }),
-    "flag_off"
-  );
+test("classifyRecipient: 宛先のクレームを見ない（クレームの無い宛先も eligible。flag_off を返さない・public-launch 1.3）", () => {
+  // 1.14 期の引数 hasFlag を渡されても読まない（クレームで宛先を絞る分岐を戻していないことの柵）。
+  for (const hasFlag of [false, undefined, "true"]) {
+    assert.equal(core.classifyRecipient({ hasFlag, userData: { fcmToken: "t" }, posterId: "P" }), "eligible", String(hasFlag));
+  }
+  // すべての理由に当てはまる宛先でも、最初の理由は設定OFF（flag_off ではない）。
+  assert.equal(core.classifyRecipient({ hasFlag: false, userData: worstUser("P"), posterId: "P" }), "pref_off");
 });
 
 // ============================================================

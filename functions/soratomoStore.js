@@ -50,7 +50,7 @@ const REQUEST_ID_MAX = 128;
 /** 理由つきの失敗。配線（soratomo.js）が HttpsError の code と details.reason に写す。 */
 class SoratomoDomainError extends Error {
   /**
-   * @param {"flag_off"|"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner"
+   * @param {"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner"
    *   |"suspended"|"consent_required"|"ng_word"|"invalid_input"|"not_member"|"invalid_reason"|"sky_not_found"
    *   |"self_report"|"outdated_guideline"|"leave_pending"} reason
    * @param {{ currentVersion: number }|null} [details] 利用者へ返してよい詳細。いまは consent_required と
