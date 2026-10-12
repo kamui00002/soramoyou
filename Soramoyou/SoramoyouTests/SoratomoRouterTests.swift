@@ -215,8 +215,7 @@ final class SoratomoRouterTests: XCTestCase {
 
     /// フラグが無効なら、理由に関わらず、破棄して flag_off を記録する。そらともの画面は出さない
     func testResolvePending_disabledGateDiscardsAndLogsFlagOff() {
-        // tokenUnavailable（一時的に取れない）は破棄せずに待つ（下の別のテスト）
-        let reasons: [SoratomoFeatureGate.DisabledReason] = [.signedOut, .anonymous, .claimMissing]
+        let reasons: [SoratomoFeatureGate.DisabledReason] = [.signedOut, .anonymous]
         for reason in reasons {
             eventLog.events.removeAll()
             router.receive(userInfo: soratomoUserInfo())
@@ -228,21 +227,6 @@ final class SoratomoRouterTests: XCTestCase {
             XCTAssertEqual(router.path, [], "\(reason)")
             XCTAssertEqual(eventLog.events, [.notificationOpened(.flagOff)], "\(reason)")
         }
-    }
-
-    /// トークンを一時的に取れない間は、破棄も記録もせずに待つ。取れて有効になったら開く（レビューで直した）
-    func testResolvePending_tokenUnavailableKeepsPendingUntilEnabled() {
-        router.receive(userInfo: soratomoUserInfo())
-
-        router.resolvePending(session: .signedIn, gate: .disabled(.tokenUnavailable), canPresent: true)
-
-        XCTAssertNotNil(router.pending)
-        XCTAssertFalse(router.isPresented)
-        XCTAssertTrue(eventLog.events.isEmpty)
-
-        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
-        XCTAssertNil(router.pending)
-        XCTAssertTrue(router.isPresented)
     }
 
     /// What's New は、そらともの全画面が先に出ているときは出さない（14.1・レビューで直した）
@@ -257,7 +241,7 @@ final class SoratomoRouterTests: XCTestCase {
     func testResolvePending_disabledGateDiscardsEvenWhenCannotPresent() {
         router.receive(userInfo: soratomoUserInfo())
 
-        router.resolvePending(session: .signedIn, gate: .disabled(.claimMissing), canPresent: false)
+        router.resolvePending(session: .signedIn, gate: .disabled(.anonymous), canPresent: false)
 
         XCTAssertNil(router.pending)
         XCTAssertEqual(eventLog.events, [.notificationOpened(.flagOff)])
@@ -323,7 +307,7 @@ final class SoratomoRouterTests: XCTestCase {
     func testResolvePending_discardedResultsAreLoggedOnlyOnce() {
         let cases: [(session: SoratomoSession, gate: SoratomoFeatureGate.State, expected: SoratomoNotificationOpenResult)] = [
             (.signedOut, .enabled, .signedOut),
-            (.signedIn, .disabled(.claimMissing), .flagOff),
+            (.signedIn, .disabled(.anonymous), .flagOff),
         ]
         for testCase in cases {
             eventLog.events.removeAll()
@@ -659,7 +643,7 @@ final class SoratomoRouterTests: XCTestCase {
     func testDiscardedTap_isNotLoggedAgainByAnyEnding() {
         let cases: [(session: SoratomoSession, gate: SoratomoFeatureGate.State, expected: SoratomoNotificationOpenResult)] = [
             (.signedOut, .enabled, .signedOut),
-            (.signedIn, .disabled(.claimMissing), .flagOff),
+            (.signedIn, .disabled(.anonymous), .flagOff),
         ]
         for testCase in cases {
             for ending in Ending.allCases {

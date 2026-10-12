@@ -93,13 +93,13 @@ struct ContentView: View {
                 SoratomoDependencies.live.clearSessionState()
             }
         }
-        // そらともの機能フラグを、ログインが確定するたびに評価する ⭐️ tasks 14.1
+        // そらともを使えるかを、ログインが確定するたびに評価する ⭐️ tasks 14.1
         // 起動時（ログイン済みで起動）と、ログインし直したとき（id が変わって張り直される）に走る。
-        // 起動ごとの最初の評価だけトークンを強制的に更新するのは、判定（SoratomoFeatureGate）の中で済んでいる。
+        // 判定は「登録済みでログイン」だけを見る同期の関数で、通信しない（soratomo-public-launch 6.1）。
         // 評価が済んで判定が変わると、MainTabView の onChange が通知の保留の行き先を解決する
         .task(id: authViewModel.isAuthenticated) {
             if authViewModel.isAuthenticated {
-                await soratomoGate.evaluate()
+                soratomoGate.evaluate()
             }
         }
         // 未ログインの間に届いた、そらともの通知の行き先を破棄する ⭐️ tasks 14.1
@@ -154,7 +154,6 @@ struct ContentView_Previews: PreviewProvider {
 
 /// Preview 用のアカウントの窓口（ログインしていない扱い。FirebaseAuth を呼ばない）⭐️
 @MainActor
-private struct SoratomoEntryContentPreviewProvider: SoratomoClaimsProviding {
+private struct SoratomoEntryContentPreviewProvider: SoratomoAccountProviding {
     func currentAccountKind() -> SoratomoAccountKind? { nil }
-    func claims(forceRefresh _: Bool) async throws -> [String: Any] { [:] }
 }

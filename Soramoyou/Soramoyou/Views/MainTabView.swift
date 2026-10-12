@@ -419,9 +419,8 @@ struct MainTabView_Previews: PreviewProvider {
 
 /// Preview 用のアカウントの窓口（ログインしていない扱い。FirebaseAuth を呼ばない）⭐️
 @MainActor
-private struct SoratomoEntryMainTabPreviewProvider: SoratomoClaimsProviding {
+private struct SoratomoEntryMainTabPreviewProvider: SoratomoAccountProviding {
     func currentAccountKind() -> SoratomoAccountKind? { nil }
-    func claims(forceRefresh _: Bool) async throws -> [String: Any] { [:] }
 }
 
 

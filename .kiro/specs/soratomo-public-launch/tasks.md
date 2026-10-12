@@ -171,7 +171,7 @@
 
 - [ ] 6. アプリの判定を「登録済みでログイン」に替える
 
-- [ ] 6.1 判定（`SoratomoFeatureGate`）を、トークンを読まない形に替える（テストを先に）
+- [x] 6.1 判定（`SoratomoFeatureGate`）を、トークンを読まない形に替える（テストを先に）
   - 前提: 1
   - 陽性対照: まず古い窓口のまま「クレームの無い登録済み（`claims` が空）→ 有効」のテストを足して赤を見てから、判定を変える
   - 判定は `currentAccountKind()` だけで決める: `nil` → 無効（未ログイン）・匿名 → 無効（匿名）・登録済み → 有効。通信しない（起動時に通信できなくても、登録済みなら入口が出る）。`evaluate()` は同期の関数にし、呼ぶ側（`ContentView` の `.task(id:)`）の `await` を外す（警告を残さない）
@@ -182,6 +182,15 @@
   - ゲストと匿名のホームに入口が出ないこと（切り替えの前と同じ）を、判定のテストで受け持つ
   - 差し戻し5（承認済みの読み方）: 匿名でログインすると `MainTabView` が出るので、全員向けの What's New（そらともの紹介）は匿名にも出る。匿名で入る画面が無いので受け入れ、匿名でそらとものページを除く判定は足さない
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 9.5, 10.4, 10.5, 13.2_
+  - 結果（2026-10-12 14:16・本番に触れない＝GO は不要）:
+    - テストを先に: `65a98ca` で `SoratomoFeatureGateTests.testRegisteredWithoutClaimIsEnabled`（クレームの無い登録済み→有効）を足した。変える前のコードで 14:12 に流し、**16 件中この 1 件だけが赤**（理由 `XCTAssertEqual failed: ("disabled(...claimMissing)") is not equal to ("enabled")` と `XCTAssertTrue failed`・残り 15 件は通過）。ログ `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/6.1-red.log`・`6.1-red.xcresult`（旧セッションの同名のログは 08:24 に `BUILD INTERRUPTED` で、証拠にしていない）
+    - 判定: `evaluate()` を同期にし、`currentAccountKind()` だけで決める（`nil`→無効（未ログイン）・匿名→無効（匿名）・登録済み→有効。`switch` に `default` を置かない）。消したもの: `DisabledReason.claimMissing`・`.tokenUnavailable`・`claimKey`・`needsForcedRefresh`・世代（`generation`）・`reevaluateIfTokenUnavailable()`。窓口を `SoratomoAccountProviding`／`FirebaseSoratomoAccountProvider` に改名し、`claims(forceRefresh:)` を消した
+    - 呼ぶ側: `ContentView` の `.task(id:)` の `await` を外し、強制更新のコメントを「通信しない同期の判定」に直した。`SoramoyouApp` の前面に戻ったときの再評価の Task を消した。見本の窓口 3 か所（`ContentView`・`GuestTabView`・`MainTabView`）を新しいプロトコルにし `claims` を消した。型・環境オブジェクトとして読む画面・入口・通知設定・退会の文（`isEnabled` を読む）は変えていない
+    - enum の項目を消すとコンパイルが通らないため、6.2 の本体（`SoratomoRouter.resolvePending` の `case .unknown, .disabled(.tokenUnavailable)` → `case .unknown`）と `SoratomoRouterTests` の直し（`.claimMissing`→`.anonymous` を 3 か所・理由の配列を `[.signedOut, .anonymous]`・`testResolvePending_tokenUnavailableKeepsPendingUntilEnabled` を削除）も、このコミットに入れた
+    - `SoratomoFeatureGateTests` を書き直した（7 本）: 初期値は判定前・登録済み→有効（クレームの口が無いので有無に関係ない）・`evaluate()` は窓口の `currentAccountKind()` を 1 回読むだけ・未ログイン→無効・匿名→無効（ゲストと匿名のホームに入口が出ないことはここで受け持つ）・評価のたびにそのときの種類に従う・`reset()` で判定前。トークンの強制更新・世代・再評価のテストは消した
+    - 緑（14:15・`C2E3F752`・`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`）: `SoratomoFeatureGateTests` と `SoratomoRouterTests` の **59 件すべて通過**（xcresult の集計 passed 59・failed 0）。触った 8 ファイルの警告は 0 件（ログを名前で検索）。ログ `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/6.1-green.log`
+    - 残りの検索: `grep -rn "SoratomoClaimsProviding\|FirebaseSoratomoClaimsProvider\|reevaluateIfTokenUnavailable\|claimMissing\|tokenUnavailable\|claimKey\|needsForcedRefresh" Soramoyou/Soramoyou Soramoyou/SoramoyouTests` が 0 件
+    - 負荷: 赤の 1 回目（14:06）はシミュレーターの起動と重なり 1 分平均 140 になったので止めて流し直した。並列テストの複製のシミュレーターを毎回起動すると重いので、緑から `-parallel-testing-enabled NO` で `C2E3F752` を直接使った
 
 - [ ] 6.2 通知のタップの解決から、クレームの理由を外す
   - 前提: 6.1
