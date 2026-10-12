@@ -294,7 +294,7 @@
     - 陽性対照: 文書だけの変更で、実行するコードを変えていないため取っていない。「消えた行が無く追記だけ」の機械検査は、最初に表の2行で赤（BAD 2）を出してから直して 0 にした。
     - 4.2 は 4.1 と同じブランチで、触ったファイルは指示された5つ（firestore-schema.md・set-soratomo-beta-claim.js・soratomo の requirements.md と design.md・release-gate の requirements.md）だけ。
 
-- [ ] 5. PR-A（サーバー）をまとめて確かめ、PR を作る（マージは切り替えの当日）
+- [x] 5. PR-A（サーバー）をまとめて確かめ、PR を作る（マージは切り替えの当日）
   - 前提: 2.2, 2.4, 2.5, 3.2, 4.1, 4.2
   - origin/main を取り込む（PR-B が先に入っていれば、それも入る）。`npm run lint`・`npm test`・`npm run test:emulator`・ルールのテスト2本（通常と `--mutants`）をもう一度通し、件数を記録する
   - `grep -rn "requireFlag\|soratomoBeta" functions/*.js firestore.rules storage.rules` が、テストのファイル以外で0件（段1-1と同じ検査）。陽性対照: 写しのファイルに1つ入れて、検査が引っかかることを先に確かめる
@@ -323,7 +323,7 @@
       - D3: `compare_and_save` は本番の本文を保存してから手元を読んでいたので、比べる先が `<保存先>/firestore.rules` そのものだと上書きされて、中身が違っても終了コード 0 になった。本番を読む前に、比べる先が保存先のファイル（どちらの名前でも・`os.path.samefile` なのでリンクも）と同じなら終了コード 2 で断るようにし、念のため手元を先に読む順にした。テストを先に足した（比べる先を保存先の firestore.rules に置く。本番を読まず・終了コード 2・比べる先の中身が変わらない）。直す前の道具では終了コード 0 で赤
       - 道具の単体テスト: 21/21（19 件＋2 件。ResourceWarning もエラーとして扱った）・`py_compile` 通過
     - `/security-review`（`/review-full` の直しの後に直列・`origin/main...HEAD`・HEAD `efda6d0`・読むだけでテストと本番は動かしていない）: HIGH・MEDIUM の脆弱性は 0 件（誤検知の判定に回すものも無し）。確かめたこと: 両ルールの `allow` の行は 1 行も変わっておらず（差分を `^[+-].*allow` で grep して 0 件）、変わったのは `isSoratomoUser()` の本体とコメントだけ。メンバーでない人が見られる範囲は広がっていない（広がったのは、メンバーになれる人だけ）／匿名はルールの全パスで拒否・Callable で匿名を通すのは `soratomoDeleteMyData` の 1 か所だけ（`soratomoLeaveGroup` は匿名を拒否する側になった。design の「退会の削除だけ匿名も通す」のとおり）／`firebase.sign_in_provider` は予約済みの項目でカスタムクレームでは書けず、サーバーにカスタムトークンを作るコードは無い／新着通知の宛先は今もグループの members だけ／読み返しの道具は、トークンの出口 4 つ（ログイン情報の失敗・HTTP のエラー・通信の失敗・想定外の例外）とも伏せてから出し、送り先のホストは固定、書くのは保存先の 2 ファイルだけ
-    - 残り: push と PR の作成（GO 待ち）
+    - push と PR（2026-10-12・どちらも GO を取って実行）: `git push -u origin 機能-そらとも一般公開-サーバー`（新しいブランチ・リモートの先頭 `b229e551` が手元と一致）→ PR #178（https://github.com/kamui00002/soramoyou/pull/178・OPEN・下書きではない・base main）。本文の頭に「マージは切り替えの当日（段1-1）。先にマージしない」を見出しで置いた。マージはしていない（11.2 で行う）
 
 ## (e) PR-B（アプリ）
 
