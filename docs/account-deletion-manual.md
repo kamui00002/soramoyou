@@ -57,10 +57,11 @@ fi
 | 9 | `livingSkyJobs`・`skyMotionPurchases` | `userId == uid` |
 | 10 | `livingSkyUsage/{uid}`・`skyMotionBalance/{uid}` | 文書 ID |
 | 11 | `recommendationNotices` | `recommenderId == uid` |
-| 12 | `feedback` | `userId == uid`（アカウントのすべての削除、またはフィードバックの削除の申し込みのとき） |
+| 12 | `feedback` | `userId == uid`（アカウントのすべての削除、またはフィードバックの削除の申し込みのとき）。消す前に各文書の `createdAt` を控え、下の「Discord の写し」も消す |
 | 13 | `users/{uid}` | 文書 ID |
 
 - `reports` は消さない
+- Discord の写し：`feedback` の文書ができると、`notifyFeedbackToDiscord`（`functions/index.js`）が種別・本文・アプリのバージョン・端末・ユーザー ID を開発者の Discord のフィードバックのチャンネルへ送っている。控えた `createdAt` の時刻の投稿を探し、「ユーザーID」の欄が uid と同じことを確かめてから消す（ポリシーの第三者の 6 番に書いてある送信。消さないと、削除を約束したフィードバックが Discord に残る）
 - 本番の文書を読むときは項目名で絞り、トークンを画面に出さない（`firebase-tools` のトークンで REST を使う場合）
 
 ## 3. 認証のアカウント
@@ -99,6 +100,7 @@ node scripts/soratomo-admin.js delete-user "$TARGET_UID" --group <groupId> --gro
 1. 消し残しが無いことを確かめる（`reports`・`soratomoReports` は残す）
    - Storage：1. の `ls` がすべて 0 件
    - Firestore：2. の表の「探し方」のとおりに、各行が 0 件（文書 ID の行は、その文書が無いこと）
+   - Discord：控えた `createdAt` の投稿が、フィードバックのチャンネルに残っていないこと
    - そらとも：`find-orphans --deep` をもう一度実行し、対象の uid が出ないこと。「soratomoGroups の下で ID の形でないグループ」の行も出ていないこと
    - 対象の uid が「データの残るグループ: （なし）」で出たら、そらともで利用停止中だった人の停止の記録（`soratomoUsers/{uid}`）が残っている（`delete-user` は停止の記録を消さない）。6 時間ごとの定期実行が消すので、その後にもう一度 `find-orphans --deep` を実行し、出なくなってから 2. へ進む
 2. 完了をメールで知らせる
