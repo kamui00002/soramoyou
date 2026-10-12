@@ -302,6 +302,7 @@
     - ③ ポリシーと削除ページに足す文: **案どおり承認**（8.1 の結果の内容。Discord の行は ID の種類まで書く版）
     - ④ 最終更新日: **12.1（archive の直前）にその日の日付へ直し、HTML も作り直す**（アプリ内とページを同じ日付・同じ本文にし、公開中の #175 の 10/12 版と区別する）。12.1 の手順に足した
     - 直しは無かったので、文字列は変えていない
+    - **再承認（2026-10-12 15:04・AskUserQuestion の 1 回）**: 9.3 の `/review-full`（codex）で、③ のポリシーの「※ そらともの投稿・写真・表示名は、同じグループのメンバーにだけ表示されます」が実装と食い違うと分かった（表示名は `SoratomoProfileService.saveDisplayName` が `publicProfiles` にも保存し、`firestore.rules` の `publicProfiles` はログインした人なら get できる）。8.1 で「表示名＝プロフィールの表示名」までは確かめたのに、グループの外から見えることを ※ の文に反映していなかった（実装者の見落とし）。利用者が「※ そらともの投稿と写真は、同じグループのメンバーにだけ表示されます。表示名は、プロフィールの表示名と同じです」に直す案を承認。あわせて削除ページの英語の要約に「(Soratomo photos are deleted even with in-app deletion)」を足す案も承認（日本語の側と情報量をそろえる）。反映は 9.3 の結果のとおり
 
 - [x] 9.2 アプリのビルドとテストを通し、変えていないものを差分で確かめる
   - 前提: 6.1〜6.3, 7.1, 7.2, 8.1〜8.3, 9.1
@@ -323,6 +324,10 @@
   - 段0-4 の読み返し: 単体テスト緑・ビルドの警告なし・8.3 の検索が0件
   - マージの後: #163 を、PR-B へのリンクを書いて閉じる（GO）。ここから、1.15.0 以外の版を main から作らない。1.15.0 の版は、サーバーを開けた後（11.5の後）にだけ TestFlight へ出す。開ける前に1.15.0の開発版を触るのは、クレームのあるテスト用アカウント（S3）だけにする
   - _Requirements: 2.1, 6.1, 7.6, 12.1, 12.3_
+  - 結果（途中・2026-10-12 15:05）:
+    - `/review-full`（14:40〜14:58・4 観点を並列＝simplifier・general・codex・project-rules → 同じ根で 14 件に集約 → `filter-validity-judge`）: **通過 5・棄却 9・保留 0**（棄却の内訳: 許容範囲 7＝経緯コメントの重複・`evaluate()` の書き方の好み・spec 6.1 が求める `kindReads` のテスト・`contains` の柵・既存の見本の窓口の重複・#163 由来のオンボのコメント・6.2 の陽性対照を Mac で取ったこと／存在しない CC 2＝匿名の見分け方 `email == nil`（サインイン方式はメールと匿名だけで `link(with:)` も無い・ずれても入口を隠す側）・テストの `@MainActor`（Swift 5 モードで警告 0））。blocker・major は 0
+    - 通過した 5 件の直し: F1（ポリシーの表示名の文・9.1 の再承認 15:04）と F14（削除ページの英語の要約）＝`778a1c66`（`build-privacy-policy-html.py` で HTML を作り直した）。F3（「機能フラグ」の古い言い方の残り。8.3 の検索語に無くすり抜けた: `ContentView`・`HomeView`・`GoldenHourNotificationManager`・`SoratomoAccountDeletionService`・`SoratomoImageStore`・`OnboardingView` のコメントと `SoratomoRouterTests` の説明 4 か所）・F4（What's New の「文言は下書き」→承認済み）・F5（`unknown` は未ログイン・ゲストの間も続く・テストの「ゲスト」の言い方）＝`02a79893`（コメントだけ）。残る「機能フラグ」は 1.14.x の経緯の説明 2 か所（`SoratomoError.flagOff`・`SoratomoRouter` の `flag_off` の名残）だけ
+    - 直した後の緑（15:06・`C2E3F752`・同じ条件）: `SoratomoFeatureGateTests`・`SoratomoRouterTests`・`SettingsViewDeleteAccountMessageTests`・`WhatsNewGateTests` の **68 件すべて通過**。直した 11 の Swift ファイルはすべてこのビルドでコンパイルし直され、警告は既存の `GeneratedAssetSymbols.swift`・`PaymentService.swift` だけ
 
 ## (f) 切り替えの前の準備（段0-2・0-3・0-5）
 
