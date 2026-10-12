@@ -36,7 +36,7 @@ struct MainTabView: View {
     }
 
     // そらとも（友達グループで空を共有）⭐️ tasks 14.1
-    /// 機能フラグの判定（SoramoyouApp が注入。ログイン時の評価は ContentView）
+    /// そらともを使えるかの判定（SoramoyouApp が注入。ログイン時の評価は ContentView）
     @EnvironmentObject private var soratomoGate: SoratomoFeatureGate
     /// そらともへの遷移を決めるルーター（全画面のカバーの表示と、通知の保留の行き先を持つ）
     @ObservedObject private var soratomoRouter = SoratomoRouter.shared
@@ -130,7 +130,7 @@ struct MainTabView: View {
             }
         }
         // そらともの通知の保留の行き先を、表示できる状況になったら開く ⭐️ tasks 14.1
-        // （タブの画面の表示時・フラグの判定が決まった時・通知のタップが届いた時。
+        // （タブの画面の表示時・判定が決まった時・通知のタップが届いた時。
         //   What's New を閉じた時は handleWhatsNewDismiss から呼ぶ）
         .onAppear {
             resolveSoratomoPending()
@@ -206,9 +206,9 @@ struct MainTabView: View {
     ///
     /// この画面はログイン済みのときだけ出る（ContentView の分岐）ので、ログイン状態は `.signedIn` で渡す。
     /// 未ログインの保留の破棄は ContentView が行う。
-    /// - フラグの判定前（unknown）: ルーターが保留のまま待つ（判定が決まると onChange でもう一度呼ばれる）
-    /// - フラグが無効: ルーターが破棄して `flag_off` を記録する（そらともの画面は出さない）
-    /// - フラグが有効: What's New の表示中は `canPresent = false` で待ち、閉じたら開く
+    /// - 判定前（unknown）: ルーターが保留のまま待つ（判定が決まると onChange でもう一度呼ばれる）
+    /// - 使えない（匿名）: ルーターが破棄して `flag_off` を記録する（そらともの画面は出さない）
+    /// - 使える（登録済み）: What's New の表示中は `canPresent = false` で待ち、閉じたら開く
     ///
     /// ⚠️ design.md の Risks のとおり、待ち合わせは What's New だけ。タブの中のほかのシートの表示中や、
     ///    What's New の 1.5 秒の待ちの間にそらともが先に出た場合の挙動は、実機で確かめる。
