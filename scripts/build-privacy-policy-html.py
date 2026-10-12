@@ -36,7 +36,26 @@ def extract_policy_text() -> str:
         sys.exit("privacyPolicyText の複数行リテラルを取り出せません")
     body = m.group(1)
     # Swift の複数行リテラルは閉じ """ のインデントぶんが各行から除かれる。ここでは8スペース固定。
-    return "\n".join(l[8:] if l.startswith(" " * 8) else l.lstrip() for l in body.split("\n"))
+    text = "\n".join(l[8:] if l.startswith(" " * 8) else l.lstrip() for l in body.split("\n"))
+    return resolve_interpolations(text)
+
+
+def resolve_interpolations(text: str) -> str:
+    """本文の文字列補間 `\\(...)` を実際の値に置き換える。
+
+    なぜ必要か: 本文のメールアドレスは `\\(SupportContact.email)` で書かれている（アプリ内の表記を
+    1 箇所にまとめるため）。そのまま HTML にすると `\\(SupportContact.email)` という文字が公開される。
+    知らない補間が残っていたら、黙って公開せずに止める。
+    """
+    if "\\(SupportContact.email)" in text:
+        contact = (ROOT / "Soramoyou/Soramoyou/Utils/SupportContact.swift").read_text()
+        m = re.search(r'static let email = "([^"]+)"', contact)
+        if not m:
+            sys.exit("SupportContact.email が見つかりません（SupportContact.swift の構造が変わった？）")
+        text = text.replace("\\(SupportContact.email)", m.group(1))
+    if "\\(" in text:
+        sys.exit("本文に置き換え方を知らない文字列補間 \\( が残っています（resolve_interpolations に足すこと）")
+    return text
 
 
 def to_html_body(text: str) -> str:
@@ -88,7 +107,7 @@ TEMPLATE = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>プライバシーポリシー — そらもよう</title>
-<meta name="description" content="iOSアプリ「そらもよう」のプライバシーポリシー">
+<meta name="description" content="アプリ「そらもよう」（iOS 版・Android 版）のプライバシーポリシー">
 <style>
   :root {{ --bg:#fff; --fg:#1c1c1e; --muted:#6b7280; --accent:#3b82f6; --line:#e5e7eb; --card:#f7f8fa; }}
   @media (prefers-color-scheme: dark) {{
