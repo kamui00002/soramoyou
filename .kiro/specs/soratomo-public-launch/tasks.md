@@ -57,7 +57,7 @@
 
 ## (b) PR-A（サーバー）: ルール2本と読み返しの道具
 
-- [ ] 2. ルール2本の関門を「登録済みでログイン」に置き換える（テストを先に）
+- [x] 2. ルール2本の関門を「登録済みでログイン」に置き換える（テストを先に）
 
 - [x] 2.1 (P) Firestore のルールのテストを作り直し、変える前のルールで陽性対照を取る（要確認2）
   - 前提: 1
@@ -147,7 +147,7 @@
     - 08:28 に、説明を足した後のコミットする中身で通常と `--mutants` を流し直し、1 回目と同じ結果（27 件すべて期待どおり・壊し方 28 個・見分けられないケース 0 件）
     - 本番には出していない（`firebase deploy --only storage` と本番のルールへの流しは 11.3 と 10.6 の範囲で、GO を取ってから）
 
-- [ ] 2.5 (P) 本番のルールの読み返しの道具を作る（要確認10）
+- [x] 2.5 (P) 本番のルールの読み返しの道具を作る（要確認10）
   - 前提: 1
   - `scripts/read-deployed-rules.py`（新規）: Rules REST API を読むだけで、Firestore のリリース `cloud.firestore` と Storage のリリースについて、ruleset の識別子・更新の時刻・本文の sha256 の頭12桁を出し、本文を `<保存先>/firestore.rules` と `<保存先>/storage.rules` に保存する。保存先は scratchpad を引数で受ける。比べる手元のファイル（既定はリポジトリ直下の2本）の sha256 の頭12桁も並べ、一致しなければ終了コード1。本番に書かない
   - 認証は、ルールのテストと同じ firebase CLI のトークン（`~/.config/configstore/firebase-tools.json`）。トークンを出力しない。ファイルの頭に、使い方・読むだけであること・トークンを出さないことを書く
@@ -178,6 +178,15 @@
     - 要確認10: 未確認（本番の読み取りなので GO 待ち）。`STORAGE_RELEASE` は推定のまま
     - 検証済みでないもの: 本物の Rules REST API を一度も呼んでいない（Storage のリリースの名前の `/` を URL にそのまま置く形・本物のログイン情報の読み込み・本番の応答の形）。期待値 `187ac94b5e73` は leave-group の tasks.md 509 行の記録（ruleset `8ba8a746`）と同じだが、記録との突き合わせで、いま本番を読んだのではない。Storage の ruleset と指紋の記録は無い
     - 残り（GO 待ち）: 要確認10（一覧で Storage のリリースの名前を確かめる）と、本番での陽性対照（本番と main で 0・1 行足した写しで 1）
+  - 結果（2026-10-12 09:40・本番の読み返し・GO を取って実行）:
+    - 実行の前に: firebase CLI のトークンが期限切れ（約 18 分前）だったので、`firebase projects:list > /dev/null` を一度実行した（終了コード 0）。トークンは出していない（残りの秒数だけを見た）
+    - 比べる先: PR-A の HEAD のルールは関門を書き換えていて本番に出ていない（頭 12 桁は Firestore `de845cbd294b`・Storage `0b6eddfffa16`）。既定（リポジトリ直下）のままだと終了コード 1 が出るが、それは陽性対照ではない。比べる先は `git show origin/main:<ファイル>`（72bf527）の写しを scratchpad に置き、`--firestore`・`--storage` で渡した
+    - 要確認10: `--list-releases` の一覧は 2 件。`cloud.firestore`（ruleset `8ba8a746-2c79-47c7-ac1e-fee3ba207beb`・更新 2026-10-12 01:36:45 JST）と `firebase.storage/soramoyou-ios.firebasestorage.app`（ruleset `2daa6614-bdc1-4a23-a29e-148b36fa37dd`・更新 2026-10-03 23:57:31 JST）。Storage のリリースの名前は推定（`STORAGE_RELEASE`）と同じ。アプリが使うバケットも、iOS の `GoogleService-Info.plist` の `STORAGE_BUCKET` と Android の `google-services.json` の `storage_bucket` がどちらも `soramoyou-ios.firebasestorage.app` で一致。定数は変えず、道具のコメント 2 か所の「推定」に確かめた日を足した（コメントだけ・`py_compile` 通過・単体テスト 19/19）
+    - 一致（本番と main）: 終了コード 0。Firestore は本番 `187ac94b5e73`・main `187ac94b5e73`（ruleset `8ba8a746`＝leave-group の tasks.md の記録と同じ）。Storage は本番 `7ec51426f1ea`・main `7ec51426f1ea`。保存した本番の本文 2 本は、main の写しと `cmp` でバイト一致
+    - 陽性対照（main の Firestore の写しに 1 行足した先）: 終了コード 1。Firestore だけ不一致（本番 `187ac94b5e73`・手元 `8e34a706bd21`）で、Storage は一致のまま（比べる土台は正しい）
+    - Storage の ruleset `2daa6614`・指紋 `7ec51426f1ea` は、これまで記録が無かった。ここに残す（11.4 で出す前の値）
+    - トークン: 道具の出力と保存した 4 つの本文に、`ya29`・`Bearer`・`access_token`・`refresh_token` は 0 件
+    - 上の「検証済みでないもの」の 3 点（Storage のリリースの名前の `/` を URL にそのまま置く形・本物のログイン情報の読み込み・本番の応答の形）は、この実行で本物の API を通った
 
 ## (c) PR-A（サーバー）: Functions
 

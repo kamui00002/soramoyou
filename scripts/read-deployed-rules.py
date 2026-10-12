@@ -34,8 +34,9 @@ spec: .kiro/specs/soratomo-public-launch/（tasks.md 2.5・design.md の「運�
   トークンは出力しない。
 
 要確認10（design.md）:
-  Storage のリリースの名前 STORAGE_RELEASE は、バケットの名前からの推定。
-  --list-releases の一覧で確かめ、違えば一覧の名前を --storage-release で渡す（確かめたら、この定数も直す）。
+  Storage のリリースの名前 STORAGE_RELEASE は、バケットの名前からの推定で、2026-10-12 に --list-releases の一覧で
+  同じ名前であることを確かめた（tasks.md 2.5 の結果）。
+  バケットを変えたときは一覧で確かめ直し、違えば一覧の名前を --storage-release で渡す（確かめたら、この定数も直す）。
 
 比べ方:
   本番の本文（API が返した文字列を UTF-8 にした bytes）と、手元のファイルの bytes を、そのまま比べる
@@ -64,7 +65,7 @@ API = "https://firebaserules.googleapis.com/v1"
 TOKEN_FILE = "~/.config/configstore/firebase-tools.json"
 
 FIRESTORE_RELEASE = "cloud.firestore"
-# バケットの名前（soramoyou-ios.firebasestorage.app）からの推定。要確認10 でリリースの一覧と照合する
+# バケットの名前（soramoyou-ios.firebasestorage.app）からの推定。2026-10-12 にリリースの一覧で同じ名前と確かめた（要確認10）
 STORAGE_RELEASE = "firebase.storage/soramoyou-ios.firebasestorage.app"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
