@@ -341,7 +341,8 @@
 - ⚠️ **G5（プライバシーポリシーとプライバシーラベル）への引き継ぎ**: 通報の記録は、通報者または投稿者が退会しても消さない（release-gate 要件 6.11）。通報が届くと、通報の記録・投稿・グループ・投稿者・通報者の**内部 ID** と理由と受け付けた時刻を、開発者の Discord（フィードバックとは別の通報専用のチャンネル）へ送る（キャプション・グループ名・表示名・招待コード・画像は送らない・要件 7.2）。ポリシーとラベルに、この保持と第三者（Discord）への送信を書く必要がある。
 - そらともの投稿は iOS では `SoratomoSky`（既存の `Post` とは別の型）。既存の画面・お気に入り・おすすめ・ウィジェット・カレンダーへは型の上で渡せない（要件 13.2〜13.4）。
 - サブコレクションに `posts` の名前を使わない。collectionGroup のクエリと `{path=**}` のルールも使わない（既存の投稿のクエリ・ルールに混ざらないため・要件 13.1）。
-- 読み書きの条件は `firestore.rules` と `storage.rules` の `soratomo` の節（クレーム `soratomoBeta` とメンバー判定）。ルールのテストは `scripts/rules_test_soratomo.py`（通常と `--mutants`）。
+- 読み書きの条件は `firestore.rules` と `storage.rules` の `soratomo` の節（登録済みでログイン〔`firebase.sign_in_provider` が `anonymous` でない〕とメンバー判定）。ルールのテストは `scripts/rules_test_soratomo.py`（通常と `--mutants`）。
+- 1.15.0 から、Android 版のアカウントを含むログインした全員に開いている。
 - **一致させる値**（片方だけ変えると、アプリが通すものをサーバーが拒否する、またはその逆になる）。文字数はすべてコードポイントで数える。
   - 招待コードの字種・長さ・区切りの文字: iOS `SoratomoInviteCode` ⇔ Functions `soratomoCore.js`（`INVITE_ALPHABET`・`INVITE_CODE_LENGTH`・`INVITE_CODE_SEPARATORS`）
   - グループ名の上限 30: iOS `SoratomoTextRules.groupNameMax` ⇔ Functions `GROUP_NAME_MAX`
