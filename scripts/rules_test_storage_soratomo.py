@@ -27,8 +27,8 @@ spec: .kiro/specs/soratomo/（tasks.md 4.2・要件 1.6 と 11 の各項目を�
   - 未ログインは auth を null で渡す（省くと request.auth が未定義になり、エラーで拒否される）
   - ログインしたケースのトークンは {"firebase": {"sign_in_provider": <方式>}, ...クレーム} の形で作る
     （本番の ID トークンには予約済みの項目 firebase.sign_in_provider が必ずある。匿名は "anonymous"、メールとパスワードは "password"）。
-    方式は PROVIDERS で決まり、ログインしたケースには必ず入る。入れ忘れると、ルールの読み取りがエラーになり、
-    許可を期待するケースが「エラーで拒否」で見つかる
+    方式とクレームは TOKENS で決まり、ログインしたケースには必ず入る。TOKENS に無い登場人物は case() が
+    KeyError で止め、書き忘れを評価の前に見つける（既定の方式・クレームは当てない。Firestore 側と同じ形）
     入れ子の項目は rules test API にそのまま届く（2026-10-12 に確認。public-launch 要確認2）。匿名のメンバーでは
     式の報告で比較が 'anonymous' を読んで false になり、エラーは出ない（条件で拒否）。firebase を抜いたトークンでは
     「Property firebase is undefined」のエラーで拒否され、期待外れとして数えられる
@@ -69,10 +69,18 @@ ANON = "anon"          # g1 のメンバーの文書はあるが、匿名でロ�
 OUTSIDER = "outsider"  # 登録済み（クレーム soratomoBeta あり）だが g1 のメンバーではない
 G1_MEMBERS = {AUTHOR, OWNER, MEMBER, NOCLAIM, ANON}
 
-# ログインの方式（ID トークンの firebase.sign_in_provider）。書いていない人は登録済み（"password"）
-PROVIDERS = {ANON: "anonymous"}
-# クレーム。書いていない人は soratomoBeta を持つ（1.14.x でクレームを配った人）
-CLAIMS = {NOCLAIM: {"skyMotionBeta": True}, ANON: {}}
+# ログインした利用者の ID トークン: (ログインの方式 firebase.sign_in_provider, クレーム)
+# 関門は 1.15.0 から「登録済みでログイン」で、クレーム soratomoBeta は見ない。1.14.x でクレームを付けた人も
+# 通ることを確かめるため、クレームのある登場人物は残す（public-launch 要件 1.9）。
+# 書いていない登場人物は case() が KeyError で止める（既定を当てると、書き忘れが黙って「登録済み＋クレームあり」で通る）
+TOKENS = {
+    AUTHOR: ("password", {"soratomoBeta": True}),
+    OWNER: ("password", {"soratomoBeta": True}),
+    MEMBER: ("password", {"soratomoBeta": True}),
+    OUTSIDER: ("password", {"soratomoBeta": True}),
+    NOCLAIM: ("password", {"skyMotionBeta": True}),
+    ANON: ("anonymous", {}),
+}
 
 # 画像のパス（バケットより下）
 AUTHOR_DIR = "soratomo/g1/" + AUTHOR + "/s1/"
@@ -95,11 +103,10 @@ def jpeg(size):
 
 
 def case(name, expect, uid, method, path, upload=None):
-    """1 ケース。uid=None は未ログイン。ログインしたケースは、ログインの方式（provider）とクレーム（claims）を
-    登場人物から決める（ANON は "anonymous"、ほかは "password"）。upload は保存する内容（request.resource）で、削除では渡さない"""
-    return {"name": name, "expect": expect, "uid": uid,
-            "provider": PROVIDERS.get(uid, "password") if uid else None,
-            "claims": CLAIMS.get(uid, {"soratomoBeta": True}) if uid else None,
+    """1 ケース。uid=None は未ログイン。ログインした利用者の方式（provider）とクレーム（claims）は TOKENS から引く
+    （TOKENS に無い uid は KeyError で止め、書き忘れを評価の前に見つける）。upload は保存する内容（request.resource）で、削除では渡さない"""
+    provider, claims = TOKENS[uid] if uid else (None, None)
+    return {"name": name, "expect": expect, "uid": uid, "provider": provider, "claims": claims,
             "method": method, "path": path, "upload": upload}
 
 

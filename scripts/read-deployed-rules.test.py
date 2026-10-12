@@ -227,6 +227,17 @@ class ReadDeployedRulesTest(unittest.TestCase):
         self.assertIn("HTTP 403", out)
         self.assert_no_token(out)
 
+    def test_HTTPのエラーの本文で600文字目をまたぐトークンも伏せる(self):
+        # 本文は 600 文字に切って出す。切ってから伏せると、境界をまたぐトークンは完全一致の置換から外れ、
+        # 頭の部分（ここでは "ya29.SENTI"）が伏せきれずに出る。assert_no_token は "SENTINEL" を探すので、頭も直接見る
+        url = f"{BASE}/releases/{rdr.FIRESTORE_RELEASE}"
+        api = FakeRulesApi(errors={url: http_error(url, 403, "x" * 590 + TOKEN)})
+        code, out = self.run_tool(self.default_argv(), api)
+        self.assertEqual(code, 2, out)
+        self.assertIn("HTTP 403", out)
+        self.assertNotIn(TOKEN[:10], out)
+        self.assert_no_token(out)
+
     def test_通信の失敗は3回まで試しトークンが混ざっても伏せる(self):
         url = f"{BASE}/releases/{rdr.FIRESTORE_RELEASE}"
         api = FakeRulesApi(errors={url: urllib.error.URLError("接続先が " + TOKEN + " を返した")})
@@ -256,6 +267,17 @@ class ReadDeployedRulesTest(unittest.TestCase):
         code, out = self.run_tool(self.default_argv(firestore=os.path.join(self.tmp, "無い.rules")))
         self.assertEqual(code, 2, out)
         self.assertFalse(os.path.exists(self.out))
+
+    def test_比べる先が保存先と同じファイルなら本番を読まずに終了コード2(self):
+        # 保存すると比べる先が本番の本文で上書きされ、中身が違っても必ず「一致」（終了コード 0）になる。読む前に断る
+        text = REMOTE_FS + "// 1 行足した\n"
+        local = self.write("読み返し/firestore.rules", text)
+        api = FakeRulesApi()
+        code, out = self.run_tool(self.default_argv(firestore=local), api)
+        self.assertEqual(code, 2, out)
+        self.assertEqual(api.calls, [])
+        with open(local, encoding="utf-8", newline="") as f:
+            self.assertEqual(f.read(), text)
 
     def test_保存先がリポジトリの中なら本番を読まずに断る(self):
         inside = os.path.join(rdr.REPO_ROOT, "読み返しの保存先-テスト")

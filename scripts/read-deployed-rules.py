@@ -44,7 +44,7 @@ spec: .kiro/specs/soratomo-public-launch/（tasks.md 2.5・design.md の「運�
   ruleset のファイルが 1 個でないときは、どれを比べるか決められないので、読めなかった扱いにする。
 
 終了コード: 0 = 2 本とも本番と手元が一致 / 1 = 一致しないものがある / 2 = 読めなかった
-  （API の失敗・手元のファイルが無い・保存先がリポジトリの中・使い方の誤り。1 と 2 を分けるのは、
+  （API の失敗・手元のファイルが無い・保存先がリポジトリの中・比べる先が保存先のファイルと同じ・使い方の誤り。1 と 2 を分けるのは、
    陽性対照の「1 行足した写しで 1」を、読み取りの失敗と見分けられるようにするため）
 
 テスト: python3 scripts/read-deployed-rules.test.py（ネットワークとトークンの読み込みを差し替える。本番には触れない）
@@ -108,9 +108,10 @@ def api_get(path, token):
             with urllib.request.urlopen(req, timeout=60) as res:
                 return json.load(res)
         except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")[:600]
+            # 伏せてから 600 文字に切る（切ってから伏せると、600 文字目をまたぐトークンの頭が伏せきれずに出る）
+            body = redact(e.read().decode("utf-8", errors="replace"), token)[:600]
             e.close()
-            message = redact(f"HTTP {e.code} {body}", token)
+            message = f"HTTP {e.code} {body}"
             if e.code == 401:
                 message += "\nトークンが古い。`firebase projects:list > /dev/null` を一度実行してから再実行する"
             raise ReadError(message) from None
@@ -178,10 +179,12 @@ def is_inside(path, root):
 
 def compare_and_save(label, release_name, remote, local_path, out_path):
     """本番の本文を out_path に保存し、手元のファイルと bytes で比べて結果を出す。一致なら True"""
-    with open(out_path, "wb") as f:
-        f.write(remote["content"])
+    # 手元を先に読んでから保存する（同じファイルを指していても、比べる先を本番の本文で上書きしてから読まないため。
+    # 同じファイルは main で読む前に断っている。ここは念のための順序）
     with open(local_path, "rb") as f:
         local = f.read()
+    with open(out_path, "wb") as f:
+        f.write(remote["content"])
     same = remote["content"] == local
     print(f"[{label}] リリース {release_name}")
     print(f"  ruleset   : {remote['ruleset_id']}")
@@ -230,6 +233,13 @@ def main(argv=None):
         for _, _, local_path, _ in targets:
             if not os.path.isfile(local_path):
                 raise ReadError(f"比べる手元のファイルが無い（{local_path}）")
+        # 比べる先が保存先のファイル（どちらの名前でも）と同じなら断る。保存すると比べる先が本番の本文で上書きされ、
+        # 中身が違っても「一致」になる（または写しが消える）。samefile なので、シンボリックリンクとハードリンクも見分ける
+        for _, _, local_path, _ in targets:
+            for _, _, _, file_name in targets:
+                out_file = os.path.join(args.out_dir, file_name)
+                if os.path.exists(out_file) and os.path.samefile(local_path, out_file):
+                    raise ReadError(f"比べる手元のファイルが、保存先のファイルと同じ（{local_path}）。保存先の外に置いた写しを渡す")
 
         token = load_token()
         os.makedirs(args.out_dir, exist_ok=True)
