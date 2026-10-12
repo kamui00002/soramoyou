@@ -15,7 +15,7 @@ struct WhatsNewView: View {
     /// 閉じる操作。呼び出し側で sheet を閉じ、onDismiss 側で既読化される。
     let onClose: () -> Void
 
-    /// 表示するページ（既定は全員向けの What's New。そらともの紹介は `WhatsNewContent.soratomoPages`）
+    /// 表示するページ（既定は全員向けの What's New）
     var pages: [WhatsNewPage] = WhatsNewContent.pages
 
     /// 上部の見出し

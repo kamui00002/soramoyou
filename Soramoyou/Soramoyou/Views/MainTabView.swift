@@ -18,6 +18,7 @@ struct MainTabView: View {
     /// いま出している紹介の種類（nil = 出していない）。全画面カバーは `item:` で駆動し、中身は引数で受け取る
     /// （`isPresented:` と別の @State で種類を持つと、カバーの中身が古い種類のまま評価され、
     ///   そらともの紹介を出したつもりで全員向けのページが出ることがある。2026-10-06 にシミュレータで実測）
+    /// ⚠️ 1.15.0 で種類は全員向けの 1 つになったが、実機で直した経緯があるので `item:` の形は変えない
     @State private var presentedWhatsNew: WhatsNewKind?
     /// 紹介を出しているか（`presentedWhatsNew` から導く）
     private var showWhatsNew: Bool { presentedWhatsNew != nil }
@@ -25,15 +26,11 @@ struct MainTabView: View {
     /// 全画面カバーは 1 枚だけにして、中身を種類で切り替える
     /// （カバーを 2 枚にすると、同時に出そうとしたときに片方が表示に失敗する）
     @State private var whatsNewKind: WhatsNewKind = .general
-    /// 既読済みのそらともの紹介の識別子 ⭐️
-    @AppStorage(WhatsNewContent.soratomoIntroSeenKey) private var lastSeenSoratomoIntro = ""
 
-    /// 紹介の種類
+    /// 紹介の種類（1.15.0 でそらともの先行公開の紹介をやめ、全員向けの 1 つになった・soratomo-public-launch 7.1）
     enum WhatsNewKind: Identifiable {
         /// 全員向けの What's New（`WhatsNewContent.currentID`）
         case general
-        /// そらともの紹介（機能フラグが有効な人だけ・`WhatsNewContent.soratomoIntroID`）
-        case soratomo
 
         var id: Self { self }
     }
@@ -130,12 +127,6 @@ struct MainTabView: View {
             switch kind {
             case .general:
                 WhatsNewView(onClose: { presentedWhatsNew = nil })
-            case .soratomo:
-                WhatsNewView(
-                    onClose: { presentedWhatsNew = nil },
-                    pages: WhatsNewContent.soratomoPages,
-                    headline: WhatsNewContent.soratomoIntroHeadline
-                )
             }
         }
         // そらともの通知の保留の行き先を、表示できる状況になったら開く ⭐️ tasks 14.1
@@ -146,8 +137,6 @@ struct MainTabView: View {
         }
         .onChange(of: soratomoGate.state) { _ in
             resolveSoratomoPending()
-            // フラグの判定は起動後に非同期で決まるので、決まったところでそらともの紹介を試す ⭐️
-            Task { await maybeShowSoratomoIntro() }
         }
         .onChange(of: soratomoRouter.pending) { _ in
             resolveSoratomoPending()
@@ -173,17 +162,12 @@ struct MainTabView: View {
             currentID: WhatsNewContent.currentID,
             lastSeenID: lastSeenWhatsNewVersion,
             hasCompletedOnboarding: hasCompletedOnboarding
-        ) else {
-            // 全員向けを出さないときだけ、そらともの紹介を試す（2 枚続けて出さない。残った方は次の起動で出る）
-            await maybeShowSoratomoIntro()
-            return
-        }
+        ) else { return }
 
         // 起動直後は ATT/AdMob ダイアログが先に出るため、その猶予を与える
         try? await Task.sleep(nanoseconds: 1_500_000_000)
 
-        // 猶予中に既読化された場合・そらともの全画面が先に出ている場合・
-        // 猶予中にそらともの紹介が先に出た場合は出さない
+        // 猶予中に既読化された場合・そらともの全画面が先に出ている場合・すでに何かを出している場合は出さない
         guard !showWhatsNew, Self.canShowWhatsNewAfterDelay(
             lastSeenID: lastSeenWhatsNewVersion,
             currentID: WhatsNewContent.currentID,
@@ -206,9 +190,6 @@ struct MainTabView: View {
         case .general:
             version = WhatsNewContent.currentID
             lastSeenWhatsNewVersion = version
-        case .soratomo:
-            version = WhatsNewContent.soratomoIntroID
-            lastSeenSoratomoIntro = version
         }
         LoggingService.shared.logEvent(
             "whats_new_dismissed",
@@ -217,34 +198,6 @@ struct MainTabView: View {
         // What's New の表示中に待たせていた、そらともの通知の行き先をもう一度試す ⭐️ tasks 14.1
         // （onDismiss は閉じるアニメーションの後に呼ばれるので、ここなら次の全画面を出せる）
         resolveSoratomoPending()
-    }
-
-    /// 機能フラグが有効な人に、そらともの紹介を 1 回だけ出す ⭐️
-    ///
-    /// 全員向けの What's New と同じく、ATT/AdMob のダイアログを避けるため少し待ってから出す。
-    /// 何かの全画面（What's New・そらとも）が出ている間は出さない。出さなかった場合は既読にならないので、次の起動で出る。
-    private func maybeShowSoratomoIntro() async {
-        guard !showWhatsNew, WhatsNewGate.shouldPresentSoratomoIntro(
-            isSoratomoEnabled: soratomoGate.isEnabled,
-            lastSeenID: lastSeenSoratomoIntro,
-            introID: WhatsNewContent.soratomoIntroID
-        ) else { return }
-
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-
-        // 猶予中に状況が変わっていないかを確かめ直す（フラグが無効になった・何かの全画面が先に出た・既読になった）
-        guard !showWhatsNew, !soratomoRouter.isPresented, WhatsNewGate.shouldPresentSoratomoIntro(
-            isSoratomoEnabled: soratomoGate.isEnabled,
-            lastSeenID: lastSeenSoratomoIntro,
-            introID: WhatsNewContent.soratomoIntroID
-        ) else { return }
-
-        whatsNewKind = .soratomo
-        presentedWhatsNew = .soratomo
-        LoggingService.shared.logEvent(
-            "whats_new_shown",
-            parameters: ["version": WhatsNewContent.soratomoIntroID]
-        )
     }
 
     // MARK: - そらとも ⭐️ tasks 14.1
