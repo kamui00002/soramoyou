@@ -56,7 +56,7 @@ fi
 | 8 | `collections`・`collectionItems` | `userId == uid` |
 | 9 | `livingSkyJobs`・`skyMotionPurchases` | `userId == uid` |
 | 10 | `livingSkyUsage/{uid}`・`skyMotionBalance/{uid}` | 文書 ID |
-| 11 | `recommendationNotices` | `recommenderId == uid` |
+| 11 | `recommendationNotices` | `recommenderId == uid` と `ownerId == uid` の両方（おすすめした側とされた側。クライアントからは消せないので、アプリの退会では残る） |
 | 12 | `feedback` | `userId == uid`（アカウントのすべての削除、またはフィードバックの削除の申し込みのとき）。消す前に各文書の `createdAt` を控え、下の「Discord の写し」も消す |
 | 13 | `users/{uid}` | 文書 ID |
 
