@@ -169,7 +169,7 @@
 
 ## (e) PR-B（アプリ）
 
-- [ ] 6. アプリの判定を「登録済みでログイン」に替える
+- [x] 6. アプリの判定を「登録済みでログイン」に替える
 
 - [x] 6.1 判定（`SoratomoFeatureGate`）を、トークンを読まない形に替える（テストを先に）
   - 前提: 1
@@ -192,7 +192,7 @@
     - 残りの検索: `grep -rn "SoratomoClaimsProviding\|FirebaseSoratomoClaimsProvider\|reevaluateIfTokenUnavailable\|claimMissing\|tokenUnavailable\|claimKey\|needsForcedRefresh" Soramoyou/Soramoyou Soramoyou/SoramoyouTests` が 0 件
     - 負荷: 赤の 1 回目（14:06）はシミュレーターの起動と重なり 1 分平均 140 になったので止めて流し直した。並列テストの複製のシミュレーターを毎回起動すると重いので、緑から `-parallel-testing-enabled NO` で `C2E3F752` を直接使った
 
-- [ ] 6.2 通知のタップの解決から、クレームの理由を外す
+- [x] 6.2 通知のタップの解決から、クレームの理由を外す
   - 前提: 6.1
   - `SoratomoRouter.resolvePending` の `case .unknown, .disabled(.tokenUnavailable)` を `case .unknown` にする。無効（匿名）は今までどおり保留を捨てて `flag_off` を記録する。クレームが無いことで `flag_off` を記録する経路は無くなる。イベントの名前と値（`flag_off` を含む）は変えない
   - leave-group が足した「抜けたグループの通知」の枝は壊さない
@@ -201,17 +201,28 @@
   - 陽性対照: 匿名でも保留を残す側にわざと変えた実装で、匿名で `flag_off` を記録するテストが赤になることを確かめて戻す
   - 既存の3つの通知設定と、既存の通知のタップの挙動と計測に差分が無いことを、差分で確かめる
   - _Requirements: 2.6, 9.4, 9.5, 10.5, 13.3_
+  - 結果（2026-10-12 14:22・本番に触れない）:
+    - 本体（`case .unknown, .disabled(.tokenUnavailable)` → `case .unknown`）と `SoratomoRouterTests` の直しは、enum の項目を消すとコンパイルが通らないため **6.1 のコミット（`daff9e40`）で入れた**。ここ（`044cd5c1`）は説明のコメントだけ: 型の説明と `resolvePending` の説明の「機能フラグ」を「そらともを使えるかの判定」「そらともを使えない（匿名）」に直し、`flag_off` の値は 1.14.x からの記録と同じ集計で数えるため変えないことを書いた。イベントの名前と値は変えていない。leave-group の「抜けたグループの通知」の枝はそのまま（テストも通過）
+    - 陽性対照（14:17・Mac の使い捨て SwiftPM パッケージ `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/pure`・本物の `SoratomoRouter.swift` と 2 つのテストへのシンボリックリンク・Firebase と `SoratomoDependencies`・`MainTabView` の静的関数は型だけの代役）: 本物で 59 件通過（シミュレーターと同じ件数）。`case .unknown, .disabled(.anonymous):`（匿名でも保留を残す）に書き換えた写しにリンクを差し替えると、**4 本が赤（失敗 10 か所）**: `testResolvePending_disabledGateDiscardsAndLogsFlagOff`・`testResolvePending_disabledGateDiscardsEvenWhenCannotPresent`・`testResolvePending_discardedResultsAreLoggedOnlyOnce`・`testDiscardedTap_isNotLoggedAgainByAnyEnding`。リンクは本物に戻した（`readlink` で確認）。作業ツリーのコードは壊していない。⚠️ 陽性対照は macOS でのコンパイル・代役つきで、正式な検証は下のシミュレーターの緑
+    - 差分で確かめた: `git diff --name-only origin/main -- Soramoyou/` は判定とルーターまわりの 8 ファイルだけで、既存の 3 つの通知設定・既存の通知のタップの挙動と計測（`PushNotificationManager`・ゴールデンアワー）には差分が無い（`SoramoyouApp` の差分は再評価の Task の削除だけ）
+    - 緑（14:22・`C2E3F752`・`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`）: `SoratomoFeatureGateTests`・`SoratomoRouterTests`・`SettingsViewDeleteAccountMessageTests`・`WhatsNewGateTests` の **68 件すべて通過**（xcresult の集計 passed 68・failed 0）。触ったファイルの警告 0 件。ログ `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/6-7-green.log`
 
-- [ ] 6.3 退会の確認の文を、単体テストで確かめられる形にする
+- [x] 6.3 退会の確認の文を、単体テストで確かめられる形にする
   - 前提: 6.1
   - 文を作る部分を、純粋な静的関数 `SettingsView.deleteAccountConfirmationMessage(isSoratomoEnabled:)` に出す（`MainTabView.canShowWhatsNewAfterDelay` と同じ型）。文そのものは変えない
   - テスト: 真ならそらともの1文（そらともの投稿とグループへの参加も削除される）を含み、偽なら含まない。陽性対照: 1文を足す条件を逆にした実装で赤になることを先に確かめる
   - 通知設定の「そらとも通知」は変えない（`isEnabled` で出る）。退会の既存の8手順の対象と順序は変えない（差分で確かめる）
   - _Requirements: 2.4, 2.5, 10.5, 13.4_
+  - 結果（2026-10-12 14:22・本番に触れない）:
+    - 先に origin/main（#175 `88247fa9`）を取り込んだ（`895df4f8`・衝突なし）。`SettingsView` の同じファイルを #175 が触っているため、8.1 の前でなくここで取り込んだ
+    - `SettingsView.deleteAccountConfirmationMessage(isSoratomoEnabled:)`（`static`）に出し、アラートは `Self.deleteAccountConfirmationMessage(isSoratomoEnabled: soratomoGate.isEnabled)` を読む。文そのものは変えていない。テスト `SettingsViewDeleteAccountMessageTests`（真なら今までの文＋そらともの 1 文と完全一致・偽なら今までの文と完全一致で「そらとも」を含まない）
+    - 陽性対照: 1 文を足す条件を逆にした実装（`guard !isSoratomoEnabled`）で 2 本とも赤を確かめてから、正しい条件にしてコミットした（`ca7067b8`。逆の実装はコミットしていない）。赤（14:19・同じ条件）: `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/6.3-7.1-red.log`。65 件中、赤は `SettingsViewDeleteAccountMessageTests` の 2 本と `WhatsNewGateTests.testCurrentIDDiffersFromPastIDs` の 1 本だけ（ほか 62 本は通過）
+    - 通知設定の「そらとも通知」と退会の既存の 8 手順には触れていない（差分は文を作る部分とアラートの 1 行だけ）
+    - 緑（14:22・`C2E3F752`・`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`）: `SoratomoFeatureGateTests`・`SoratomoRouterTests`・`SettingsViewDeleteAccountMessageTests`・`WhatsNewGateTests` の **68 件すべて通過**（xcresult の集計 passed 68・failed 0）。触ったファイルの警告 0 件。ログ `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/6-7-green.log`
 
-- [ ] 7. 案内を全員向けに載せ直す
+- [x] 7. 案内を全員向けに載せ直す
 
-- [ ] 7.1 全員向けの What's New にそらともと「グループを抜ける」を載せ、先行公開の紹介をやめる
+- [x] 7.1 全員向けの What's New にそらともと「グループを抜ける」を載せ、先行公開の紹介をやめる
   - 前提: 6.1
   - `WhatsNewContent.currentID` を `"2026-10-soratomo-public"` にする。過去の値（`2026-09-sky-camera`・`2026-09-sky-ae`・`2026-09-ranking-recommended`・`2026-09-ranking-sky-ae`・`2026-10-soratomo-beta`）の一覧と、「1.15.0 で全員向けに載せ直した」経緯をコメントに書く（先行公開の節にあった「1.14 で全員に公開するときは…」のコメントは、節ごと消える）
   - `pages` を2ページに替える（下書き。確定は9.1）。1ページ目「そらとも」: 家族や友達だけの小さなグループで空を見せ合える・「ホーム右上の（アイコン）ボタン」から始める。アイコンは入口と同じ `person.2.circle`。2ページ目「グループの出入り」: 招待コードで参加できる・タイムラインの右上のメニューの「グループを抜ける」で、あとから抜けられる。抜けるの言葉は、タスク1で確かめた leave-group の画面の言葉にそろえる。バッジは「新機能」。先行公開の文「ホームの『そらとも』から」は画面と合わないので使わない
@@ -219,8 +230,14 @@
   - `WhatsNewGateTests`: 先行公開の紹介のテストを消す。「`currentID` が過去の5つの値のどれとも違う」を足す（1.12.0 までを既読にした人にも出ることの柵。陽性対照: `currentID` を一時的に過去の値に戻すと赤）。`testRealCurrentIDBehavior` は残す
   - 案内の表示の判定: 全員向けの判定はアカウントの種類を受け取らず、既存のテストのまま受け持つ。ゲストは `MainTabView` に来ないので出ない。匿名には出る（差し戻し5）。オンボを終えた既存の利用者に1回だけ出て、オンボの完了で新しい識別子が既読になる（オンボの後に重ねて出ない）
   - _Requirements: 6.1, 7.1, 7.2, 7.3, 7.5, 7.7, 10.5, 14.1_
+  - 結果（2026-10-12 14:22・本番に触れない・`5a87b56c`）:
+    - テストを先に: `WhatsNewGateTests.testCurrentIDDiffersFromPastIDs`（過去の 5 つの値と違う）を、`currentID` が `2026-09-ranking-sky-ae` のままで流して赤を確かめた（`XCTAssertNotEqual failed: ("2026-09-ranking-sky-ae") is equal to ("2026-09-ranking-sky-ae")`）。赤（14:19・同じ条件）: `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/6.3-7.1-red.log`。65 件中、赤は `SettingsViewDeleteAccountMessageTests` の 2 本と `WhatsNewGateTests.testCurrentIDDiffersFromPastIDs` の 1 本だけ（ほか 62 本は通過）
+    - `currentID` を `2026-10-soratomo-public` にし、過去の 5 つの値と「1.15.0 で全員向けに載せ直した」経緯をコメントに書いた。`pages` を 2 ページに替えた（下書き・確定は 9.1）: ①「そらとも」`person.2.circle`「家族や友達だけの小さなグループで、／撮った空を見せ合えます／ホーム右上のボタンから始めましょう」②「グループの出入り」`rectangle.portrait.and.arrow.right`（抜けるの項目と同じアイコン）「招待コードでグループに参加できます／抜けたいときは、タイムライン右上のメニューの／「グループを抜ける」から」。バッジはどちらも「新機能」。抜けるの言葉はタスク1で確かめた「グループを抜ける」
+    - 消したもの: `soratomoIntroID`・`soratomoIntroSeenKey`・`soratomoIntroHeadline`・`soratomoPages`・`WhatsNewGate.shouldPresentSoratomoIntro`・`MainTabView` の `WhatsNewKind.soratomo`・`lastSeenSoratomoIntro`・`maybeShowSoratomoIntro()` と、その 2 つの呼び出し（判定の変化のとき・全員向けを出さないとき）。端末の既読のキーは消していない。全画面のカバーの `item:` と `whatsNewKind` の形は変えていない（種類は 1 つ）。`WhatsNewView` の `pages` の説明から `soratomoPages` を外した
+    - `WhatsNewGateTests`: 先行公開の紹介のテスト 4 本を消し、上の 1 本を足した。`testRealCurrentIDBehavior` は残した（7 本）。全員向けの判定はアカウントの種類を受け取らないので、匿名にも出る（差し戻し5）・オンボの完了で新しい識別子が既読になるのは既存の `completeOnboarding` のまま
+    - 緑（14:22・`C2E3F752`・`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`）: `SoratomoFeatureGateTests`・`SoratomoRouterTests`・`SettingsViewDeleteAccountMessageTests`・`WhatsNewGateTests` の **68 件すべて通過**（xcresult の集計 passed 68・failed 0）。触ったファイルの警告 0 件。ログ `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/6-7-green.log`
 
-- [ ] 7.2 オンボーディングのそらとものページ（PR #163）を取り込む
+- [x] 7.2 オンボーディングのそらとものページ（PR #163）を取り込む
   - 前提: 7.1
   - PR #163 の5つのコミット（`47e5fcc` オンボのページ、`c858133`・`4926acc`・`bd61b95`・`86e4987` スクリーンショットの素材と作り方）を、PR-B のブランチへ cherry-pick で取り込む。2026-10-11 の時点で、`Soramoyou/Soramoyou/Views/OnboardingView.swift`（blob `6c9e15e0`）と `screenshots/screenshot-gen/src/app/page.tsx`（`74efe4f6`）は PR の差分の元と一致し、ほかは新しいファイルなので当たる見込み。leave-group の後の main で、衝突しないことを確かめる
   - 直すもの: オンボのページのコメントの「1.14」（3か所）を「1.15.0」に。コメントの「What's New の『そらとも』ページ（`WhatsNewContent.soratomoPages`）と揃えている」を、7.1 の新しいページを指すように。`screenshots/make-soratomo-store-sizes.py` の「1.14 時点」と `page.tsx` の「Slide 7 … 1.14 で公開」も1.15.0に合わせる
@@ -229,6 +246,12 @@
   - スクリーンショットの画像はリポジトリに入れるだけで、App Store Connect には触れない（1.15.0 の版にだけ入れるのは13.2）
   - #163 は、PR-B のマージの後に、PR-B へのリンクを書いて閉じる（9.3。squash でマージするので自動では閉じない）
   - _Requirements: 7.4, 7.5, 7.6, 7.7, 7.9_
+  - 結果（2026-10-12 14:22・本番と ASC に触れない）:
+    - PR #163 の 5 つのコミットを cherry-pick で取り込んだ（衝突なし）: `47e5fcc`→`0955ab7d`・`c858133`→`e0321ff5`・`4926acc`→`7ef815c8`・`bd61b95`→`6fe16382`・`86e4987`→`5e5ef09f`
+    - 直し（`5be13488`）: オンボのコメントの「1.14」2 か所を「1.15.0」に、参照先を `WhatsNewContent.soratomoPages` から「全員向けの What's New の 1 ページ目（`WhatsNewContent.pages` の「そらとも」）」に。`make-soratomo-store-sizes.py` の「1.14 時点」を「1.15.0 の準備の時点」に、`page.tsx` の「Slide 7 … 1.14 で公開」を「1.15.0 で公開」に。3 ファイルの「1.14」は 0 件（tasks.md の「3 か所」は、コメントの 1.14 が 2 か所と参照先の 1 か所の数え方だった）
+    - 説明の文: オンボは「ホーム右上のボタンから始めよう」、What's New は「ホーム右上のボタンから始めましょう」。入口の言い方（ホーム右上のボタンから）はそろえ、語尾は各画面の口調（オンボは「〜しよう」・What's New は「〜ます」）に合わせた。確定は 9.1
+    - 完了の処理（`completeOnboarding`）は変えていない。スクリーンショットの画像はリポジトリに入れただけで ASC には触れていない。#163 を閉じるのは 9.3
+    - 緑（14:22・`C2E3F752`・`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`）: `SoratomoFeatureGateTests`・`SoratomoRouterTests`・`SettingsViewDeleteAccountMessageTests`・`WhatsNewGateTests` の **68 件すべて通過**（xcresult の集計 passed 68・failed 0）。触ったファイルの警告 0 件。ログ `/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/ios/6-7-green.log`（オンボの画面のファイルもこのビルドでコンパイルされた）
 
 - [ ] 8. ポリシーの本文・版数・説明を直す
 
