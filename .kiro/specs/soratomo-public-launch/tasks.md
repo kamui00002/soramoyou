@@ -782,7 +782,8 @@
     - deploy の前の確かめ: 作業ツリーの `hosting/`・`firebase.json`・`SettingsView.swift`・台本は origin/main と差 0。`python3 scripts/build-privacy-policy-html.py` で作り直しても差 0（privacy `1853c499…`・delete-account `7a9f03ff…`）
     - **`firebase deploy --only hosting --project soramoyou-ios`（GO・19:39:53〜19:40:01・exit 0）**。ファイルは 2 つ
     - 読み返し（19:40:08）: https://soramoyou-ios.web.app/privacy/ と /delete-account/ が HTTP 200 で **main とバイト一致**（11523・8038 バイト）・最終更新日は **2026年10月13日**・`last-modified` 10/13 19:40 JST。クエリを付けない GET も一致
-    - 残り: プライバシーラベル・年齢区分・審査メモの入力、審査用のグループ、`docs/app-privacy-label.md` の PR
+    - プライバシーラベル（利用者の決定・2026-10-13 19:4x・AskUserQuestion）: **10.4 の結論どおり「変更なし」で受け入れる**（種類は 9 のまま・ASC の入力は変えない）。ASC のラベルは API で読めず、**画面では見ていない**
+    - 残り: 年齢区分・審査メモの入力、審査用のグループ、`docs/app-privacy-label.md` の PR
 
 - [x] 13.4 サポートURLを現物で確かめる（段3-4・release-gate tasks.md 19）
   - 前提: 13.1
@@ -793,6 +794,7 @@
     - ASC から読んだ値（13.1 の読み返しの GO の範囲・19:33:14）: 1.15.0 の ja のサポート URL は **`https://sites.google.com/view/soramoyou-app/お問い合わせ`**（Google サイト）。⚠️ repo には書かれておらず、背景のエージェントの推測（`soramoyou-ios.web.app`）は外れていた
     - 開いた結果（**2026-10-13 19:40:23**）: HTTP 200・題「そらもよう - お問い合わせ」・**連絡先のメールアドレスが 1 つ載っている**（「不具合の報告・機能に関するご要望・アカウントの削除依頼・その他」・「通常3営業日以内にご返信」）
     - ⚠️ 載っているのは**開発者の個人の Gmail** で、ポリシー・削除の受付ページ・アプリの「お問い合わせ」の `soramoyou.app@gmail.com` とは別のアドレス（連絡はつくので公開は止めない。そろえるかは利用者に聞く）
+    - 利用者の決定（19:4x）: **AI の側で直せるなら `soramoyou.app@gmail.com` に直す**（Google サイトは repo の外。直したら開いて確かめ、日時をここと release-gate 19 に足す）
     - release-gate の `tasks.md` の 19 の「結果」に、同じ日時と連絡先を書いた
 
 - [ ] 13.5 公開判断の記録（G1〜G5）を残す（段3-5・利用者の判断）
