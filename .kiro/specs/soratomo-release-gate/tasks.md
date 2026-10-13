@@ -667,7 +667,7 @@
     - prepare（07:20:27〜07:20:51）: 版 1.14.0 を作成。fastlane の後の読み返しで紐づくビルドが無く、`PATCH relationships/build` が HTTP 204、読み返して build 111 を確認。リリースノートを API で読み返し、手元のファイル（末尾の改行を除く）と一致。利用者が App Store Connect でも版・リリースノート・ビルドを目視した
     - submit（07:25:17〜07:25:48・利用者のGOを取って `--yes`）: `Successfully submitted the app for review!`。読み返しで 1.14.0 は WAITING_FOR_REVIEW・ビルド 111・リリースノート一致
 
-- [ ] 19. 公開判断の記録を残す（利用者の判断。App Store Connectの読み取りはGOを取ってから）
+- [x] 19. 公開判断の記録を残す（利用者の判断。App Store Connectの読み取りはGOを取ってから）
   - 前提: 12.1（ガイドライン本文の承認）, 16.1〜16.4, 18
   - 一般向けの機能フラグをONにすると判断するとき、App StoreのサポートURLを現物で確かめる。登録されたURLをApp Store Connectから読み（GOを取ってから）、実際に開いて、連絡先が載っていることを確かめ、確かめた日時を記録する
   - soratomoの公開前ゲートの記録（soratomo要件17の2の「G1〜G5の完了の記録」）に、G1とG2が完了したこと（受け入れの確認の結果の要約・ガイドライン本文の承認の日時と版）と、サポートURLの確認の1行を足す。G3〜G5は別作業なので、その完了の記録は各作業で足す
@@ -676,4 +676,10 @@
   - 結果（途中・サポートURLの1行・public-launch 13.4 から）:
     - サポートURL: ASC の 1.15.0 の ja に登録された `https://sites.google.com/view/soramoyou-app/お問い合わせ` を **2026-10-13 19:40:23** に開いた（HTTP 200）。連絡先は**開発者の個人の Gmail のメールアドレス 1 つ**（ポリシーの `soramoyou.app@gmail.com` とは別）。ASC の読み取りは public-launch 13.1 の GO の範囲（19:33:14）
     - 連絡先を直した（public-launch 13.4・利用者の依頼）: お問い合わせのページ（とホーム）の連絡先を `soramoyou.app@gmail.com` に置き換えて公開し、**2026-10-13 20:20:26** に開き直して、載っている連絡先が `soramoyou.app@gmail.com` だけ（個人の Gmail は 0 回）であることを確かめた
-    - G1〜G5 の記録は public-launch 13.5 で足す
+    - G1〜G5 の記録（public-launch 13.5・2026-10-13 20:2x。詳しくは public-launch の tasks.md 13.5 の「結果」）:
+      - G1・G2: 本 spec の 16.1〜16.4・17（ルールを本番へ 2026-10-10 07:10）・18（1.14.0/111 を審査へ 07:25）で完了。ガイドラインの本文の承認は 12.1 の 2026-10-09 08:17・v1。⚠️ #171 の F1/F2 と #172 の D9 の端末での確認は未確認のまま（検証済みでない）
+      - G3: 文言の承認 2026-10-12 14:36（public-launch 9.1）・What's New とオンボの確認（public-launch 12.2 の 1 と 8・2026-10-13）
+      - G4: public-launch 12.3（⚠️ `soratomo_leave_failed` 未着・`leave_pending` は起こせず＝検証済みでない）
+      - G5: 承認 2026-10-12 10:48（public-launch 10.4）・ポリシーの公開 2026-10-13 19:40・年齢区分 20:10・審査メモ 20:09（public-launch 13.3）
+      - サポートURL: 2026-10-13 20:20:26 に開き、連絡先は `soramoyou.app@gmail.com`
+    - **利用者の決定（2026-10-13 20:2x・AskUserQuestion）: 19 を [x] にする**（未確認の項目は上のとおり書いたまま）
