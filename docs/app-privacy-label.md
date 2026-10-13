@@ -2,7 +2,7 @@
 
 > ASC → アプリ → **App のプライバシー** のフォームに入れる内容。
 > 出典は `Soramoyou/PrivacyInfo.xcprivacy`（コードを実査して作成）。**こことマニフェストは必ず一致させること。**
-> 最終確認: 2026-08-03（回数パック課金の追加を反映）
+> 最終確認: 2026-10-13（そらとも＝友達グループの一般公開を反映。種類は 9 のまま・マニフェストも変更なし）
 
 ## 0. 最初の質問
 
@@ -34,14 +34,19 @@
 | # | 何を・どこへ |
 |---|---|
 | 1 | Firebase Auth のアカウント作成／ログイン |
-| 2 | Firestore の `userId`、Analytics/Crashlytics の `setUserID`（**内部UIDのみ**。email や表示名は渡さない） |
-| 3 | プロフィールの表示名（`users.displayName`） |
-| 4 | 投稿画像を Firebase Storage へアップロード |
-| 5 | キャプション・ハッシュタグ・コメント・アプリ内フィードバック本文 |
+| 2 | Firestore の `userId`、Analytics/Crashlytics の `setUserID`（**内部UIDのみ**。email や表示名は渡さない）。そらともでは、グループの参加・通報の記録の uid と、ガイドラインに同意した版と日時（`soratomoUsers` の `guidelineVersion`・`guidelineAgreedAt`） |
+| 3 | プロフィールの表示名（`users.displayName`）。そらともの投稿者名とメンバー一覧にも出す（そらとも専用の名前は無い） |
+| 4 | 投稿画像を Firebase Storage へアップロード。そらともの投稿画像は Storage の `soratomo/` 配下（位置情報などのメタデータは送る前に落とす） |
+| 5 | キャプション・ハッシュタグ・コメント・アプリ内フィードバック本文・そらとものグループ名と投稿のキャプション |
 | 6 | 投稿に位置情報を付けた場合の緯度・経度（`posts.location`）。**付けるかは投稿ごとに選択制** |
 | 7 | 「空を動かす」回数パックの `transactionId` / `productId` / 購入日時。**決済情報は Apple が処理し受け取らない** |
 | 8 | `LoggingService` → Firebase Analytics の画面表示・主要操作イベント（PII は sanitize 済み） |
 | 9 | Crashlytics。`setUserID` で内部UIDを紐づけているため「リンクあり」 |
+
+> **そらとも（友達グループ・1.15.0 で一般公開）で新しい種類は増えない。**
+> 通報の理由は 5 つの固定の選択肢（`functions/soratomoCore.js` の `REPORT_REASONS`）で、自由記述は無い。
+> 運営の Discord へ転送するのは内部ID・理由・時刻だけ（`buildReportForwardPayload`）。
+> 表と `PrivacyInfo.xcprivacy` は 9 種類のまま（2026-10-12 に開発者が承認・soratomo-public-launch tasks 10.4）。
 
 ---
 
