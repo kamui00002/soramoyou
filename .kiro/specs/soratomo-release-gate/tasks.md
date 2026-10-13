@@ -675,4 +675,5 @@
   - _Requirements: 12.2_
   - 結果（途中・サポートURLの1行・public-launch 13.4 から）:
     - サポートURL: ASC の 1.15.0 の ja に登録された `https://sites.google.com/view/soramoyou-app/お問い合わせ` を **2026-10-13 19:40:23** に開いた（HTTP 200）。連絡先は**開発者の個人の Gmail のメールアドレス 1 つ**（ポリシーの `soramoyou.app@gmail.com` とは別）。ASC の読み取りは public-launch 13.1 の GO の範囲（19:33:14）
+    - 連絡先を直した（public-launch 13.4・利用者の依頼）: お問い合わせのページ（とホーム）の連絡先を `soramoyou.app@gmail.com` に置き換えて公開し、**2026-10-13 20:20:26** に開き直して、載っている連絡先が `soramoyou.app@gmail.com` だけ（個人の Gmail は 0 回）であることを確かめた
     - G1〜G5 の記録は public-launch 13.5 で足す
