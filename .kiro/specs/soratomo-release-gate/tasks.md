@@ -673,3 +673,6 @@
   - soratomoの公開前ゲートの記録（soratomo要件17の2の「G1〜G5の完了の記録」）に、G1とG2が完了したこと（受け入れの確認の結果の要約・ガイドライン本文の承認の日時と版）と、サポートURLの確認の1行を足す。G3〜G5は別作業なので、その完了の記録は各作業で足す
   - 機能フラグを一般向けにONにする切り替え自体は、本specの範囲外（公開の準備作業）
   - _Requirements: 12.2_
+  - 結果（途中・サポートURLの1行・public-launch 13.4 から）:
+    - サポートURL: ASC の 1.15.0 の ja に登録された `https://sites.google.com/view/soramoyou-app/お問い合わせ` を **2026-10-13 19:40:23** に開いた（HTTP 200）。連絡先は**開発者の個人の Gmail のメールアドレス 1 つ**（ポリシーの `soramoyou.app@gmail.com` とは別）。ASC の読み取りは public-launch 13.1 の GO の範囲（19:33:14）
+    - G1〜G5 の記録は public-launch 13.5 で足す

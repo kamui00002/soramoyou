@@ -669,6 +669,9 @@
     - 9.1 の決定の最終更新日: `privacyPolicyText` と `hosting/delete-account/index.html` を **2026年10月13日** にし、`build-privacy-policy-html.py` で HTML を作り直して **PR #180（`08023ea7`）** で main へ入れた（push・PR・マージは GO）。archive はこの `08023ea7` から
     - archive と export: 負荷を見てから `nice -n 19`・`-jobs 4`・`ENABLE_USER_SCRIPT_SANDBOXING=YES` のまま。**`ARCHIVE SUCCEEDED`・`EXPORT SUCCEEDED`（18:36:51）**。IPA は 1.15.0 / 113（23,865,473 バイト）
     - ⚠️ archive のログに、Crashlytics の dSYM のアップロードの段で `error: Unable to expand directory at path …/ArchiveIntermediates/…`（ウィジェットの側）が出た。ビルドは止まらず、本体の dSYM（arm64）の `Successfully submitted symbols` は出ていて、archive には本体とウィジェットの dSYM が両方入っている。クラッシュの記号化に要る本体の分は届いているので、今回は止めない（ウィジェットのクラッシュの記号化は手で上げる候補）
+    - ↑ の原因（2026-10-13 19:4x・読むだけの調査を背景のエージェントに渡し、根拠を実物で確かめた）: **本体の Run Script「Upload dSYM to Crashlytics」が `${DWARF_DSYM_FOLDER_PATH}/*.dSYM` を全部まわして上げようとし、inputPaths に無いウィジェットの dSYM の読み取りを `ENABLE_USER_SCRIPT_SANDBOXING=YES` のサンドボックスが拒んだ**（`project.pbxproj` の inputPaths は本体の dSYM と GoogleService-Info.plist だけ・shellScript は `for DSYM in "$DSYM_DIR"/*.dSYM`。エージェントは OS ログで `Sandbox: upload-symbols deny(1) file-read-data …SoramoyouWidgetExtension.appex.dSYM` と、エラーが POSIX の EPERM であることも見た）。ビルドの順番・ファイルの不在ではない（ウィジェットの dSYM は 18:33:51 にでき、archive の dSYMs に本体 `29E322A5…` とウィジェット `2D4F521F…` の両方がある）
+      - 影響は無い: ウィジェットは Crashlytics を組み込んでいない（依存のパッケージが空・import にも無い）ので、ウィジェットの dSYM は Crashlytics に要らない。本体の dSYM は UUID が一致して届いている。**手で上げる必要も無い**
+      - 別の穴: `upload-symbols` はこの失敗でも exit 0 を返すので、スクリプトは「2 dSYM(s) uploaded successfully」と数えている（PR #29 の失敗検知が拾えない形）。直すなら、ループをやめて `${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}` だけを上げる（inputPaths と読むものが一致し、サンドボックスは YES のまま）。公開は止めない・別の課題
     - アップロード（GO＝IPA の版と build が正しければアップロードしてよい）: `UPLOAD SUCCEEDED with no errors`（18:38:33）。**ASC の読み返しで build 113・版 1.15.0・`processingState VALID`（18:42:00 の読み取り）**。輸出の申告は pbxproj の `ITSAppUsesNonExemptEncryption = NO` で済んでいる
     - 内部の TestFlight: 利用者の iPhone に 1.15.0 (113) が届き、更新できた（12.2 の 1）
 
@@ -731,6 +734,9 @@
     - `leave_pending`: 抜けるの片づけは 1 回の呼び出しで終わった（`done: true`）ので、本番では起こせなかった。根拠は `soratomo_join_failed` 自体の着弾（上）と leave-group の単体テスト
     - **利用者の決定（2026-10-13 19:2x）: 12.3 は完了にし、`soratomo_leave_failed` の未着は別の課題にする**（公開は止めない）。`leave_failed` と `leave_pending` は「検証済み」ではない。別の課題では、端末のログ（Xcode のデバイスのコンソール）を取りながら、確認の段で通信を切って失敗させ、PostHog の SDK が記録を捨てているかを確かめる
     - 13.5 の G4 には、この表と「`leave_failed` 未着・`leave_pending` は起こせず」をそのまま写す
+    - 別の課題の読むだけの調査（2026-10-13 19:4x・背景のエージェント・根拠は実物で確かめた）: **仮説「PostHog の SDK がオフライン直後の記録を捨てた」はソースと合わない**（posthog-ios 3.59.3・`179438b8`）。capture はファイルへ同期で書いてから返り、通信が無い間は送信を止めるだけ（`PostHogQueue.swift` 257〜263 行 `Queue is paused because network is unreachable`）。捨てる道はキュー全件か 1 回の送信分まるごとしか無く、同じオフラインの間の `Application Opened` が届いたのに `leave_failed` だけが消える形は説明しにくい。アプリ側（`SoratomoAnalytics`・`LoggingService`）にもこのイベントだけを落とす処理は無い
+      - 有力な候補: **確認を出す前の段 `requestLeave()` のオフラインの枝**（`SoratomoLeaveViewModel.swift` 246〜249 行）は、確定の段（316〜321 行・記録する）と同じ通信の文言を出すのに、要件 1.7 で記録しない。機内モードが確認のダイアログを出す前に効いていれば、画面は同じで記録は 0 件になる。ほかの候補は PostHog に届いた後の扱い・検索の条件。**未検証**
+      - 決め手の確かめ方: ① Mac の Console.app で iPhone の subsystem `com.soramoyou`・category `LoggingService` を見て、「抜ける」を押した時刻に `Analytics event:` の行が出るか（無ければ `requestLeave()` の枝）② 同じ `logEvent` が送る Firebase Analytics に 18:58〜19:12 の `soratomo_leave_failed` があるか ③ `config.debug = true` の開発版で `[PostHog] Queued event 'soratomo_leave_failed'` が出るか
 
 ## (i) App Store Connect の準備と公開判断の記録（段3-1〜3-5）
 
@@ -771,12 +777,23 @@
   - 審査用のグループ: S3 がオーナーのグループを1つ作り、空の写真を2〜3枚投稿しておく。デモのアカウントはメンバーにしない（審査の人が参加から試せるように）。審査の間は招待コードを再発行しない。審査の人が抜けても S3 が残る
   - `docs/app-privacy-label.md` に、G5 の結果（変えた項目があれば）と最終確認の日付を書く（小さな PR で main へ）
   - _Requirements: 8.3, 8.4, 8.5, 8.6, 8.7_
+  - 結果（途中・2026-10-13 19:28〜19:40）:
+    - deploy の前の公開中（19:28〜19:29 に背景のエージェントが GET・19:29:41 に本筋で取り直して確かめた）: 2 ページとも **#175（`88247fa9`・10/12）の版とバイト一致**（privacy 9573 バイト sha256 `21edc905…`・delete-account 7615 バイト `c352fbc3…`・`last-modified` 10/12 13:54 JST）。⚠️ 引き継ぎメモの「#180 の日付だけが未 deploy」は不足で、**#179 で足した「そらとも」の節も出ていなかった**（公開中の本文に「そらとも」は 0 回・main の privacy は 8 回）
+    - deploy の前の確かめ: 作業ツリーの `hosting/`・`firebase.json`・`SettingsView.swift`・台本は origin/main と差 0。`python3 scripts/build-privacy-policy-html.py` で作り直しても差 0（privacy `1853c499…`・delete-account `7a9f03ff…`）
+    - **`firebase deploy --only hosting --project soramoyou-ios`（GO・19:39:53〜19:40:01・exit 0）**。ファイルは 2 つ
+    - 読み返し（19:40:08）: https://soramoyou-ios.web.app/privacy/ と /delete-account/ が HTTP 200 で **main とバイト一致**（11523・8038 バイト）・最終更新日は **2026年10月13日**・`last-modified` 10/13 19:40 JST。クエリを付けない GET も一致
+    - 残り: プライバシーラベル・年齢区分・審査メモの入力、審査用のグループ、`docs/app-privacy-label.md` の PR
 
-- [ ] 13.4 サポートURLを現物で確かめる（段3-4・release-gate tasks.md 19）
+- [x] 13.4 サポートURLを現物で確かめる（段3-4・release-gate tasks.md 19）
   - 前提: 13.1
   - 登録された App Store のサポートURLを ASC から読み（GO）、実際に開いて、連絡先が載っていることを確かめ、確かめた日時を記録する
   - release-gate の `tasks.md` の19の「結果」に、同じ日時と、開いて見た連絡先を書く（release-gate 要件12の2）
   - _Requirements: 8.2_
+  - 結果（2026-10-13 19:33〜19:40）:
+    - ASC から読んだ値（13.1 の読み返しの GO の範囲・19:33:14）: 1.15.0 の ja のサポート URL は **`https://sites.google.com/view/soramoyou-app/お問い合わせ`**（Google サイト）。⚠️ repo には書かれておらず、背景のエージェントの推測（`soramoyou-ios.web.app`）は外れていた
+    - 開いた結果（**2026-10-13 19:40:23**）: HTTP 200・題「そらもよう - お問い合わせ」・**連絡先のメールアドレスが 1 つ載っている**（「不具合の報告・機能に関するご要望・アカウントの削除依頼・その他」・「通常3営業日以内にご返信」）
+    - ⚠️ 載っているのは**開発者の個人の Gmail** で、ポリシー・削除の受付ページ・アプリの「お問い合わせ」の `soramoyou.app@gmail.com` とは別のアドレス（連絡はつくので公開は止めない。そろえるかは利用者に聞く）
+    - release-gate の `tasks.md` の 19 の「結果」に、同じ日時と連絡先を書いた
 
 - [ ] 13.5 公開判断の記録（G1〜G5）を残す（段3-5・利用者の判断）
   - 前提: 9.1, 10.4, 12.2, 12.3, 13.3, 13.4
