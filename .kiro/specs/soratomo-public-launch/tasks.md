@@ -702,7 +702,7 @@
     - 8. オンボ（新規の利用者の端末の状態）: ⚠️ spec の DCFBF2D6 と、新しく起動した 1BD50A18 はタップが届かなかった（スワイプの前後のスクショのハッシュが同じ）。代わりに F37CBCBC から**アプリを消して 1.15.0/113 を入れ直した**（オンボ済みの印と What's New の既読は端末の中の記録なので、新規の人と同じ状態になる）。オンボは 10 ページで、**「そらとも」は 5 ページ目（「みんなと共有」の直後）に 1 枚だけ**・本文は承認版のまま。「始める」→ ATT → キーチェーンに残った S3 のログインでホームへ入り、**What's New は出なかった**。開き直しても出なかった（19:18）。⚠️ ログインは新規のアカウントでなく S3（判定に使う印は端末の中の記録だけなので、見たいことは同じ）
     - 宣伝する操作（作成・招待コードでの参加・投稿・グループを抜ける）と通報・ブロックを、クレームの無い登録済みのアカウントで、本番で 1 回ずつ通した
 
-- [ ] 12.3 G4: 計測の着弾を、除外の条件あり・なしで数える（段2-3・要確認6）
+- [x] 12.3 G4: 計測の着弾を、除外の条件あり・なしで数える（段2-3・要確認6）
   - 前提: 12.2
   - 通しの時間帯で、`soratomo_opened`・`soratomo_group_created`・`soratomo_group_joined`・`soratomo_post_created`・`soratomo_invite_shared`・`soratomo_report_submitted`・`soratomo_user_blocked`・`soratomo_guideline_result` の件数を、除外の条件をかけない場合とかける場合で出す（クエリの型は `research.md` の G4）。期待: 除外なしで各イベントが1件以上・除外ありで0件（TestFlight の版は除外の条件2で、S5 は条件4でも除かれる）
   - leave-group の要件12の5（同じ時点・同じ除外の条件）: 抜けるのイベント `soratomo_group_left`（`role`・`group_deleted`・`completed`）と `soratomo_leave_failed`（`reason`）、`soratomo_join_failed` の `reason` の `leave_pending` も、同じクエリに足して数える（イベントの名前は leave-group の design.md の SoratomoAnalytics のとおり）
@@ -729,7 +729,8 @@
     - 要確認6: `$app_version` の値の形は **`1.15.0`**（S5 と S3 の全イベント）。15.3 の普及率のクエリはこの形のままでよい
     - ⚠️ **`soratomo_leave_failed` は本番で 2 回起こしたが、PostHog に届かなかった**（PostHog の一覧にもまだ一度も無い名前）。1 回目（18:58 ごろ）は機内モードにした時点が確認の前か後か分からなかったので、2 回目（19:11 ごろ・S5 の自分のグループ）は「確認のダイアログを出したまま機内モードにして『抜ける』を押した」ことを利用者に確かめた（確定の段＝`confirm()` の通信の確認で `leaveFailed(.network)` を記録する道。準備の段 `requestLeave()` は要件 1.7 で記録しない）。同じ窓口（`LoggingService.logEvent`）から送る `soratomo_join_failed`（通信あり）は届き、1 回目の機内モード中の `Application Opened`（18:58:40）は通信が戻った後（18:59:18）に届いている。2 回目の時間帯（10:00Z〜）に `soratomoLeaveGroup` の呼び出しはログに 1 件も無い（同じ読み方で 18:59:14 の成功は読めている）＝アプリは `confirm()` の通信の確認で止まり `leaveFailed(.network)` を呼んだ道で、S5 の自分のグループも消えていない。原因は未解明（仮説: 通信が切れた直後に記録した分を、PostHog の SDK が送れずに捨てている。端末のログが無いと切り分けられない）。画面の動き（失敗の表示・抜けていないこと）は正しく、利用者への害は無い。**「検証済み」とは書かない**
     - `leave_pending`: 抜けるの片づけは 1 回の呼び出しで終わった（`done: true`）ので、本番では起こせなかった。根拠は `soratomo_join_failed` 自体の着弾（上）と leave-group の単体テスト
-    - 完了にするか（`leave_failed` の未着と `leave_pending` を起こせなかったことを、どう扱うか）は利用者に聞く
+    - **利用者の決定（2026-10-13 19:2x）: 12.3 は完了にし、`soratomo_leave_failed` の未着は別の課題にする**（公開は止めない）。`leave_failed` と `leave_pending` は「検証済み」ではない。別の課題では、端末のログ（Xcode のデバイスのコンソール）を取りながら、確認の段で通信を切って失敗させ、PostHog の SDK が記録を捨てているかを確かめる
+    - 13.5 の G4 には、この表と「`leave_failed` 未着・`leave_pending` は起こせず」をそのまま写す
 
 ## (i) App Store Connect の準備と公開判断の記録（段3-1〜3-5）
 
