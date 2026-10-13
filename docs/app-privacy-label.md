@@ -83,7 +83,8 @@ https://soramoyou-ios.web.app/privacy/
 
 > ⚠️ **記録と現物のずれ（2026-10-13）**: 提出時（1.15.0 の審査提出 2026-10-13 20:34）の ASC の実際の指し先は、
 > 上の URL ではなく **Google サイトの「利用規約」ページ**だった（`privacyChoicesUrl` も同じ）。
-> 同日に `privacyPolicyUrl` と `privacyChoicesUrl` の両方を上の URL へ直した（公開中・審査中の 2 つの appInfo）。
+> 同日 21:19 に、審査中の appInfo（1.15.0 と一緒に出る側）の `privacyPolicyUrl` と `privacyChoicesUrl` の両方を上の URL へ直した。
+> 公開中の appInfo（1.14.0 側）は `409 INVALID_STATE`（今の状態では変えられない）で直せず、1.15.0 の公開で入れ替わる。公開の後に読み直して確かめる。
 > 確かめ方: 文書ではなく現物で。ASC の API の `appInfoLocalizations` の `privacyPolicyUrl`／`privacyChoicesUrl` を読む。
 
 ---

@@ -112,8 +112,9 @@ https://soramoyou-ios.web.app/privacy/
 
 > 注記（2026-10-13）: 1.15.0 の審査提出時点まで、ASC の `privacyPolicyUrl` と `privacyChoicesUrl` は
 > どちらも Google サイトの「利用規約」ページを指していた（ASC の API で現物を確認・公開中と審査中の 2 つの appInfo とも）。
-> 同日に上記の hosting 版（正式なポリシー）へ直した。
-> Google サイトのホームと利用規約のページにも、正式な版への案内を置いた。
+> 同日 21:19 に、審査中の appInfo（1.15.0 と一緒に出る側）の 2 つの URL を上記の hosting 版（正式なポリシー）へ直した。
+> 公開中の appInfo（1.14.0 側）は `409 INVALID_STATE`（今の状態では変えられない）で直せず、1.15.0 の公開で入れ替わる。
+> Google サイトの利用規約のページ（21:11 に公開）とホーム（21:24 に公開）にも、正式な版への案内を置いた。
 
 ## サポートURL
 https://sites.google.com/view/soramoyou-app/%E5%88%A9%E7%94%A8%E8%A6%8F%E7%B4%84
