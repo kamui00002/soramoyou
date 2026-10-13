@@ -207,7 +207,8 @@ service firebase.storage {
     // そらとも（招待制の小さなグループで空を共有する）の画像 ⭐️
     // spec: .kiro/specs/soratomo/（tasks 4.1）
     // パス: soratomo/{groupId}/{authorId}/{skyId}/display.jpg と thumb.jpg（アプリだけが作成・削除する）
-    // - 読み取りは、機能フラグを持つそのグループのメンバーだけ。Firestore のメンバーの文書の存在で判定する（1 回の評価で 1 件）
+    // - 読み取りは、登録済みのアカウントでログインした（匿名でない）そのグループのメンバーだけ。
+    //   Firestore のメンバーの文書の存在で判定する（1 回の評価で 1 件）
     // - Storage のルールから Firestore を読むには、初回の deploy で IAM の付与が要る（tasks 4.3）。
     //   付与しないと、メンバーの読み取りも拒否される
     // - 作成と削除を同じ allow write にまとめない。削除の要求には request.resource が無いので、
@@ -216,11 +217,13 @@ service firebase.storage {
     // テスト: Rules test API で firestore.exists をモックして評価する（research.md の要確認 2・tasks 4.2）
     // ============================================
     match /soratomo/{groupId}/{authorId}/{skyId}/{fileName} {
-      // 機能フラグ（カスタムクレーム soratomoBeta）を持つログイン利用者か（要件 1.6）
-      // - firestore.rules の isSoratomoUser() と同じ条件。token.soratomoBeta と直接書くと、
-      //   クレームの無い人では「項目が無い」エラーで拒否になる。get の既定値 false で読み、条件として拒否する
+      // 登録済みのアカウントでログインした利用者か（匿名は拒否）。1.15.0 で一般公開（soratomo-public-launch 要件 1.1・1.7）
+      // - firestore.rules の isSoratomoUser() と同じ条件。読み取り・作成・削除の 3 か所で同じ「登録済みでログイン」を要求する
+      // - クレームは見ない（1.14.x でクレームを配った人も登録済みなので、これまでどおり通る）
+      // - firebase.sign_in_provider は ID トークンの予約済みの項目で、本番のトークンには必ずある。
+      //   get の既定値つきで読まない（項目の無いトークンはエラーで拒否＝閉じる側に倒れる）
       function isSoratomoUser() {
-        return isAuthenticated() && request.auth.token.get('soratomoBeta', false) == true;
+        return isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
       }
 
       // そのグループのメンバーか（要件 11.1・11.2）

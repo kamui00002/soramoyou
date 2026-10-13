@@ -4,6 +4,7 @@
 storage.rules の「そらとも」（招待制の小さなグループで空を共有する）の画像のパスを、
 Firebase の rules test API で評価する。評価だけを行うので、本番のデータにも deploy 済みのルールにも触れない。
 spec: .kiro/specs/soratomo/（tasks.md 4.2・要件 1.6 と 11 の各項目を許可と拒否の両方で確かめる）
+      .kiro/specs/soratomo-public-launch/（tasks.md 2.3・2.4・関門をクレームでなく「登録済みでログイン」で決める）
 
 使い方:
   python3 scripts/rules_test_storage_soratomo.py [storage.rules のパス]            # 省略時はリポジトリ直下
@@ -24,7 +25,15 @@ spec: .kiro/specs/soratomo/（tasks.md 4.2・要件 1.6 と 11 の各項目を�
   - ただし && の片方が false のときは、もう片方のエラーは捨てられて false になる（エラーにならない）。
     拒否を期待するケースでは「内容を参照したか」は結果に表れない（2026-10-03 確認。下の MUTANTS の削除の項）
   - 未ログインは auth を null で渡す（省くと request.auth が未定義になり、エラーで拒否される）
-  - クレームの無い利用者には別のクレーム（skyMotionBeta）を持たせ、soratomoBeta 以外では通らないことも同時に見る
+  - ログインしたケースのトークンは {"firebase": {"sign_in_provider": <方式>}, ...クレーム} の形で作る
+    （本番の ID トークンには予約済みの項目 firebase.sign_in_provider が必ずある。匿名は "anonymous"、メールとパスワードは "password"）。
+    方式とクレームは TOKENS で決まり、ログインしたケースには必ず入る。TOKENS に無い登場人物は case() が
+    KeyError で止め、書き忘れを評価の前に見つける（既定の方式・クレームは当てない。Firestore 側と同じ形）
+    入れ子の項目は rules test API にそのまま届く（2026-10-12 に確認。public-launch 要確認2）。匿名のメンバーでは
+    式の報告で比較が 'anonymous' を読んで false になり、エラーは出ない（条件で拒否）。firebase を抜いたトークンでは
+    「Property firebase is undefined」のエラーで拒否され、期待外れとして数えられる
+  - クレームの無い利用者（NOCLAIM）には別のクレーム（skyMotionBeta）だけを持たせ、クレームに左右されず、
+    登録済みなら通ることも同時に見る。1.14.x でクレームを持つ利用者（MEMBER など）も通ることを見る（public-launch 要件 1.9）
 
 陽性対照（--mutants）:
   MUTANTS は、ルールの条件を 1 つずつわざと壊す置き換え。壊したルールで全ケースを流し、
@@ -51,13 +60,27 @@ MEMBER_DOC = "/databases/(default)/documents/soratomoGroups/g1/members/"
 # 要求の時刻（ルールは見ないが、本番の要求と同じく渡す）
 T = "2026-10-02T03:00:00Z"
 
-# 登場人物
-AUTHOR = "author"      # g1 のメンバー・投稿者
+# 登場人物（ANON 以外は登録済み＝メールとパスワードでログイン）
+AUTHOR = "author"      # g1 のメンバー・投稿者（クレーム soratomoBeta あり＝1.14.x の人）
 OWNER = "owner"        # g1 のオーナー（Storage のルールにオーナーの区別は無く、メンバーの 1 人として扱われる）
-MEMBER = "member"      # g1 のほかのメンバー
-NOCLAIM = "noclaim"    # g1 のメンバーの文書はあるが、機能フラグのクレームが無い
-OUTSIDER = "outsider"  # クレームはあるが g1 のメンバーではない
-G1_MEMBERS = {AUTHOR, OWNER, MEMBER, NOCLAIM}
+MEMBER = "member"      # g1 のほかのメンバー（クレーム soratomoBeta あり）
+NOCLAIM = "noclaim"    # g1 のメンバー。登録済みだが soratomoBeta が無い（別のクレーム skyMotionBeta だけ）
+ANON = "anon"          # g1 のメンバーの文書はあるが、匿名でログイン（クレームなし）
+OUTSIDER = "outsider"  # 登録済み（クレーム soratomoBeta あり）だが g1 のメンバーではない
+G1_MEMBERS = {AUTHOR, OWNER, MEMBER, NOCLAIM, ANON}
+
+# ログインした利用者の ID トークン: (ログインの方式 firebase.sign_in_provider, クレーム)
+# 関門は 1.15.0 から「登録済みでログイン」で、クレーム soratomoBeta は見ない。1.14.x でクレームを付けた人も
+# 通ることを確かめるため、クレームのある登場人物は残す（public-launch 要件 1.9）。
+# 書いていない登場人物は case() が KeyError で止める（既定を当てると、書き忘れが黙って「登録済み＋クレームあり」で通る）
+TOKENS = {
+    AUTHOR: ("password", {"soratomoBeta": True}),
+    OWNER: ("password", {"soratomoBeta": True}),
+    MEMBER: ("password", {"soratomoBeta": True}),
+    OUTSIDER: ("password", {"soratomoBeta": True}),
+    NOCLAIM: ("password", {"skyMotionBeta": True}),
+    ANON: ("anonymous", {}),
+}
 
 # 画像のパス（バケットより下）
 AUTHOR_DIR = "soratomo/g1/" + AUTHOR + "/s1/"
@@ -80,19 +103,24 @@ def jpeg(size):
 
 
 def case(name, expect, uid, method, path, upload=None):
-    """1 ケース。uid=None は未ログイン。upload は保存する内容（request.resource）で、削除では渡さない"""
-    return {"name": name, "expect": expect, "uid": uid, "claim": uid != NOCLAIM,
+    """1 ケース。uid=None は未ログイン。ログインした利用者の方式（provider）とクレーム（claims）は TOKENS から引く
+    （TOKENS に無い uid は KeyError で止め、書き忘れを評価の前に見つける）。upload は保存する内容（request.resource）で、削除では渡さない"""
+    provider, claims = TOKENS[uid] if uid else (None, None)
+    return {"name": name, "expect": expect, "uid": uid, "provider": provider, "claims": claims,
             "method": method, "path": path, "upload": upload}
 
 
 ALLOW, DENY = "ALLOW", "DENY"
 
 CASES = [
-    # --- 機能フラグ（要件 1.6）---
-    case("フラグ クレーム有りのメンバーが画像を読む", ALLOW, MEMBER, "get", DISPLAY),
-    case("フラグ クレーム無しのメンバーが画像を読む", DENY, NOCLAIM, "get", DISPLAY),
-    case("フラグ クレーム無しのメンバーが自分のパスへ保存", DENY, NOCLAIM, "create", own_path(NOCLAIM), jpeg(1000)),
-    case("フラグ クレーム無しの投稿者が自分の画像を削除（内容なし）", DENY, NOCLAIM, "delete", own_path(NOCLAIM)),
+    # --- ログインの種類（public-launch 要件 1.1・1.7・1.9）。クレームでなく「登録済みでログイン」で決める ---
+    case("種類 クレーム有りのメンバーが画像を読む", ALLOW, MEMBER, "get", DISPLAY),
+    case("種類 クレーム無しのメンバーが画像を読む", ALLOW, NOCLAIM, "get", DISPLAY),
+    case("種類 クレーム無しのメンバーが自分のパスへ保存", ALLOW, NOCLAIM, "create", own_path(NOCLAIM), jpeg(1000)),
+    case("種類 クレーム無しの投稿者が自分の画像を削除（内容なし）", ALLOW, NOCLAIM, "delete", own_path(NOCLAIM)),
+    case("種類 匿名のメンバーが画像を読む", DENY, ANON, "get", DISPLAY),
+    case("種類 匿名のメンバーが自分のパスへ保存", DENY, ANON, "create", own_path(ANON), jpeg(1000)),
+    case("種類 匿名の投稿者が自分の画像を削除（内容なし）", DENY, ANON, "delete", own_path(ANON)),
 
     # --- 読み取り（要件 11.1・11.2）---
     case("読取 投稿者が自分のサムネイルを読む", ALLOW, AUTHOR, "get", THUMB),
@@ -128,7 +156,8 @@ CASES = [
 # 細かい壊し方（条件を 1 つ外す・境界を 1 つずらす）で「その条件をテストが見ている」ことを、
 # 粗い壊し方（条件を true に）で「パスや種類の書き間違いで拒否されているだけではない」ことを確かめる。
 # 投稿者 ID の一致（request.auth.uid == authorId）は作成と削除の 2 か所にあるので、作成の側は改行とインデントごと置き換え元にする。
-CLAIM = "isAuthenticated() && request.auth.token.get('soratomoBeta', false) == true"
+# 登録済みでログイン（isSoratomoUser() の本文。public-launch 2.4）
+REGISTERED = "isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous'"
 MEMBER_EXISTS = ("return firestore.exists(/databases/(default)/documents/soratomoGroups/$(groupId)"
                  "/members/$(request.auth.uid));")
 READ = "allow read: if isSoratomoUser() && isSoratomoMember();"
@@ -145,16 +174,18 @@ UPDATE = "allow update: if false;"
 DELETE = "allow delete: if isSoratomoUser() && request.auth.uid == authorId;"
 
 MUTANTS = [
-    # 機能フラグ（クレーム）
-    ("クレームの判定を外す", [(CLAIM, "isAuthenticated()")]),
-    ("クレームの判定を常に偽", [(CLAIM, "false")]),
-    ("クレームを直接読む（token.soratomoBeta）", [(CLAIM, "isAuthenticated() && request.auth.token.soratomoBeta == true")]),
+    # 登録済みでログイン（public-launch 2.4）
+    ("匿名の判定を外す", [(REGISTERED, "isAuthenticated()")]),
+    ("匿名の判定を逆にする", [(REGISTERED, REGISTERED.replace("!= 'anonymous'", "== 'anonymous'"))]),
+    ("登録済みの判定を常に偽", [(REGISTERED, "false")]),
+    # 未ログインでは request.auth が null なので、トークンの読み取りがエラーで拒否されて見つかる
+    ("ログインの判定を外す", [(REGISTERED, "request.auth.token.firebase.sign_in_provider != 'anonymous'")]),
     # メンバー判定（読み取りと保存の共通）
     ("メンバー判定を外す", [(MEMBER_EXISTS, "return true;")]),
     ("メンバー判定を常に偽", [(MEMBER_EXISTS, "return false;")]),
     # 読み取り
     ("読み取りのメンバー判定を外す", [(READ, "allow read: if isSoratomoUser();")]),
-    ("読み取りのクレーム判定を外す", [(READ, "allow read: if isAuthenticated() && isSoratomoMember();")]),
+    ("読み取りの登録済み判定を外す", [(READ, "allow read: if isAuthenticated() && isSoratomoMember();")]),
     ("読み取りを全員に許す", [(READ, "allow read: if true;")]),
     # 保存
     ("保存の条件をすべて外す", [(CREATE, "allow create: if true;")]),
@@ -173,7 +204,7 @@ MUTANTS = [
     ("上書きを許す", [(UPDATE, "allow update: if true;")]),
     # 削除
     ("削除の投稿者判定を外す", [(DELETE, "allow delete: if isSoratomoUser();")]),
-    ("削除のクレーム判定を外す", [(DELETE, "allow delete: if isAuthenticated() && request.auth.uid == authorId;")]),
+    ("削除の登録済み判定を外す", [(DELETE, "allow delete: if isAuthenticated() && request.auth.uid == authorId;")]),
     ("削除の条件をすべて外す", [(DELETE, "allow delete: if true;")]),
     # 要件 11.7: 削除に内容の検査を混ぜる。後ろに足しても前に足しても、投稿者本人の削除（許可を期待）がエラーで拒否されて見つかる。
     # 拒否を期待するケースは、前に足しても期待外れにならない。Rules の && は、もう片方が false ならエラーを捨てて false を返す
@@ -194,7 +225,8 @@ def build_test_case(c):
     request = {"path": BUCKET_PATH + c["path"], "method": c["method"], "time": T, "auth": None}
     test_case = {"expectation": c["expect"], "request": request}
     if c["uid"]:
-        token = {"soratomoBeta": True} if c["claim"] else {"skyMotionBeta": True}
+        # ログインの方式は本番の ID トークンと同じく firebase.sign_in_provider の入れ子で渡し、クレームを並べる
+        token = {"firebase": {"sign_in_provider": c["provider"]}, **c["claims"]}
         request["auth"] = {"uid": c["uid"], "token": token}
         # メンバー判定（g1 のメンバーの文書の存在）。全ケースで明示する
         test_case["functionMocks"] = [{"function": "firestore.exists",

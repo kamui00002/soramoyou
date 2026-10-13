@@ -565,13 +565,15 @@ service cloud.firestore {
     // テスト: scripts/rules_test_soratomo.py（許可と拒否の両方・--mutants で陽性対照）。ルールを変えたら両方を流す。
     // ============================================
 
-    // そらともの機能フラグ（カスタムクレーム soratomoBeta）を持つログイン利用者か（要件 1.6）
-    // - アプリ・ルール・Functions の 3 か所で同じクレームを要求する。一般公開でクレームの運用をやめるときは、
-    //   3 か所を同時に変える（ずれると、入口は出るのに読み書きが拒否される）
-    // - token.soratomoBeta と直接書くと、クレームの無い人では「項目が無い」エラーで拒否になる。
-    //   get の既定値 false で読み、エラーでなく条件として拒否する
+    // 登録済みでログインした利用者か（匿名は拒否。public-launch 要件 1.1・1.6・1.7）
+    // - アプリ・ルール・Functions の 3 か所で同じ「登録済みでログイン」を要求する。匿名は拒否。
+    //   1.15.0 で一般公開（soratomo-public-launch）。3 か所は同時に変える（ずれると、入口は出るのに読み書きが拒否される）
+    // - クレームは見ない（1.14.x でクレームを付けた人も、登録済みなのでそのまま通る）
+    // - 「メールとパスワードだけ」でなく「匿名でない」を条件にする（ほかのログイン方式を足しても、開け直さずに済む）
+    // - firebase.sign_in_provider は ID トークンの予約済みの項目で、本番のトークンには必ずある。get の既定値つきで読まない
+    //   （項目の無いトークンは、読み取りのエラーで拒否される＝閉じる側に倒れる）
     function isSoratomoUser() {
-      return isAuthenticated() && request.auth.token.get('soratomoBeta', false) == true;
+      return isAuthenticated() && request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
 
     // そのグループのメンバーか（要件 11.1・11.2）
