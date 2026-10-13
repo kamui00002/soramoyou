@@ -641,17 +641,21 @@
     - 差し戻し1 の読み方の残り（新しい挙動がログに出る＝クレームの無い uid の `ok` と通知の集計の `flagOff` が 0）は 12.2 で見る
     - **ここでサーバーは登録済みの全員に開いた（2026-10-13 18:27:56 JST）**。ここから 1.15.0 を TestFlight へ出してよい（12.1）
 
-- [ ] 11.6 開けた後の1.14.xの見え方を確かめる（段1-5・組み合わせの「途中」の列・利用者の操作が要る）
+- [x] 11.6 開けた後の1.14.xの見え方を確かめる（段1-5・組み合わせの「途中」の列・利用者の操作が要る）
   - 前提: 11.5
   - 1.14.x・クレームあり（S3）が投稿する。ログ `soratomoCreateSky: ok`（uid S3）
   - 1.14.x・クレーム無し（App Store の 1.14.0・S5）: 開けた後も入口が出ない（1.14.x はクレームの無い人に入口を出さない）
   - _Requirements: 1.9, 3.4_
+  - 結果（2026-10-13 18:30）:
+    - **1.14.x・クレームあり（S3・F37CBCBC の 1.14.1/111）**: 開けた後（18:27:56）にグループ「空」へ 1 枚投稿（18:30:04）→ タイムラインに出た。**本番のログ `soratomoCreateSky: ok`（09:30:06Z＝18:30:06 JST・uid の頭 `8Ar2DV…`＝S3）**（ログの読み取りは GO 16:44）
+    - **1.14.x・クレーム無し（S5・利用者の iPhone の TestFlight 1.14.1/112）**: アプリを閉じて開き直しても、ホーム右上にそらともの入口は**出ない**（利用者の目視・18:30:39 に回答）。⚠️ 11.1 と同じく、spec の「App Store の 1.14.0」でなく TestFlight の 1.14.1（判定は 1.14.0 と同じクレームの判定）
+    - 組み合わせの「途中」の列はそろった（S3＝投稿 ok／S5＝入口なし）
 
 ## (h) 1.15.0 の TestFlight と本番の通し（段2-1〜2-3）
 
 - [ ] 12. 1.15.0 を TestFlight で確かめる
 
-- [ ] 12.1 build 番号を決めて archive し、内部の TestFlight へ出す（段2-1・ユーザーのGOを取ってから実行）
+- [x] 12.1 build 番号を決めて archive し、内部の TestFlight へ出す（段2-1・ユーザーのGOを取ってから実行）
   - 9.1 の決定（2026-10-12）: archive の直前に、`privacyPolicyText` と `hosting/delete-account/index.html` の最終更新日をその日の日付に直し、`python3 scripts/build-privacy-policy-html.py` で HTML を作り直して、build 番号と同じ小さな PR で main へ入れてから archive する（アプリ内とページを同じ日付・同じ本文にする）
   - 前提: 11.5（クレームの無いアカウントが1.15.0を手にする前に、3か所を開け終えて確かめる）
   - App Store Connect の最大の build を実測で読む（GO）。113以上でまだ使っていない番号に決め、main の pbxproj の値（8.2）と違えば、小さな PR で main の値を直してから出す（コマンドの上書きで上げない）
@@ -660,6 +664,13 @@
   - アップロードは別にGOを取る。成否はアップロードのログでなく、ASC で build が `VALID` になったことを読んで判定する。内部の TestFlight（開発者とテスト用アカウント）へ配る
   - 1.14.1（build 112）は審査に出さない
   - _Requirements: 3.1, 12.1, 12.2_
+  - 結果（2026-10-13 18:31〜18:42）:
+    - ASC の実測（GO 18:30）: `max_build_on_asc=112`・`latest_train=1.14.1` → **build 113** に決定。main の pbxproj は 8.2 で 1.15.0/113 のまま（直す PR は要らなかった）
+    - 9.1 の決定の最終更新日: `privacyPolicyText` と `hosting/delete-account/index.html` を **2026年10月13日** にし、`build-privacy-policy-html.py` で HTML を作り直して **PR #180（`08023ea7`）** で main へ入れた（push・PR・マージは GO）。archive はこの `08023ea7` から
+    - archive と export: 負荷を見てから `nice -n 19`・`-jobs 4`・`ENABLE_USER_SCRIPT_SANDBOXING=YES` のまま。**`ARCHIVE SUCCEEDED`・`EXPORT SUCCEEDED`（18:36:51）**。IPA は 1.15.0 / 113（23,865,473 バイト）
+    - ⚠️ archive のログに、Crashlytics の dSYM のアップロードの段で `error: Unable to expand directory at path …/ArchiveIntermediates/…`（ウィジェットの側）が出た。ビルドは止まらず、本体の dSYM（arm64）の `Successfully submitted symbols` は出ていて、archive には本体とウィジェットの dSYM が両方入っている。クラッシュの記号化に要る本体の分は届いているので、今回は止めない（ウィジェットのクラッシュの記号化は手で上げる候補）
+    - アップロード（GO＝IPA の版と build が正しければアップロードしてよい）: `UPLOAD SUCCEEDED with no errors`（18:38:33）。**ASC の読み返しで build 113・版 1.15.0・`processingState VALID`（18:42:00 の読み取り）**。輸出の申告は pbxproj の `ITSAppUsesNonExemptEncryption = NO` で済んでいる
+    - 内部の TestFlight: 利用者の iPhone に 1.15.0 (113) が届き、更新できた（12.2 の 1）
 
 - [ ] 12.2 組み合わせの確認と本番の通しを行う（段2-2・差し戻し3・利用者の操作が要る）
   - 前提: 12.1
