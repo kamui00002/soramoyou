@@ -839,7 +839,7 @@
 
 - [ ] 14. 審査に出し、公開を迎える
 
-- [ ] 14.1 1.15.0 を審査へ提出する（段4-1・ユーザーのGOを取ってから実行）
+- [x] 14.1 1.15.0 を審査へ提出する（段4-1・ユーザーのGOを取ってから実行）
   - 前提: 1（leave-group の受け入れの確認が済んでいる）, 13.1〜13.5
   - 審査に出す build は、12.1 で配って12.2 で確かめたもの。違う場合は差分を示して、利用者に確認する。1.14.1（build 112）は出さない
   - 提出の直前に、3か所が開いたままであることをもう一度確かめる（読み返しの道具で本番のルール2本が main と一致・`functions:list` の22本）。審査の人が1.15.0を手にする間、サーバーは要件1の状態にある
@@ -847,6 +847,15 @@
   - 読み返し: `scripts/asc_ensure_build.py --version 1.15.0 --build <N> --check-only` で、`WAITING_FOR_REVIEW`・build・リリースノートの一致を見る
   - 提出の道具は「承認されたら自動で公開」のまま（利用者の判断1の B）
   - _Requirements: 3.1, 12.2, 12.4_
+  - 結果（2026-10-13 20:29〜20:34）:
+    - 出す build は **113**（12.1 で配って 12.2 で確かめたもの・期限 2027-01-11）。1.14.1（build 112）は出していない
+    - 提出の直前の読み返し（本番の読み取りの GO・20:2x）: `python3 scripts/read-deployed-rules.py <scratchpad>` で **ルール 2 本とも本番と手元が一致**（20:29:19・終了コード 0。Firestore＝ruleset `e4478b05`〔18:24:44〕・sha256 の頭 `de845cbd294b`、Storage＝`a4c9c06a`〔18:25:12〕・`0b6eddfffa16`）。`firebase functions:list` は **22 本**で、名前の集合がコードの数え（`index.js` 9・`skyMotion.js` 2・`soratomo.js` 11）と一致・場所は asia-northeast1・ランタイムは nodejs22（20:29:31）。手元のルールと `functions/` は origin/main と差 0
+    - 提出で deliver がもう一度走っても上書きされないことを `fastlane/Fastfile` の `deliver_release` で確かめた: `skip_screenshots: true`・メタデータは `ja/release_notes.txt` だけ・審査メモと年齢区分の設定ファイルは無い
+    - **提出（GO・20:33:34〜20:34:05・exit 0）**: `scripts/appstore-release.sh submit --version 1.15.0 --build 113 --yes`。マニフェストの照合を通り、ログに「Successfully selected build」「Successfully submitted the app for review!」
+    - 読み返し（20:34:11）: `asc_ensure_build.py --version 1.15.0 --build 113 --check-only` → **`WAITING_FOR_REVIEW`・build 113**。リリースノートは ASC と手元が末尾の改行を除いて一致（13.1 と同じ）
+    - 提出の前（20:33:18）と後（20:34）で同じ道具で読み、**審査メモ**（sha256 が 20:09 の本文と一致・2,098 文字・デモのアカウントあり）・**年齢区分**（1.15.0 側の全項目と id が 20:10 と同じ）・**スクショ**（1.15.0 は 9 枚×2・公開中の 1.14.0 は 8 枚×2・並びの id が 19:38 と同じ）が消えていないことを確かめた
+      - ⚠️ 道具が appInfo を状態の名前で引いていたので、提出後の 1 回目は年齢区分が「不一致」と出た（状態が `WAITING_FOR_REVIEW` に変わり、比べる相手が見つからなかった）。id で比べ直して、違う項目は無かった
+    - 審査の間は、審査用のグループ「空のアルバム」の招待コードを再発行しない（14.3 で再発行する）。提出の道具は「承認されたら自動で公開」のまま
 
 - [ ] 14.2 公開を知った日のうちに見回りを始める（段5-1）
   - 前提: 14.1
