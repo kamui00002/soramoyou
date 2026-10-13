@@ -783,7 +783,20 @@
     - **`firebase deploy --only hosting --project soramoyou-ios`（GO・19:39:53〜19:40:01・exit 0）**。ファイルは 2 つ
     - 読み返し（19:40:08）: https://soramoyou-ios.web.app/privacy/ と /delete-account/ が HTTP 200 で **main とバイト一致**（11523・8038 バイト）・最終更新日は **2026年10月13日**・`last-modified` 10/13 19:40 JST。クエリを付けない GET も一致
     - プライバシーラベル（利用者の決定・2026-10-13 19:4x・AskUserQuestion）: **10.4 の結論どおり「変更なし」で受け入れる**（種類は 9 のまま・ASC の入力は変えない）。ASC のラベルは API で読めず、**画面では見ていない**
-    - 残り: 年齢区分・審査メモの入力、審査用のグループ、`docs/app-privacy-label.md` の PR
+    - ASC の読み取り（GO・2026-10-13 19:49:58・GET だけ）: 審査メモ（`notes`）は **1.14.0・1.15.0 とも 0 文字**（これまで審査メモは使っていなかった）。デモのアカウントは 1.15.0 に写っていた（必須＝はい・パスワードあり・ID は 1.14.0 と同じ）。連絡先もあり
+    - **要確認5の答え**: 年齢区分は appInfo ごとに持つ。appInfo は 2 つ（公開中の 1.14.0 側 `caa81ac1…`＝`READY_FOR_DISTRIBUTION`・1.15.0 と一緒に審査に出る側 `7f50af39…`＝`PREPARE_FOR_SUBMISSION`）→ **版ごと**で、1.15.0 の公開まで表に出ない。プライバシーラベルは API で読めず、「変更なし」なので画面でも見ていない
+    - 年齢区分の質問文の現物: ASC の画面ではなく、Apple の「Age ratings values and definitions」（developer.apple.com/help/app-store-connect/reference/app-information/age-ratings-values-and-definitions・19:5x に取得）。API の項目名は `userGeneratedContent`・`messagingAndChat`・`socialMedia`。表の 4+ の欄に UGC・Messaging and Chat・Advertising、13+ の欄に Social media（オーストラリア 16+・ブラジル A16・韓国 15+）。Social Media の定義は「いいね・コメント・シェア付きのフィードで、利用者の投稿を多くの人に広める」＝そらとも以前からのホームのフィードが当たる
+    - 変える前: 4+・UGC＝いいえ・Messaging and Chat＝いいえ・Social Media＝いいえ・Advertising＝はい（10.4 の「4+／UGC＝いいえ なら直す」の場合だった）
+    - **利用者の決定（19:55 ごろ・AskUserQuestion）: UGC・Messaging and Chat・Social Media を全部「はい」（13+）**。UGC と Messaging は 10.4 の承認の範囲（4+ のまま）。Social Media は 10.4 で見ていない質問なので、定義と「はい→13+」「いいえ→4+ のまま（食い違いが残る）」を示して新しく決めてもらった。「13 歳未満には SNS 機能を止める」は Declared Age Range API の呼び出しが 0 件（`grep -rn DeclaredAgeRange Soramoyou/`）なので選択肢に出していない
+    - 年齢区分の書き込み（GO・20:10:59・HTTP 200）: 1.15.0 側の `ageRatingDeclaration`（`7f50af39…`）の 3 項目だけを送った。読み返し: 3 項目が いいえ→はい・**ほかの項目は変化なし**・公開中の 1.14.0 側は 19:49 と同じ
+      - ⚠️ API の札（`appStoreAgeRating`）は書いた後も `FOUR_PLUS` のまま。公開中の 1.14.0 も Advertising＝はい なのに `brazilAgeRatingV2`＝`SELF_RATED_L`（新しい表なら A12）で、この欄は書き込みのたびには計算し直されない。審査で計算し直されるという読み（**未確認**）。13+ になったかは、ASC の画面か公開後の App Store で確かめる
+    - 審査用のグループ（作成と投稿の GO・19:59）: 利用者がリモートのため、**AI がシミュレーター F37CBCBC（iPhone 18 Pro・1.15.0／build 113）で S3（表示名「空3」）として操作**した。名前は利用者が選んだ **「空のアルバム」**。作成 20:01:39〜20:01:56・通知の案内は「あとで」。メンバーは **S3 の 1 人だけ**（デモのアカウントは入れていない・既存のグループ「空」は触っていない）
+      - 投稿 3 枚（キャプション付き・利用者が選択）: 「青空」20:03・「夕焼け」20:05・「雲」20:06。写真は検証用シミュレーター DCFBF2D6 にあった空の写真（`IMG_0008`・`IMG_0011`・`IMG_0013`）を `simctl addmedia` で F37CBCBC へ写したもの（利用者に縮小版を送って確認）。そらともの変換は位置情報などのメタデータを落としてから送る（`SoratomoImageEncoder.encodeJPEG` は圧縮品質だけを渡す）
+      - ⚠️ この端末では `simctl pbcopy`／`pbpaste` が効かなかった（書いた後も `pbinfo` が「Pasteboard is empty」）。日本語はかなキーボードを 1 文字ずつタップして変換し、欄の値を describe-all で照合した。招待コードは「コピー」を使わず、招待の画面の読み上げラベルを Python が読んで、書式（`XXXX-XXXX`・32 文字の英数字）を確かめてからスクラッチパッドのファイル（権限 600）にだけ書いた。**コードは画面・チャット・tasks.md・コミットに出していない**。招待の画面のスクショも撮っていない
+      - 審査の間は招待コードを再発行しない（14.3 で再発行する）
+    - 審査メモ（本文を見せて GO・PATCH 20:09:23・HTTP 200）: 10.4 の日本語 1〜4 と英語 1〜4 を tasks.md から**プログラムで抜き**、置き換え印 2 か所（「（ASC にだけ書くコード）」と英語の「(code is written only in App Store Connect)」）に招待コードを差し込んだ。**利用者の指示で 2 を (1)〜(8) の手順の行に分けた**（分けた文をつなぎ直すと元の文に戻ることをプログラムで確かめた・英語の (1) の頭の 1 文字だけ大文字）。見出しは【日本語】と [English]。2,098 文字（上限 4,000）
+      - 読み返し: 本文が送ったものと**一致**・招待コードは 2 回・置き換え印は 0 回・**「新しく登録したアカウントで」あり（差し戻し4）**・デモのアカウントと連絡先は書く前と同じ・公開中の 1.14.0 の審査メモは空のまま
+    - 残り: `docs/app-privacy-label.md` の PR
 
 - [x] 13.4 サポートURLを現物で確かめる（段3-4・release-gate tasks.md 19）
   - 前提: 13.1
