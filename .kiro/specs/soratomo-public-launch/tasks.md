@@ -799,6 +799,18 @@
     - `docs/app-privacy-label.md`（10.4 の (1)）: 各項目の根拠 2〜5 にそらともの分（2＝参加・通報の uid とガイドライン同意の `guidelineVersion`・`guidelineAgreedAt`、3＝投稿者名とメンバー一覧の表示名〔そらとも専用の名前は無い〕、4＝Storage の `soratomo/` 配下の画像〔メタデータは送る前に落とす〕、5＝**グループ名**と投稿のキャプション）を足し、表の後に「新しい種類は増えない」注記（通報の理由は `REPORT_REASONS` の固定 5 つ・Discord へは `buildReportForwardPayload` で内部ID・理由・時刻だけ）と、最終確認の日付 2026-10-13 を入れた。5 の「グループ名」は 10.4 の一覧に無かったが、利用者が書く文字なので足した（PR の説明に書いた）。根拠はどれもコードの現物で確かめた
       - **PR #181**（push の GO・PR 作成の GO・マージの GO を 1 手ずつ）→ **squash で `4b5e5863`・2026-10-13 20:15:50 にマージ**。チェックは GitGuardian 成功・claude はスキップ。変更は文書 1 ファイルだけ。main の文書に「そらとも」が入ったことを読み返した。リモートとローカルのブランチ・作業用 worktree は片づけた
     - ⚠️ 年齢区分が 13+ になったかは、まだ見ていない（上の「API の札」の項）
+    - **訂正（2026-10-13 20:44 の ASC の GET で判明）**: 提出時の ASC の `privacyPolicyUrl` と `privacyChoicesUrl`（ja・公開中と審査中の 2 つの appInfo とも）は、hosting のポリシーではなく **Google サイトの「利用規約」ページ**（`https://sites.google.com/view/soramoyou-app/利用規約`・最終更新日 2026年2月10日・第1〜9条でプライバシーの中身なし）を指していた。13.3 の deploy は hosting の本文を新しくしたが、ASC がそこを指しているかは確かめていなかった。`APP_STORE_TEXT.md`（ホームと書いていた）も `docs/app-privacy-label.md`（hosting と書いていた）も現物と違っていた
+      - 直し方（利用者の決定・AskUserQuestion）: ② 利用規約のページに案内を足す → ① ASC の 2 つの URL を hosting へ → ③ ホームの古い写しを案内に置き換える。`privacyChoicesUrl` もポリシーと同じ URL にする。Google サイトの編集はこの Mac の Chrome（Claude in Chrome）で
+      - ②（打つ GO と公開の GO を 1 手ずつ）: 利用規約のページの本文の先頭に「プライバシーポリシーはこちら: https://soramoyou-ios.web.app/privacy/」（URL はリンク）の 1 行を足した。第1〜9条と最終更新日は触っていない。公開の前の確認の画面の変更点は「利用規約を更新」だけ → 公開（21:11 ごろ）。読み返し（**21:11:13**・GET）: 案内の行とリンク（href＝hosting）があり、公開の前の GET との差はその 2 行だけ
+        - ⚠️ Claude in Chrome の `type` は Google サイトの本文で日本語を落とした（ASCII の「: https://…」だけが入った）。日本語は Mac のクリップボード（`pbcopy`）から `cmd+v` で貼った
+      - ①（読み取りの GO・書き込みの GO を appInfo ごとに 1 手ずつ）: 書く前の読み取り（**21:14:10**）は 20:44 と同じ（2 つとも利用規約）・1.15.0 は `WAITING_FOR_REVIEW`・build 113
+        - 公開中の appInfo（`caa81ac1…`・`READY_FOR_DISTRIBUTION`）: PATCH は **HTTP 409 `ENTITY_ERROR.ATTRIBUTE.INVALID.INVALID_STATE`**（今の状態では変えられない・2 つの欄とも）で弾かれた（21:18:53）。読み返しで値は変わっていない
+        - 審査中の appInfo（`7f50af39…`・`WAITING_FOR_REVIEW`）: PATCH は **HTTP 200**（21:19:45）。読み返しで 2 つの URL とも `https://soramoyou-ios.web.app/privacy/`・公開中の側は変わっていない
+        - 読み返し（**21:19:59**・GET）: 1.15.0 は `WAITING_FOR_REVIEW`・build 113 のまま（書き込みで審査の状態は動いていない）
+        - → 1.15.0 の公開で審査中の appInfo が公開中に入れ替わり、App Store のリンクも hosting になる見込み（**未確認**・14.2 で確かめる）。それまでの App Store のリンクは利用規約のページで、② の 1 行から正式な版へ行ける
+      - ③（打つ GO と公開の GO を 1 手ずつ）: ホームの本文（古いポリシーの写し）を丸ごと消し、「そらもようのプライバシーポリシー（最新の版）は、次のページに載せています。」「https://soramoyou-ios.web.app/privacy/」（リンク）「お問い合わせ: soramoyou.app@gmail.com」の 3 行にした。見出し「プライバシーポリシー」はそのまま（利用者の決定）。公開の前の確認の画面の変更点は「ホームを更新」だけ → 公開。読み返し（**21:24:51**・GET）: `/ホーム` とサイトの入口の両方で、古い本文（「収集する情報」「2026年2月10日」）が 0 回・3 行とリンクが出る
+      - 文書: `APP_STORE_TEXT.md` と `docs/app-privacy-label.md` の §3 を現物に合わせるブランチ `ドキュメント-プライバシーURLの記録を直す`（origin/main から・`dd5eb396`・push は GO 待ち）
+    - 💡 別件の確かめ（20:45 に気づいた疑い・背景のエージェントが調べ、根拠を本筋で見直した）: `Soramoyou/Soramoyou/Views/SkyZukanView.swift:393` の `https://apps.apple.com/app/id6790911086` は、このアプリ（6758070979）ではなく同じ開発者の別アプリ **「天名 -Amana-」**（iTunes lookup の jp で `com.soumatou.amana`）。空図鑑の「天名をひらく」で `amana://` が開けないときの App Store への逃がし先で、PR #118（`9706ad7a`・2026-09-17「空図鑑から天名 -Amana- へ、一方通行の送客導線を足す」）の**意図どおり**。`SoratomoInviteViewModel.swift:27` のコメントにも「天名のページなので写さないこと」とある → **直さない**
 
 - [x] 13.4 サポートURLを現物で確かめる（段3-4・release-gate tasks.md 19）
   - 前提: 13.1
@@ -832,6 +844,7 @@
     - **G4**: 12.3 の表のとおり（8 つのイベントが除外なしで 1 件以上・除外ありで 0 件・`$app_version`＝`1.15.0`）。⚠️ `soratomo_leave_failed` は本番で 2 回起こして未着・`leave_pending` は本番で起こせなかった（どちらも**検証済みでない**・利用者の決定で別の課題）。公開から 7 日の分は 15.2 で足す
     - **G5**: 10.4 の承認＝**2026-10-12 10:48**。ポリシー＝ https://soramoyou-ios.web.app/privacy/ ・最終更新日 **2026年10月13日**（13.3 の deploy 19:39:53〜19:40:01・main とバイト一致）。プライバシーラベル＝変更なし（利用者の決定 19:4x・ASC の画面では見ていない）・入力表 `docs/app-privacy-label.md` は PR #181（`4b5e5863`・20:15:50）。年齢区分＝UGC・Messaging and Chat・Social Media を「はい」（利用者の決定 19:55 ごろ・書き込み 20:10:59）。審査メモ＝20:09:23（招待コードは ASC にだけ）
       - ⚠️ 年齢区分の札が 13+ になったかは未確認。API の札の欄は書き込みで計算し直されず、ASC の画面は Mac の Chrome がログインしていなかった（20:2x・ログイン画面で止めた）。**審査の後に App Store のページで確かめる**（14.2）
+      - **訂正（2026-10-13 20:44 の ASC の GET で判明）**: 上の「ポリシー＝ https://soramoyou-ios.web.app/privacy/ 」は、ポリシーの本文の置き場（hosting）としては正しいが、**提出時の ASC の `privacyPolicyUrl`／`privacyChoicesUrl` はそこを指していなかった**（Google サイトの「利用規約」ページ）。直した結果は 13.3 の「訂正」の項（21:19:45 に審査中の appInfo を hosting へ・公開中の appInfo は 409 で直せず 1.15.0 の公開で入れ替わる見込み）
     - **サポートURL**: 13.4 の 19:40:23 に開いた（連絡先＝個人の Gmail）→ 連絡先を直して **20:20:26** に開き直し、載っている連絡先は `soramoyou.app@gmail.com` だけ
     - **release-gate の 19 は、利用者の決定（20:2x・AskUserQuestion）で [x] にした**（未確認の項目は「検証済みでない」と書いたまま）
 
@@ -862,7 +875,9 @@
   - 承認と同時に自動で公開される。公開の知らせ（ASC のメール・`asc_ensure_build.py --check-only` の `READY_FOR_SALE`）を受けた日のうちに、見回り（15.1）の公開後の分を始め、通報には24時間以内に対応する（release-gate 要件8の1）
   - `READY_FOR_SALE` と公開の日時を記録する（15.3 の比較に添える）
   - 公開の後は、そらともを全員に対して閉じ直さない（ルールと Functions を戻さない）。止める手段は、利用者ごとの利用停止（`soratomo-admin.js suspend`）と、次の版での修正だけ（決定事項2）
+  - 追加（2026-10-13・13.3 の訂正から）: 公開の後に ASC の appInfo を読み（GO）、公開中になった appInfo の ja の `privacyPolicyUrl`／`privacyChoicesUrl` が `https://soramoyou-ios.web.app/privacy/` になっていることを確かめる（App Store のページのリンクも開く）。利用規約のままなら PATCH し直す（GO）
   - _Requirements: 3.6, 11.4, 12.6_
+  - 途中の記録（2026-10-13 21:14:10・21:19:59 の GET）: 1.15.0 は `WAITING_FOR_REVIEW`・build 113（まだ承認されていない）
 
 - [ ] 14.3 審査の後片づけと、クレームの扱い（段5-2・5-3）
   - 前提: 14.2
