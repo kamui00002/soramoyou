@@ -18,6 +18,7 @@ struct MainTabView: View {
     /// いま出している紹介の種類（nil = 出していない）。全画面カバーは `item:` で駆動し、中身は引数で受け取る
     /// （`isPresented:` と別の @State で種類を持つと、カバーの中身が古い種類のまま評価され、
     ///   そらともの紹介を出したつもりで全員向けのページが出ることがある。2026-10-06 にシミュレータで実測）
+    /// ⚠️ 1.15.0 で種類は全員向けの 1 つになったが、実機で直した経緯があるので `item:` の形は変えない
     @State private var presentedWhatsNew: WhatsNewKind?
     /// 紹介を出しているか（`presentedWhatsNew` から導く）
     private var showWhatsNew: Bool { presentedWhatsNew != nil }
@@ -25,21 +26,17 @@ struct MainTabView: View {
     /// 全画面カバーは 1 枚だけにして、中身を種類で切り替える
     /// （カバーを 2 枚にすると、同時に出そうとしたときに片方が表示に失敗する）
     @State private var whatsNewKind: WhatsNewKind = .general
-    /// 既読済みのそらともの紹介の識別子 ⭐️
-    @AppStorage(WhatsNewContent.soratomoIntroSeenKey) private var lastSeenSoratomoIntro = ""
 
-    /// 紹介の種類
+    /// 紹介の種類（1.15.0 でそらともの先行公開の紹介をやめ、全員向けの 1 つになった・soratomo-public-launch 7.1）
     enum WhatsNewKind: Identifiable {
         /// 全員向けの What's New（`WhatsNewContent.currentID`）
         case general
-        /// そらともの紹介（機能フラグが有効な人だけ・`WhatsNewContent.soratomoIntroID`）
-        case soratomo
 
         var id: Self { self }
     }
 
     // そらとも（友達グループで空を共有）⭐️ tasks 14.1
-    /// 機能フラグの判定（SoramoyouApp が注入。ログイン時の評価は ContentView）
+    /// そらともを使えるかの判定（SoramoyouApp が注入。ログイン時の評価は ContentView）
     @EnvironmentObject private var soratomoGate: SoratomoFeatureGate
     /// そらともへの遷移を決めるルーター（全画面のカバーの表示と、通知の保留の行き先を持つ）
     @ObservedObject private var soratomoRouter = SoratomoRouter.shared
@@ -130,24 +127,16 @@ struct MainTabView: View {
             switch kind {
             case .general:
                 WhatsNewView(onClose: { presentedWhatsNew = nil })
-            case .soratomo:
-                WhatsNewView(
-                    onClose: { presentedWhatsNew = nil },
-                    pages: WhatsNewContent.soratomoPages,
-                    headline: WhatsNewContent.soratomoIntroHeadline
-                )
             }
         }
         // そらともの通知の保留の行き先を、表示できる状況になったら開く ⭐️ tasks 14.1
-        // （タブの画面の表示時・フラグの判定が決まった時・通知のタップが届いた時。
+        // （タブの画面の表示時・判定が決まった時・通知のタップが届いた時。
         //   What's New を閉じた時は handleWhatsNewDismiss から呼ぶ）
         .onAppear {
             resolveSoratomoPending()
         }
         .onChange(of: soratomoGate.state) { _ in
             resolveSoratomoPending()
-            // フラグの判定は起動後に非同期で決まるので、決まったところでそらともの紹介を試す ⭐️
-            Task { await maybeShowSoratomoIntro() }
         }
         .onChange(of: soratomoRouter.pending) { _ in
             resolveSoratomoPending()
@@ -173,17 +162,12 @@ struct MainTabView: View {
             currentID: WhatsNewContent.currentID,
             lastSeenID: lastSeenWhatsNewVersion,
             hasCompletedOnboarding: hasCompletedOnboarding
-        ) else {
-            // 全員向けを出さないときだけ、そらともの紹介を試す（2 枚続けて出さない。残った方は次の起動で出る）
-            await maybeShowSoratomoIntro()
-            return
-        }
+        ) else { return }
 
         // 起動直後は ATT/AdMob ダイアログが先に出るため、その猶予を与える
         try? await Task.sleep(nanoseconds: 1_500_000_000)
 
-        // 猶予中に既読化された場合・そらともの全画面が先に出ている場合・
-        // 猶予中にそらともの紹介が先に出た場合は出さない
+        // 猶予中に既読化された場合・そらともの全画面が先に出ている場合・すでに何かを出している場合は出さない
         guard !showWhatsNew, Self.canShowWhatsNewAfterDelay(
             lastSeenID: lastSeenWhatsNewVersion,
             currentID: WhatsNewContent.currentID,
@@ -206,9 +190,6 @@ struct MainTabView: View {
         case .general:
             version = WhatsNewContent.currentID
             lastSeenWhatsNewVersion = version
-        case .soratomo:
-            version = WhatsNewContent.soratomoIntroID
-            lastSeenSoratomoIntro = version
         }
         LoggingService.shared.logEvent(
             "whats_new_dismissed",
@@ -219,43 +200,15 @@ struct MainTabView: View {
         resolveSoratomoPending()
     }
 
-    /// 機能フラグが有効な人に、そらともの紹介を 1 回だけ出す ⭐️
-    ///
-    /// 全員向けの What's New と同じく、ATT/AdMob のダイアログを避けるため少し待ってから出す。
-    /// 何かの全画面（What's New・そらとも）が出ている間は出さない。出さなかった場合は既読にならないので、次の起動で出る。
-    private func maybeShowSoratomoIntro() async {
-        guard !showWhatsNew, WhatsNewGate.shouldPresentSoratomoIntro(
-            isSoratomoEnabled: soratomoGate.isEnabled,
-            lastSeenID: lastSeenSoratomoIntro,
-            introID: WhatsNewContent.soratomoIntroID
-        ) else { return }
-
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-
-        // 猶予中に状況が変わっていないかを確かめ直す（フラグが無効になった・何かの全画面が先に出た・既読になった）
-        guard !showWhatsNew, !soratomoRouter.isPresented, WhatsNewGate.shouldPresentSoratomoIntro(
-            isSoratomoEnabled: soratomoGate.isEnabled,
-            lastSeenID: lastSeenSoratomoIntro,
-            introID: WhatsNewContent.soratomoIntroID
-        ) else { return }
-
-        whatsNewKind = .soratomo
-        presentedWhatsNew = .soratomo
-        LoggingService.shared.logEvent(
-            "whats_new_shown",
-            parameters: ["version": WhatsNewContent.soratomoIntroID]
-        )
-    }
-
     // MARK: - そらとも ⭐️ tasks 14.1
 
     /// そらともの通知の保留の行き先を、いまの状況で開くか・破棄するか・待つかをルーターに決めさせる
     ///
     /// この画面はログイン済みのときだけ出る（ContentView の分岐）ので、ログイン状態は `.signedIn` で渡す。
     /// 未ログインの保留の破棄は ContentView が行う。
-    /// - フラグの判定前（unknown）: ルーターが保留のまま待つ（判定が決まると onChange でもう一度呼ばれる）
-    /// - フラグが無効: ルーターが破棄して `flag_off` を記録する（そらともの画面は出さない）
-    /// - フラグが有効: What's New の表示中は `canPresent = false` で待ち、閉じたら開く
+    /// - 判定前（unknown）: ルーターが保留のまま待つ（判定が決まると onChange でもう一度呼ばれる）
+    /// - 使えない（匿名）: ルーターが破棄して `flag_off` を記録する（そらともの画面は出さない）
+    /// - 使える（登録済み）: What's New の表示中は `canPresent = false` で待ち、閉じたら開く
     ///
     /// ⚠️ design.md の Risks のとおり、待ち合わせは What's New だけ。タブの中のほかのシートの表示中や、
     ///    What's New の 1.5 秒の待ちの間にそらともが先に出た場合の挙動は、実機で確かめる。
@@ -419,9 +372,8 @@ struct MainTabView_Previews: PreviewProvider {
 
 /// Preview 用のアカウントの窓口（ログインしていない扱い。FirebaseAuth を呼ばない）⭐️
 @MainActor
-private struct SoratomoEntryMainTabPreviewProvider: SoratomoClaimsProviding {
+private struct SoratomoEntryMainTabPreviewProvider: SoratomoAccountProviding {
     func currentAccountKind() -> SoratomoAccountKind? { nil }
-    func claims(forceRefresh _: Bool) async throws -> [String: Any] { [:] }
 }
 
 

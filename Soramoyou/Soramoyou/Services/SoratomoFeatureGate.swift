@@ -4,6 +4,7 @@
 //
 //  そらとも（友達グループで空を共有）の入口と設定を出すかの判定 ⭐️
 //  （tasks 10.6・design.md の SoratomoFeatureGate・要件 1.1・1.2・1.4・1.5・10.10・10.14）
+//  1.15.0 の一般公開で、クレームの判定から「登録済みでログイン」の判定に替えた（soratomo-public-launch 6.1）
 //
 
 import Combine
@@ -22,48 +23,38 @@ enum SoratomoAccountKind: Equatable {
 
 /// 判定が読むアカウントの窓口
 ///
-/// FirebaseAuth を直接呼ばずにこの窓口を通すのは、単体テストでログイン状態とクレームを差し替えるため。
+/// FirebaseAuth を直接呼ばずにこの窓口を通すのは、単体テストでログイン状態を差し替えるため。
+/// ID トークン（クレーム）を読む口は持たない（1.15.0 の一般公開で判定に使わなくなった）。
 @MainActor
-protocol SoratomoClaimsProviding {
+protocol SoratomoAccountProviding {
     /// いまログインしているアカウントの種類。ログインしていなければ nil
     func currentAccountKind() -> SoratomoAccountKind?
-    /// ID トークンのクレーム（カスタムクレームを含む）を読む
-    /// - Parameter forceRefresh: true ならキャッシュを使わず、サーバーからトークンを取り直す
-    func claims(forceRefresh: Bool) async throws -> [String: Any]
 }
 
 /// 本番の窓口（FirebaseAuth の現在のユーザー）
 @MainActor
-struct FirebaseSoratomoClaimsProvider: SoratomoClaimsProviding {
-    /// 判定の途中でログアウトしていたとき
-    struct SignedOutError: Error {}
-
+struct FirebaseSoratomoAccountProvider: SoratomoAccountProviding {
     func currentAccountKind() -> SoratomoAccountKind? {
         guard let user = Auth.auth().currentUser else { return nil }
         // 匿名かどうかは email の有無で決める（SettingsViewModel の先例: この app のサインイン方式は
         // メール/パスワードと匿名の 2 つだけで、匿名ユーザーは email が必ず nil）
         return user.email == nil ? .anonymous : .registered
     }
-
-    func claims(forceRefresh: Bool) async throws -> [String: Any] {
-        guard let user = Auth.auth().currentUser else { throw SignedOutError() }
-        return try await user.getIDTokenResult(forcingRefresh: forceRefresh).claims
-    }
 }
 
 // MARK: - 判定
 
-/// そらともの機能フラグの判定
+/// そらともを使えるかの判定
 ///
-/// ID トークンのカスタムクレーム `soratomoBeta == true` のときだけ有効にする。
-/// 利用者やビルドの種類（Debug / Release）にかかわらず、クレームの有無だけで決める。
+/// 登録済みのアカウントでログインしていれば有効にする。ID トークンもクレームも読まず、通信もしないので、
+/// 起動時に通信できなくても、登録済みなら入口が出る（soratomo-public-launch 要件 2.1〜2.3）。
 ///
-/// - 未ログイン・匿名アカウントは無効。クレームの取得に失敗したときも無効に倒す
-/// - 判定が済むまで（`unknown` の間）は入口を出さない
-/// - ⚠️ DEBUG ビルドでも例外を設けない（`SkyMotionAccess` は DEBUG で常に表示するが、そらともは違う）。
-///   クレームの無い開発者に入口を出しても、書き込みがすべてルール（`isSoratomoUser()`）で拒否されるため
-/// - 起動ごとの最初のトークンの取得だけ、強制的に更新する。クレームを付けた直後でも、
-///   ログインし直さずに使えるようにするため。以後はキャッシュ済みのトークンを読む
+/// - 未ログイン・匿名アカウントは無効
+/// - 判定が済むまで（`unknown` の間）は入口を出さない。ログイン中の `unknown` は、ログインが確定してから
+///   最初の `evaluate()` までの一瞬だけ。未ログイン・ゲストの間は評価しないので `unknown` のまま（入口は隠れる）
+/// - ルール（`isSoratomoUser()`）と Functions（`requireSoratomoUser`）も、同じ「登録済みでログイン（匿名は拒否）」を
+///   要求する。3 か所は同じ条件にしておく（ずれると、入口は出るのに読み書きが拒否される）
+/// - 1.14.x まではカスタムクレームで判定していた。1.15.0 で一般公開した（soratomo-public-launch）
 ///
 /// アプリの起点（`SoramoyouApp`）で環境オブジェクトとして渡す。ゲスト中の画面（`GuestTabView`）も
 /// 同じ `HomeView` を使うので、同じオブジェクトを読む。評価とサインアウト時の `reset()` の呼び出しは tasks 14.1。
@@ -75,10 +66,6 @@ final class SoratomoFeatureGate: ObservableObject {
         case signedOut
         /// 匿名アカウント
         case anonymous
-        /// クレーム `soratomoBeta` が無い（または true でない）
-        case claimMissing
-        /// トークンを取得できなかった（通信できないなど）
-        case tokenUnavailable
     }
 
     /// 判定の状態
@@ -89,9 +76,6 @@ final class SoratomoFeatureGate: ObservableObject {
         case disabled(DisabledReason)
     }
 
-    /// 機能フラグのカスタムクレームの名前。⚠️ ルール・Functions・付与のスクリプトと同じ名前にする
-    static let claimKey = "soratomoBeta"
-
     /// いまの判定
     @Published private(set) var state: State = .unknown
 
@@ -100,81 +84,41 @@ final class SoratomoFeatureGate: ObservableObject {
         state == .enabled
     }
 
-    private let provider: SoratomoClaimsProviding
-
-    /// この起動で、まだトークンの強制的な更新に成功していないか
-    private var needsForcedRefresh = true
-
-    /// 評価の世代。新しい評価と `reset()` で進める
-    ///
-    /// トークンの取得を待っている間にサインアウトや別の評価があったとき、古い評価の結果で
-    /// 状態を上書きしないために使う（サインアウト後に「有効」へ戻るのを防ぐ）。
-    private var generation = 0
+    private let provider: SoratomoAccountProviding
 
     /// - Parameter provider: アカウントの窓口（テストではモックを渡す）
-    init(provider: SoratomoClaimsProviding) {
+    init(provider: SoratomoAccountProviding) {
         self.provider = provider
     }
 
     /// 本番の窓口（FirebaseAuth）で作る
     ///
-    /// 引数の既定値（`= FirebaseSoratomoClaimsProvider()`）にしないのは、既定値の式がメインアクターの外で
+    /// 引数の既定値（`= FirebaseSoratomoAccountProvider()`）にしないのは、既定値の式がメインアクターの外で
     /// 評価される扱いになり、メインアクター専用の窓口を作れないため（コンパイルエラーになる）。
     convenience init() {
-        self.init(provider: FirebaseSoratomoClaimsProvider())
+        self.init(provider: FirebaseSoratomoAccountProvider())
     }
 
-    /// 現在のログイン状態とトークンから評価し直す
-    /// - Returns: 評価した後の状態（待っている間に新しい評価やリセットがあれば、そちらの状態）
+    /// 現在のログイン状態から評価し直す（同期。通信しない）
+    /// - Returns: 評価した後の状態
     @discardableResult
-    func evaluate() async -> State {
-        generation += 1
-        let evaluating = generation
-
+    func evaluate() -> State {
         guard let kind = provider.currentAccountKind() else {
-            return apply(.disabled(.signedOut), evaluatedAt: evaluating)
+            state = .disabled(.signedOut)
+            return state
         }
-        guard kind == .registered else {
-            return apply(.disabled(.anonymous), evaluatedAt: evaluating)
+        // `default` を置かない: アカウントの種類が増えたら、ここで有効にするかを決め直させる
+        switch kind {
+        case .registered:
+            state = .enabled
+        case .anonymous:
+            state = .disabled(.anonymous)
         }
-
-        let forceRefresh = needsForcedRefresh
-        let result: State
-        do {
-            let claims = try await provider.claims(forceRefresh: forceRefresh)
-            if forceRefresh {
-                // 強制的な更新に成功したら、この起動ではもう強制しない（失敗したら次の評価でもう一度強制する）
-                needsForcedRefresh = false
-            }
-            // 真偽値の true のときだけ有効（文字列の "true" などは無効。ルールの `== true` と同じ）
-            result = claims[Self.claimKey] as? Bool == true ? .enabled : .disabled(.claimMissing)
-        } catch {
-            result = .disabled(.tokenUnavailable)
-        }
-        return apply(result, evaluatedAt: evaluating)
-    }
-
-    /// トークンを一時的に取れなかったときだけ、もう一度判定する（アプリが前面に戻ったときに呼ぶ・レビューで足した）
-    ///
-    /// 判定し直すのはログイン状態が変わったときだけなので、起動時に通信できずにトークンを取れないと、
-    /// その起動の間ずっと入口が出なかった。ほかの状態（有効・クレーム無しなど）では何もしない。
-    /// - Returns: 判定の後の状態
-    @discardableResult
-    func reevaluateIfTokenUnavailable() async -> State {
-        guard state == .disabled(.tokenUnavailable) else { return state }
-        return await evaluate()
+        return state
     }
 
     /// サインアウト時に判定を戻す（`unknown` にして入口を隠す）
     func reset() {
-        generation += 1
         state = .unknown
-    }
-
-    /// 評価した世代がいまの世代のときだけ状態に反映する
-    private func apply(_ newState: State, evaluatedAt evaluating: Int) -> State {
-        guard evaluating == generation else { return state }
-        state = newState
-        return newState
     }
 }

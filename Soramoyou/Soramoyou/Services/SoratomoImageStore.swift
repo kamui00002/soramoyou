@@ -85,7 +85,7 @@ struct SoratomoImageStoreProgress: Sendable {
 /// | `unauthenticated` | `.permissionDenied` | `.permissionDenied` |
 /// | それ以外（`cancelled`・`objectNotFound` など） | `.unknown` | `.unknown` |
 ///
-/// - `unauthorized` は、Storage のルール（メンバーの判定・フラグ・本人のパス）が拒否したとき。
+/// - `unauthorized` は、Storage のルール（メンバーの判定・使えるかの判定・本人のパス）が拒否したとき。
 ///   取得では「メンバーでない」、書き込みでは「ルールに拒否された」と読む。
 /// - 取り消し（`cancelled`）は、このファイルの `SoratomoImageStore` が制限時間か取り消しで止めたもの。
 ///   制限時間の判定（`.uploadTimeout`）は、止めた側が知っているので、ここでは `.unknown` にする。

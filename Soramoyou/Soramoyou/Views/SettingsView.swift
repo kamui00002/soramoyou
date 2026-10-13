@@ -124,7 +124,7 @@ struct SettingsView: View {
                     }
                 }
             } message: {
-                Text(deleteAccountConfirmationMessage)
+                Text(Self.deleteAccountConfirmationMessage(isSoratomoEnabled: soratomoGate.isEnabled))
             }
             // 再認証が必要な場合のアラート
             .alert("パスワードを入力", isPresented: $viewModel.showingReauthentication) {
@@ -223,11 +223,15 @@ struct SettingsView: View {
 
     /// アカウント削除の確認の文言
     ///
-    /// ⭐️ そらともの機能フラグが有効なときだけ、そらとものデータも消えることを 1 文足す（release-gate 9.4・要件 3.7）。
-    /// 無効のときは今までの文のまま。文案は下書き（tasks 12.1 で利用者が確認する）
-    private var deleteAccountConfirmationMessage: String {
+    /// ⭐️ そらともを使える（登録済みでログイン）ときだけ、そらとものデータも消えることを 1 文足す（release-gate 9.4・要件 3.7）。
+    /// 使えないとき（匿名・判定前）は今までの文のまま。
+    /// 単体テストで確かめられるよう、画面の状態を読まない静的関数にしてある（soratomo-public-launch 6.3・
+    /// `MainTabView.canShowWhatsNewAfterDelay` と同じ形）
+    /// - Parameter isSoratomoEnabled: そらともを使えるか（`SoratomoFeatureGate.isEnabled`）
+    /// - Returns: 確認のアラートに出す文
+    static func deleteAccountConfirmationMessage(isSoratomoEnabled: Bool) -> String {
         let base = "アカウントを削除すると、すべての投稿・下書き・プロフィール情報が完全に削除されます。この操作は取り消せません。"
-        guard soratomoGate.isEnabled else { return base }
+        guard isSoratomoEnabled else { return base }
         return base + "そらともの投稿（写真を含む）とグループへの参加も削除されます。"
     }
 
@@ -778,6 +782,14 @@ struct PrivacyPolicyView: View {
         ※ クレジットカード番号などの決済情報は、Apple が処理するため本アプリでは
         　 一切受け取らず、保存もしません
 
+        8. そらとも（iOS 版のみ。招待コードで参加する非公開のグループ）
+        - グループに投稿した空の写真・キャプション（100文字まで）・写真の幅と高さ
+        - 表示名（プロフィールの表示名を、グループのメンバー一覧と投稿者名に使います）
+        - 参加しているグループ、グループ内の役割（オーナー・メンバー）、参加日時
+        - そらともの利用ガイドラインに同意した版と日時
+        - 通報の記録（通報した人と投稿した人の内部 ID、通報の理由、受け付けた時刻）
+        ※ そらともの投稿と写真は、同じグループのメンバーにだけ表示されます。表示名は、プロフィールの表示名と同じです
+
         ■ 情報の利用目的
 
         収集した情報は以下の目的で利用します：
@@ -787,6 +799,7 @@ struct PrivacyPolicyView: View {
         - ユーザーサポートの提供
         - 広告の表示（Google AdMob）
         - アプリのクラッシュ分析と品質向上（Firebase Crashlytics）
+        - そらともでのグループ内の投稿の表示と、不適切な投稿への対応（通報の確認・利用の停止）
         - App内課金で購入された利用回数の付与と管理
 
         ■ 第三者サービスへのデータ提供
@@ -819,6 +832,7 @@ struct PrivacyPolicyView: View {
 
         6. Discord（Discord Inc.／米国）
         - アプリの「フィードバック」から送られた内容を開発者が確かめるため、種別・本文・アプリのバージョン・端末の情報・アカウントの内部 ID を、開発者の通知用の Discord へ送ります
+        - そらとも（iOS 版のみ）で投稿が通報されたとき、開発者が確かめるため、通報・投稿・グループ・投稿者・通報者の内部 ID と、通報の理由・受け付けた時刻を、開発者の通知用の Discord へ送ります。キャプション・グループ名・表示名・招待コード・写真は送りません
         - プライバシーポリシー: https://discord.com/privacy
 
         上記以外の第三者に対して、ユーザーの個人情報を提供することはありません。
@@ -833,7 +847,8 @@ struct PrivacyPolicyView: View {
         ■ データの保存期間
 
         - アカウント情報・投稿データ：アカウントの削除まで保存。Android 版で削除した場合は、投稿の写真とアイコン画像も削除します。iOS 版のアプリで削除した場合、投稿の写真とアイコン画像はサーバーに残ります。これらも削除したい場合は、アプリでは削除せずに、アカウント削除のページ（https://soramoyou-ios.web.app/delete-account/ ）から申し込んでください。申し込みから30日以内に、アカウントとあわせて削除します。アプリで削除した後は、ご本人のデータであることを確かめられないため、残った写真とアイコン画像だけの削除には応じられません
-        - 通報の記録：不正利用を防ぐため、アカウントの削除の後も保持します
+        - そらとも（iOS 版のみ）の投稿（写真を含む）・グループへの参加・ガイドラインへの同意の記録：アカウントの削除で削除します（iOS 版のアプリで削除した場合も、そらともの写真は削除します）。「グループを抜ける」を選んだ場合は、そのグループでの自分の投稿（写真を含む）と参加の記録を削除します
+        - 通報の記録（そらともの通報を含む）：不正利用を防ぐため、通報した人や投稿した人がアカウントを削除した後も保持します
         - 利用状況データ：収集から最大26ヶ月間保存
         - クラッシュレポート：収集から90日間保存
 
@@ -842,6 +857,7 @@ struct PrivacyPolicyView: View {
         ユーザーは以下の権利を有します：
         - アカウント情報の閲覧・編集
         - 投稿の編集・削除
+        - そらとも（iOS 版のみ）の自分の投稿の削除と、グループから抜けること
         - 位置情報の使用許可の取り消し（端末の設定から変更可能）
         - 広告トラッキングの拒否（端末の設定から変更可能）
         - アカウントとデータの削除（アプリの設定から、またはアカウント削除のページ https://soramoyou-ios.web.app/delete-account/ から申し込み）

@@ -13,7 +13,7 @@ struct ContentView: View {
     @EnvironmentObject private var favoriteManager: FavoriteManager
     /// いいね状態の共有 Manager ⭐️ 同じくサインアウト時のローカル破棄を配線するために参照する（#147）
     @EnvironmentObject private var likeManager: LikeManager
-    /// そらとも（友達グループで空を共有）の機能フラグの判定 ⭐️ tasks 14.1
+    /// そらとも（友達グループで空を共有）を使えるかの判定 ⭐️ tasks 14.1
     /// ログインが確定したら評価し、サインアウトで判定を戻す（SoramoyouApp が注入）
     @EnvironmentObject private var soratomoGate: SoratomoFeatureGate
     /// そらともへの遷移を決めるルーター ⭐️ tasks 14.1（未ログインの間に届いた通知の行き先を破棄するために見る）
@@ -85,7 +85,7 @@ struct ContentView: View {
                 // おすすめの空（自分の一覧）も同じ理由で消す。アカウント削除でもここを通る ⭐️
                 RecommendationManager.shared.clearOnSignOut()
                 // そらとも（友達グループで空を共有）も同じ理由で消す ⭐️ tasks 14.1
-                // 通知の保留の行き先と画面の経路・フラグの判定・画像のキャッシュ・表示名とアイコンの保持・投稿の覚え
+                // 通知の保留の行き先と画面の経路・使えるかの判定・画像のキャッシュ・表示名とアイコンの保持・投稿の覚え
                 // ・ブロックの一覧と通報の記録のメモリ（release-gate 9.6。端末の通報の記録は残す）
                 SoratomoRouter.shared.clearOnSignOut()
                 soratomoGate.reset()
@@ -93,13 +93,13 @@ struct ContentView: View {
                 SoratomoDependencies.live.clearSessionState()
             }
         }
-        // そらともの機能フラグを、ログインが確定するたびに評価する ⭐️ tasks 14.1
+        // そらともを使えるかを、ログインが確定するたびに評価する ⭐️ tasks 14.1
         // 起動時（ログイン済みで起動）と、ログインし直したとき（id が変わって張り直される）に走る。
-        // 起動ごとの最初の評価だけトークンを強制的に更新するのは、判定（SoratomoFeatureGate）の中で済んでいる。
+        // 判定は「登録済みでログイン」だけを見る同期の関数で、通信しない（soratomo-public-launch 6.1）。
         // 評価が済んで判定が変わると、MainTabView の onChange が通知の保留の行き先を解決する
         .task(id: authViewModel.isAuthenticated) {
             if authViewModel.isAuthenticated {
-                await soratomoGate.evaluate()
+                soratomoGate.evaluate()
             }
         }
         // 未ログインの間に届いた、そらともの通知の行き先を破棄する ⭐️ tasks 14.1
@@ -154,7 +154,6 @@ struct ContentView_Previews: PreviewProvider {
 
 /// Preview 用のアカウントの窓口（ログインしていない扱い。FirebaseAuth を呼ばない）⭐️
 @MainActor
-private struct SoratomoEntryContentPreviewProvider: SoratomoClaimsProviding {
+private struct SoratomoEntryContentPreviewProvider: SoratomoAccountProviding {
     func currentAccountKind() -> SoratomoAccountKind? { nil }
-    func claims(forceRefresh _: Bool) async throws -> [String: Any] { [:] }
 }

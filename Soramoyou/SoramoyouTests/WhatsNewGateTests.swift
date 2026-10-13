@@ -74,41 +74,18 @@ final class WhatsNewGateTests: XCTestCase {
         ))
     }
 
-    // MARK: - そらともの紹介（機能フラグが有効な人だけ）
-
-    private let soratomoIntroID = "soratomo-current"
-
-    /// フラグが有効で未読 → 表示する
-    func testSoratomoIntroEnabledUnseenShouldPresent() {
-        XCTAssertTrue(WhatsNewGate.shouldPresentSoratomoIntro(
-            isSoratomoEnabled: true,
-            lastSeenID: "",
-            introID: soratomoIntroID
-        ))
-    }
-
-    /// フラグが有効でも既読 → 出さない（1回だけ）
-    func testSoratomoIntroAlreadySeenShouldNotPresent() {
-        XCTAssertFalse(WhatsNewGate.shouldPresentSoratomoIntro(
-            isSoratomoEnabled: true,
-            lastSeenID: soratomoIntroID,
-            introID: soratomoIntroID
-        ))
-    }
-
-    /// フラグが無効（判定前を含む）→ 出さない（クレームの無い人には見せない）
-    func testSoratomoIntroDisabledShouldNotPresent() {
-        XCTAssertFalse(WhatsNewGate.shouldPresentSoratomoIntro(
-            isSoratomoEnabled: false,
-            lastSeenID: "",
-            introID: soratomoIntroID
-        ))
-    }
-
-    /// そらともの紹介の識別子は、全員向けの What's New と別でなければならない
-    /// （同じだと、オンボーディングの完了で既読になり、招待された新規ユーザーに届かない）
-    func testSoratomoIntroIDDiffersFromGeneralID() {
-        XCTAssertNotEqual(WhatsNewContent.soratomoIntroID, WhatsNewContent.currentID)
-        XCTAssertNotEqual(WhatsNewContent.soratomoIntroSeenKey, WhatsNewContent.lastSeenKey)
+    /// 1.15.0 の `currentID` は、過去に使った値のどれとも違う（soratomo-public-launch 7.1）。
+    /// 過去の値に戻すと、その値を既読にした人（1.12.0 までを見た人・先行公開の紹介を見た人）には出ない
+    func testCurrentIDDiffersFromPastIDs() {
+        let pastIDs = [
+            "2026-09-sky-camera",
+            "2026-09-sky-ae",
+            "2026-09-ranking-recommended",
+            "2026-09-ranking-sky-ae",
+            "2026-10-soratomo-beta",
+        ]
+        for pastID in pastIDs {
+            XCTAssertNotEqual(WhatsNewContent.currentID, pastID, "過去の値 \(pastID) と同じ")
+        }
     }
 }

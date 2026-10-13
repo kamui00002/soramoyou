@@ -387,6 +387,7 @@ final class SoratomoGroupService: SoratomoGroupServiceProtocol, @unchecked Senda
     /// - Returns: 知っている理由なら種類。知らない理由は nil
     private static func reasonToError(_ reason: String, details: [String: Any]) -> SoratomoError? {
         switch reason {
+        // 1.14.x までのサーバーがクレームの無い人に返した理由。1.15.0 のサーバーは返さないが、写しは残す
         case "flag_off":
             .flagOff
         case "invalid_name":

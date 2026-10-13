@@ -248,7 +248,7 @@ extension GoldenHourNotificationManager: UNUserNotificationCenterDelegate {
         }
         // そらとも（友達グループで空を共有）の新着通知なら、行き先をルーターへ渡す ⭐️ tasks 14.1
         // ルーターは type が soratomoPost のものだけを保留にし、既存の通知とゴールデンアワーでは何もしない。
-        // 表示はここでは決めない（ログイン状態・機能フラグ・What's New の表示中かが分かった時点で画面側が解決する。
+        // 表示はここでは決めない（ログイン状態・そらともを使えるかの判定・What's New の表示中かが分かった時点で画面側が解決する。
         // コールドスタートで画面より先にタップが届いても、保留はルーターが持っているので失わない）
         SoratomoRouter.shared.receive(userInfo: response.notification.request.content.userInfo)
     }

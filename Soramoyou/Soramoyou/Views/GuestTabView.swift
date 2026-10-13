@@ -188,7 +188,6 @@ struct GuestTabView_Previews: PreviewProvider {
 
 /// Preview 用のアカウントの窓口（ログインしていない扱い。FirebaseAuth を呼ばない）⭐️
 @MainActor
-private struct SoratomoEntryGuestPreviewProvider: SoratomoClaimsProviding {
+private struct SoratomoEntryGuestPreviewProvider: SoratomoAccountProviding {
     func currentAccountKind() -> SoratomoAccountKind? { nil }
-    func claims(forceRefresh _: Bool) async throws -> [String: Any] { [:] }
 }

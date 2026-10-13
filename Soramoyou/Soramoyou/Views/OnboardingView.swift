@@ -61,6 +61,22 @@ struct OnboardingView: View {
                 Color(red: 0.58, green: 0.39, blue: 0.93)
             ]
         ),
+        // ⭐️ 1.15.0: そらとも（友達グループで空を共有）を登録ユーザー全員に公開するのに合わせて追加（soratomo-public-launch 7.2）。
+        //    新規ユーザーには What's New が出ないので、ここで案内する。「みんなと共有」（公開）の直後に置き、
+        //    「身内だけで見せ合う」という違いが続けて読めるようにする。
+        //    アイコン・配色・入口の言い方（ホーム右上のボタンから）は、全員向けの What's New の 1 ページ目
+        //    （WhatsNewContent.pages の「そらとも」）と揃えている。
+        //    入口はホーム右上のアイコンだけのボタン（SoratomoEntryButton）なので、文字では「右上のボタン」と書く。
+        // ⚠️ オンボはログイン前に出るので、そらともを使えるかの判定で分けられない。一般公開の 1.15.0 より前に出荷しないこと。
+        OnboardingPage(
+            icon: "person.2.circle",
+            title: "そらとも",
+            description: "家族や友達だけの小さなグループで\n撮った空を見せ合えます\nホーム右上のボタンから始めよう",
+            gradientColors: [
+                Color(red: 0.55, green: 0.80, blue: 0.98),
+                Color(red: 0.36, green: 0.58, blue: 0.90)
+            ]
+        ),
         OnboardingPage(
             icon: "square.grid.2x2.fill",
             title: "ホーム画面に飾る",

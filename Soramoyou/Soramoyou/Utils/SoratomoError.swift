@@ -20,7 +20,8 @@ import Foundation
 enum SoratomoError: Error, Equatable, CaseIterable {
     /// 通信できない・届かない
     case network
-    /// 機能フラグ（クレーム soratomoBeta）が無い
+    /// 1.14.x までのサーバーの理由（機能フラグのカスタムクレームが無い）。1.15.0 のサーバーは返さない
+    /// （soratomo-public-launch。古いサーバーや想定外の応答に備えて種類は残す）
     case flagOff
     /// グループ名が 1〜30 文字でない
     case invalidName

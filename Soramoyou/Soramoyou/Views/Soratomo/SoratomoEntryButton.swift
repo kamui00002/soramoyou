@@ -5,8 +5,9 @@
 //  ホームのツールバーの右に出す「そらとも」の入口のボタン ⭐️
 //  （tasks 14.1・design.md の SoratomoEntryButton・要件 1.1・1.2・1.4・1.5）
 //
-//  - 機能フラグの判定（SoratomoFeatureGate）が「有効」のときだけボタンを出す。
-//    ゲスト中・匿名アカウント・フラグ OFF・判定前（unknown）は何も描かない
+//  - そらともを使えるかの判定（SoratomoFeatureGate）が「有効」＝登録済みのアカウントでログインしている
+//    ときだけボタンを出す（1.15.0 の一般公開から。1.14.x まではクレームで判定していた）。
+//    ゲスト中・匿名アカウント・未ログイン・判定前（unknown）は何も描かない
 //  - 押したら、ルーターがそらともの画面（グループ一覧）を全画面で開く。
 //    全画面のカバーは MainTabView が持っているので、ここでは開くことをルーターへ頼むだけ
 //
@@ -21,15 +22,15 @@ import SwiftUI
 struct SoratomoEntryButton: View {
     // MARK: - Properties
 
-    /// そらともの機能フラグの判定（アプリ全体で 1 つ）
+    /// そらともを使えるかの判定（アプリ全体で 1 つ）
     @EnvironmentObject private var soratomoGate: SoratomoFeatureGate
 
     // MARK: - Body
 
     var body: some View {
         // ⚠️ `isEnabled` は判定が `.enabled` のときだけ true。
-        //    判定前（unknown）・無効（未ログイン・匿名・クレーム無し・トークン取得失敗）では、
-        //    ボタンそのものを作らない（フラグ OFF の利用者には、既存のホームと同じ見た目のまま）
+        //    判定前（unknown）・無効（未ログイン・匿名）では、
+        //    ボタンそのものを作らない（使えない利用者には、既存のホームと同じ見た目のまま）
         if soratomoGate.isEnabled {
             Button {
                 // 全画面の表示はルーターに任せる（MainTabView の fullScreenCover が isPresented を見ている）。
