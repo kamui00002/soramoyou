@@ -681,5 +681,6 @@
       - G3: 文言の承認 2026-10-12 14:36（public-launch 9.1）・What's New とオンボの確認（public-launch 12.2 の 1 と 8・2026-10-13）
       - G4: public-launch 12.3（⚠️ `soratomo_leave_failed` 未着・`leave_pending` は起こせず＝検証済みでない）
       - G5: 承認 2026-10-12 10:48（public-launch 10.4）・ポリシーの公開 2026-10-13 19:40・年齢区分 20:10・審査メモ 20:09（public-launch 13.3）
+        - 訂正（2026-10-13 20:44 の ASC の GET で判明）: 「ポリシーの公開」は hosting（https://soramoyou-ios.web.app/privacy/ ）の deploy の時刻。提出時の ASC の `privacyPolicyUrl`／`privacyChoicesUrl` は Google サイトの「利用規約」ページを指していた。21:19:45 に審査中の appInfo を hosting へ直した（公開中の appInfo は 409 で直せず・1.15.0 の公開で入れ替わる見込み）。詳しくは public-launch の tasks.md 13.3 の「訂正」
       - サポートURL: 2026-10-13 20:20:26 に開き、連絡先は `soramoyou.app@gmail.com`
     - **利用者の決定（2026-10-13 20:2x・AskUserQuestion）: 19 を [x] にする**（未確認の項目は上のとおり書いたまま）
