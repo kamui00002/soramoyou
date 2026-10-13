@@ -336,9 +336,9 @@
 
 ## (f) 切り替えの前の準備（段0-2・0-3・0-5）
 
-- [ ] 10. 切り替えの前に準備する
+- [x] 10. 切り替えの前に準備する
 
-- [ ] 10.1 クレームの無いテスト用アカウント S5 を作り、基準値を出し直す（段0-2・利用者の操作が要る）
+- [x] 10.1 クレームの無いテスト用アカウント S5 を作り、基準値を出し直す（段0-2・利用者の操作が要る）
   - 前提: 1（切り替えの当日より前ならいつでもよい）
   - 利用者の操作: App Store の 1.14.0 で新規登録する（クレームは付けない）。操作を頼む前に、いまさわれる端末を聞き、端末に入っている版と build を確かめる
   - 本番の Auth で、S5 の作成の時刻とクレームが無いことを読む（ユーザーのGOを取ってから実行。出すのは uid の頭6文字・時刻・クレームの名前だけ）
@@ -346,6 +346,9 @@
   - S5 の uid を、`research.md` の除外の条件（`<S5のuid>`）に足し、公開前の基準値の表を同じクエリで出し直して、差を記録する（除外の条件を変えたので、比べる前に出し直す）
   - S5 は、1.14.0・クレーム無しの「入口が出ない」の確かめ（11.1・11.6）と、1.15.0 の本番の通し（12.2）に使う
   - _Requirements: 3.4, 3.5, 11.6_
+  - 結果（2026-10-13 18:35）:
+    - S5 の作成と本番の Auth の読み取りは 11.1 の結果のとおり（`soratomo6@gmail.com`・uid の頭 `Qk9lcs…`・18:20:53 JST・クレーム無し・利用者の iPhone の TestFlight 1.14.1/112 で作成。spec の「App Store の 1.14.0」からの逸脱）
+    - `research.md` の除外の条件に S5（`Qk9lcs%`）と、タスク1で申し送られた B（`nhYcDQ%`・soratomo5）を足し、公開前の基準値を同じ定義・期間で出し直した（PostHog の execute-sql・読むだけ・18:30）: **差はどの指標も 0**（S5 と B の最初のイベントが基準値の締めの 10-10 より後のため）。ただし元の値と、旧の条件で今出し直した値に小さなずれ（日ごとの 10-10 が 112→118 など）があり、S5・B とは無関係（遅れて着いたイベントと見ている・未確認）→ **公開後に比べるときは「旧の条件で出し直し」の列を使う**。詳細は research.md の「2026-10-13 除外の条件に S5 と B を足して出し直した値」
 
 - [x] 10.2 切り替えの前の使用量と、本番の設定を読む（段0-3・要確認3・7。利用者の操作が要る）
   - 前提: なし（切り替えの当日の7日前から）
@@ -435,7 +438,7 @@
     - 11.1 の「前」の列はそろった（S3＝入口あり・投稿 ok／S5＝入口なし）
     - ⚠️ 秘密の申告: 係が撮ったログインの途中のスクショ 1 枚に、iOS の仕様で S3 のパスワードの最後の 1 文字が一瞬見えていた（係が読んだ後、伏字の画面で上書き済み）。S3 はテスト用アカウント。ローテートは利用者の判断
 
-- [ ] 11.2 PR-A を main へ入れ、出し元を確かめる（段1-1）
+- [x] 11.2 PR-A を main へ入れ、出し元を確かめる（段1-1）
   - 前提: 11.1
   - PR-A のマージ（ユーザーのGOを取ってから実行）。`git fetch` の後、`git log` で main の先頭に leave-group・PR-B・PR-A が入っていることを見る。作業ツリーが clean で `HEAD == origin/main` のところから出す。出し元のコミットを記録する
   - `grep -rn "requireFlag\|soratomoBeta" functions/*.js firestore.rules storage.rules` が、テストのファイル以外で0件
@@ -443,21 +446,29 @@
   - 出す前の本番のルール2本を、読み返しの道具（2.5）で読み、PR-A の前の main（leave-group の反映の後）と一致することを記録する（出す前の状態。GOを取ってから）
   - 11.3〜11.5 のどれかのデプロイが失敗したら、1.15.0 を配らずに止める。直して出し直すか、出した分を Firebase のコンソールで前の ruleset へ戻す。戻してよいのは、1.15.0 をクレームの無いアカウントへ配る前だけ
   - _Requirements: 3.2, 3.3_
+  - 結果（2026-10-13・利用者の GO を 1 手ずつ）:
+    - 出す前の本番（18:22・GO＝読んでよい）: `read-deployed-rules.py` で本番の Firestore（ruleset `8ba8a746`・10-12 01:36 JST）と Storage（`2daa6614`・10-03 23:57 JST）を読み、PR-A の前の main（`9a56d5e8`）の 2 本と **sha256 の頭が一致**（`187ac94b5e73`・`7ec51426f1ea`）。`firebase functions:list` は 22 本（そらともの 11 本を含む）・asia-northeast1・nodejs22
+    - **PR #178 を squash でマージ 18:23（`cdc7c3e3`・2026-10-13T09:23:19Z）**（GO＝想定どおりならマージ・GitGuardian pass・CLEAN）。main の先頭は leave-group（#174・#176・#177）→ #175 → PR-B（#179）→ PR-A（#178）の順
+    - マージ後の main のテスト: **マージの前に、PR-A に origin/main を取り込んだ木（`60843dc8a59a…`）で全部を流しておき、マージ後の `origin/main^{tree}` が同じ `60843dc8a59a…` だったので、同じ木で確かめたとみなした**（係・17:00ごろ）: `npm run lint` 通過・`npm test` 294／294・`npm run test:emulator` 220／220（Java は Android Studio 同梱の JDK・ポートは空いていた）・`rules_test_soratomo.py` 123／123・`rules_test_storage_soratomo.py` 27／27
+    - `grep -rn "requireFlag\|soratomoBeta" functions/*.js firestore.rules storage.rules`（テストのファイル以外）: 0 件
+    - 出し元: `~/dev/soramoyou-pl-server` を `git switch --detach origin/main`（`cdc7c3e3`・未コミット 0）。`git log d204a9e1..origin/main -- functions/` は `cdc7c3e3` だけ＝前回の Functions の反映からの差は PR-A の分だけ
 
-- [ ] 11.3 Firestore のルールを出し、読み返してテストを流す（段1-2・ユーザーのGOを取ってから実行）
+- [x] 11.3 Firestore のルールを出し、読み返してテストを流す（段1-2・ユーザーのGOを取ってから実行）
   - 前提: 11.2
   - `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive`
   - 読み返しの道具で、ruleset の識別子・更新の時刻・ハッシュの頭が手元の `firestore.rules` と一致する。保存した本番の本文に `rules_test_soratomo.py`（通常）を流して全件緑（release-gate tasks.md 17 と同じ）
   - この日から見回り（15.1）を始める（開けた日から）
   - _Requirements: 3.3, 10.6_
+  - 結果（2026-10-13 18:24・GO）: `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive`（出し元 `cdc7c3e3`）→ released。読み返し: 本番の ruleset **`e4478b05`**（18:24:44 JST）・sha256 の頭 `de845cbd294b` が手元の `firestore.rules` と**一致**。保存した本番の本文に `rules_test_soratomo.py`: **123／123 期待どおり**。**この日（10-13）から見回り（15.1）を始める**
 
-- [ ] 11.4 Storage のルールを出し、読み返してテストを流す（段1-3・ユーザーのGOを取ってから実行）
+- [x] 11.4 Storage のルールを出し、読み返してテストを流す（段1-3・ユーザーのGOを取ってから実行）
   - 前提: 11.3
   - `firebase deploy --only storage --project soramoyou-ios --non-interactive`
   - 読み返しの道具で、同じく手元の `storage.rules` と一致する。保存した本番の本文に `rules_test_storage_soratomo.py`（通常）を流して全件緑
   - _Requirements: 3.3, 10.6_
+  - 結果（2026-10-13 18:25・GO＝11.3 が緑なら）: `firebase deploy --only storage --project soramoyou-ios --non-interactive` → released。読み返し: 本番の ruleset **`a4c9c06a`**（18:25:12 JST）が手元の `storage.rules` と**一致**（Firestore も一致のまま）。保存した本番の本文に `rules_test_storage_soratomo.py`: **27／27 期待どおり**
 
-- [ ] 11.5 そらともの関数を名前で指定して出す（段1-4・要確認8・差し戻し1。ユーザーのGOを取ってから実行）
+- [x] 11.5 そらともの関数を名前で指定して出す（段1-4・要確認8・差し戻し1。ユーザーのGOを取ってから実行）
   - 前提: 11.4
   - 要確認8: 出す前に、公開する関数を数えて期待値にする。2026-10-11 の数え方は、`functions/index.js` の `exports.名前 =` が9本、`functions/skyMotion.js` の `exports.名前 =` が2本、`functions/soratomo.js` の `module.exports` が leave-group の後で11本の、計22本。本番の `firebase functions:list --project soramoyou-ios` の名前と数がこれと一致すること
   - 出す前に、本番の Functions を最後に出したとき（leave-group の反映）から、main の `functions/` の差が PR-A の分だけであることを `git log` で確かめる
@@ -465,6 +476,12 @@
   - デプロイの出力で、11本の更新がすべて成功。出した後の `functions:list` の名前と数（22本）・リージョン（asia-northeast1）・ランタイム（nodejs22）が、出す前と同じ
   - 差し戻し1（承認済みの読み方）: Functions は本番のコードを読み返す手段が無いので、「出し元のコミットが origin/main の先頭・デプロイの出力で全部の更新が成功・関数の一覧が `index.js` の公開と一致・新しい挙動がログに出る（クレームの無い uid の `ok` と、通知の集計の `flagOff` が0。12.2 で見る）」を、「一致を読み返して確かめた」とみなす
   - _Requirements: 3.3_
+  - 結果（2026-10-13 18:25〜18:27・GO＝11.4 が緑なら）:
+    - 要確認8: 出す前の `functions:list` は 22 本（`index.js` 9・`skyMotion.js` 2・`soratomo.js` 11 の内訳と一致）。対象の 11 本の名前は `functions/soratomo.js` の `module.exports` から台本で組み立て、tasks.md の一覧と完全一致を assert した（手で打っていない）
+    - `firebase deploy --only functions:soratomoCreateGroup,…（11 本）--project soramoyou-ios --non-interactive`: **11 本とも `Successful update operation`・`Deploy complete!`（18:27:56 JST）**・終了コード 0。ほかの 11 本は出していない
+    - 出した後の `functions:list`: 22 本・名前の集合が出す前と同じ・リージョン asia-northeast1／ランタイム nodejs22 も同じ
+    - 差し戻し1 の読み方の残り（新しい挙動がログに出る＝クレームの無い uid の `ok` と通知の集計の `flagOff` が 0）は 12.2 で見る
+    - **ここでサーバーは登録済みの全員に開いた（2026-10-13 18:27:56 JST）**。ここから 1.15.0 を TestFlight へ出してよい（12.1）
 
 - [ ] 11.6 開けた後の1.14.xの見え方を確かめる（段1-5・組み合わせの「途中」の列・利用者の操作が要る）
   - 前提: 11.5
