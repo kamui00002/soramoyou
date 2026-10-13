@@ -7,7 +7,8 @@
 //
 // - Firestore はエミュレーターの本物を使う（トランザクション・読み書きの形まで確かめるため）
 // - 次の 5 つは require の前に Module._load を差し替える（pushHelpers.test.js と同じ方式）:
-//     firebase-admin/auth（getUsers でフラグとアカウントの有無を返す）・./pushHelpers（送信を記録するだけ。本物の FCM へ
+//     firebase-admin/auth（getUsers でアカウントの有無を返す。定期実行が使う。通知の宛先の絞り込みでは呼ばれないことも見る）・
+//     ./pushHelpers（送信を記録するだけ。本物の FCM へ
 //     送らない）・firebase-functions/logger（ログを記録し、名前・キャプション・コード・トークンが出ていないかを見る）・
 //     ./soratomoStorage（画像の一覧と削除をメモリ上のパスの集合で行う。退会の削除が本番のバケットへ向かわないため）・
 //     ./soratomoNgWords（本物を包み、ngWordsOverride を入れた間だけ別の提供口を使う。「一度も読めていない」場面のため）
@@ -44,6 +45,8 @@ process.env.DISCORD_REPORT_WEBHOOK_URL = WEBHOOK_URL;
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
+const fs = require("node:fs");
+const path = require("node:path");
 
 // MARK: - 偽物（Auth・送信・ログ）
 
@@ -113,7 +116,8 @@ let ngWordsOverride = null;
 let realCreateNgWordProvider = null;
 
 const originalLoad = Module._load;
-Module._load = function (request, parent, isMain) {
+/** 偽物へ差し替える読み込み。soratomo.js を読む間だけ入れる（選択肢の名前の検査のテストでも、写しを読む間だけ入れ直す）。 */
+function fakeLoad(request, parent, isMain) {
   if (request === "firebase-admin/auth") return { getAuth: () => fakeAuth };
   if (request === "./pushHelpers") return fakePush;
   if (request === "firebase-functions/logger") return fakeLogger;
@@ -130,7 +134,8 @@ Module._load = function (request, parent, isMain) {
     };
   }
   return originalLoad.call(this, request, parent, isMain);
-};
+}
+Module._load = fakeLoad;
 
 const { initializeApp, deleteApp } = require("firebase-admin/app");
 const { getFirestore, Timestamp } = require("firebase-admin/firestore");
@@ -179,8 +184,18 @@ test.after(async () => {
   await deleteApp(app);
 });
 
-const ON = { soratomoBeta: true };
-const authOf = (uid, token = ON) => ({ uid, token });
+/**
+ * ID トークンの形（public-launch 3.1）。本番のトークンには firebase.sign_in_provider が必ずある。
+ * - REGISTERED: 登録済み（メールとパスワード）・クレーム無し。1.15.0 の一般の利用者で、既定のトークン
+ * - CLAIMED: 登録済み・クレーム soratomoBeta あり。1.14.x の先行公開でクレームを付けた人
+ * - ANONYMOUS: 匿名のログイン（退会の削除だけ通す）
+ * BETA_CLAIMS はトークンでなく、偽の Auth の getUsers が返す customClaims（定期実行の「アカウントがある」の印にも使う）。
+ */
+const REGISTERED = { firebase: { sign_in_provider: "password" } };
+const CLAIMED = { soratomoBeta: true, firebase: { sign_in_provider: "password" } };
+const ANONYMOUS = { firebase: { sign_in_provider: "anonymous" } };
+const BETA_CLAIMS = { soratomoBeta: true };
+const authOf = (uid, token = REGISTERED) => ({ uid, token });
 
 /** Callable をハンドラーとして直接呼ぶ。 */
 function call(name, auth, data) {
@@ -233,9 +248,9 @@ async function seedGroup({ groupId, ownerId, inviteCode, memberIds, name = "種�
   await batch.commit();
 }
 
-// MARK: - Callable: ログインとフラグ（8.1）
+// MARK: - Callable: ログインと関門（8.1・public-launch 3.1）
 
-/** クレームを確かめる Callable（退会の削除の soratomoDeleteMyData と、抜ける soratomoLeaveGroup 以外のすべて）と、正しい形の要求。 */
+/** 匿名を拒否する Callable（退会の削除 soratomoDeleteMyData 以外の7本）と、正しい形の要求。 */
 const CALLABLES = [
   ["soratomoCreateGroup", { name: "空の会", requestId: "r1" }],
   ["soratomoJoinGroup", { code: "SKYAAAAA" }],
@@ -243,26 +258,168 @@ const CALLABLES = [
   ["soratomoCreateSky", { groupId: "g1", skyId: "s1", width: 1080, height: 1440 }],
   ["soratomoReportSky", { groupId: "g1", skyId: "s1", reason: "spam" }],
   ["soratomoAgreeGuideline", { version: 1 }],
+  ["soratomoLeaveGroup", { groupId: "g1" }],
 ];
 
-test("Callable: クレームを確かめる6本とも、ログインが無ければ unauthenticated", async () => {
+/**
+ * 関門で止められた後に、何も書かれていないことを確かめる。場面は g1（alice だけ・招待コード SKYAAAAA）。
+ * alice が関門を通ってしまうと、再発行でコードが変わる・投稿ができる・同意が記録される・抜けるでグループごと消える。
+ */
+async function assertGateWroteNothing() {
+  const groupRef = db.collection("soratomoGroups").doc("g1");
+  assert.equal((await db.collection("soratomoGroups").get()).size, 1);
+  assert.equal((await groupRef.get()).get("inviteCode"), "SKYAAAAA");
+  assert.deepEqual((await groupRef.collection("members").get()).docs.map((d) => d.id), ["alice"]);
+  assert.equal((await db.collection("soratomoUsers").get()).size, 0);
+  assert.equal((await groupRef.collection("skies").get()).size, 0);
+  assert.equal((await db.collection("soratomoReports").get()).size, 0);
+  assert.equal((await db.collection("soratomoPendingLeaves").get()).size, 0);
+}
+
+test("Callable: 関門を持つ7本とも、ログインが無ければ unauthenticated", async () => {
   for (const [name, data] of CALLABLES) {
     await assert.rejects(call(name, undefined, data), httpsError("unauthenticated"), name);
   }
 });
 
-test("Callable: クレームを確かめる6本とも、クレームが無い・true でなければ permission-denied（flag_off）で、何も書かない", async () => {
+test("Callable（public-launch 1.7）: 匿名のログインは、クレームの有無に関係なく7本とも permission-denied（registration_required・理由だけ）で、何も書かない。拒否のログに理由を出す", async () => {
   await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
-  for (const token of [{}, { soratomoBeta: false }, { soratomoBeta: "true" }]) {
+  for (const token of [ANONYMOUS, { ...ANONYMOUS, soratomoBeta: true }]) {
     for (const [name, data] of CALLABLES) {
-      await assert.rejects(call(name, authOf("alice", token), data), httpsError("permission-denied", "flag_off"), name);
+      await assert.rejects(
+        call(name, authOf("alice", token), data),
+        httpsError("permission-denied", "registration_required", {}),
+        `${name} ${JSON.stringify(token)}`
+      );
     }
   }
-  assert.equal((await db.collection("soratomoGroups").get()).size, 1);
-  assert.equal((await db.collection("soratomoGroups").doc("g1").get()).get("inviteCode"), "SKYAAAAA");
-  assert.equal((await db.collection("soratomoUsers").get()).size, 0);
-  assert.equal((await db.collection("soratomoGroups").doc("g1").collection("skies").get()).size, 0);
-  assert.equal((await db.collection("soratomoReports").get()).size, 0);
+  await assertGateWroteNothing();
+  for (const [name] of CALLABLES) {
+    const rejected = logFieldsOf(`${name}: rejected`);
+    assert.equal(rejected.length, 2, name);
+    for (const fields of rejected) {
+      // 既存の形（{name}: rejected { uid, groupId?, skyId?, reason }）。関門の拒否では uid はまだ決まっていないので null
+      // （1.14 期の flag_off の拒否と同じ）。トークンの中身は出さない
+      assert.equal(fields.uid, null, name);
+      assert.equal(fields.reason, "registration_required", name);
+      assert.deepEqual(Object.keys(fields).filter((k) => !["uid", "groupId", "skyId", "reason"].includes(k)), [], name);
+    }
+  }
+});
+
+test("Callable（public-launch 1.7）: ログインの方式が読めないトークン（firebase の項目が無い・方式が文字列でない・トークンが無い）も、7本とも registration_required で拒否し、何も書かない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  const auths = [
+    authOf("alice", {}),
+    authOf("alice", { soratomoBeta: true }), // 1.14 期に通っていた形でも、方式が無ければ拒否（閉じる側に倒す）
+    authOf("alice", { firebase: {} }),
+    authOf("alice", { firebase: { sign_in_provider: 1 } }),
+    { uid: "alice" }, // トークンそのものが無い
+  ];
+  for (const auth of auths) {
+    for (const [name, data] of CALLABLES) {
+      await assert.rejects(
+        call(name, auth, data),
+        httpsError("permission-denied", "registration_required", {}),
+        `${name} ${JSON.stringify(auth.token)}`
+      );
+    }
+  }
+  await assertGateWroteNothing();
+});
+
+test("Callable（public-launch 1.1・1.6）: クレームの無い登録済みは、7本とも関門で止められない（拒否されるならドメインの理由で、registration_required でも flag_off でもない）", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice"] });
+  for (const [name, data] of CALLABLES) {
+    try {
+      await call(name, authOf("alice"), data);
+    } catch (err) {
+      const reason = err && err.details && err.details.reason;
+      assert.ok(reason !== "registration_required" && reason !== "flag_off", `${name}: 関門で止められた（${reason}）`);
+      assert.notEqual(err && err.code, "unauthenticated", name);
+    }
+  }
+  const logs = allLogs();
+  assert.ok(!logs.includes("registration_required"), "関門の拒否のログが出ていない");
+  assert.ok(!logs.includes("flag_off"), "1.14 期の拒否のログが出ていない");
+});
+
+/**
+ * 2人（どちらも同じトークンの形）で、同意・作成・参加・投稿・通報・再発行・抜けるを1回ずつ通す。
+ * @param {Object} token ID トークンの形（REGISTERED か CLAIMED）
+ */
+async function runHappyPath(token) {
+  const alice = authOf("alice", token);
+  const bob = authOf("bob", token);
+  for (const auth of [alice, bob]) {
+    assert.deepEqual(await call("soratomoAgreeGuideline", auth, { version: core.GUIDELINE_VERSION }), {
+      version: core.GUIDELINE_VERSION,
+    });
+  }
+  const created = await call("soratomoCreateGroup", alice, { name: "空の会", requestId: "r1" });
+  const { groupId } = created;
+  assert.deepEqual(await call("soratomoJoinGroup", bob, { code: created.inviteCode }), { groupId, alreadyMember: false });
+  assert.deepEqual(await call("soratomoCreateSky", bob, { groupId, skyId: "s1", width: 1080, height: 1440 }), {
+    skyId: "s1",
+    created: true,
+  });
+  assert.deepEqual(await call("soratomoReportSky", alice, { groupId, skyId: "s1", reason: "spam" }), { accepted: true });
+  assert.equal((await db.collection("soratomoReports").get()).size, 1);
+  const { inviteCode } = await call("soratomoRegenerateInviteCode", alice, { groupId });
+  assert.notEqual(inviteCode, created.inviteCode);
+  assert.deepEqual(await call("soratomoLeaveGroup", bob, { groupId }), { done: true, groupDeleted: false });
+  const members = await db.collection("soratomoGroups").doc(groupId).collection("members").get();
+  assert.deepEqual(members.docs.map((d) => d.id), ["alice"]);
+}
+
+test("Callable（public-launch 1.1・1.2）: クレームの無い登録済みの2人で、同意・作成・参加・投稿・通報・再発行・抜けるが通る", async () => {
+  await runHappyPath(REGISTERED);
+});
+
+test("Callable（public-launch 1.9）: クレームのある登録済み（1.14.x の人）も、今までどおり同意・作成・参加・投稿・通報・再発行・抜けるが通る", async () => {
+  await runHappyPath(CLAIMED);
+});
+
+// MARK: - 選択肢の名前の検査（public-launch 3.1）
+
+/**
+ * soratomo.js の本文の module.exports の前に1行足した写しを、偽物の読み込みを入れた間だけ読み込み、その exports を返す。
+ * soratomoCallable は公開していない（公開するのは関数の11本だけ）ので、本文に呼び出しを足して「読み込みの時点」の挙動を見る。
+ * @param {string} extraLine 足す1行
+ */
+function loadSoratomoWith(extraLine) {
+  const filename = path.join(__dirname, "soratomo.js");
+  const source = fs.readFileSync(filename, "utf8");
+  const marker = "\nmodule.exports = {";
+  assert.equal(source.split(marker).length, 2, "module.exports の位置が1つに決まる");
+  const probe = new Module(path.join(__dirname, "soratomo.probe.js"), module);
+  probe.filename = probe.id;
+  probe.paths = Module._nodeModulePaths(__dirname);
+  Module._load = fakeLoad;
+  try {
+    probe._compile(source.replace(marker, `\n${extraLine}\n${marker}`), probe.filename);
+  } finally {
+    Module._load = originalLoad;
+  }
+  return probe.exports;
+}
+
+test("選択肢の名前の検査（public-launch 3.2）: soratomoCallable に知らない選択肢（1.14 期の requireFlag を含む）を渡すと、読み込みの時点で例外になる", () => {
+  // 対照: 知っている選択肢だけなら、写しも読み込めて同じ11本を公開する（下の例外が、写しの読み込みの失敗でないことの確かめ）
+  const probed = loadSoratomoWith('soratomoCallable("soratomoProbe", async () => ({}), { allowAnonymous: false });');
+  assert.deepEqual(Object.keys(probed).sort(), Object.keys(fns).sort());
+
+  for (const [options, unknownName] of [
+    ["{ requireFlag: false }", "requireFlag"],
+    ["{ requireFlag: true }", "requireFlag"],
+    ["{ allowAnonymus: true }", "allowAnonymus"],
+  ]) {
+    assert.throws(
+      () => loadSoratomoWith(`soratomoCallable("soratomoProbe", async () => ({}), ${options});`),
+      (err) => err instanceof Error && err.message.includes(unknownName),
+      options
+    );
+  }
 });
 
 // MARK: - Callable: 作成・参加・再発行（8.1）
@@ -571,12 +728,12 @@ test("抜ける: ログインが無ければ unauthenticated で、何も消さ�
   assert.deepEqual(leaveOkLogs(), []);
 });
 
-test("抜ける: クレームの無い人（匿名を含む）・false の人・利用停止中の人・ガイドラインに未同意の人も抜けられ、応答は { done, groupDeleted } だけ", async () => {
+test("抜ける: クレームの無い登録済み・クレームが false の人・利用停止中の人・ガイドラインに未同意の人も抜けられ、応答は { done, groupDeleted } だけ（匿名は関門で拒否する・public-launch 3.1）", async () => {
   const cases = [
-    ["クレーム無し（匿名）", { firebase: { sign_in_provider: "anonymous" } }, async () => {}],
-    ["クレームが false", { soratomoBeta: false }, async () => {}],
-    ["利用停止中", ON, (ref) => ref.update({ suspendedAt: Timestamp.now() })],
-    ["ガイドラインに未同意", ON, (ref) => ref.set({ groupCount: 1 })],
+    ["クレーム無し（登録済み）", REGISTERED, async () => {}],
+    ["クレームが false", { ...REGISTERED, soratomoBeta: false }, async () => {}],
+    ["利用停止中", REGISTERED, (ref) => ref.update({ suspendedAt: Timestamp.now() })],
+    ["ガイドラインに未同意", REGISTERED, (ref) => ref.set({ groupCount: 1 })],
   ];
   for (const [name, token, prepare] of cases) {
     await seedDeletionScene();
@@ -616,7 +773,7 @@ test("抜ける: 本文に他人の uid を書いても、抜けるのは認証�
   const groupRef = db.collection("soratomoGroups").doc(DEL_GROUP);
 
   // メンバーでない carol が alice を指定しても、何も変わらない（not_member も返さない）
-  assert.deepEqual(await call("soratomoLeaveGroup", authOf("carol", {}), { groupId: DEL_GROUP, uid: "alice" }), { done: true, groupDeleted: false });
+  assert.deepEqual(await call("soratomoLeaveGroup", authOf("carol"), { groupId: DEL_GROUP, uid: "alice" }), { done: true, groupDeleted: false });
   assert.deepEqual(await delGroupRoles(), { alice: "owner", bob: "member" });
   assert.equal((await groupRef.get()).get("memberCount"), 2);
   assert.equal(storageFiles.size, 4);
@@ -684,7 +841,8 @@ const MEMBERS = ["poster", "a", "b", "c", "d", "e", "f"];
 
 /**
  * 宛先の分類を一通り含む場面を入れる。
- * a・f: 送る / b: フラグOFF / c: 通知設定OFF / d: 投稿者をブロック / e: トークン無し / poster: 投稿者（宛先から除く）
+ * a・b・f: 送る / c: 通知設定OFF / d: 投稿者をブロック / e: トークン無し / poster: 投稿者（宛先から除く）
+ * b だけクレームが無い（1.14 期はフラグOFFで送らなかった。public-launch 1.3 から、クレームに関係なく送る）。
  */
 async function seedScene({ posterName = "ソラミ" } = {}) {
   await seedGroup({ groupId: "g1", ownerId: "poster", inviteCode: "SKYAAAAA", memberIds: MEMBERS, name: "ひみつの空の会", lastActivityAt: OLD });
@@ -700,7 +858,7 @@ async function seedScene({ posterName = "ソラミ" } = {}) {
   const batch = db.batch();
   for (const [uid, data] of Object.entries(users)) batch.set(db.collection("users").doc(uid), data);
   await batch.commit();
-  claims = new Map(MEMBERS.map((uid) => [uid, uid === "b" ? {} : ON]));
+  claims = new Map(MEMBERS.map((uid) => [uid, uid === "b" ? {} : BETA_CLAIMS]));
 }
 
 /** 投稿の文書を作り、そのスナップショットでトリガーのハンドラーを呼ぶ。 */
@@ -723,31 +881,31 @@ function summaryLog() {
   return found[0].args.find((a) => a && typeof a === "object" && "sendFailed" in a);
 }
 
-test("トリガー: 投稿者を除いたメンバーを分類し、送れる宛先だけへ、まとめ指定つきで送る", async () => {
+test("トリガー: 投稿者を除いたメンバーを分類し、送れる宛先だけへ、まとめ指定つきで送る（クレームの無い宛先にも送る・宛先の絞り込みで Auth を読まない）", async () => {
   await seedScene();
   await postSky("s1");
 
-  assert.deepEqual(record.sends.map((s) => s.uid).sort(), ["a", "f"]);
+  assert.deepEqual(record.sends.map((s) => s.uid).sort(), ["a", "b", "f"]);
   for (const s of record.sends) {
     assert.equal(s.token, `tok-${s.uid}`);
     assert.deepEqual(s.notification, { title: "ひみつの空の会", body: "ソラミさんが空を投稿しました「夕焼けがきれい」" });
     assert.deepEqual(s.data, { type: "soratomoPost", groupId: "g1", postId: "s1" });
     assert.deepEqual(s.grouping, { threadId: "soratomo-g1", collapseId: "soratomo-g1" });
   }
-  assert.equal(record.getUsersCalls.length, 1, "フラグはまとめて1回で確かめる");
-  assert.deepEqual([...record.getUsersCalls[0]].sort(), ["a", "b", "c", "d", "e", "f"]);
+  assert.equal(record.getUsersCalls.length, 0, "宛先のクレームを Auth に問い合わせない（public-launch 1.3）");
 
+  // 集計の形は 1.14 期と同じ（flagOff の項目は残し、いつも 0）
   assert.deepEqual(summaryLog(), {
     groupId: "g1",
     skyId: "s1",
-    sent: 2,
+    sent: 3,
     throttled: 0,
     duplicate: 0,
     noToken: 1,
     sendFailed: 0,
     prefOff: 1,
     blocked: 1,
-    flagOff: 1,
+    flagOff: 0,
   });
   const logs = allLogs();
   for (const secret of ["ひみつの空の会", "夕焼けがきれい", "ソラミ", "tok-", "SKYAAAAA"]) {
@@ -758,18 +916,18 @@ test("トリガー: 投稿者を除いたメンバーを分類し、送れる宛
 test("トリガー: 同じ投稿の再配信は重複として送らず、5分以内の次の投稿は間引く", async () => {
   await seedScene();
   await postSky("s1");
-  assert.equal(record.sends.length, 2);
+  assert.equal(record.sends.length, 3);
 
   record.sends = [];
   record.logs = [];
   await runTrigger("s1");
   assert.equal(record.sends.length, 0);
-  assert.equal(summaryLog().duplicate, 2);
+  assert.equal(summaryLog().duplicate, 3);
 
   record.logs = [];
   await postSky("s2");
   assert.equal(record.sends.length, 0);
-  assert.equal(summaryLog().throttled, 2);
+  assert.equal(summaryLog().throttled, 3);
 });
 
 test("トリガー: 1人の送信の失敗で残りを止めず、例外を投げずに終える", async () => {
@@ -779,21 +937,24 @@ test("トリガー: 1人の送信の失敗で残りを止めず、例外を投�
     return "sent";
   };
   await postSky("s1");
-  assert.deepEqual(record.sends.map((s) => s.uid).sort(), ["a", "f"]);
+  assert.deepEqual(record.sends.map((s) => s.uid).sort(), ["a", "b", "f"]);
   const summary = summaryLog();
-  assert.equal(summary.sent, 1);
+  assert.equal(summary.sent, 2);
   assert.equal(summary.sendFailed, 1);
   assert.equal((await db.collection("soratomoGroups").doc("g1").collection("skies").doc("s1").get()).exists, true, "投稿は消さない");
 });
 
-test("トリガー: フラグの確認に失敗しても例外を投げず、だれにも送らない", async () => {
+test("トリガー: Auth が失敗していても、宛先の絞り込みは Auth を読まないので送る（public-launch 1.3）", async () => {
   await seedScene();
   getUsersImpl = async () => {
     throw new Error("auth の失敗");
   };
   await postSky("s1");
-  assert.equal(record.sends.length, 0);
-  assert.equal(summaryLog().flagOff, 6);
+  assert.deepEqual(record.sends.map((s) => s.uid).sort(), ["a", "b", "f"]);
+  assert.equal(record.getUsersCalls.length, 0);
+  const summary = summaryLog();
+  assert.equal(summary.sent, 3);
+  assert.equal(summary.flagOff, 0);
 });
 
 test("トリガー: グループの最新の活動時刻を、投稿の作成日時との大きいほうにする", async () => {
@@ -834,7 +995,7 @@ test("トリガー: グループが無ければ、例外を投げずに何もし
   const ghost = db.collection("soratomoGroups").doc("ghost");
   await ghost.collection("members").doc("a").set({ uid: "a", role: "member", joinedAt: Timestamp.now() });
   await db.collection("users").doc("a").set({ fcmToken: "tok-a" });
-  claims = new Map([["a", ON]]);
+  claims = new Map([["a", BETA_CLAIMS]]);
   await ghost.collection("skies").doc("s1").set({ authorId: "poster", createdAt: Timestamp.now() });
   await runTrigger("s1", "ghost");
   assert.equal(record.sends.length, 0);
@@ -976,7 +1137,7 @@ async function seedSweepScene() {
   await db.collection("soratomoUsers").doc("erin").set({ groupCount: 0, guidelineVersion: core.GUIDELINE_VERSION });
   await db.collection("soratomoUsers").doc("frank").set({ groupCount: 0, suspendedAt: Timestamp.now() });
   claims = new Map([
-    ["alice", ON],
+    ["alice", BETA_CLAIMS],
     ["erin", {}],
   ]);
 }
@@ -1111,7 +1272,7 @@ test("定期実行の仕事C: 確定から30分を過ぎた印を sweep で終�
   await seedPendingLeave({ uid: "bob", groupId: "gl1", owner: "alice", code: "SKYLEAVA", ageMs: 31 * MINUTE });
   await seedPendingLeave({ uid: "carl", groupId: "gl2", owner: "alice", code: "SKYLEAVB", ageMs: 5 * MINUTE });
   await db.collection("users").doc("bob").set({ displayName: "そらのボブ" });
-  claims = new Map([["alice", ON], ["bob", ON], ["carl", {}]]); // 仕事Aに消されないよう、アカウントはある
+  claims = new Map([["alice", BETA_CLAIMS], ["bob", BETA_CLAIMS], ["carl", {}]]); // 仕事Aに消されないよう、アカウントはある
 
   await runHousekeeping();
 
@@ -1141,7 +1302,7 @@ test("定期実行の仕事C: 確定から30分を過ぎた印を sweep で終�
 
 test("定期実行の仕事C（陽性対照C2のサーバー版）: 入り直した後の古い印は、印だけを消してメンバーを外さない（stale_marker）", async () => {
   await seedPendingLeave({ uid: "bob", groupId: "gl1", owner: "alice", code: "SKYLEAVA", ageMs: 31 * MINUTE, member: true });
-  claims = new Map([["alice", ON], ["bob", ON]]);
+  claims = new Map([["alice", BETA_CLAIMS], ["bob", BETA_CLAIMS]]);
 
   await runHousekeeping();
 
@@ -1160,7 +1321,7 @@ test("定期実行の仕事C（陽性対照C2のサーバー版）: 入り直し
 
 test("定期実行の仕事C: 24時間を過ぎて終わらない（失敗した）ものに overdue と sweep_item_failed を出し、印と写しを残す。次の実行で終える", async () => {
   await seedPendingLeave({ uid: "bob", groupId: "gl1", owner: "alice", code: "SKYLEAVA", ageMs: 25 * 60 * MINUTE });
-  claims = new Map([["alice", ON], ["bob", ON]]);
+  claims = new Map([["alice", BETA_CLAIMS], ["bob", BETA_CLAIMS]]);
   const originalDelete = fakeStorageGateway.deleteFile;
   fakeStorageGateway.deleteFile = async () => {
     throw new Error("偽物: 画像の削除の失敗");
@@ -1400,7 +1561,7 @@ test("要確認6: Callable で作った投稿でも、新着通知の宛先・�
   record.logs = [];
   await runTrigger("s1");
 
-  assert.deepEqual(record.sends.map((s) => s.uid).sort(), ["a", "f"]);
+  assert.deepEqual(record.sends.map((s) => s.uid).sort(), ["a", "b", "f"]);
   for (const s of record.sends) {
     assert.equal(s.token, `tok-${s.uid}`);
     assert.deepEqual(s.notification, { title: "ひみつの空の会", body: "ソラミさんが空を投稿しました「夕焼けがきれい」" });
@@ -1410,14 +1571,14 @@ test("要確認6: Callable で作った投稿でも、新着通知の宛先・�
   assert.deepEqual(summaryLog(), {
     groupId: "g1",
     skyId: "s1",
-    sent: 2,
+    sent: 3,
     throttled: 0,
     duplicate: 0,
     noToken: 1,
     sendFailed: 0,
     prefOff: 1,
     blocked: 1,
-    flagOff: 1,
+    flagOff: 0,
   });
   const createdAt = (await db.collection("soratomoGroups").doc("g1").collection("skies").doc("s1").get()).get("createdAt");
   assert.ok(createdAt instanceof Timestamp, "Callable の作成日時もサーバーの時刻（Timestamp）");

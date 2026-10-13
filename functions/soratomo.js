@@ -2,15 +2,15 @@
 // そらもよう Cloud Functions — 「そらとも」の配線（Callable 8本・トリガー2本・定期実行1本）⭐️☁️
 //
 // - soratomoCreateGroup・soratomoJoinGroup・soratomoRegenerateInviteCode（tasks 8.1）:
-//   ログインと soratomoBeta のクレームを確かめ、soratomoStore.js のトランザクションを呼び、
+//   ログインと、登録済みのアカウント（匿名でない）かを確かめ、soratomoStore.js のトランザクションを呼び、
 //   ドメインのエラー（SoratomoDomainError）を理由つきの HttpsError（code と details.reason）に写す。
 //   グループ名の検証と招待コードの正規化は、トランザクション（soratomoStore.js）の入口でも必ず通る。
 // - soratomoCreateSky・soratomoReportSky・soratomoAgreeGuideline（release-gate 4.2）: 投稿の作成・通報・
-//   ガイドラインへの同意。作りは上の3本と同じ（クレームを確かめ、トランザクションを呼ぶ）。
+//   ガイドラインへの同意。作りは上の3本と同じ（登録済みかを確かめ、トランザクションを呼ぶ）。
 // - soratomoDeleteMyData（release-gate 4.1）: 退会の前に、本人のそらとものデータを soratomoDeletion.js の
-//   共通の削除で消す。クレームは確かめない（ログインは求める）。
+//   共通の削除で消す。匿名も受け付ける（ログインは求める）。
 // - soratomoLeaveGroup（leave-group 3.1）: 本人が1つのグループだけを抜ける。soratomoDeletion.js の
-//   leaveSoratomoGroup（片づけ中の印つき）で、そのグループの本人のデータを消す。クレームは確かめない（ログインは求める）。
+//   leaveSoratomoGroup（片づけ中の印つき）で、そのグループの本人のデータを消す。関門はほかの Callable と同じ（匿名は拒否）。
 // - onSoratomoSkyCreated（tasks 8.2）: グループの新しい投稿を、投稿者以外のメンバーへ知らせる。
 //   既存の onPostCreated とは名前も対象（soratomoGroups/{groupId}/skies/{skyId}）も別。
 // - onSoratomoReportCreated（release-gate 4.3）: 通報の記録を、開発者の Discord（フィードバックとは別の送り先）へ
@@ -22,6 +22,9 @@
 // index.js の末尾の Object.assign(exports, require("./soratomo")) で公開する（tasks 8.3）。
 // ここで公開するのは Cloud Functions の 11 本だけにする（ほかの値を exports に混ぜない）。
 //
+// ⚠️ 関門（1.15.0 の一般公開・public-launch 3.2）: Callable はログインと「登録済みのアカウント（匿名でない）」を求め、
+//    先行公開のクレームは読まない。匿名を通すのは退会の削除だけ（allowAnonymous）。ルールの isSoratomoUser() と
+//    アプリの SoratomoFeatureGate と同じ条件にしておく（3か所を同時に変える）。新着通知の宛先もクレームで絞らない。
 // ⚠️ ログと個人情報（要件15.2・15.3）: ログに出すのは uid・groupId・skyId・結果の理由・件数だけ。
 //    グループ名・表示名・キャプション・招待コード・通知トークン・エラーの本文（文書のパスに招待コードが
 //    含まれることがある）は出さない。
@@ -59,7 +62,8 @@ const storage = createStorageGateway();
 
 /** ドメインのエラーの理由 → HttpsError の code（design.md の API Contract）。ここに無い理由は internal になる。 */
 const REASON_TO_CODE = Object.freeze({
-  flag_off: "permission-denied",
+  // public-launch（関門: 匿名・ログインの方式が読めないトークン）
+  registration_required: "permission-denied",
   invalid_name: "invalid-argument",
   invalid_format: "invalid-argument",
   not_found: "not-found",
@@ -81,17 +85,20 @@ const REASON_TO_CODE = Object.freeze({
 });
 
 /**
- * ログイン（匿名を含む）と、requireFlag のときは soratomoBeta のクレームを確かめ、呼び出し元の uid を返す（要件1.6）。
+ * ログインと、allowAnonymous でなければ登録済みのアカウント（匿名でない）かを確かめ、呼び出し元の uid を返す
+ * （public-launch 要件1.6・1.7）。先行公開のクレームは読まない（1.14.x のクレームのある人は、登録済みなのでそのまま通る）。
+ * - 未ログイン → unauthenticated（今までどおり）
+ * - allowAnonymous が true でなく、isRegisteredToken が偽（匿名・方式の読めないトークン）→ permission-denied・registration_required
  * @param {import("firebase-functions/v2/https").CallableRequest} request
- * @param {{ requireFlag: boolean }} options
+ * @param {{ allowAnonymous: boolean }} options
  * @returns {string}
  */
-function requireSoratomoUser(request, { requireFlag }) {
+function requireSoratomoUser(request, { allowAnonymous }) {
   if (!request.auth || !request.auth.uid) {
     throw new HttpsError("unauthenticated", "ログインが必要です");
   }
-  if (requireFlag && (!request.auth.token || request.auth.token.soratomoBeta !== true)) {
-    throw new HttpsError("permission-denied", "flag_off", { reason: "flag_off" });
+  if (allowAnonymous !== true && !core.isRegisteredToken(request.auth.token)) {
+    throw new HttpsError("permission-denied", "registration_required", { reason: "registration_required" });
   }
   return request.auth.uid;
 }
@@ -124,22 +131,30 @@ function requestIdFields(data) {
   return fields;
 }
 
+/** soratomoCallable が受け付ける選択肢の名前。ここに無い名前は、読み込みの時点で止める（soratomoCallable）。 */
+const CALLABLE_OPTION_NAMES = Object.freeze(["allowAnonymous", "runtime", "respond", "okLogFields"]);
+
 /**
- * Callable の本体を包む: ログインとクレームの確認 → 本体 → 結果のログ。失敗は HttpsError に写して投げ直す。
+ * Callable の本体を包む: ログインと登録済みの確認 → 本体 → 結果のログ。失敗は HttpsError に写して投げ直す。
+ * 知らない選択肢の名前（1.14 期のクレームの確認の選択肢を含む）を受け取ったら、例外を投げる。Callable はモジュールの最上位で
+ * 作るので、消し忘れ・書き間違いは読み込みの時点で（テストもデプロイも）止まる（public-launch 3.2）。
  * @param {string} name ログに出す Callable の名前
  * @param {(uid: string, data: Object) => Promise<Object>} body
- * @param {{ requireFlag?: boolean, runtime?: Object, respond?: (result: Object) => Object,
+ * @param {{ allowAnonymous?: boolean, runtime?: Object, respond?: (result: Object) => Object,
  *   okLogFields?: (result: Object, data: Object) => Object }} [options]
- *   - requireFlag: soratomoBeta のクレームを確かめるか（既定 true）。false にしてよいのは退会の削除
- *     （soratomoDeleteMyData）と抜ける（soratomoLeaveGroup）だけ。フラグを取り消された人と、一度も ON になっていない人の
- *     データも消すため（要件1.4・leave-group 要件2.6・9.1）。false でもログイン（匿名を含む）は求める
+ *   - allowAnonymous: 匿名のログインも通すか（既定 false）。true にしてよいのは退会の削除（soratomoDeleteMyData）だけ。
+ *     true でもログインは求める
  *   - runtime: onCall の設定（timeoutSeconds・memory など）。リージョンは REGION に固定する
  *   - respond: 本体の結果から、利用者へ返す応答を作る（既定はそのまま返す）
  *   - okLogFields: 成功のログに uid と一緒に出す項目（既定は groupId）。内部IDと件数だけにする（要件14.2・14.3）
  */
 function soratomoCallable(name, body, options = {}) {
+  const unknownOptions = Object.keys(options).filter((key) => !CALLABLE_OPTION_NAMES.includes(key));
+  if (unknownOptions.length > 0) {
+    throw new Error(`soratomoCallable(${name}): 知らない選択肢 ${unknownOptions.join(", ")}（受け付けるのは ${CALLABLE_OPTION_NAMES.join(", ")}）`);
+  }
   const {
-    requireFlag = true,
+    allowAnonymous = false,
     runtime = {},
     respond = (result) => result,
     okLogFields = (result, data) => ({ groupId: result.groupId || data.groupId || null }),
@@ -148,7 +163,7 @@ function soratomoCallable(name, body, options = {}) {
     let uid = null;
     const data = request.data && typeof request.data === "object" ? request.data : {};
     try {
-      uid = requireSoratomoUser(request, { requireFlag });
+      uid = requireSoratomoUser(request, { allowAnonymous });
       const result = await body(uid, data);
       logger.info(`${name}: ok`, { uid, ...okLogFields(result, data) });
       return respond(result);
@@ -243,8 +258,9 @@ const DELETE_BUDGET_MS = 45_000;
 
 /**
  * 本人のそらとものデータを消す。{} → { done }（アプリは退会の前に、done が true になるまで呼ぶ）。
- * - 機能フラグのクレームを確かめない（requireFlag: false）。フラグを取り消された人と、一度も ON になっていない人
- *   （匿名を含む）のデータも消すため（要件1.4）。そらともを使っていない人は、何も書かずに done: true（要件3.8）
+ * - 匿名のログインも受け付ける（allowAnonymous: true。Callable で匿名を通すのはここだけ）。匿名の人と、一度も
+ *   そらともを使っていない人のデータも消すため（要件1.4・public-launch 要件1.8）。そらともを使っていない人は、
+ *   何も書かずに done: true（要件3.8）
  * - 消す相手は認証の uid だけ。要求の本文は読まない（uid を書かれても使わない・要件3.5）
  * - 1回の予算は45秒。終わらなければ done: false を返す。所属の写しが残るので、次の呼び出しが続ける（要件3.3）
  * - 応答は done だけ。件数は利用者へ返さず、ログに内部IDと件数だけで残す（要件14.3・14.4・design の Monitoring）
@@ -258,8 +274,8 @@ const soratomoDeleteMyData = soratomoCallable(
       { uid, trigger: "self", deadlineMs: Date.now() + DELETE_BUDGET_MS }
     ),
   {
-    // クレームを確かめない理由: フラグを取り消された人・一度も ON になっていない人のデータも消すため（要件1.4）
-    requireFlag: false,
+    // 匿名も通す理由: 匿名の人と、一度もそらともを使っていない人のデータも消すため（要件1.4・public-launch 要件1.8）
+    allowAnonymous: true,
     runtime: { timeoutSeconds: 120, memory: "512MiB" },
     respond: (totals) => ({ done: totals.done }),
     okLogFields: (totals) => ({
@@ -277,8 +293,8 @@ const soratomoDeleteMyData = soratomoCallable(
 
 /**
  * 本人が1つのグループを抜ける。{ groupId } → { done, groupDeleted }（アプリは done が true になるまで呼ぶ・leave-group 要件4.1）。
- * - 機能フラグのクレームを確かめない（requireFlag: false）。フラグの状態に関わらず、自分のデータを消す方向の操作を
- *   受け付けるため（要件2.6・9.1）。ログイン（匿名を含む）は soratomoCallable の関門が求める（要件9.2）
+ * - 関門はほかの Callable と同じ（選択肢を渡さない＝登録済みを求め、匿名は拒否する・public-launch 3.2）。
+ *   クレームは確かめない。匿名はグループに参加できないので、抜ける相手もいない（要件9.2）
  * - 抜ける相手は認証の uid だけ。要求の本文からは groupId だけを読む（uid を書かれても使わない・要件3.13）
  * - groupId が自動IDの形でなければ invalid_input（soratomoCreateSky と同じ型）。共通の削除が投げる TypeError を
  *   internal にしないため、呼ぶ前に確かめる
@@ -300,8 +316,6 @@ const soratomoLeaveGroup = soratomoCallable(
     );
   },
   {
-    // クレームを確かめない理由: フラグの状態に関わらず、自分のデータを消す方向の操作を受け付けるため（要件2.6・9.1）
-    requireFlag: false,
     runtime: { timeoutSeconds: 120, memory: "512MiB" },
     respond: (result) => ({ done: result.done, groupDeleted: result.kind === "delete_group" }),
     okLogFields: (result, data) => ({
@@ -319,26 +333,6 @@ const soratomoLeaveGroup = soratomoCallable(
 );
 
 // MARK: - 新着投稿の通知（8.2）
-
-/**
- * 宛先の soratomoBeta のクレームを、getUsers でまとめて1回で確かめる（要件1.7）。
- * 失敗したら全員を「フラグOFF」とみなす（送らない側に倒す。集計の flagOff に出る）。
- * @param {string[]} uids 最大19人（メンバーの上限20人から投稿者を除く）
- * @returns {Promise<Set<string>>} クレームが true の uid
- */
-async function fetchFlaggedUids(uids) {
-  const flagged = new Set();
-  if (uids.length === 0) return flagged;
-  try {
-    const { users } = await getAuth().getUsers(uids.map((uid) => ({ uid })));
-    for (const user of users) {
-      if (user.customClaims && user.customClaims.soratomoBeta === true) flagged.add(user.uid);
-    }
-  } catch (err) {
-    logger.warn("onSoratomoSkyCreated: フラグの確認に失敗", { errorName: err && err.name, errorCode: err && err.code });
-  }
-  return flagged;
-}
 
 /**
  * Firestore の時刻をミリ秒で読む（Timestamp 以外は null）。
@@ -366,7 +360,8 @@ async function bumpLastActivity(groupRef, createdAt) {
 
 /**
  * 新しいそらとも投稿を、投稿者以外のメンバーへ知らせる（要件9.1〜9.15）。
- * 分類の順は「フラグOFF→通知設定OFF→ブロック→トークン無し→（枠の確保で）重複か間引き→送信」。
+ * 分類の順は「通知設定OFF→ブロック→トークン無し→（枠の確保で）重複か間引き→送信」。宛先をクレームで絞らない
+ * （Auth を読まない・public-launch 要件1.3）。集計の flagOff の項目は 1.14 期のログと同じ形のために残り、いつも0。
  * 1人の失敗で残りを止めず、例外を投げずに終える（再試行で二重に送らないため）。投稿は消さない。
  * @param {{ params: { groupId: string, skyId: string }, data?: FirebaseFirestore.DocumentSnapshot }} event
  */
@@ -391,7 +386,6 @@ async function handleSoratomoSkyCreated(event) {
       posterName: posterSnap && posterSnap.exists ? posterSnap.get("displayName") : null,
       caption: sky.caption,
     });
-    const flagged = await fetchFlaggedUids(recipientIds);
     const userSnaps =
       recipientIds.length > 0 ? await db.getAll(...recipientIds.map((uid) => db.collection("users").doc(uid))) : [];
 
@@ -404,7 +398,7 @@ async function handleSoratomoSkyCreated(event) {
       recipientIds.map(async (uid, i) => {
         try {
           const userData = userSnaps[i].exists ? userSnaps[i].data() : null;
-          const kind = core.classifyRecipient({ hasFlag: flagged.has(uid), userData, posterId });
+          const kind = core.classifyRecipient({ userData, posterId });
           if (kind !== "eligible") return kind;
           const slot = await store.claimNotifySlot(db, { groupId, uid, skyId, nowMs });
           if (slot !== "send") return slot;

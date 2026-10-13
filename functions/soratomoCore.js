@@ -1,7 +1,7 @@
 //
 // そらもよう Cloud Functions — 「そらとも」（友達グループで空を共有）の純粋関数 ⭐️
 //
-// 招待コードの生成と正規化・グループ名の検証・通知文・宛先の分類・間引きの判定・集計を置く。
+// 招待コードの生成と正規化・グループ名の検証・関門の判定・通知文・宛先の分類・間引きの判定・集計を置く。
 // ここには firebase-admin / firebase-functions に触れない純粋関数だけを置き、node:test で検証する
 // （soratomoCore.test.js）。トランザクション（soratomoStore.js）と配線（soratomo.js）がこれを使う。
 //
@@ -177,6 +177,23 @@ function buildNotification({ groupName, posterName, caption }) {
   return { title: groupName, body };
 }
 
+// MARK: - 関門（public-launch 要件1.7）
+
+/**
+ * 検証済みの ID トークンが、登録済みのアカウント（匿名でない）のものか。Callable の関門（soratomo.js の
+ * requireSoratomoUser）が使う。ルールの isSoratomoUser()（firebase.sign_in_provider が "anonymous" でない）と同じ規則。
+ * - firebase.sign_in_provider が文字列で、"anonymous" でないときだけ真
+ * - トークンが無い・firebase の項目が無い・方式が文字列でないときは偽（閉じる側に倒す。本番のトークンには必ずある）
+ * - クレーム（先行公開のクレームを含む）は読まない
+ * @param {{ firebase?: { sign_in_provider?: unknown } }|null|undefined} token request.auth.token
+ * @returns {boolean}
+ */
+function isRegisteredToken(token) {
+  const firebase = token && typeof token === "object" ? token.firebase : undefined;
+  const provider = firebase && typeof firebase === "object" ? firebase.sign_in_provider : undefined;
+  return typeof provider === "string" && provider !== "anonymous";
+}
+
 // MARK: - 宛先の判定
 
 /**
@@ -191,15 +208,15 @@ function soratomoPrefEnabled(userData) {
 }
 
 /**
- * 受信者1人を分類する（要件1.7・9.13・9.15）。
- * 順序は「フラグOFF → 通知設定OFF → ブロック → トークン無し」。集計（9.11）で理由を1つに決めるため、
+ * 受信者1人を分類する（要件9.13・9.15）。
+ * 順序は「通知設定OFF → ブロック → トークン無し」。集計（9.11）で理由を1つに決めるため、
  * 複数に当てはまる受信者は先の理由で数える。
- * @param {{ hasFlag: boolean, userData: Object|null|undefined, posterId: string }} args
- *   hasFlag は受信者に soratomoBeta のクレームがあるか（true のときだけ ON）
- * @returns {"eligible"|"flag_off"|"pref_off"|"blocked"|"no_token"}
+ * 宛先のクレームは見ない（1.15.0 の一般公開で、クレームで宛先を絞るのをやめた・public-launch 要件1.3）。
+ * 匿名の宛先を除く分岐も持たない（匿名はグループに参加できないので、メンバーにいない）。
+ * @param {{ userData: Object|null|undefined, posterId: string }} args
+ * @returns {"eligible"|"pref_off"|"blocked"|"no_token"}
  */
-function classifyRecipient({ hasFlag, userData, posterId }) {
-  if (hasFlag !== true) return "flag_off";
+function classifyRecipient({ userData, posterId }) {
   if (!soratomoPrefEnabled(userData)) return "pref_off";
   // ブロックの規則は index.js の isBlocked と同じ（配列のときだけ見る）。
   if (userData && Array.isArray(userData.blockedUserIds) && userData.blockedUserIds.includes(posterId)) {
@@ -254,6 +271,7 @@ const OUTCOME_TO_SUMMARY_KEY = {
   invalid_token: "sendFailed",
   pref_off: "prefOff",
   blocked: "blocked",
+  // 1.15.0 から classifyRecipient は flag_off を返さない（集計の flagOff はいつも0）。1.14 期のログと同じ形で読めるように残す
   flag_off: "flagOff",
 };
 
@@ -569,6 +587,7 @@ module.exports = {
   normalizeInviteCode,
   validateGroupName,
   buildNotification,
+  isRegisteredToken,
   soratomoPrefEnabled,
   classifyRecipient,
   decideThrottle,
