@@ -736,12 +736,19 @@
 
 - [ ] 13. App Store Connect を準備し、公開判断を記録する
 
-- [ ] 13.1 版を作り、リリースノートを入れる（段3-1・ユーザーのGOを取ってから実行）
+- [x] 13.1 版を作り、リリースノートを入れる（段3-1・ユーザーのGOを取ってから実行）
   - 前提: 12.2
   - リリースノート（ASC の「このバージョンの最新情報」）の草案を利用者に聞き、チャットで清書する。`fastlane/metadata/ja/release_notes.txt` に入れ、コードポイントで検査して、絵文字・異体字セレクタ（U+FE0F を含む）・私用領域の文字・`PLACEHOLDER` が無いことを確かめる
   - 提出の前の ASC を読む（GO）: 公開中は 1.14.0（READY_FOR_SALE）、1.15.0 の版は無く、審査中・編集中の版も無い。build N は VALID で期限切れでない
   - `scripts/appstore-release.sh prepare --version 1.15.0 --build <N>`（GO）。`prepare` は成功と出てもビルドを紐付けないことがあるので、`scripts/asc_ensure_build.py --version 1.15.0 --build <N>` で読み返して紐付けを保証する。リリースノートを API で読み返し、手元のファイルとバイトで一致することを確かめる
   - _Requirements: 12.1, 12.5_
+  - 結果（2026-10-13 19:23〜19:33・ASC の読み取り GO 19:30・prepare の GO 19:32）:
+    - リリースノート: 利用者が 3 案から **A（機能＋参加・抜ける）** を選んだ（19:30・AskUserQuestion）。本文は 4 行・373 バイト（末尾の改行込み）・sha256 `4bd82c23…`。コードポイントで検査して、絵文字・異体字セレクタ（U+FE00〜U+FE0F・U+E0100〜）・私用領域・ZWJ・制御文字・`PLACEHOLDER` は 0 件（かな・漢字・改行のほかは `、` `。` `「` `」` の 4 種だけ）。検査器の陽性対照: U+FE0F 単体・☀️（U+2600＋U+FE0F）・🔖・U+E000 をそれぞれ検出した
+    - 提出の前の ASC（GET だけ・19:30:31）: 1.14.0＝`READY_FOR_SALE`（`AFTER_APPROVAL`）・1.15.0 の版は無し・編集中／審査中／公開待ちの版は無し・build 113 は `VALID` で期限切れでない（期限 2027-01-11）
+    - prepare（19:32:19〜19:32:48・exit 0）: deliver が版 1.15.0 を作り、ja の最新情報を入れた。**ビルドの紐付けは今回も空**（読み返しで「なし」）→ `asc_ensure_build.py` が `PATCH relationships/build`（HTTP 204）→ 読み返しで build 113 を確認。マニフェスト `fastlane/.release-manifest` は 1.15.0／113・本文の sha256 `4bd82c23…`
+    - 読み返し（19:33:14）: 版 1.15.0＝`PREPARE_FOR_SUBMISSION`・build 113。ASC の whatsNew は 372 バイトで、手元（373 バイト）と**末尾の改行 1 バイトを除いてバイト一致**（ASC が末尾の改行を落とす）
+    - 同じ読み返しで、1.15.0 の ja のサポート URL が `https://sites.google.com/view/soramoyou-app/お問い合わせ`（ASC は百分率符号化で返す）と分かった。13.4 で開いて確かめる
+    - ⚠️ submit はマニフェストと手元の `release_notes.txt` を照合するので、14.1 まで `release_notes.txt` を変えない
 
 - [ ] 13.2 スクリーンショットを1.15.0の版にだけ入れる（段3-2・利用者の操作）
   - 前提: 13.1
