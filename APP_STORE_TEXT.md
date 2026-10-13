@@ -105,7 +105,15 @@
 ---
 
 ## プライバシーポリシーURL
-https://sites.google.com/view/soramoyou-app/%E3%83%9B%E3%83%BC%E3%83%A0
+https://soramoyou-ios.web.app/privacy/
+
+## プライバシーの選択URL（privacyChoicesUrl）
+https://soramoyou-ios.web.app/privacy/
+
+> 注記（2026-10-13）: 1.15.0 の審査提出時点まで、ASC の `privacyPolicyUrl` と `privacyChoicesUrl` は
+> どちらも Google サイトの「利用規約」ページを指していた（ASC の API で現物を確認・公開中と審査中の 2 つの appInfo とも）。
+> 同日に上記の hosting 版（正式なポリシー）へ直した。
+> Google サイトのホームと利用規約のページにも、正式な版への案内を置いた。
 
 ## サポートURL
 https://sites.google.com/view/soramoyou-app/%E5%88%A9%E7%94%A8%E8%A6%8F%E7%B4%84

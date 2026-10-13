@@ -81,6 +81,11 @@ https://soramoyou-ios.web.app/privacy/
   **`scripts/build-privacy-policy-html.py` で生成**するので、アプリ内とホスト版はドリフトしない
 - アプリ内の本文を変えたら: 生成スクリプト実行 → `firebase deploy --only hosting --project soramoyou-ios`
 
+> ⚠️ **記録と現物のずれ（2026-10-13）**: 提出時（1.15.0 の審査提出 2026-10-13 20:34）の ASC の実際の指し先は、
+> 上の URL ではなく **Google サイトの「利用規約」ページ**だった（`privacyChoicesUrl` も同じ）。
+> 同日に `privacyPolicyUrl` と `privacyChoicesUrl` の両方を上の URL へ直した（公開中・審査中の 2 つの appInfo）。
+> 確かめ方: 文書ではなく現物で。ASC の API の `appInfoLocalizations` の `privacyPolicyUrl`／`privacyChoicesUrl` を読む。
+
 ---
 
 ## 4. 入力後のチェック
