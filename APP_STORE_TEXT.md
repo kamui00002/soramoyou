@@ -117,7 +117,11 @@ https://soramoyou-ios.web.app/privacy/
 > Google サイトの利用規約のページ（21:11 に公開）とホーム（21:24 に公開）にも、正式な版への案内を置いた。
 
 ## サポートURL
-https://sites.google.com/view/soramoyou-app/%E5%88%A9%E7%94%A8%E8%A6%8F%E7%B4%84
+https://sites.google.com/view/soramoyou-app/%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B
+
+> 注記（2026-10-13）: ここには Google サイトの「利用規約」ページの URL を書いていたが、ASC の現物（1.15.0 の ja・19:33 に API で読み返し）は
+> Google サイトの「お問い合わせ」ページだった（上記の `%E3%81%8A…` は「お問い合わせ」を URL 用に符号化したもの）。控えを現物に合わせた。
+> ページは 23:08 に GET で開けること（HTTP 200・題名「そらもよう - お問い合わせ」）を確かめた。
 
 ## カテゴリ
 - プライマリ: 写真/ビデオ
