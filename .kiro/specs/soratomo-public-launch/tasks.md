@@ -287,7 +287,7 @@
     - 段0-4 の検索 `grep -rn "soratomoIntroID\|claimMissing\|tokenUnavailable\|soratomoBeta" Soramoyou/Soramoyou` は **0 件**（いま書いた `SoratomoError` の説明に `soratomoBeta` が 1 件入ったので、言い方を変えて 0 件にした）。`Soramoyou/SoramoyouTests` も 0 件（判定のテストを書き直したので、クレームの意図のテストも残っていない）。陽性対照: `Utils` の写し（`/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/grepcheck`）の 1 ファイルに `claimMissing` を 1 行足すと、同じ検索が 1 件を返した
     - 本体に残る「クレーム」は、1.14.x までの経緯の説明だけ（`SoratomoFeatureGate`・`WhatsNewContent`・`SoratomoAccountDeletionService` など）
 
-- [ ] 9. PR-B（アプリ）を点検し、main へ入れる
+- [x] 9. PR-B（アプリ）を点検し、main へ入れる
 
 - [x] 9.1 新しい文言を確認してもらう（ユーザーの入力が要る）
   - 前提: 7.1, 7.2, 8.1
@@ -318,7 +318,7 @@
     - 差分で確かめた（`git diff origin/main`）: 退会の既存の 8 手順（`SettingsViewModel`・`SoratomoAccountDeletionService`・`AuthService`）の差分 0 行・既存の 3 つの通知設定と通知のタップの計測（`SoratomoAnalytics`・`LoggingService` の差分 0 行。`flag_off` の値も同じ）・ゲストのホーム（`GuestTabView` の差分は見本の窓口の 2 行だけ）・`SettingsView` の差分は退会の文の静的関数とポリシーの本文だけで、利用規約・お問い合わせに触れた行は 0
     - 匿名から登録への昇格（`link(with:)`）の経路はアプリに無い（`Services`・`ViewModels`・`Views` を検索して 0 件）ので、判定し直す契機は「ログインの確定」（`ContentView` の `.task(id:)`）だけでよい（6.1 で前面復帰の再評価を消した影響の確認）
 
-- [ ] 9.3 PR-B を main へ入れる（段0-4・ユーザーのGOを取ってから実行）
+- [x] 9.3 PR-B を main へ入れる（段0-4・ユーザーのGOを取ってから実行）
   - 前提: 1, 9.2。10.4 でプライバシーマニフェストを変えることになった場合は、その変更も PR-B に入れる（マージの前に10.4を済ませるのが望ましい。マージの後なら、12.1 の archive より前に小さな PR で main へ入れる。1.15.0 のまま）
   - push・PR の作成・マージは、それぞれGOを取ってから。PR の本文に、PR #163 を取り込んだことと、マージの後は1.15.0以外の版を main から作らないことを書く
   - 段0-4 の読み返し: 単体テスト緑・ビルドの警告なし・8.3 の検索が0件
@@ -329,6 +329,10 @@
     - 通過した 5 件の直し: F1（ポリシーの表示名の文・9.1 の再承認 15:04）と F14（削除ページの英語の要約）＝`778a1c66`（`build-privacy-policy-html.py` で HTML を作り直した）。F3（「機能フラグ」の古い言い方の残り。8.3 の検索語に無くすり抜けた: `ContentView`・`HomeView`・`GoldenHourNotificationManager`・`SoratomoAccountDeletionService`・`SoratomoImageStore`・`OnboardingView` のコメントと `SoratomoRouterTests` の説明 4 か所）・F4（What's New の「文言は下書き」→承認済み）・F5（`unknown` は未ログイン・ゲストの間も続く・テストの「ゲスト」の言い方）＝`02a79893`（コメントだけ）。残る「機能フラグ」は 1.14.x の経緯の説明 2 か所（`SoratomoError.flagOff`・`SoratomoRouter` の `flag_off` の名残）だけ
     - 直した後の緑（15:06・`C2E3F752`・同じ条件）: `SoratomoFeatureGateTests`・`SoratomoRouterTests`・`SettingsViewDeleteAccountMessageTests`・`WhatsNewGateTests` の **68 件すべて通過**。直した 11 の Swift ファイルはすべてこのビルドでコンパイルし直され、警告は既存の `GeneratedAssetSymbols.swift`・`PaymentService.swift` だけ
     - `/security-review`（2026-10-13 16:20・読むだけの係 1 人で洗い出し）: **HIGH・MEDIUM の指摘 0 件**（誤検知の確認に回すものが無かった）。判定の緩め（クレーム→登録済み）が変えるのは入口の見え方だけで、`isEnabled`／`state` の使い道 5 か所はすべて画面の出し分けと遷移。読み書きは本番のルール（`isSoratomoUser()`）と Functions の `requireFlag` が今もクレームを確かめる（PR-A の切り替えまで）。ポリシーの HTML は `build-privacy-policy-html.py` が `html.escape` を通してからリンクにする・削除ページは利用者の値を含まない静的な HTML。PR-B が PR-A より先に出ても、入口は出るが操作は拒否される（安全側に倒れる順序の問題で、権限のすり抜けではない）
+    - push・PR・マージ（2026-10-13・どれも利用者の GO を 1 手ずつ取った）: push 16:20 → 10.2 の記録の追加の push と PR の作成 16:28（**PR #179**・本文に #163 の取り込みと、マージ後は 1.15.0 以外の版を main から作らないことを書いた）→ GitGuardian pass・CLEAN を待って **squash でマージ 16:33（`9a56d5e8`・2026-10-13T07:33:14Z）**。cherry-pick の時の英語の既定のマージ文（`895df4f8`）は squash で消えた
+    - 段0-4 の読み返し（origin/main `9a56d5e8`）: ブランチの最後（`ab5e0543`）と main の木の差 0 行・`git grep` で段0-4 の検索 0 件・`project.pbxproj` の 1.15.0／113 が 8 行。単体テストの緑と警告なしは、同じ中身で 9.2 と 9.3 の直した後（15:06）に確かめた
+    - マージの後: **#163 を #179 へのリンクを書いて閉じた（16:35・GO）**。ここから 1.15.0 以外の版を main から作らない。1.15.0 は 11.5 の後にだけ TestFlight へ出す。PR #178（PR-A）は 11.2 までマージしない
+    - 以後の記録は `ドキュメント-そらとも一般公開-記録`（origin/main `9a56d5e8` から切った・未 push）に書く
 
 ## (f) 切り替えの前の準備（段0-2・0-3・0-5）
 
