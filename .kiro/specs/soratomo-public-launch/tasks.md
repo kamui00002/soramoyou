@@ -445,7 +445,7 @@
     - 段0-4 の検索 `grep -rn "soratomoIntroID\|claimMissing\|tokenUnavailable\|soratomoBeta" Soramoyou/Soramoyou` は **0 件**（いま書いた `SoratomoError` の説明に `soratomoBeta` が 1 件入ったので、言い方を変えて 0 件にした）。`Soramoyou/SoramoyouTests` も 0 件（判定のテストを書き直したので、クレームの意図のテストも残っていない）。陽性対照: `Utils` の写し（`/private/tmp/claude-501/-Users-yoshidometoru----iOS-----------claude-worktrees-soratomo/da2b468a-67d9-4a75-8e70-833b9b1f9376/scratchpad/grepcheck`）の 1 ファイルに `claimMissing` を 1 行足すと、同じ検索が 1 件を返した
     - 本体に残る「クレーム」は、1.14.x までの経緯の説明だけ（`SoratomoFeatureGate`・`WhatsNewContent`・`SoratomoAccountDeletionService` など）
 
-- [ ] 9. PR-B（アプリ）を点検し、main へ入れる
+- [x] 9. PR-B（アプリ）を点検し、main へ入れる
 
 - [x] 9.1 新しい文言を確認してもらう（ユーザーの入力が要る）
   - 前提: 7.1, 7.2, 8.1
@@ -476,7 +476,7 @@
     - 差分で確かめた（`git diff origin/main`）: 退会の既存の 8 手順（`SettingsViewModel`・`SoratomoAccountDeletionService`・`AuthService`）の差分 0 行・既存の 3 つの通知設定と通知のタップの計測（`SoratomoAnalytics`・`LoggingService` の差分 0 行。`flag_off` の値も同じ）・ゲストのホーム（`GuestTabView` の差分は見本の窓口の 2 行だけ）・`SettingsView` の差分は退会の文の静的関数とポリシーの本文だけで、利用規約・お問い合わせに触れた行は 0
     - 匿名から登録への昇格（`link(with:)`）の経路はアプリに無い（`Services`・`ViewModels`・`Views` を検索して 0 件）ので、判定し直す契機は「ログインの確定」（`ContentView` の `.task(id:)`）だけでよい（6.1 で前面復帰の再評価を消した影響の確認）
 
-- [ ] 9.3 PR-B を main へ入れる（段0-4・ユーザーのGOを取ってから実行）
+- [x] 9.3 PR-B を main へ入れる（段0-4・ユーザーのGOを取ってから実行）
   - 前提: 1, 9.2。10.4 でプライバシーマニフェストを変えることになった場合は、その変更も PR-B に入れる（マージの前に10.4を済ませるのが望ましい。マージの後なら、12.1 の archive より前に小さな PR で main へ入れる。1.15.0 のまま）
   - push・PR の作成・マージは、それぞれGOを取ってから。PR の本文に、PR #163 を取り込んだことと、マージの後は1.15.0以外の版を main から作らないことを書く
   - 段0-4 の読み返し: 単体テスト緑・ビルドの警告なし・8.3 の検索が0件
@@ -487,12 +487,16 @@
     - 通過した 5 件の直し: F1（ポリシーの表示名の文・9.1 の再承認 15:04）と F14（削除ページの英語の要約）＝`778a1c66`（`build-privacy-policy-html.py` で HTML を作り直した）。F3（「機能フラグ」の古い言い方の残り。8.3 の検索語に無くすり抜けた: `ContentView`・`HomeView`・`GoldenHourNotificationManager`・`SoratomoAccountDeletionService`・`SoratomoImageStore`・`OnboardingView` のコメントと `SoratomoRouterTests` の説明 4 か所）・F4（What's New の「文言は下書き」→承認済み）・F5（`unknown` は未ログイン・ゲストの間も続く・テストの「ゲスト」の言い方）＝`02a79893`（コメントだけ）。残る「機能フラグ」は 1.14.x の経緯の説明 2 か所（`SoratomoError.flagOff`・`SoratomoRouter` の `flag_off` の名残）だけ
     - 直した後の緑（15:06・`C2E3F752`・同じ条件）: `SoratomoFeatureGateTests`・`SoratomoRouterTests`・`SettingsViewDeleteAccountMessageTests`・`WhatsNewGateTests` の **68 件すべて通過**。直した 11 の Swift ファイルはすべてこのビルドでコンパイルし直され、警告は既存の `GeneratedAssetSymbols.swift`・`PaymentService.swift` だけ
     - `/security-review`（2026-10-13 16:20・読むだけの係 1 人で洗い出し）: **HIGH・MEDIUM の指摘 0 件**（誤検知の確認に回すものが無かった）。判定の緩め（クレーム→登録済み）が変えるのは入口の見え方だけで、`isEnabled`／`state` の使い道 5 か所はすべて画面の出し分けと遷移。読み書きは本番のルール（`isSoratomoUser()`）と Functions の `requireFlag` が今もクレームを確かめる（PR-A の切り替えまで）。ポリシーの HTML は `build-privacy-policy-html.py` が `html.escape` を通してからリンクにする・削除ページは利用者の値を含まない静的な HTML。PR-B が PR-A より先に出ても、入口は出るが操作は拒否される（安全側に倒れる順序の問題で、権限のすり抜けではない）
+    - push・PR・マージ（2026-10-13・どれも利用者の GO を 1 手ずつ取った）: push 16:20 → 10.2 の記録の追加の push と PR の作成 16:28（**PR #179**・本文に #163 の取り込みと、マージ後は 1.15.0 以外の版を main から作らないことを書いた）→ GitGuardian pass・CLEAN を待って **squash でマージ 16:33（`9a56d5e8`・2026-10-13T07:33:14Z）**。cherry-pick の時の英語の既定のマージ文（`895df4f8`）は squash で消えた
+    - 段0-4 の読み返し（origin/main `9a56d5e8`）: ブランチの最後（`ab5e0543`）と main の木の差 0 行・`git grep` で段0-4 の検索 0 件・`project.pbxproj` の 1.15.0／113 が 8 行。単体テストの緑と警告なしは、同じ中身で 9.2 と 9.3 の直した後（15:06）に確かめた
+    - マージの後: **#163 を #179 へのリンクを書いて閉じた（16:35・GO）**。ここから 1.15.0 以外の版を main から作らない。1.15.0 は 11.5 の後にだけ TestFlight へ出す。PR #178（PR-A）は 11.2 までマージしない
+    - 以後の記録は `ドキュメント-そらとも一般公開-記録`（origin/main `9a56d5e8` から切った・未 push）に書く
 
 ## (f) 切り替えの前の準備（段0-2・0-3・0-5）
 
-- [ ] 10. 切り替えの前に準備する
+- [x] 10. 切り替えの前に準備する
 
-- [ ] 10.1 クレームの無いテスト用アカウント S5 を作り、基準値を出し直す（段0-2・利用者の操作が要る）
+- [x] 10.1 クレームの無いテスト用アカウント S5 を作り、基準値を出し直す（段0-2・利用者の操作が要る）
   - 前提: 1（切り替えの当日より前ならいつでもよい）
   - 利用者の操作: App Store の 1.14.0 で新規登録する（クレームは付けない）。操作を頼む前に、いまさわれる端末を聞き、端末に入っている版と build を確かめる
   - 本番の Auth で、S5 の作成の時刻とクレームが無いことを読む（ユーザーのGOを取ってから実行。出すのは uid の頭6文字・時刻・クレームの名前だけ）
@@ -500,8 +504,11 @@
   - S5 の uid を、`research.md` の除外の条件（`<S5のuid>`）に足し、公開前の基準値の表を同じクエリで出し直して、差を記録する（除外の条件を変えたので、比べる前に出し直す）
   - S5 は、1.14.0・クレーム無しの「入口が出ない」の確かめ（11.1・11.6）と、1.15.0 の本番の通し（12.2）に使う
   - _Requirements: 3.4, 3.5, 11.6_
+  - 結果（2026-10-13 18:35）:
+    - S5 の作成と本番の Auth の読み取りは 11.1 の結果のとおり（`soratomo6@gmail.com`・uid の頭 `Qk9lcs…`・18:20:53 JST・クレーム無し・利用者の iPhone の TestFlight 1.14.1/112 で作成。spec の「App Store の 1.14.0」からの逸脱）
+    - `research.md` の除外の条件に S5（`Qk9lcs%`）と、タスク1で申し送られた B（`nhYcDQ%`・soratomo5）を足し、公開前の基準値を同じ定義・期間で出し直した（PostHog の execute-sql・読むだけ・18:30）: **差はどの指標も 0**（S5 と B の最初のイベントが基準値の締めの 10-10 より後のため）。ただし元の値と、旧の条件で今出し直した値に小さなずれ（日ごとの 10-10 が 112→118 など）があり、S5・B とは無関係（遅れて着いたイベントと見ている・未確認）→ **公開後に比べるときは「旧の条件で出し直し」の列を使う**。詳細は research.md の「2026-10-13 除外の条件に S5 と B を足して出し直した値」
 
-- [ ] 10.2 切り替えの前の使用量と、本番の設定を読む（段0-3・要確認3・7。利用者の操作が要る）
+- [x] 10.2 切り替えの前の使用量と、本番の設定を読む（段0-3・要確認3・7。利用者の操作が要る）
   - 前提: なし（切り替えの当日の7日前から）
   - 利用者の操作: Firebase のコンソールで、切り替えの前の7日分（日ごと）の Firestore の読み取り・書き込み・削除、Storage の保存量と転送量、Functions の呼び出し回数を読み、表にしてこのタスクの結果に書く。公開後の見回りの目安（7日の最大の2倍）の土台にする
   - 要確認3: 本番の Auth で有効なログイン方式。release-gate tasks.md 14.5（2026-10-09）では、匿名ログインは無効で、有効なのはメールとパスワードだけだった。変わっていないかを、開発者がコンソールで読む（読むだけ）。AIが REST で読む場合は、GOを取り、`signIn` の中の方式ごとの有効かどうかの項目だけに絞って出す（`signIn` を丸ごと出さない）。どの結果でも設計は変えない。匿名が有効なら、見回りで `registration_required` を見る意味が増える
@@ -527,13 +534,20 @@
       - 見回りの目安（7 日の最大の 2 倍）: 読み取り 153,368／日・書き込み 4,612／日・削除 158／日・転送 8.26 GB／日・呼び出し 4,782／日（10.3 で使う）
     - 要確認3（Auth のログイン方式）: `signIn` のキーは `email` と `hashConfig` だけ。`email.enabled = true`（`passwordRequired = true`）・`anonymous` と `phoneNumber` は項目自体が無い＝無効・外部 IdP は 0 件。release-gate 14.5（2026-10-09）と同じで変わっていない。設計は変えない
     - 要確認7（GCP の予算のアラート）: firebase CLI の token では `cloudbilling.googleapis.com/v1/projects/soramoyou-ios/billingInfo` が HTTP 403 で読めなかった。**開発者がコンソール（お支払い → 予算とアラート）で読む**（残り）
+    - 要確認7 の続き（2026-10-13 16:44・利用者の GO＝「Billing Budgets API を有効にして読む」）: 403 の理由は権限でなく、token の既定のクォータのプロジェクトで API が無効だったこと（`SERVICE_DISABLED`）。soramoyou-ios で `billingbudgets.googleapis.com` を有効にして（状態 ENABLED を確認・予算は作っていない）読んだ: 請求は有効・**予算は 2 つ**（`Firebase Project soramoyou-ios` **月 25 円**・しきい値 50／90／100%・プロジェクトで絞る／もう 1 つは別のプロジェクト）。転送量（10.2 の表で 1.5〜4.1 GB／日）から、25 円は毎月すぐ超えて鳴り続けている見込み（要確認・請求の実額は読んでいない）＝乱用の合図としては役に立たない。見回りは 10.3 の使用量の目安で見る。予算の金額の見直しは任意（利用者の判断・費用はかからない）
 
-- [ ] 10.3 見回りの手順と、「効果あり」の基準を、公開の前に記録する
+- [x] 10.3 見回りの手順と、「効果あり」の基準を、公開の前に記録する
   - 前提: 10.2
   - 見回りの手順（見る場所・見るもの・乱用を疑う目安の初期値）は、design.md の「公開後14日の見回り」の表のとおりとする。このタスクの結果に、公開の前に決めた日時を書く。目安は7日目に見直す
   - 「効果あり」の基準は、利用者の判断2の C（2026-10-11 決定）。主: 公開から2週の時点で「そらともを開いた人」が30人以上、かつ「グループを作成または参加した人」が10人以上。従: 公開から4週の「直近7日の利用者」が、予測の「中（新規110/週）×毎週1割減」の312を上回る。届かなかったときの読み方も design.md の表のとおり。数字はどれも除外の条件をかけた値で、1.15.0 の普及率を添えて読む
   - 測る前に決める（`docs/roadmap.md` の段階Bの判定ゲートと同じ）。変えるなら、公開の前にこのタスクに書き直す
   - _Requirements: 5.4, 11.5_
+  - 結果（**2026-10-13 16:40 に公開の前に決めた**・本番に触れない）:
+    - 見回りの手順: design.md の「公開後14日の見回り」の表のとおり（Functions のログの件数と uid ごとの件数・`rejected` の理由／コンソールの使用量／PostHog の件数（除外の条件をかける）／Discord の通報のチャンネル）。記録には uid の頭 6 文字と件数だけを書く。乱用を疑ったら `soratomo-admin.js` で調べ、`suspend` は GO を取ってから
+    - 乱用を疑う目安（初期値・7 日目に見直す）: 1 人が 24 時間にグループを 3 件以上作る／1 人が 1 つのグループに 24 時間で 21 件以上投稿する／1 人の参加の `not_found` が 1 時間に 10 件以上／`registration_required` が出る（要確認3: 本番は匿名ログインが無効なので、出たらアプリ以外からの要求を疑う）
+    - 使用量の目安（10.2 の 7 日の最大の 2 倍。超えた日はログの件数でそらともの分かを切り分ける）: Firestore の読み取り **153,368／日**・書き込み **4,612／日**・削除 **158／日**・Storage の転送 **8.26 GB／日**・Functions の呼び出し **4,782／日**。Storage の保存量は 7 日で +0.51 GB の伸び（10/13 に 2.00 GB）を基準に、伸びの倍増を目安にする
+    - 「効果あり」の基準（利用者の判断2の C・2026-10-11 決定のまま変えない）: **主**＝公開から 2 週で「そらともを開いた人」30 人以上、かつ「グループを作成または参加した人」10 人以上。**従**＝公開から 4 週の「直近 7 日の利用者」が、予測の「中（新規 110／週）×毎週 1 割減」の 312 を上回る。数字はどれも除外の条件（S3・B・S5 などのテスト用アカウントと開発者）をかけた値で、1.15.0 の普及率を添えて読む。届かなかったときの読み方は design.md の表のとおり
+    - ⚠️ S5 の uid は 10.1 で除外の条件に足す（まだ）
 
 - [x] 10.4 G5 の文案を用意し、開発者の承認を取る（段0-5・ユーザーの入力が要る）
   - 前提: 1（PR-B のマージより前に済ませるのが望ましい。プライバシーマニフェストを変える場合に PR-B へ入れられる）
@@ -566,15 +580,23 @@
 
 - [ ] 11. サーバーを開ける（すべてユーザーのGOを取ってから）
 
-- [ ] 11.1 開ける前の見え方を確かめる（組み合わせの「前」の列・利用者の操作が要る）
+- [x] 11.1 開ける前の見え方を確かめる（組み合わせの「前」の列・利用者の操作が要る）
   - 前提: 5, 9.3, 10.1
   - 端末の割り当て（どの端末にどの版とアカウントを入れるか）を開発者に聞く。いまさわれる端末を先に確かめ、端末に入っている版と build を確かめる
   - 1.14.x・クレーム無し（App Store の 1.14.0・S5）: ホームの右上にそらともの入口が出ない
   - 1.14.x・クレームあり（1.14.x・S3）: タイムラインの表示と投稿ができる。ログ `soratomoCreateSky: ok`（uid S3。ログの読み取りはGOを取ってから）
   - Android 版: `~/dev/soramoyou-android` で `soratomo` を grep して、Kotlin のコードに0件（読むだけ。リポジトリの外で、書き込まない）。Android 版の作業と公開を待たずに1.15.0を出す。サーバーの規則がどのクライアントにも同じに効くことは、自動テスト（2・3）が受け持つ
   - _Requirements: 1.9, 3.4, 4.1, 4.3_
+  - 結果（途中・2026-10-13 18:10）:
+    - 端末の割り当て（利用者 16:45・17:52〜18:00）: 利用者の手元は iPhone（TestFlight 1.14.1/112）だけ・リモート。S3 は AI が Mac のシミュレーター、S5 は利用者が iPhone で作る（パスワードは iOS の「強力なパスワード」で iPhone に保存し、AI は知らない。Mac に作った S5 用の secret は使わずに消した）
+    - シミュレーターの経緯: DCFBF2D6（iOS 26.2・長く起動したまま）はタップが届かない・553E8B23（iOS 27.0）は起動の負荷の山（1 分平均 662）で固まり、`simctl erase` の後もタップが届かなかった（`hid succeeded` でも画面が変わらない・前後のスクショのハッシュが同じ）。553E8B23 には誰のものか分からないログインが残っていたが、利用者の決定でログアウトせず（ログアウトは本番の `users/{uid}` の `fcmToken` を消す書き込みになる）端末の初期化で外した。本番への書き込みはしていない。**未使用の F37CBCBC（iPhone 18 Pro・iOS 27.0・今日はじめて `simctl boot`）で陽性対照（ホーム画面の「設定」のタップで設定アプリが開く）が取れた**ので、そこで行った
+    - **1.14.x・クレームあり（S3・F37CBCBC に 1.14.1/111 を入れた・未ログインから S3 でログイン）**: ホーム右上にそらともの入口が出た。What's New は先行公開の紹介（「そらともが使えるようになりました」）が出た。グループ「空」に写真を 1 枚投稿（**18:06:00 JST**）→ タイムラインの「今日」の先頭に出た。**本番のログ `soratomoCreateSky: ok`（09:06:07Z＝18:06:07 JST・jsonPayload の uid の頭 `8Ar2DV…`＝S3〔research.md と release-gate の記録と一致〕）**。09:04〜09:10Z の `soratomoCreateSky` の行はこの 1 件だけ（ログの読み取りは利用者の GO 16:44）
+    - Android 版: `~/dev/soramoyou-android`（`62cae2c7`）の Kotlin で `soratomo` は 0 件（陽性対照: 同じ書き方で `AuthRepository` は 21 件）
+    - **1.14.x・クレーム無し（S5・利用者の iPhone・TestFlight 1.14.1/112）**: 利用者が `soratomo6@gmail.com` で新規登録（先頭が `+` のアドレスはアプリのメールの形の確認で弾かれた）・表示名 TestS5。**ホーム右上にそらともの入口は出ない**（利用者の目視・18:20）。本番の Auth（GO 16:44）: uid の頭 `Qk9lcs…`・作成 **18:20:53 JST**・**カスタムクレーム無し**・方式 password・無効化なし。⚠️ spec の「App Store の 1.14.0」でなく TestFlight の 1.14.1 で作った（判定のコードは 1.14.0 と同じクレームの判定）
+    - 11.1 の「前」の列はそろった（S3＝入口あり・投稿 ok／S5＝入口なし）
+    - ⚠️ 秘密の申告: 係が撮ったログインの途中のスクショ 1 枚に、iOS の仕様で S3 のパスワードの最後の 1 文字が一瞬見えていた（係が読んだ後、伏字の画面で上書き済み）。S3 はテスト用アカウント。ローテートは利用者の判断
 
-- [ ] 11.2 PR-A を main へ入れ、出し元を確かめる（段1-1）
+- [x] 11.2 PR-A を main へ入れ、出し元を確かめる（段1-1）
   - 前提: 11.1
   - PR-A のマージ（ユーザーのGOを取ってから実行）。`git fetch` の後、`git log` で main の先頭に leave-group・PR-B・PR-A が入っていることを見る。作業ツリーが clean で `HEAD == origin/main` のところから出す。出し元のコミットを記録する
   - `grep -rn "requireFlag\|soratomoBeta" functions/*.js firestore.rules storage.rules` が、テストのファイル以外で0件
@@ -582,21 +604,29 @@
   - 出す前の本番のルール2本を、読み返しの道具（2.5）で読み、PR-A の前の main（leave-group の反映の後）と一致することを記録する（出す前の状態。GOを取ってから）
   - 11.3〜11.5 のどれかのデプロイが失敗したら、1.15.0 を配らずに止める。直して出し直すか、出した分を Firebase のコンソールで前の ruleset へ戻す。戻してよいのは、1.15.0 をクレームの無いアカウントへ配る前だけ
   - _Requirements: 3.2, 3.3_
+  - 結果（2026-10-13・利用者の GO を 1 手ずつ）:
+    - 出す前の本番（18:22・GO＝読んでよい）: `read-deployed-rules.py` で本番の Firestore（ruleset `8ba8a746`・10-12 01:36 JST）と Storage（`2daa6614`・10-03 23:57 JST）を読み、PR-A の前の main（`9a56d5e8`）の 2 本と **sha256 の頭が一致**（`187ac94b5e73`・`7ec51426f1ea`）。`firebase functions:list` は 22 本（そらともの 11 本を含む）・asia-northeast1・nodejs22
+    - **PR #178 を squash でマージ 18:23（`cdc7c3e3`・2026-10-13T09:23:19Z）**（GO＝想定どおりならマージ・GitGuardian pass・CLEAN）。main の先頭は leave-group（#174・#176・#177）→ #175 → PR-B（#179）→ PR-A（#178）の順
+    - マージ後の main のテスト: **マージの前に、PR-A に origin/main を取り込んだ木（`60843dc8a59a…`）で全部を流しておき、マージ後の `origin/main^{tree}` が同じ `60843dc8a59a…` だったので、同じ木で確かめたとみなした**（係・17:00ごろ）: `npm run lint` 通過・`npm test` 294／294・`npm run test:emulator` 220／220（Java は Android Studio 同梱の JDK・ポートは空いていた）・`rules_test_soratomo.py` 123／123・`rules_test_storage_soratomo.py` 27／27
+    - `grep -rn "requireFlag\|soratomoBeta" functions/*.js firestore.rules storage.rules`（テストのファイル以外）: 0 件
+    - 出し元: `~/dev/soramoyou-pl-server` を `git switch --detach origin/main`（`cdc7c3e3`・未コミット 0）。`git log d204a9e1..origin/main -- functions/` は `cdc7c3e3` だけ＝前回の Functions の反映からの差は PR-A の分だけ
 
-- [ ] 11.3 Firestore のルールを出し、読み返してテストを流す（段1-2・ユーザーのGOを取ってから実行）
+- [x] 11.3 Firestore のルールを出し、読み返してテストを流す（段1-2・ユーザーのGOを取ってから実行）
   - 前提: 11.2
   - `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive`
   - 読み返しの道具で、ruleset の識別子・更新の時刻・ハッシュの頭が手元の `firestore.rules` と一致する。保存した本番の本文に `rules_test_soratomo.py`（通常）を流して全件緑（release-gate tasks.md 17 と同じ）
   - この日から見回り（15.1）を始める（開けた日から）
   - _Requirements: 3.3, 10.6_
+  - 結果（2026-10-13 18:24・GO）: `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive`（出し元 `cdc7c3e3`）→ released。読み返し: 本番の ruleset **`e4478b05`**（18:24:44 JST）・sha256 の頭 `de845cbd294b` が手元の `firestore.rules` と**一致**。保存した本番の本文に `rules_test_soratomo.py`: **123／123 期待どおり**。**この日（10-13）から見回り（15.1）を始める**
 
-- [ ] 11.4 Storage のルールを出し、読み返してテストを流す（段1-3・ユーザーのGOを取ってから実行）
+- [x] 11.4 Storage のルールを出し、読み返してテストを流す（段1-3・ユーザーのGOを取ってから実行）
   - 前提: 11.3
   - `firebase deploy --only storage --project soramoyou-ios --non-interactive`
   - 読み返しの道具で、同じく手元の `storage.rules` と一致する。保存した本番の本文に `rules_test_storage_soratomo.py`（通常）を流して全件緑
   - _Requirements: 3.3, 10.6_
+  - 結果（2026-10-13 18:25・GO＝11.3 が緑なら）: `firebase deploy --only storage --project soramoyou-ios --non-interactive` → released。読み返し: 本番の ruleset **`a4c9c06a`**（18:25:12 JST）が手元の `storage.rules` と**一致**（Firestore も一致のまま）。保存した本番の本文に `rules_test_storage_soratomo.py`: **27／27 期待どおり**
 
-- [ ] 11.5 そらともの関数を名前で指定して出す（段1-4・要確認8・差し戻し1。ユーザーのGOを取ってから実行）
+- [x] 11.5 そらともの関数を名前で指定して出す（段1-4・要確認8・差し戻し1。ユーザーのGOを取ってから実行）
   - 前提: 11.4
   - 要確認8: 出す前に、公開する関数を数えて期待値にする。2026-10-11 の数え方は、`functions/index.js` の `exports.名前 =` が9本、`functions/skyMotion.js` の `exports.名前 =` が2本、`functions/soratomo.js` の `module.exports` が leave-group の後で11本の、計22本。本番の `firebase functions:list --project soramoyou-ios` の名前と数がこれと一致すること
   - 出す前に、本番の Functions を最後に出したとき（leave-group の反映）から、main の `functions/` の差が PR-A の分だけであることを `git log` で確かめる
@@ -604,18 +634,28 @@
   - デプロイの出力で、11本の更新がすべて成功。出した後の `functions:list` の名前と数（22本）・リージョン（asia-northeast1）・ランタイム（nodejs22）が、出す前と同じ
   - 差し戻し1（承認済みの読み方）: Functions は本番のコードを読み返す手段が無いので、「出し元のコミットが origin/main の先頭・デプロイの出力で全部の更新が成功・関数の一覧が `index.js` の公開と一致・新しい挙動がログに出る（クレームの無い uid の `ok` と、通知の集計の `flagOff` が0。12.2 で見る）」を、「一致を読み返して確かめた」とみなす
   - _Requirements: 3.3_
+  - 結果（2026-10-13 18:25〜18:27・GO＝11.4 が緑なら）:
+    - 要確認8: 出す前の `functions:list` は 22 本（`index.js` 9・`skyMotion.js` 2・`soratomo.js` 11 の内訳と一致）。対象の 11 本の名前は `functions/soratomo.js` の `module.exports` から台本で組み立て、tasks.md の一覧と完全一致を assert した（手で打っていない）
+    - `firebase deploy --only functions:soratomoCreateGroup,…（11 本）--project soramoyou-ios --non-interactive`: **11 本とも `Successful update operation`・`Deploy complete!`（18:27:56 JST）**・終了コード 0。ほかの 11 本は出していない
+    - 出した後の `functions:list`: 22 本・名前の集合が出す前と同じ・リージョン asia-northeast1／ランタイム nodejs22 も同じ
+    - 差し戻し1 の読み方の残り（新しい挙動がログに出る＝クレームの無い uid の `ok` と通知の集計の `flagOff` が 0）は 12.2 で見る
+    - **ここでサーバーは登録済みの全員に開いた（2026-10-13 18:27:56 JST）**。ここから 1.15.0 を TestFlight へ出してよい（12.1）
 
-- [ ] 11.6 開けた後の1.14.xの見え方を確かめる（段1-5・組み合わせの「途中」の列・利用者の操作が要る）
+- [x] 11.6 開けた後の1.14.xの見え方を確かめる（段1-5・組み合わせの「途中」の列・利用者の操作が要る）
   - 前提: 11.5
   - 1.14.x・クレームあり（S3）が投稿する。ログ `soratomoCreateSky: ok`（uid S3）
   - 1.14.x・クレーム無し（App Store の 1.14.0・S5）: 開けた後も入口が出ない（1.14.x はクレームの無い人に入口を出さない）
   - _Requirements: 1.9, 3.4_
+  - 結果（2026-10-13 18:30）:
+    - **1.14.x・クレームあり（S3・F37CBCBC の 1.14.1/111）**: 開けた後（18:27:56）にグループ「空」へ 1 枚投稿（18:30:04）→ タイムラインに出た。**本番のログ `soratomoCreateSky: ok`（09:30:06Z＝18:30:06 JST・uid の頭 `8Ar2DV…`＝S3）**（ログの読み取りは GO 16:44）
+    - **1.14.x・クレーム無し（S5・利用者の iPhone の TestFlight 1.14.1/112）**: アプリを閉じて開き直しても、ホーム右上にそらともの入口は**出ない**（利用者の目視・18:30:39 に回答）。⚠️ 11.1 と同じく、spec の「App Store の 1.14.0」でなく TestFlight の 1.14.1（判定は 1.14.0 と同じクレームの判定）
+    - 組み合わせの「途中」の列はそろった（S3＝投稿 ok／S5＝入口なし）
 
 ## (h) 1.15.0 の TestFlight と本番の通し（段2-1〜2-3）
 
 - [ ] 12. 1.15.0 を TestFlight で確かめる
 
-- [ ] 12.1 build 番号を決めて archive し、内部の TestFlight へ出す（段2-1・ユーザーのGOを取ってから実行）
+- [x] 12.1 build 番号を決めて archive し、内部の TestFlight へ出す（段2-1・ユーザーのGOを取ってから実行）
   - 9.1 の決定（2026-10-12）: archive の直前に、`privacyPolicyText` と `hosting/delete-account/index.html` の最終更新日をその日の日付に直し、`python3 scripts/build-privacy-policy-html.py` で HTML を作り直して、build 番号と同じ小さな PR で main へ入れてから archive する（アプリ内とページを同じ日付・同じ本文にする）
   - 前提: 11.5（クレームの無いアカウントが1.15.0を手にする前に、3か所を開け終えて確かめる）
   - App Store Connect の最大の build を実測で読む（GO）。113以上でまだ使っていない番号に決め、main の pbxproj の値（8.2）と違えば、小さな PR で main の値を直してから出す（コマンドの上書きで上げない）
@@ -624,8 +664,18 @@
   - アップロードは別にGOを取る。成否はアップロードのログでなく、ASC で build が `VALID` になったことを読んで判定する。内部の TestFlight（開発者とテスト用アカウント）へ配る
   - 1.14.1（build 112）は審査に出さない
   - _Requirements: 3.1, 12.1, 12.2_
+  - 結果（2026-10-13 18:31〜18:42）:
+    - ASC の実測（GO 18:30）: `max_build_on_asc=112`・`latest_train=1.14.1` → **build 113** に決定。main の pbxproj は 8.2 で 1.15.0/113 のまま（直す PR は要らなかった）
+    - 9.1 の決定の最終更新日: `privacyPolicyText` と `hosting/delete-account/index.html` を **2026年10月13日** にし、`build-privacy-policy-html.py` で HTML を作り直して **PR #180（`08023ea7`）** で main へ入れた（push・PR・マージは GO）。archive はこの `08023ea7` から
+    - archive と export: 負荷を見てから `nice -n 19`・`-jobs 4`・`ENABLE_USER_SCRIPT_SANDBOXING=YES` のまま。**`ARCHIVE SUCCEEDED`・`EXPORT SUCCEEDED`（18:36:51）**。IPA は 1.15.0 / 113（23,865,473 バイト）
+    - ⚠️ archive のログに、Crashlytics の dSYM のアップロードの段で `error: Unable to expand directory at path …/ArchiveIntermediates/…`（ウィジェットの側）が出た。ビルドは止まらず、本体の dSYM（arm64）の `Successfully submitted symbols` は出ていて、archive には本体とウィジェットの dSYM が両方入っている。クラッシュの記号化に要る本体の分は届いているので、今回は止めない（ウィジェットのクラッシュの記号化は手で上げる候補）
+    - ↑ の原因（2026-10-13 19:4x・読むだけの調査を背景のエージェントに渡し、根拠を実物で確かめた）: **本体の Run Script「Upload dSYM to Crashlytics」が `${DWARF_DSYM_FOLDER_PATH}/*.dSYM` を全部まわして上げようとし、inputPaths に無いウィジェットの dSYM の読み取りを `ENABLE_USER_SCRIPT_SANDBOXING=YES` のサンドボックスが拒んだ**（`project.pbxproj` の inputPaths は本体の dSYM と GoogleService-Info.plist だけ・shellScript は `for DSYM in "$DSYM_DIR"/*.dSYM`。エージェントは OS ログで `Sandbox: upload-symbols deny(1) file-read-data …SoramoyouWidgetExtension.appex.dSYM` と、エラーが POSIX の EPERM であることも見た）。ビルドの順番・ファイルの不在ではない（ウィジェットの dSYM は 18:33:51 にでき、archive の dSYMs に本体 `29E322A5…` とウィジェット `2D4F521F…` の両方がある）
+      - 影響は無い: ウィジェットは Crashlytics を組み込んでいない（依存のパッケージが空・import にも無い）ので、ウィジェットの dSYM は Crashlytics に要らない。本体の dSYM は UUID が一致して届いている。**手で上げる必要も無い**
+      - 別の穴: `upload-symbols` はこの失敗でも exit 0 を返すので、スクリプトは「2 dSYM(s) uploaded successfully」と数えている（PR #29 の失敗検知が拾えない形）。直すなら、ループをやめて `${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}` だけを上げる（inputPaths と読むものが一致し、サンドボックスは YES のまま）。公開は止めない・別の課題
+    - アップロード（GO＝IPA の版と build が正しければアップロードしてよい）: `UPLOAD SUCCEEDED with no errors`（18:38:33）。**ASC の読み返しで build 113・版 1.15.0・`processingState VALID`（18:42:00 の読み取り）**。輸出の申告は pbxproj の `ITSAppUsesNonExemptEncryption = NO` で済んでいる
+    - 内部の TestFlight: 利用者の iPhone に 1.15.0 (113) が届き、更新できた（12.2 の 1）
 
-- [ ] 12.2 組み合わせの確認と本番の通しを行う（段2-2・差し戻し3・利用者の操作が要る）
+- [x] 12.2 組み合わせの確認と本番の通しを行う（段2-2・差し戻し3・利用者の操作が要る）
   - 前提: 12.1
   - 端末の割り当てを開発者に聞く。試す前に、端末に入っている版と build（TestFlight の 1.15.0 / N）を確かめる。ログと本番の読み取りはGOを取ってから
   - 組み合わせ: 1.15.0・クレーム無し（S5。1.14.0 の上に入れる）→ 使える（下の通し）。1.15.0・クレームあり（S3）→ タイムラインの表示と投稿ができる。どちらにも、先行公開の紹介（「先行公開」のバッジ）が出ない
@@ -642,8 +692,20 @@
   - 2〜7 で、案内で宣伝する操作（作成・招待コードでの参加・投稿・グループを抜ける）を、1.15.0 のビルドの実データで1回ずつ通したことになる（`docs/pre-release-checklist.md` の§4）。通報・ブロックを含めて、クレームの無い登録済みのアカウントで、本番で1回ずつ通したことになる
   - 結果は13.5 の G3（1と8）に使う
   - _Requirements: 1.3, 1.9, 2.1, 2.6, 3.4, 3.5, 6.1, 7.1, 7.4, 7.5, 7.8_
+  - 結果（2026-10-13 18:44〜19:18・ログの読み取りと S3 のシミュレーターの操作は GO 18:46・通報を閉じるのは GO 18:57）:
+    - 端末: S5＝利用者の iPhone（TestFlight 1.14.1/112 → **1.15.0 (113)**）。S3＝Mac のシミュレーター F37CBCBC（開発版 1.14.1/111 の上に `08023ea7` の開発版 **1.15.0/113** を入れ直し・ログインは残る）。⚠️ spec の「1.14.0 の上に入れる」でなく、S5 は TestFlight の 1.14.1 の上
+    - 組み合わせ: **1.15.0・クレーム無し（S5）**＝下の通しがすべてできた。**1.15.0・クレームあり（S3）**＝タイムラインの表示と投稿ができた。どちらにも先行公開の紹介（「先行公開」のバッジ）は出なかった
+    - 1. What's New: S5（利用者の目視）も S3 も、全員向けの What's New が「そらとも」「グループの出入り」の 2 ページで 1 回出た（文言は承認版と一致）。アプリを終了して開き直すと出なかった
+    - 2. 作成: `soratomoAgreeGuideline: ok`（18:49:58）・`soratomoCreateGroup: ok`（18:50:20）。uid はどちらも `Qk9lcs…`（S5）。招待の画面で「招待コードをコピーする」を 1 回（`soratomo_invite_shared` 18:50:22）
+    - 3. 参加: S3 のグループ「空」に S5 が招待コードで参加。`soratomoJoinGroup: ok`（18:50:57・uid S5）。S3 の画面で「空、3人」
+    - 4. 投稿と通知: S5 の投稿 `soratomoCreateSky: ok`（18:53:12・uid S5。集計は `sent` 0・`noToken` 2＝S3 のシミュレーターと B は通知のトークンを持たない）。S3 がシミュレーターから「空」に投稿（`soratomoCreateSky: ok` 18:54:19・uid `8Ar2DV…`）→ **集計 `onSoratomoSkyCreated: summary` は `sent` 1・`flagOff` 0**・`noToken` 1・`prefOff` 0・`blocked` 0・`throttled` 0。S5 の iPhone に通知が届き、タップで「空」のタイムラインが開いた（利用者の目視）。11.5 の差し戻し1 の残り（クレームの無い uid の `ok` と `flagOff` が 0）はここで満たした
+    - 5. 通報: S5 が S3 の 18:54 の投稿を「その他」で通報。`soratomoReportSky: ok`（18:56:03・uid S5・`duplicate: false`）。Discord の通報のチャンネルに 18:56 に届いた（利用者のスクショ・reportId がログと一致）。`soratomo-admin.js show-report` で転送 `sent`（18:56:09）・確認「未確認」→ `review-report … --result no_violation`（GO）→ 読み返しで `no_violation`・確認日時 18:58:04（投稿は消していない）
+    - 6. ブロック: S5 が S3 をブロック → 「空」のタイムラインから空3 の投稿が全部消えた（利用者の目視・`soratomo_user_blocked` 18:57:52）
+    - 7. 抜ける: 機内モードで 1 回失敗の表示 → 戻して 2 回目で抜けた。`soratomoLeaveGroup: ok`（18:59:14・uid S5・`removed: true`・`skiesDeleted: 1`・`imagesDeleted: 2`・`groupDeleted: false`・`done: true`）。サーバーへの呼び出しは 1 回だけ。S3 の画面で「空、2人」に戻り、S5 の投稿は消えた。⚠️ 失敗の計測 `soratomo_leave_failed` は届かなかった（12.3）
+    - 8. オンボ（新規の利用者の端末の状態）: ⚠️ spec の DCFBF2D6 と、新しく起動した 1BD50A18 はタップが届かなかった（スワイプの前後のスクショのハッシュが同じ）。代わりに F37CBCBC から**アプリを消して 1.15.0/113 を入れ直した**（オンボ済みの印と What's New の既読は端末の中の記録なので、新規の人と同じ状態になる）。オンボは 10 ページで、**「そらとも」は 5 ページ目（「みんなと共有」の直後）に 1 枚だけ**・本文は承認版のまま。「始める」→ ATT → キーチェーンに残った S3 のログインでホームへ入り、**What's New は出なかった**。開き直しても出なかった（19:18）。⚠️ ログインは新規のアカウントでなく S3（判定に使う印は端末の中の記録だけなので、見たいことは同じ）
+    - 宣伝する操作（作成・招待コードでの参加・投稿・グループを抜ける）と通報・ブロックを、クレームの無い登録済みのアカウントで、本番で 1 回ずつ通した
 
-- [ ] 12.3 G4: 計測の着弾を、除外の条件あり・なしで数える（段2-3・要確認6）
+- [x] 12.3 G4: 計測の着弾を、除外の条件あり・なしで数える（段2-3・要確認6）
   - 前提: 12.2
   - 通しの時間帯で、`soratomo_opened`・`soratomo_group_created`・`soratomo_group_joined`・`soratomo_post_created`・`soratomo_invite_shared`・`soratomo_report_submitted`・`soratomo_user_blocked`・`soratomo_guideline_result` の件数を、除外の条件をかけない場合とかける場合で出す（クエリの型は `research.md` の G4）。期待: 除外なしで各イベントが1件以上・除外ありで0件（TestFlight の版は除外の条件2で、S5 は条件4でも除かれる）
   - leave-group の要件12の5（同じ時点・同じ除外の条件）: 抜けるのイベント `soratomo_group_left`（`role`・`group_deleted`・`completed`）と `soratomo_leave_failed`（`reason`）、`soratomo_join_failed` の `reason` の `leave_pending` も、同じクエリに足して数える（イベントの名前は leave-group の design.md の SoratomoAnalytics のとおり）
@@ -651,25 +713,63 @@
   - 要確認6: 1.15.0 の TestFlight のイベントを1件読み、`$app_version` の値の形（例 `1.15.0`）を確かめる。普及率のクエリ（15.3）の条件に使う
   - 結果は13.5 の G4 に使う
   - _Requirements: 9.1, 9.2_
+  - 結果（途中・2026-10-13 19:15。PostHog MCP の `execute-sql`・プロジェクト 430627・除外の条件は research.md のもの〔開発者 2 件は `nzvqlZ%`・`bOigAs%`〕）:
+    - 期間は JST 18:44:00〜19:15:00（19:16 に締めて 1 回で出し直した値）。⚠️ 最初は `toDateTime('2026-10-13 18:44:00')` と JST に直した時刻を比べて 0 行になった（`toDateTime` はプロジェクトの時間帯で読まれ、比べるのは時刻そのもの）。JST の文字列どうしで比べて出し直した
+    - | イベント | 除外なし | 除外あり | 内訳 |
+      |---|---|---|---|
+      | `soratomo_opened` | 5 | 0 | S5 4・S3 1 |
+      | `soratomo_guideline_result` | 1 | 0 | S5 |
+      | `soratomo_group_created` | 1 | 0 | S5 |
+      | `soratomo_invite_shared` | 1 | 0 | S5 |
+      | `soratomo_group_joined` | 1 | 0 | S5 |
+      | `soratomo_post_created` | 2 | 0 | S5 1・S3 1 |
+      | `soratomo_report_submitted` | 1 | 0 | S5 |
+      | `soratomo_user_blocked` | 1 | 0 | S5 |
+      | `soratomo_group_left` | 1 | 0 | S5（`completed: true`） |
+      | `soratomo_join_failed` | 1 | 0 | S5（`reason: not_found`・架空の招待コードで 19:11:57） |
+      | `soratomo_leave_failed` | **0** | 0 | — |
+    - 期待どおり、8 つのイベントが除外なしで 1 件以上・除外ありで 0 件（S5 の `$is_testflight` は true・S3 のシミュレーターは false でも uid で除かれる）
+    - 要確認6: `$app_version` の値の形は **`1.15.0`**（S5 と S3 の全イベント）。15.3 の普及率のクエリはこの形のままでよい
+    - ⚠️ **`soratomo_leave_failed` は本番で 2 回起こしたが、PostHog に届かなかった**（PostHog の一覧にもまだ一度も無い名前）。1 回目（18:58 ごろ）は機内モードにした時点が確認の前か後か分からなかったので、2 回目（19:11 ごろ・S5 の自分のグループ）は「確認のダイアログを出したまま機内モードにして『抜ける』を押した」ことを利用者に確かめた（確定の段＝`confirm()` の通信の確認で `leaveFailed(.network)` を記録する道。準備の段 `requestLeave()` は要件 1.7 で記録しない）。同じ窓口（`LoggingService.logEvent`）から送る `soratomo_join_failed`（通信あり）は届き、1 回目の機内モード中の `Application Opened`（18:58:40）は通信が戻った後（18:59:18）に届いている。2 回目の時間帯（10:00Z〜）に `soratomoLeaveGroup` の呼び出しはログに 1 件も無い（同じ読み方で 18:59:14 の成功は読めている）＝アプリは `confirm()` の通信の確認で止まり `leaveFailed(.network)` を呼んだ道で、S5 の自分のグループも消えていない。原因は未解明（仮説: 通信が切れた直後に記録した分を、PostHog の SDK が送れずに捨てている。端末のログが無いと切り分けられない）。画面の動き（失敗の表示・抜けていないこと）は正しく、利用者への害は無い。**「検証済み」とは書かない**
+    - `leave_pending`: 抜けるの片づけは 1 回の呼び出しで終わった（`done: true`）ので、本番では起こせなかった。根拠は `soratomo_join_failed` 自体の着弾（上）と leave-group の単体テスト
+    - **利用者の決定（2026-10-13 19:2x）: 12.3 は完了にし、`soratomo_leave_failed` の未着は別の課題にする**（公開は止めない）。`leave_failed` と `leave_pending` は「検証済み」ではない。別の課題では、端末のログ（Xcode のデバイスのコンソール）を取りながら、確認の段で通信を切って失敗させ、PostHog の SDK が記録を捨てているかを確かめる
+    - 13.5 の G4 には、この表と「`leave_failed` 未着・`leave_pending` は起こせず」をそのまま写す
+    - 別の課題の読むだけの調査（2026-10-13 19:4x・背景のエージェント・根拠は実物で確かめた）: **仮説「PostHog の SDK がオフライン直後の記録を捨てた」はソースと合わない**（posthog-ios 3.59.3・`179438b8`）。capture はファイルへ同期で書いてから返り、通信が無い間は送信を止めるだけ（`PostHogQueue.swift` 257〜263 行 `Queue is paused because network is unreachable`）。捨てる道はキュー全件か 1 回の送信分まるごとしか無く、同じオフラインの間の `Application Opened` が届いたのに `leave_failed` だけが消える形は説明しにくい。アプリ側（`SoratomoAnalytics`・`LoggingService`）にもこのイベントだけを落とす処理は無い
+      - 有力な候補: **確認を出す前の段 `requestLeave()` のオフラインの枝**（`SoratomoLeaveViewModel.swift` 246〜249 行）は、確定の段（316〜321 行・記録する）と同じ通信の文言を出すのに、要件 1.7 で記録しない。機内モードが確認のダイアログを出す前に効いていれば、画面は同じで記録は 0 件になる。ほかの候補は PostHog に届いた後の扱い・検索の条件。**未検証**
+      - 決め手の確かめ方: ① Mac の Console.app で iPhone の subsystem `com.soramoyou`・category `LoggingService` を見て、「抜ける」を押した時刻に `Analytics event:` の行が出るか（無ければ `requestLeave()` の枝）② 同じ `logEvent` が送る Firebase Analytics に 18:58〜19:12 の `soratomo_leave_failed` があるか ③ `config.debug = true` の開発版で `[PostHog] Queued event 'soratomo_leave_failed'` が出るか
 
 ## (i) App Store Connect の準備と公開判断の記録（段3-1〜3-5）
 
-- [ ] 13. App Store Connect を準備し、公開判断を記録する
+- [x] 13. App Store Connect を準備し、公開判断を記録する
 
-- [ ] 13.1 版を作り、リリースノートを入れる（段3-1・ユーザーのGOを取ってから実行）
+- [x] 13.1 版を作り、リリースノートを入れる（段3-1・ユーザーのGOを取ってから実行）
   - 前提: 12.2
   - リリースノート（ASC の「このバージョンの最新情報」）の草案を利用者に聞き、チャットで清書する。`fastlane/metadata/ja/release_notes.txt` に入れ、コードポイントで検査して、絵文字・異体字セレクタ（U+FE0F を含む）・私用領域の文字・`PLACEHOLDER` が無いことを確かめる
   - 提出の前の ASC を読む（GO）: 公開中は 1.14.0（READY_FOR_SALE）、1.15.0 の版は無く、審査中・編集中の版も無い。build N は VALID で期限切れでない
   - `scripts/appstore-release.sh prepare --version 1.15.0 --build <N>`（GO）。`prepare` は成功と出てもビルドを紐付けないことがあるので、`scripts/asc_ensure_build.py --version 1.15.0 --build <N>` で読み返して紐付けを保証する。リリースノートを API で読み返し、手元のファイルとバイトで一致することを確かめる
   - _Requirements: 12.1, 12.5_
+  - 結果（2026-10-13 19:23〜19:33・ASC の読み取り GO 19:30・prepare の GO 19:32）:
+    - リリースノート: 利用者が 3 案から **A（機能＋参加・抜ける）** を選んだ（19:30・AskUserQuestion）。本文は 4 行・373 バイト（末尾の改行込み）・sha256 `4bd82c23…`。コードポイントで検査して、絵文字・異体字セレクタ（U+FE00〜U+FE0F・U+E0100〜）・私用領域・ZWJ・制御文字・`PLACEHOLDER` は 0 件（かな・漢字・改行のほかは `、` `。` `「` `」` の 4 種だけ）。検査器の陽性対照: U+FE0F 単体・☀️（U+2600＋U+FE0F）・🔖・U+E000 をそれぞれ検出した
+    - 提出の前の ASC（GET だけ・19:30:31）: 1.14.0＝`READY_FOR_SALE`（`AFTER_APPROVAL`）・1.15.0 の版は無し・編集中／審査中／公開待ちの版は無し・build 113 は `VALID` で期限切れでない（期限 2027-01-11）
+    - prepare（19:32:19〜19:32:48・exit 0）: deliver が版 1.15.0 を作り、ja の最新情報を入れた。**ビルドの紐付けは今回も空**（読み返しで「なし」）→ `asc_ensure_build.py` が `PATCH relationships/build`（HTTP 204）→ 読み返しで build 113 を確認。マニフェスト `fastlane/.release-manifest` は 1.15.0／113・本文の sha256 `4bd82c23…`
+    - 読み返し（19:33:14）: 版 1.15.0＝`PREPARE_FOR_SUBMISSION`・build 113。ASC の whatsNew は 372 バイトで、手元（373 バイト）と**末尾の改行 1 バイトを除いてバイト一致**（ASC が末尾の改行を落とす）
+    - 同じ読み返しで、1.15.0 の ja のサポート URL が `https://sites.google.com/view/soramoyou-app/お問い合わせ`（ASC は百分率符号化で返す）と分かった。13.4 で開いて確かめる
+    - ⚠️ submit はマニフェストと手元の `release_notes.txt` を照合するので、14.1 まで `release_notes.txt` を変えない
 
-- [ ] 13.2 スクリーンショットを1.15.0の版にだけ入れる（段3-2・利用者の操作）
+- [x] 13.2 スクリーンショットを1.15.0の版にだけ入れる（段3-2・利用者の操作）
   - 前提: 13.1
   - 開発者が、PR #163 の6.5インチ用（`screenshots/appstore-2026-10-07/6.5/02-soratomo-1284x2778.png`）と iPad 用（`screenshots/appstore-2026-10-07/ipad/02-soratomo-2048x2732.png`）を、既存の8枚の2枚目として1.15.0 の版に入れる（アルファの無い PNG・同じ入れ物に大きさを混ぜない）
   - ASC の1.15.0 の版のスクリーンショットの並びと、公開中の1.14.0 が変わっていないことを見る（読み取りはGOを取ってから）
   - _Requirements: 7.9_
+  - 結果（2026-10-13 19:36〜19:38・読み取りの GO 19:36・書き込みの GO 19:37）:
+    - ⚠️ spec は開発者の手作業だったが、利用者がリモートで Mac の画像を ASC の画面へ渡せないため、利用者の選択で **AI が ASC の API で入れた**（予約 `POST appScreenshots` → 送信 → `uploaded` と md5 で確定 → `COMPLETE` を待つ → 入れ物の並びを `PATCH`）。書き込み先は 1.15.0 の入れ物の id に固定し、1.14.0 の入れ物の id なら止まる作りにした
+    - 入れる前（19:36:35）: prepare が 1.14.0 の 8 枚を 1.15.0 へ写していた（並びと md5 は 1.14.0 と同じ・id は別）。ロケールは ja だけ・入れ物は `APP_IPHONE_65` と `APP_IPAD_PRO_3GEN_129` の 2 つ
+    - 手元の 2 枚: アルファ無し・RGB・1284×2778（md5 `95dd38716d…`）と 2048×2732（md5 `a10dfaa6a9…`）。main の #179 で入ったファイルと同じ
+    - 書き込み（19:37:40〜19:37:57・exit 0）: どちらも予約 HTTP 201 → 送信 200 → 確定 200 → `COMPLETE` → 並び替え 204
+    - 読み返し（19:38:05）: 1.15.0 は**どちらも 9 枚で 2 枚目が `02-soratomo-…`**（md5 が手元と一致）・残りは元の 1 枚目→2〜8 枚目の順のまま（期待の並びと機械で照合して一致）。**公開中の 1.14.0 は 2 つの入れ物とも id と順番が入れる前と完全に同じ**（8 枚）
+    - 戻すなら、`DELETE /v1/appScreenshots/<id>`（iPhone `42c00019-…`・iPad `fd800019-…`）でその 1 枚だけ消える
 
-- [ ] 13.3 G5 を反映し、審査用のグループを用意する（段3-3・要確認5・差し戻し4。利用者の操作が要る）
+- [x] 13.3 G5 を反映し、審査用のグループを用意する（段3-3・要確認5・差し戻し4。利用者の操作が要る）
   - 前提: 9.3, 10.4, 13.1
   - ポリシー: `python3 scripts/build-privacy-policy-html.py` の出力が main の `hosting/privacy/index.html` と同じであることを確かめてから、`firebase deploy --only hosting --project soramoyou-ios`（GO）。https://soramoyou-ios.web.app/privacy/ を開いて、新しい本文と最終更新日が出ることを見る
   - 開発者の手作業（ASC）: プライバシーラベル・年齢区分・審査メモを、10.4 で承認した案で入れる。審査メモの招待コードは、下の審査用のグループのものを ASC にだけ書く。差し戻し4のとおり、退会の削除は「新しく登録したアカウントで」と書いてあることを見る。AIは、ASC の画面で何を見ればよいかを示す
@@ -677,14 +777,57 @@
   - 審査用のグループ: S3 がオーナーのグループを1つ作り、空の写真を2〜3枚投稿しておく。デモのアカウントはメンバーにしない（審査の人が参加から試せるように）。審査の間は招待コードを再発行しない。審査の人が抜けても S3 が残る
   - `docs/app-privacy-label.md` に、G5 の結果（変えた項目があれば）と最終確認の日付を書く（小さな PR で main へ）
   - _Requirements: 8.3, 8.4, 8.5, 8.6, 8.7_
+  - 結果（途中・2026-10-13 19:28〜19:40）:
+    - deploy の前の公開中（19:28〜19:29 に背景のエージェントが GET・19:29:41 に本筋で取り直して確かめた）: 2 ページとも **#175（`88247fa9`・10/12）の版とバイト一致**（privacy 9573 バイト sha256 `21edc905…`・delete-account 7615 バイト `c352fbc3…`・`last-modified` 10/12 13:54 JST）。⚠️ 引き継ぎメモの「#180 の日付だけが未 deploy」は不足で、**#179 で足した「そらとも」の節も出ていなかった**（公開中の本文に「そらとも」は 0 回・main の privacy は 8 回）
+    - deploy の前の確かめ: 作業ツリーの `hosting/`・`firebase.json`・`SettingsView.swift`・台本は origin/main と差 0。`python3 scripts/build-privacy-policy-html.py` で作り直しても差 0（privacy `1853c499…`・delete-account `7a9f03ff…`）
+    - **`firebase deploy --only hosting --project soramoyou-ios`（GO・19:39:53〜19:40:01・exit 0）**。ファイルは 2 つ
+    - 読み返し（19:40:08）: https://soramoyou-ios.web.app/privacy/ と /delete-account/ が HTTP 200 で **main とバイト一致**（11523・8038 バイト）・最終更新日は **2026年10月13日**・`last-modified` 10/13 19:40 JST。クエリを付けない GET も一致
+    - プライバシーラベル（利用者の決定・2026-10-13 19:4x・AskUserQuestion）: **10.4 の結論どおり「変更なし」で受け入れる**（種類は 9 のまま・ASC の入力は変えない）。ASC のラベルは API で読めず、**画面では見ていない**
+    - ASC の読み取り（GO・2026-10-13 19:49:58・GET だけ）: 審査メモ（`notes`）は **1.14.0・1.15.0 とも 0 文字**（これまで審査メモは使っていなかった）。デモのアカウントは 1.15.0 に写っていた（必須＝はい・パスワードあり・ID は 1.14.0 と同じ）。連絡先もあり
+    - **要確認5の答え**: 年齢区分は appInfo ごとに持つ。appInfo は 2 つ（公開中の 1.14.0 側 `caa81ac1…`＝`READY_FOR_DISTRIBUTION`・1.15.0 と一緒に審査に出る側 `7f50af39…`＝`PREPARE_FOR_SUBMISSION`）→ **版ごと**で、1.15.0 の公開まで表に出ない。プライバシーラベルは API で読めず、「変更なし」なので画面でも見ていない
+    - 年齢区分の質問文の現物: ASC の画面ではなく、Apple の「Age ratings values and definitions」（developer.apple.com/help/app-store-connect/reference/app-information/age-ratings-values-and-definitions・19:5x に取得）。API の項目名は `userGeneratedContent`・`messagingAndChat`・`socialMedia`。表の 4+ の欄に UGC・Messaging and Chat・Advertising、13+ の欄に Social media（オーストラリア 16+・ブラジル A16・韓国 15+）。Social Media の定義は「いいね・コメント・シェア付きのフィードで、利用者の投稿を多くの人に広める」＝そらとも以前からのホームのフィードが当たる
+    - 変える前: 4+・UGC＝いいえ・Messaging and Chat＝いいえ・Social Media＝いいえ・Advertising＝はい（10.4 の「4+／UGC＝いいえ なら直す」の場合だった）
+    - **利用者の決定（19:55 ごろ・AskUserQuestion）: UGC・Messaging and Chat・Social Media を全部「はい」（13+）**。UGC と Messaging は 10.4 の承認の範囲（4+ のまま）。Social Media は 10.4 で見ていない質問なので、定義と「はい→13+」「いいえ→4+ のまま（食い違いが残る）」を示して新しく決めてもらった。「13 歳未満には SNS 機能を止める」は Declared Age Range API の呼び出しが 0 件（`grep -rn DeclaredAgeRange Soramoyou/`）なので選択肢に出していない
+    - 年齢区分の書き込み（GO・20:10:59・HTTP 200）: 1.15.0 側の `ageRatingDeclaration`（`7f50af39…`）の 3 項目だけを送った。読み返し: 3 項目が いいえ→はい・**ほかの項目は変化なし**・公開中の 1.14.0 側は 19:49 と同じ
+      - ⚠️ API の札（`appStoreAgeRating`）は書いた後も `FOUR_PLUS` のまま。公開中の 1.14.0 も Advertising＝はい なのに `brazilAgeRatingV2`＝`SELF_RATED_L`（新しい表なら A12）で、この欄は書き込みのたびには計算し直されない。審査で計算し直されるという読み（**未確認**）。13+ になったかは、ASC の画面か公開後の App Store で確かめる
+    - 審査用のグループ（作成と投稿の GO・19:59）: 利用者がリモートのため、**AI がシミュレーター F37CBCBC（iPhone 18 Pro・1.15.0／build 113）で S3（表示名「空3」）として操作**した。名前は利用者が選んだ **「空のアルバム」**。作成 20:01:39〜20:01:56・通知の案内は「あとで」。メンバーは **S3 の 1 人だけ**（デモのアカウントは入れていない・既存のグループ「空」は触っていない）
+      - 投稿 3 枚（キャプション付き・利用者が選択）: 「青空」20:03・「夕焼け」20:05・「雲」20:06。写真は検証用シミュレーター DCFBF2D6 にあった空の写真（`IMG_0008`・`IMG_0011`・`IMG_0013`）を `simctl addmedia` で F37CBCBC へ写したもの（利用者に縮小版を送って確認）。そらともの変換は位置情報などのメタデータを落としてから送る（`SoratomoImageEncoder.encodeJPEG` は圧縮品質だけを渡す）
+      - ⚠️ この端末では `simctl pbcopy`／`pbpaste` が効かなかった（書いた後も `pbinfo` が「Pasteboard is empty」）。日本語はかなキーボードを 1 文字ずつタップして変換し、欄の値を describe-all で照合した。招待コードは「コピー」を使わず、招待の画面の読み上げラベルを Python が読んで、書式（`XXXX-XXXX`・32 文字の英数字）を確かめてからスクラッチパッドのファイル（権限 600）にだけ書いた。**コードは画面・チャット・tasks.md・コミットに出していない**。招待の画面のスクショも撮っていない
+      - 審査の間は招待コードを再発行しない（14.3 で再発行する）
+    - 審査メモ（本文を見せて GO・PATCH 20:09:23・HTTP 200）: 10.4 の日本語 1〜4 と英語 1〜4 を tasks.md から**プログラムで抜き**、置き換え印 2 か所（「（ASC にだけ書くコード）」と英語の「(code is written only in App Store Connect)」）に招待コードを差し込んだ。**利用者の指示で 2 を (1)〜(8) の手順の行に分けた**（分けた文をつなぎ直すと元の文に戻ることをプログラムで確かめた・英語の (1) の頭の 1 文字だけ大文字）。見出しは【日本語】と [English]。2,098 文字（上限 4,000）
+      - 読み返し: 本文が送ったものと**一致**・招待コードは 2 回・置き換え印は 0 回・**「新しく登録したアカウントで」あり（差し戻し4）**・デモのアカウントと連絡先は書く前と同じ・公開中の 1.14.0 の審査メモは空のまま
+    - `docs/app-privacy-label.md`（10.4 の (1)）: 各項目の根拠 2〜5 にそらともの分（2＝参加・通報の uid とガイドライン同意の `guidelineVersion`・`guidelineAgreedAt`、3＝投稿者名とメンバー一覧の表示名〔そらとも専用の名前は無い〕、4＝Storage の `soratomo/` 配下の画像〔メタデータは送る前に落とす〕、5＝**グループ名**と投稿のキャプション）を足し、表の後に「新しい種類は増えない」注記（通報の理由は `REPORT_REASONS` の固定 5 つ・Discord へは `buildReportForwardPayload` で内部ID・理由・時刻だけ）と、最終確認の日付 2026-10-13 を入れた。5 の「グループ名」は 10.4 の一覧に無かったが、利用者が書く文字なので足した（PR の説明に書いた）。根拠はどれもコードの現物で確かめた
+      - **PR #181**（push の GO・PR 作成の GO・マージの GO を 1 手ずつ）→ **squash で `4b5e5863`・2026-10-13 20:15:50 にマージ**。チェックは GitGuardian 成功・claude はスキップ。変更は文書 1 ファイルだけ。main の文書に「そらとも」が入ったことを読み返した。リモートとローカルのブランチ・作業用 worktree は片づけた
+    - ⚠️ 年齢区分が 13+ になったかは、まだ見ていない（上の「API の札」の項）
+    - **訂正（2026-10-13 20:44 の ASC の GET で判明）**: 提出時の ASC の `privacyPolicyUrl` と `privacyChoicesUrl`（ja・公開中と審査中の 2 つの appInfo とも）は、hosting のポリシーではなく **Google サイトの「利用規約」ページ**（`https://sites.google.com/view/soramoyou-app/利用規約`・最終更新日 2026年2月10日・第1〜9条でプライバシーの中身なし）を指していた。13.3 の deploy は hosting の本文を新しくしたが、ASC がそこを指しているかは確かめていなかった。`APP_STORE_TEXT.md`（ホームと書いていた）も `docs/app-privacy-label.md`（hosting と書いていた）も現物と違っていた
+      - 直し方（利用者の決定・AskUserQuestion）: ② 利用規約のページに案内を足す → ① ASC の 2 つの URL を hosting へ → ③ ホームの古い写しを案内に置き換える。`privacyChoicesUrl` もポリシーと同じ URL にする。Google サイトの編集はこの Mac の Chrome（Claude in Chrome）で
+      - ②（打つ GO と公開の GO を 1 手ずつ）: 利用規約のページの本文の先頭に「プライバシーポリシーはこちら: https://soramoyou-ios.web.app/privacy/」（URL はリンク）の 1 行を足した。第1〜9条と最終更新日は触っていない。公開の前の確認の画面の変更点は「利用規約を更新」だけ → 公開（21:11 ごろ）。読み返し（**21:11:13**・GET）: 案内の行とリンク（href＝hosting）があり、公開の前の GET との差はその 2 行だけ
+        - ⚠️ Claude in Chrome の `type` は Google サイトの本文で日本語を落とした（ASCII の「: https://…」だけが入った）。日本語は Mac のクリップボード（`pbcopy`）から `cmd+v` で貼った
+      - ①（読み取りの GO・書き込みの GO を appInfo ごとに 1 手ずつ）: 書く前の読み取り（**21:14:10**）は 20:44 と同じ（2 つとも利用規約）・1.15.0 は `WAITING_FOR_REVIEW`・build 113
+        - 公開中の appInfo（`caa81ac1…`・`READY_FOR_DISTRIBUTION`）: PATCH は **HTTP 409 `ENTITY_ERROR.ATTRIBUTE.INVALID.INVALID_STATE`**（今の状態では変えられない・2 つの欄とも）で弾かれた（21:18:53）。読み返しで値は変わっていない
+        - 審査中の appInfo（`7f50af39…`・`WAITING_FOR_REVIEW`）: PATCH は **HTTP 200**（21:19:45）。読み返しで 2 つの URL とも `https://soramoyou-ios.web.app/privacy/`・公開中の側は変わっていない
+        - 読み返し（**21:19:59**・GET）: 1.15.0 は `WAITING_FOR_REVIEW`・build 113 のまま（書き込みで審査の状態は動いていない）
+        - → 1.15.0 の公開で審査中の appInfo が公開中に入れ替わり、App Store のリンクも hosting になる見込み（**未確認**・14.2 で確かめる）。それまでの App Store のリンクは利用規約のページで、② の 1 行から正式な版へ行ける
+      - ③（打つ GO と公開の GO を 1 手ずつ）: ホームの本文（古いポリシーの写し）を丸ごと消し、「そらもようのプライバシーポリシー（最新の版）は、次のページに載せています。」「https://soramoyou-ios.web.app/privacy/」（リンク）「お問い合わせ: soramoyou.app@gmail.com」の 3 行にした。見出し「プライバシーポリシー」はそのまま（利用者の決定）。公開の前の確認の画面の変更点は「ホームを更新」だけ → 公開。読み返し（**21:24:51**・GET）: `/ホーム` とサイトの入口の両方で、古い本文（「収集する情報」「2026年2月10日」）が 0 回・3 行とリンクが出る
+      - 文書: `APP_STORE_TEXT.md` と `docs/app-privacy-label.md` の §3 を現物に合わせるブランチ `ドキュメント-プライバシーURLの記録を直す`（origin/main から・`dd5eb396`・push は GO 待ち）
+    - 💡 別件の確かめ（20:45 に気づいた疑い・背景のエージェントが調べ、根拠を本筋で見直した）: `Soramoyou/Soramoyou/Views/SkyZukanView.swift:393` の `https://apps.apple.com/app/id6790911086` は、このアプリ（6758070979）ではなく同じ開発者の別アプリ **「天名 -Amana-」**（iTunes lookup の jp で `com.soumatou.amana`）。空図鑑の「天名をひらく」で `amana://` が開けないときの App Store への逃がし先で、PR #118（`9706ad7a`・2026-09-17「空図鑑から天名 -Amana- へ、一方通行の送客導線を足す」）の**意図どおり**。`SoratomoInviteViewModel.swift:27` のコメントにも「天名のページなので写さないこと」とある → **直さない**
 
-- [ ] 13.4 サポートURLを現物で確かめる（段3-4・release-gate tasks.md 19）
+- [x] 13.4 サポートURLを現物で確かめる（段3-4・release-gate tasks.md 19）
   - 前提: 13.1
   - 登録された App Store のサポートURLを ASC から読み（GO）、実際に開いて、連絡先が載っていることを確かめ、確かめた日時を記録する
   - release-gate の `tasks.md` の19の「結果」に、同じ日時と、開いて見た連絡先を書く（release-gate 要件12の2）
   - _Requirements: 8.2_
+  - 結果（2026-10-13 19:33〜19:40）:
+    - ASC から読んだ値（13.1 の読み返しの GO の範囲・19:33:14）: 1.15.0 の ja のサポート URL は **`https://sites.google.com/view/soramoyou-app/お問い合わせ`**（Google サイト）。⚠️ repo には書かれておらず、背景のエージェントの推測（`soramoyou-ios.web.app`）は外れていた
+    - 開いた結果（**2026-10-13 19:40:23**）: HTTP 200・題「そらもよう - お問い合わせ」・**連絡先のメールアドレスが 1 つ載っている**（「不具合の報告・機能に関するご要望・アカウントの削除依頼・その他」・「通常3営業日以内にご返信」）
+    - ⚠️ 載っているのは**開発者の個人の Gmail** で、ポリシー・削除の受付ページ・アプリの「お問い合わせ」の `soramoyou.app@gmail.com` とは別のアドレス（連絡はつくので公開は止めない。そろえるかは利用者に聞く）
+    - 利用者の決定（19:4x）: **AI の側で直せるなら `soramoyou.app@gmail.com` に直す**（Google サイトは repo の外。直したら開いて確かめ、日時をここと release-gate 19 に足す）
+    - release-gate の `tasks.md` の 19 の「結果」に、同じ日時と連絡先を書いた
+    - **直した（2026-10-13・編集と公開の GO は変える場所を見せてから 1 回）**: AI が Claude in Chrome で Google サイト「そらもよう」の編集画面を開き、**お問い合わせ**と**ホーム**（古い版のプライバシーポリシーの写し・「■ お問い合わせ」の欄）の 2 ページで、「メール: 」の後の個人の Gmail を `soramoyou.app@gmail.com` に置き換えた（行の末尾からアドレスの 26 文字だけを選んで打ち替え・前後の文は触っていない）。公開の前の確認の画面の変更点は「ホームを更新」「お問い合わせを更新」の 2 つだけ（前回の公開は 2026-02-11）→ 公開
+      - 読み返し（**2026-10-13 20:20:26**・GET）: お問い合わせ＝`soramoyou.app@gmail.com` が 3 回（本文と、ページの説明文 2 か所）・個人の Gmail は 0 回。ホーム＝1 回・個人の Gmail は 0 回。利用規約＝前から 0 回。直す前の同じ検査は個人の Gmail を 3 回と 1 回見つけていた（検査が効いていることの確かめ）
+      - 💡 ホームのページは古いプライバシーポリシーの写し（最終更新日 2026年2月10日）のまま。正式な版は `https://soramoyou-ios.web.app/privacy/`。直すかは別に決める（今回は連絡先だけ）
 
-- [ ] 13.5 公開判断の記録（G1〜G5）を残す（段3-5・利用者の判断）
+- [x] 13.5 公開判断の記録（G1〜G5）を残す（段3-5・利用者の判断）
   - 前提: 9.1, 10.4, 12.2, 12.3, 13.3, 13.4
   - soratomo spec の要件17の2の記録として、このタスクの結果と、release-gate の `tasks.md` の19の「結果」に次を書く
     - G1・G2: release-gate spec で完了（16.1〜16.4・17・18の結果の要約と、ガイドラインの本文の承認の日時と版＝release-gate 12.1 の 2026-10-09 08:17・v1）
@@ -694,12 +837,22 @@
     - サポートURL: 13.4 の日時と、開いて見た連絡先
   - release-gate の19を [x] にしてよいかは、利用者に聞く
   - _Requirements: 8.1_
+  - 結果（2026-10-13 20:2x・soratomo 要件17の2の「G1〜G5 の完了の記録」。release-gate 19 の「結果」にも同じ要約を書いた）:
+    - **G1・G2**（release-gate spec で完了）: 16.1〜16.4（退会・通報とブロック・同意と NG ワードと利用停止・古い版と定期実行と退会直後のトークンを、2 台・クレームのある 2 アカウントで確かめた・2026-10-09〜10）・17（ルールを本番へ・2026-10-10 07:10）・18（1.14.0/111 を審査へ・07:25）。**ガイドラインの本文の承認＝release-gate 12.1 の 2026-10-09 08:17・v1**（`SoratomoGuideline.currentVersion = 1`・コミット `dae1357`）
+      - ⚠️ release-gate の後の直し（#171 の F1/F2・#172 の D9＝タイムラインの続き読みの順序）の端末での確認は、記録の上では未確認のまま（**検証済みでない**）。12.2 の通しでタイムラインの表示と投稿はできた
+    - **G3**: What's New とオンボの文言の承認＝9.1 の **2026-10-12 14:36**（③ のポリシーの文は 15:04 に再承認）。12.2 の 1（全員向けの What's New が 2 ページで 1 回出て、開き直すと出ない）と 8（オンボの 5 ページ目にそらともが 1 枚・その後に What's New は出ない）を 2026-10-13 に確かめた
+    - **G4**: 12.3 の表のとおり（8 つのイベントが除外なしで 1 件以上・除外ありで 0 件・`$app_version`＝`1.15.0`）。⚠️ `soratomo_leave_failed` は本番で 2 回起こして未着・`leave_pending` は本番で起こせなかった（どちらも**検証済みでない**・利用者の決定で別の課題）。公開から 7 日の分は 15.2 で足す
+    - **G5**: 10.4 の承認＝**2026-10-12 10:48**。ポリシー＝ https://soramoyou-ios.web.app/privacy/ ・最終更新日 **2026年10月13日**（13.3 の deploy 19:39:53〜19:40:01・main とバイト一致）。プライバシーラベル＝変更なし（利用者の決定 19:4x・ASC の画面では見ていない）・入力表 `docs/app-privacy-label.md` は PR #181（`4b5e5863`・20:15:50）。年齢区分＝UGC・Messaging and Chat・Social Media を「はい」（利用者の決定 19:55 ごろ・書き込み 20:10:59）。審査メモ＝20:09:23（招待コードは ASC にだけ）
+      - ⚠️ 年齢区分の札が 13+ になったかは未確認。API の札の欄は書き込みで計算し直されず、ASC の画面は Mac の Chrome がログインしていなかった（20:2x・ログイン画面で止めた）。**審査の後に App Store のページで確かめる**（14.2）
+      - **訂正（2026-10-13 20:44 の ASC の GET で判明）**: 上の「ポリシー＝ https://soramoyou-ios.web.app/privacy/ 」は、ポリシーの本文の置き場（hosting）としては正しいが、**提出時の ASC の `privacyPolicyUrl`／`privacyChoicesUrl` はそこを指していなかった**（Google サイトの「利用規約」ページ）。直した結果は 13.3 の「訂正」の項（21:19:45 に審査中の appInfo を hosting へ・公開中の appInfo は 409 で直せず 1.15.0 の公開で入れ替わる見込み）
+    - **サポートURL**: 13.4 の 19:40:23 に開いた（連絡先＝個人の Gmail）→ 連絡先を直して **20:20:26** に開き直し、載っている連絡先は `soramoyou.app@gmail.com` だけ
+    - **release-gate の 19 は、利用者の決定（20:2x・AskUserQuestion）で [x] にした**（未確認の項目は「検証済みでない」と書いたまま）
 
 ## (j) 審査への提出と公開（段4-1〜5-3）
 
-- [ ] 14. 審査に出し、公開を迎える
+- [x] 14. 審査に出し、公開を迎える
 
-- [ ] 14.1 1.15.0 を審査へ提出する（段4-1・ユーザーのGOを取ってから実行）
+- [x] 14.1 1.15.0 を審査へ提出する（段4-1・ユーザーのGOを取ってから実行）
   - 前提: 1（leave-group の受け入れの確認が済んでいる）, 13.1〜13.5
   - 審査に出す build は、12.1 で配って12.2 で確かめたもの。違う場合は差分を示して、利用者に確認する。1.14.1（build 112）は出さない
   - 提出の直前に、3か所が開いたままであることをもう一度確かめる（読み返しの道具で本番のルール2本が main と一致・`functions:list` の22本）。審査の人が1.15.0を手にする間、サーバーは要件1の状態にある
@@ -707,19 +860,44 @@
   - 読み返し: `scripts/asc_ensure_build.py --version 1.15.0 --build <N> --check-only` で、`WAITING_FOR_REVIEW`・build・リリースノートの一致を見る
   - 提出の道具は「承認されたら自動で公開」のまま（利用者の判断1の B）
   - _Requirements: 3.1, 12.2, 12.4_
+  - 結果（2026-10-13 20:29〜20:34）:
+    - 出す build は **113**（12.1 で配って 12.2 で確かめたもの・期限 2027-01-11）。1.14.1（build 112）は出していない
+    - 提出の直前の読み返し（本番の読み取りの GO・20:2x）: `python3 scripts/read-deployed-rules.py <scratchpad>` で **ルール 2 本とも本番と手元が一致**（20:29:19・終了コード 0。Firestore＝ruleset `e4478b05`〔18:24:44〕・sha256 の頭 `de845cbd294b`、Storage＝`a4c9c06a`〔18:25:12〕・`0b6eddfffa16`）。`firebase functions:list` は **22 本**で、名前の集合がコードの数え（`index.js` 9・`skyMotion.js` 2・`soratomo.js` 11）と一致・場所は asia-northeast1・ランタイムは nodejs22（20:29:31）。手元のルールと `functions/` は origin/main と差 0
+    - 提出で deliver がもう一度走っても上書きされないことを `fastlane/Fastfile` の `deliver_release` で確かめた: `skip_screenshots: true`・メタデータは `ja/release_notes.txt` だけ・審査メモと年齢区分の設定ファイルは無い
+    - **提出（GO・20:33:34〜20:34:05・exit 0）**: `scripts/appstore-release.sh submit --version 1.15.0 --build 113 --yes`。マニフェストの照合を通り、ログに「Successfully selected build」「Successfully submitted the app for review!」
+    - 読み返し（20:34:11）: `asc_ensure_build.py --version 1.15.0 --build 113 --check-only` → **`WAITING_FOR_REVIEW`・build 113**。リリースノートは ASC と手元が末尾の改行を除いて一致（13.1 と同じ）
+    - 提出の前（20:33:18）と後（20:34）で同じ道具で読み、**審査メモ**（sha256 が 20:09 の本文と一致・2,098 文字・デモのアカウントあり）・**年齢区分**（1.15.0 側の全項目と id が 20:10 と同じ）・**スクショ**（1.15.0 は 9 枚×2・公開中の 1.14.0 は 8 枚×2・並びの id が 19:38 と同じ）が消えていないことを確かめた
+      - ⚠️ 道具が appInfo を状態の名前で引いていたので、提出後の 1 回目は年齢区分が「不一致」と出た（状態が `WAITING_FOR_REVIEW` に変わり、比べる相手が見つからなかった）。id で比べ直して、違う項目は無かった
+    - 審査の間は、審査用のグループ「空のアルバム」の招待コードを再発行しない（14.3 で再発行する）。提出の道具は「承認されたら自動で公開」のまま
 
-- [ ] 14.2 公開を知った日のうちに見回りを始める（段5-1）
+- [x] 14.2 公開を知った日のうちに見回りを始める（段5-1）
   - 前提: 14.1
   - 承認と同時に自動で公開される。公開の知らせ（ASC のメール・`asc_ensure_build.py --check-only` の `READY_FOR_SALE`）を受けた日のうちに、見回り（15.1）の公開後の分を始め、通報には24時間以内に対応する（release-gate 要件8の1）
   - `READY_FOR_SALE` と公開の日時を記録する（15.3 の比較に添える）
   - 公開の後は、そらともを全員に対して閉じ直さない（ルールと Functions を戻さない）。止める手段は、利用者ごとの利用停止（`soratomo-admin.js suspend`）と、次の版での修正だけ（決定事項2）
+  - 追加（2026-10-13・13.3 の訂正から）: 公開の後に ASC の appInfo を読み（GO）、公開中になった appInfo の ja の `privacyPolicyUrl`／`privacyChoicesUrl` が `https://soramoyou-ios.web.app/privacy/` になっていることを確かめる（App Store のページのリンクも開く）。利用規約のままなら PATCH し直す（GO）
   - _Requirements: 3.6, 11.4, 12.6_
+  - 途中の記録（2026-10-13 21:14:10・21:19:59 の GET）: 1.15.0 は `WAITING_FOR_REVIEW`・build 113（まだ承認されていない）
+  - 途中の記録（2026-10-14 05:21:42 の GET）: まだ `WAITING_FOR_REVIEW`・build 113
+  - 公開の確認（2026-10-15 00:36:36 JST の GET）: 1.15.0 は `READY_FOR_SALE`・build 113。公開の時刻は 10/14 05:21:42 の GET と、この GET の間。正確な時刻は未確定（iTunes lookup はまだ 1.14.0 を返す・Apple のメールは、つながっている Gmail に届いていない）
+  - プライバシー URL（同じ GET）: appInfo は 7f50af39 の 1 つだけになった（公開中だった caa81ac1 は無くなった）。ja の `privacyPolicyUrl`／`privacyChoicesUrl` は両方 `https://soramoyou-ios.web.app/privacy/`＝PATCH し直す必要はない。App Store のページのリンクを開く確認はまだ
+  - 年齢区分の札（2026-10-15 00:37:46 の iTunes lookup・`country=jp`）: まだ 1.14.0（`currentVersionReleaseDate` 2026-10-10T18:20:08Z）と `contentAdvisoryRating` 4+ を返した。lookup の更新が遅れているだけで、1.15.0 の札ではない。更新されてから読み直す
+  - 読み直し（2026-10-15 00:45:29 の iTunes lookup・00:45:39 の App Store のページ `apps.apple.com/jp/app/id6758070979` の GET）: どちらもまだ 1.14.0 の中身。lookup は 1.14.0・4+ のまま。ページも版は 1.14.0・札（`contentRating`）は 4+・「デベロッパプライバシーポリシー」のリンクは Google サイトの**利用規約**のまま（ASC の appInfo は 00:36 に hosting を確かめてあるので、ページの表示が古いだけ）。ページの中の「13+」は、同じデベロッパの別のアプリの札だった（そらもようの札ではない）。札 13+ とリンクは、ページが 1.15.0 に変わってから読み直す
+  - 見回り（15.1）の公開後の分を、公開を知った日のうち（2026-10-15 00:52）に始めた。開けた日（10/13 18:27）からの分もまとめて読んだ（15.1 の結果）
+  - **利用者の決定（2026-10-15 01:0x）: 14.2 は完了にする**。年齢区分の札 13+ と、App Store のページのプライバシーのリンクの読み直しは、App Store のページが 1.15.0 に変わった後の見回り（15.1）のついでに 1 回行い、結果をここに追記する（ASC の appInfo の URL は 00:36 に hosting を確かめ済み）
 
-- [ ] 14.3 審査の後片づけと、クレームの扱い（段5-2・5-3）
+- [x] 14.3 審査の後片づけと、クレームの扱い（段5-2・5-3）
   - 前提: 14.2
   - 審査用のグループの招待コードを、S3 が再発行する（審査の人へ渡したコードを使えなくする）。再発行の時刻を記録する。審査の人の投稿・通報が残っていれば見る
   - 公開の後は、新しくクレームを付けない。すでに付けたクレームは取り消さない（1.14.x のままのクレームのある人が、1.15.0 に更新するまで使い続けられるように）。後で取り消す場合は、付与のスクリプトの `--revoke`（既存のクレームと合成して書く仕組み）を使い、`skyMotionBeta` を消さない
   - _Requirements: 6.2, 6.3, 6.5_
+  - 途中の記録（2026-10-15 00:5x・PostHog と Functions のログを読んだだけ・15.1 の GO）: 審査の人は審査用のデモのアカウント（`FvPXCf`・US）で、10/13 23:01:10 に 1.15.0 でそらともを開き、23:01:17 にガイドラインの画面の結果を記録した。同意の呼び出し（`soratomoAgreeGuideline: ok`）はログに無い＝同意していない。その後はそらとも以外（お気に入り・ギャラリー・カメラ）を触っていた。そらともの参加・投稿・通報は 0 件＝審査の人の投稿・通報は残っていない。審査メモの「新しく登録したアカウントで」は使われなかった
+  - 結果（2026-10-15 00:57〜01:03・利用者は Mac の前・端末の操作と再発行は GO）:
+    - 事前点検（`~/.claude/skills/ios-sim-runner/scripts/preflight.py`）: F37CBCBC（iPhone 18 Pro・S3 でログイン中）で **OK 側を初めて通した**（Booted・影の DEVELOPER_DIR・companion が影で起動・pbinfo・終了コード 0）。`--tap-check 255 84`（グループの画面の上の「人＋」）も **OK**（スクショのハッシュが変わり、要素一覧で見出し「友達を招待」の招待の画面が開いたのを確かめた＝時計が進んだだけではない）
+    - 再発行の前: 招待の画面のコードの指紋（sha256 の頭）が、審査メモに書いたコードの控えの指紋と一致した（`44bddda5d6`）＝再発行で審査の人に渡したコードが使えなくなる。メンバーは「1人」のまま（審査の人は参加していない）
+    - **再発行（GO）: 01:01:54 に「招待コードを再発行する」→ 確認「招待コードを再発行しますか？」→ 01:02:11 に「再発行する」**。Functions のログに `soratomoRegenerateInviteCode: ok` が 1 件（**01:02:16 JST**・uid `8Ar2DV`＝S3・groupId `y2PpRM`＝空のアルバム）。画面のコードの指紋は 01:02:29 までに `44bddda5d6` → `4ef33b0ae6` に変わった（コードの値は画面・チャット・記録に出していない）
+    - 審査の人の投稿・通報: 残っていない（上の途中の記録・15.1 の 10/13 の行）。グループの投稿は S3 の 3 枚だけ
+    - クレーム: 公開の後に新しく付けたり、取り消したりしていない（このセッションの範囲・方針どおり）
 
 ## (k) 公開後の見回りと比較（段6-1〜6-3）
 
@@ -733,6 +911,11 @@
   - 通報は24時間以内に `show-report` → `review-report`（GO）
   - 要確認9: 初日に、Functions のログを uid ごとに数える方法（`gcloud logging read` の権限、または `functions_get_logs` の1回1000件の上限）を1回試す。足りなければ時間帯を分けて読む
   - _Requirements: 5.2, 5.3_
+  - 結果（1 日 1 行・uid は頭 6 文字・本番は読むだけ）:
+    - 読み方（要確認9 の答え・2026-10-15 00:52 に試した・利用者の GO）: `gcloud logging read` でも `functions_get_logs` でもなく、firebase CLI のログインの token（画面に出さない）で Cloud Logging の `entries:list`（REST）を読み、台本の中で集計してから、uid と groupId の頭 6 文字・件数・理由だけを出した。1 回 1,000 件で、`nextPageToken` で続きを読む（この窓は 42 件・1 ページ）。uid の全体はチャットにも出していない。使用量は 10.2 と同じ Cloud Monitoring。PostHog は MCP の `execute-sql`（除外の条件は research.md のもの〔開発者 2 件は `nzvqlZ%`・`bOigAs%`〕）。台本は scratchpad の `ops/patrol.py`（再起動で消える）
+      - 陽性対照: 10/13 の S5 の通し（12.2・12.3）の作成・参加・通報・抜ける・架空の招待コードの `not_found` が、ログにも PostHog にも出た＝読み方は効いている
+    - 10/13（開けた 18:27 から・2026-10-15 00:52 に読んだ）: そらともの呼び出しはテスト用のアカウントだけ（作成 2＝S5・S3／参加 1＝S5／投稿 6＝S3 5・S5 1／通報 1＝S5〔12.2 で 18:58 に `no_violation` で閉じた〕／抜ける 1＝S5／同意 1＝S5／rejected は参加の `not_found` 1＝S5 の架空の招待コード）。テスト用でない uid は、退会のそらともの片づけ（`soratomoDeleteMyData: ok`）の 1 件 `jHcHjQ` だけ。目安: 作成の 24 時間の最大 1・投稿の 1 人×1 グループの 24 時間の最大 3・`not_found` の 1 時間の最大 1・`registration_required` 0・`internal` 0＝どれも目安の下。使用量（その日の 0 時から）: 読み取り 36,053・書き込み 1,856・削除 44・転送 2.22 GB・呼び出し 2,264＝どれも目安の下。PostHog（除外なし／あり）: そらとものイベント 27／0（S3 10・S5 15・審査のデモ 2）＝ログと食い違いなし。Discord: 新しい通報なし（ログの通報は S5 の 1 件だけ）
+    - 10/14（2026-10-15 00:52 に読んだ）: そらともの呼び出しは 0 件（定期実行の片づけ `soratomoHousekeeping` の 3 種が 4 回ずつと、退会のそらともの片づけ 1 件 `SgXxhW` だけ）。rejected 0。使用量: 読み取り 41,413・書き込み 1,803・削除 19・転送 2.44 GB・呼び出し 2,287＝どれも目安の下。Storage の保存量（日の最大）は 2.00 → 2.13 → 2.21 GB（1 日の伸び +0.13／+0.08 GB・10.2 の伸びは 1 日あたり約 0.07 GB で、2 倍の目安の下。Monitoring の出力では 10/14・10/15 の日付で出た。区切りの終わりの時刻で日付が付いて 1 日ずれて見えるのだと思う・要確認）。PostHog: そらとものイベント 0／0。Discord: 新しい通報なし。※ 1.15.0 の公開は 10/14 05:21〜10/15 00:36 の間なので、10/14 は公開の前の分を多く含む
 
 - [ ] 15.2 公開から7日で、G4 の残りを確かめる（段6-2）
   - 前提: 12.3, 14.2（公開から7日）
