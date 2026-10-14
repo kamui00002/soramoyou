@@ -85,6 +85,7 @@ https://soramoyou-ios.web.app/privacy/
 > 上の URL ではなく **Google サイトの「利用規約」ページ**だった（`privacyChoicesUrl` も同じ）。
 > 同日 21:19 に、審査中の appInfo（1.15.0 と一緒に出る側）の `privacyPolicyUrl` と `privacyChoicesUrl` の両方を上の URL へ直した。
 > 公開中の appInfo（1.14.0 側）は `409 INVALID_STATE`（今の状態では変えられない）で直せず、1.15.0 の公開で入れ替わる。公開の後に読み直して確かめる。
+> 追記（2026-10-15 00:36）: 1.15.0 の公開の後に ASC の API で読み直した。appInfo は 1.15.0 側の 1 つだけになり、2 つの URL とも上の URL になっていた。App Store のページの表示（00:45）はまだ 1.14.0 のままで、表示が新しくなった後の確認は未。
 > 確かめ方: 文書ではなく現物で。ASC の API の `appInfoLocalizations` の `privacyPolicyUrl`／`privacyChoicesUrl` を読む。
 
 ---
