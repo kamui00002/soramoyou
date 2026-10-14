@@ -83,3 +83,8 @@ test("isAlreadyExistsError: Admin SDK の ALREADY_EXISTS（コード 6）を判�
   assert.equal(core.isAlreadyExistsError({ code: 7 }), false);
   assert.equal(core.isAlreadyExistsError(undefined), false);
 });
+
+// ⚠️ Ruleset の陽性対照（2026-10-15）：わざと落とす。この PR はマージしない（確かめたら閉じる）。
+test("Ruleset の陽性対照：わざと落とす", () => {
+  assert.fail("Ruleset の陽性対照。この PR はマージしない");
+});
