@@ -878,6 +878,10 @@
   - 追加（2026-10-13・13.3 の訂正から）: 公開の後に ASC の appInfo を読み（GO）、公開中になった appInfo の ja の `privacyPolicyUrl`／`privacyChoicesUrl` が `https://soramoyou-ios.web.app/privacy/` になっていることを確かめる（App Store のページのリンクも開く）。利用規約のままなら PATCH し直す（GO）
   - _Requirements: 3.6, 11.4, 12.6_
   - 途中の記録（2026-10-13 21:14:10・21:19:59 の GET）: 1.15.0 は `WAITING_FOR_REVIEW`・build 113（まだ承認されていない）
+  - 途中の記録（2026-10-14 05:21:42 の GET）: まだ `WAITING_FOR_REVIEW`・build 113
+  - 公開の確認（2026-10-15 00:36:36 JST の GET）: 1.15.0 は `READY_FOR_SALE`・build 113。公開の時刻は 10/14 05:21:42 の GET と、この GET の間。正確な時刻は未確定（iTunes lookup はまだ 1.14.0 を返す・Apple のメールは、つながっている Gmail に届いていない）
+  - プライバシー URL（同じ GET）: appInfo は 7f50af39 の 1 つだけになった（公開中だった caa81ac1 は無くなった）。ja の `privacyPolicyUrl`／`privacyChoicesUrl` は両方 `https://soramoyou-ios.web.app/privacy/`＝PATCH し直す必要はない。App Store のページのリンクを開く確認はまだ
+  - 年齢区分の札（2026-10-15 00:37:46 の iTunes lookup・`country=jp`）: まだ 1.14.0（`currentVersionReleaseDate` 2026-10-10T18:20:08Z）と `contentAdvisoryRating` 4+ を返した。lookup の更新が遅れているだけで、1.15.0 の札ではない。更新されてから読み直す
 
 - [ ] 14.3 審査の後片づけと、クレームの扱い（段5-2・5-3）
   - 前提: 14.2
