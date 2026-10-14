@@ -81,7 +81,7 @@ USAGE_LIMITS = {
     "Storage 転送（送信）GB": 8.26,
     "Functions 呼び出し（Cloud Run）": 4782,
 }
-# (表示名, 指標, 日ごとの集め方, 割る数)。Storage の保存量は目安なし（値だけ）
+# (表示名, 指標, 日ごとの集め方, 割る数)。Storage の保存量は伸びの目安（10.3）を人が前日と比べる（道具は値だけ出す）
 USAGE_METRICS = [
     ("Firestore 読み取り", "firestore.googleapis.com/document/read_count", "ALIGN_SUM", 1),
     ("Firestore 書き込み", "firestore.googleapis.com/document/write_count", "ALIGN_SUM", 1),
@@ -111,6 +111,11 @@ def load_token(now=None):
     except (OSError, ValueError, KeyError, TypeError) as e:
         # 例外の文には、項目の名前やファイルの中身の一部が載ることがあるので、型の名前だけを出す
         raise ReadError(f"firebase CLI のログイン情報が読めない（{type(e).__name__}）。`firebase login` の状態を確かめる") from None
+    # 空白・改行・制御文字の混ざったトークンは、http.client がヘッダーの検査で例外にし、その文にトークンを
+    # repr（改行を \n と書いた形）で載せる。redact の完全一致では伏せられないので、送る前に止める（値は出さない）
+    if not isinstance(token, str) or not token or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in token):
+        raise ReadError("firebase CLI のログイン情報のトークンの形がおかしい（空・文字列でない・空白や改行を含む）。"
+                        "`firebase projects:list > /dev/null` を一度実行してから再実行する")
     if left_min < TOKEN_MIN_MINUTES:
         raise ReadError(
             f"トークンが切れている／切れそう（残り {left_min:.0f} 分）。"
@@ -163,6 +168,11 @@ def parse_ts(s):
     fromisoformat は 6 桁を超える小数部を読めない版があるので、6 桁に切ってから読む"""
     base, _, frac = s.rstrip("Z").partition(".")
     return dt.datetime.fromisoformat(base + ("." + frac[:6] if frac else "") + "+00:00").astimezone(JST)
+
+
+def _now():
+    """今の時刻（JST）。テストで固定できるように関数にしている（使用量の注記が日によって変わらないように）"""
+    return dt.datetime.now(JST)
 
 
 def day_key(t):
@@ -232,7 +242,8 @@ def summarize_logs(entries, start, end, pages):
     for t, jp in entries:
         by_day[day_key(t)].append((t, jp))
 
-    group_create = defaultdict(list)   # uid -> 時刻
+    group_create = defaultdict(list)   # uid -> 時刻（同じ groupId の送り直しは最初の 1 件だけ）
+    group_seen = set()                 # (uid, groupId)。送り直しを見分ける
     sky_create = defaultdict(list)     # (uid, groupId) -> 時刻（created が false でないものだけ）
     join_not_found = defaultdict(list)  # uid -> 時刻
     registration_required = 0
@@ -251,8 +262,14 @@ def summarize_logs(entries, start, end, pages):
             fn = short(fn)
             if kind == "ok":
                 ok_uid[fn][tag(jp.get("uid"))] += 1
+                # 同じ要求 ID の送り直しは、サーバーが前回のグループを返して同じ groupId で ok を出す
+                # （soratomoStore.js の冪等の枝）ので、(uid, groupId) が 2 回目以降のものは数えない。
+                # groupId の無い項目は見分けられないので、そのまま数える
                 if fn == "soratomoCreateGroup":
-                    group_create[jp.get("uid")].append(t)
+                    key = (jp.get("uid"), jp.get("groupId"))
+                    if key[1] is None or key not in group_seen:
+                        group_seen.add(key)
+                        group_create[jp.get("uid")].append(t)
                 # created が false のものは、再送で同じ投稿を返しただけ（新しい投稿ではない）なので数えない
                 if fn == "soratomoCreateSky" and jp.get("created") is not False:
                     sky_create[(jp.get("uid"), jp.get("groupId"))].append(t)
@@ -278,7 +295,8 @@ def summarize_logs(entries, start, end, pages):
     gc = sorted(((tag(u), sliding_max(ts, day)) for u, ts in group_create.items()), key=lambda x: -x[1])
     text, w = fmt_items(gc, GROUP_CREATE_LIMIT)
     warned |= w
-    lines.append(f"  グループの作成（1 人の 24 時間の最大・目安 {GROUP_CREATE_LIMIT} 以上）: " + (text or "0 件"))
+    lines.append(f"  グループの作成（1 人の 24 時間の最大・同じグループの送り直しを除く・目安 {GROUP_CREATE_LIMIT} 以上）: "
+                 + (text or "0 件"))
 
     sc = sorted(((f"{tag(u)}/{(g or '')[:6]}", sliding_max(ts, day)) for (u, g), ts in sky_create.items()), key=lambda x: -x[1])
     text, w = fmt_items(sc[:10], SKY_CREATE_LIMIT)
@@ -309,7 +327,12 @@ def fetch_series(metric, aligner, mstart, mend, token):
     out = {}
     for s in res.get("timeSeries", []):
         for p in s.get("points", []):
-            t = dt.datetime.fromisoformat(p["interval"]["startTime"].replace("Z", "+00:00")).astimezone(JST)
+            # 日付は区切りの終わり（endTime）の 1 秒前で付ける。件数（DELTA）の点は startTime が区切りの始まりだが、
+            # 保存量（GAUGE）の点は startTime が endTime と同じ（＝翌日の 0 時）なので、startTime で付けると
+            # 保存量だけが 1 日先の日付になる（2026-10-15 の試作の実行で、保存量だけ 1 日ずれて出たことと合う。
+            # GAUGE の点の形は一次資料では未確認＝要確認。--day の見回りで保存量がその日の日付で出れば合っている）
+            end_t = dt.datetime.fromisoformat(p["interval"]["endTime"].replace("Z", "+00:00"))
+            t = (end_t - dt.timedelta(seconds=1)).astimezone(JST)
             v = p["value"]
             out[day_key(t)] = out.get(day_key(t), 0) + float(v.get("int64Value", v.get("doubleValue", 0)))
     return dict(sorted(out.items()))
@@ -341,9 +364,20 @@ def summarize_usage(series):
                 warned = True
             cells.append(f"{d} {s}")
         lines.append(f"  {name}: " + ", ".join(cells) + (f"（目安 {limit:,}）" if limit is not None else ""))
-    lines.append("  ※ Storage の保存量は日付が 1 日ずれて見えることがある（2026-10-15 の試作の実行で観測）。目安は無く、値だけ")
-    lines.append("  ※ 最後の日は途中までの値（終わりの時刻まで）")
+    lines.append("  ※ Storage の保存量は、伸びの目安（tasks.md 10.3: 7 日で +0.51 GB＝1 日あたり約 0.07 GB の 2 倍＝"
+                 "約 0.15 GB／日）を、前日の値と人が比べる（道具は警告の印を付けない）")
     return lines, warned
+
+
+def usage_notes(end, mend, now):
+    """使用量の注記の行（純関数）。窓の終わりが 0 時でないときと、最後の日がまだ終わっていないときだけ出す"""
+    last_day = day_key(mend - dt.timedelta(seconds=1))
+    notes = []
+    if mend > end:
+        notes.append(f"  ※ 使用量は日ごとの値なので、{last_day} は窓の終わり（{end:%H:%M}）を越えて、その日の終わりまでを数えている")
+    if mend > now:
+        notes.append(f"  ※ {last_day} はまだ終わっていないので、読んだ時刻までの途中の値")
+    return notes
 
 
 def parse_window(args):
@@ -396,7 +430,7 @@ def main(argv=None):
         series = [(name, fetch_series(metric, aligner, mstart, mend, token), div)
                   for name, metric, aligner, div in USAGE_METRICS]
         usage_lines, usage_warned = summarize_usage(series)
-        lines += usage_lines
+        lines += usage_lines + usage_notes(end, mend, _now())
     except ReadError as e:
         _emit(lines)
         print("読めなかった:", e)

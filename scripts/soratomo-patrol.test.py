@@ -20,11 +20,15 @@ spec: .kiro/specs/soratomo-public-launch/（tasks.md 10.3・15.1 の見回りの
   - uid・groupId の全体が出力に出ない（頭 6 文字とテスト用の印は出る）
   - 乱用を疑う目安の陽性対照（目安ちょうどで ⚠️・終了コード 1）と陰性対照（1 つ手前で ⚠️ なし・終了コード 0）
   - 使用量の目安超え・トークンの期限切れ（ネットワークを呼ばずに 2）・HTTP のエラー（2・トークンが出ない）
+  - グループの作成の送り直し（同じ groupId）は 1 件と数える
+  - 使用量の日付は区切りの終わりで付ける（保存量〔GAUGE〕の点は startTime が endTime と同じ）
+  - 改行の混ざったトークンは、送る前に止める（http.client のヘッダーの例外の文から漏れないように）
   - 送る要求は、logging の entries:list への POST と monitoring の timeSeries への GET だけ
   - 使い方の誤りは終了コード 2
 """
 import contextlib
 import datetime as dt
+import http.client
 import importlib.util
 import io
 import json
@@ -60,6 +64,10 @@ BASE_TIME = dt.datetime(2026, 10, 14, 1, 0, tzinfo=JST)
 
 READ_METRIC = "firestore.googleapis.com/document/read_count"
 SENT_METRIC = "storage.googleapis.com/network/sent_bytes_count"
+STORED_METRIC = "storage.googleapis.com/storage/total_bytes"  # GAUGE（ある時点の量）。ほかは DELTA（区切りの間の合計）
+
+# 使用量の注記が日によって変わらないように固定する「今」（どの窓よりも後）
+FIXED_NOW = dt.datetime(2026, 10, 20, 12, 0, tzinfo=JST)
 
 
 class NetworkCalled(BaseException):
@@ -95,7 +103,9 @@ def at(minutes):
 class FakeGoogleApi:
     """Cloud Logging と Cloud Monitoring の代わり。呼ばれた要求を記録して、決めた JSON を返す。
     log_pages: ページごとの項目の並び（nextPageToken は "page-1" のように作る）
-    usage: {指標: {"MM/DD": 値}}（Monitoring の日ごとの点にして返す。無い指標は点なし）
+    usage: {指標: {"MM/DD": 値}}（Monitoring の日ごとの点にして返す。無い指標は点なし）。
+      点の interval は、DELTA なら startTime＝その日の 0 時・endTime＝翌日の 0 時、
+      GAUGE（保存量）なら startTime＝endTime＝翌日の 0 時（整列した GAUGE の点は一瞬の値なので、始まりが終わりと同じ）
     errors: {URL に含まれる文字列: 投げる例外}"""
 
     def __init__(self, log_pages=None, usage=None, errors=None):
@@ -125,8 +135,10 @@ class FakeGoogleApi:
             for day, value in self.usage.get(metric, {}).items():
                 month, d = day.split("/")
                 start = dt.datetime(2026, int(month), int(d), tzinfo=JST).astimezone(dt.timezone.utc)
-                points.append({"interval": {"startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ")},
-                               "value": {"doubleValue": value}})
+                end = start + dt.timedelta(days=1)
+                interval = {"startTime": (end if metric == STORED_METRIC else start).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ")}
+                points.append({"interval": interval, "value": {"doubleValue": value}})
             res = {"timeSeries": [{"points": points}] if points else []}
             return io.BytesIO(json.dumps(res).encode("utf-8"))
         raise http_error(url, 404, "{}")
@@ -138,6 +150,7 @@ class SoratomoPatrolTest(unittest.TestCase):
             "urlopen": mock.patch.object(sp.urllib.request, "urlopen", refuse_network),
             "load_token": mock.patch.object(sp, "load_token", return_value=TOKEN),
             "sleep": mock.patch.object(sp.time, "sleep"),
+            "now": mock.patch.object(sp, "_now", return_value=FIXED_NOW),
         }
         for patcher in self.patchers.values():
             patcher.start()
@@ -302,6 +315,25 @@ class SoratomoPatrolTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertNotIn(WARN, out)
 
+    def test_グループの作成の送り直しは同じgroupIdなら1件と数える(self):
+        # 2 つ作り、2 つ目を同じ要求 ID で送り直した（サーバーは前回のグループを返し、同じ groupId で ok を出す）
+        entries = [entry(at(0), "soratomoCreateGroup: ok", UID_S3, groupId=GROUP_A),
+                   entry(at(10), "soratomoCreateGroup: ok", UID_S3, groupId=GROUP_B),
+                   entry(at(11), "soratomoCreateGroup: ok", UID_S3, groupId=GROUP_B)]
+        code, out, _ = self.run_wide(entries)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn(WARN, out)
+        self.assertIn("8Ar2DV(S3)=2", self.line_with(out, "グループの作成"))
+        # 日ごとの ok の件数は、送り直しを含めたまま（ログの件数そのもの）
+        self.assertIn("ok の uid ごと soratomoCreateGroup: 8Ar2DV(S3)×3", out)
+
+    def test_グループの作成は別のgroupIdなら3件で警告(self):
+        entries = [entry(at(i * 10), "soratomoCreateGroup: ok", UID_S3, groupId=g)
+                   for i, g in enumerate([GROUP_A, GROUP_B, "zz9ZZZ" + "THIRDTHIRDTHIRDTHIRD"])]
+        code, out, _ = self.run_wide(entries)
+        self.assertEqual(code, 1, out)
+        self.assertIn("8Ar2DV(S3)=3" + WARN, out)
+
     def test_グループの作成は人ごとに数える(self):
         entries = self.creates([0, 10], uid=UID_S3) + self.creates([20, 30], uid=UID_S5)
         code, out, _ = self.run_wide(entries)
@@ -392,14 +424,42 @@ class SoratomoPatrolTest(unittest.TestCase):
         code, out, _ = self.run_wide([], usage={SENT_METRIC: {"10/13": 8.26e9}})
         self.assertEqual(code, 0, out)
 
-    def test_Storageの保存量は目安なしで値だけ(self):
-        usage = {"storage.googleapis.com/storage/total_bytes": {"10/14": 99e9}}
+    def test_Storageの保存量は警告を付けず伸びは人が比べる案内を出す(self):
+        usage = {STORED_METRIC: {"10/14": 99e9}}
         code, out, _ = self.run_wide([], usage=usage)
         self.assertEqual(code, 0, out)
         line = self.line_with(out, "Storage 保存量（日の最大）GB")
-        self.assertIn("10/14 99.00", line)
+        self.assertIn("99.00", line)
         self.assertNotIn("目安", line)
-        self.assertIn("日付が 1 日ずれて見える", out)
+        self.assertIn("約 0.15 GB／日）を、前日の値と人が比べる", out)
+
+    def test_使用量の日付は区切りの終わりで付け保存量もずれない(self):
+        # 保存量（GAUGE）の点は startTime が翌日の 0 時。startTime で日付を付けると 10/15 になってしまう
+        usage = {STORED_METRIC: {"10/14": 2.13e9}, READ_METRIC: {"10/14": 100}}
+        code, out, _ = self.run_wide([], usage=usage)
+        self.assertEqual(code, 0, out)
+        self.assertIn("10/14 2.13", self.line_with(out, "Storage 保存量（日の最大）GB"))
+        self.assertIn("10/14 100", self.line_with(out, "Firestore 読み取り"))
+        self.assertNotIn("10/15", out.split("== 使用量")[1])
+
+    def test_使用量の注記は過ぎた日を丸ごと読むときは出ない(self):
+        code, out = self.run_tool(["--day", "2026-10-15"], FakeGoogleApi())
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("途中", out)
+        self.assertNotIn("その日の終わりまで", out)
+
+    def test_使用量の注記は終わりが0時でないときと最後の日が終わっていないときに出る(self):
+        # 終わりが 12:00（過ぎた時刻）: 使用量は 10/14 の終わりまでを数える、とだけ出る
+        code, out = self.run_tool(["--from", "2026-10-13 18:27", "--to", "2026-10-14 12:00"], FakeGoogleApi())
+        self.assertEqual(code, 0, out)
+        self.assertIn("10/14 は窓の終わり（12:00）を越えて、その日の終わりまでを数えている", out)
+        self.assertNotIn("途中", out)
+        # 今日（10/15 の 9:00）を丸ごと指定: 10/15 はまだ終わっていない
+        with mock.patch.object(sp, "_now", return_value=dt.datetime(2026, 10, 15, 9, 0, tzinfo=JST)):
+            code, out = self.run_tool(["--day", "2026-10-15"], FakeGoogleApi())
+        self.assertEqual(code, 0, out)
+        self.assertIn("10/15 はまだ終わっていないので、読んだ時刻までの途中の値", out)
+        self.assertNotIn("その日の終わりまで", out)
 
     def test_使用量のデータが無い指標はデータなしと出す(self):
         code, out, _ = self.run_wide([])
@@ -443,6 +503,43 @@ class SoratomoPatrolTest(unittest.TestCase):
                 self.assertNotIn(TOKEN, str(cm.exception))
                 write(10)
                 self.assertEqual(sp.load_token(), TOKEN)
+
+    def write_token_file(self, tmp, access_token):
+        """本物の load_token に読ませるログイン情報を、一時ファイルに書く（期限は 1 時間後）"""
+        path = os.path.join(tmp, "firebase-tools.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"tokens": {"access_token": access_token, "expires_at": (time.time() + 3600) * 1000}}, f)
+        return path
+
+    def test_改行の混ざったトークンは送る前に止めて値を出さない(self):
+        self.patchers["load_token"].stop()
+        self.addCleanup(self.patchers["load_token"].start)
+
+        def header_check_only(req, timeout=None):
+            # 本物の http.client のヘッダーの検査だけを通す（接続はしない）。改行の混ざった値は ValueError になり、
+            # その文には値が repr（改行を \n と書いた形）で載る＝redact の完全一致では伏せられない
+            conn = http.client.HTTPConnection("example.invalid")
+            conn.putrequest(req.get_method(), "/")
+            conn.putheader("Authorization", req.get_header("Authorization"))
+            raise AssertionError("ヘッダーの検査を通った（改行の混ざったトークンを送ろうとした）")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(sp, "TOKEN_FILE", self.write_token_file(tmp, TOKEN + "\n")):
+                code, out = self.run_tool(WIDE, header_check_only)
+        self.assert_no_token(out)  # 先に漏れを確かめる（直す前の道具では、ここで落ちる）
+        self.assertEqual(code, 2, out)
+        self.assertIn("トークンの形がおかしい", out)
+
+    def test_トークンが空や文字列でなければ止めて値を出さない(self):
+        self.patchers["load_token"].stop()
+        self.addCleanup(self.patchers["load_token"].start)
+        for bad in ("", None, 12345, "ya29.SENTINEL with space"):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as tmp:
+                with mock.patch.object(sp, "TOKEN_FILE", self.write_token_file(tmp, bad)):
+                    code, out = self.run_tool(WIDE)  # api を渡さない: ネットワークを呼んだら NetworkCalled で落ちる
+                self.assertEqual(code, 2, out)
+                self.assertIn("トークンの形がおかしい", out)
+                self.assert_no_token(out)
 
     def test_ログイン情報が壊れていても中身を出さない(self):
         self.patchers["load_token"].stop()
