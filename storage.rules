@@ -12,11 +12,22 @@ service firebase.storage {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // NOTE: Firebase Storage rules cannot access Firestore data.
-    // Follower access control is handled at the Firestore level.
-    // For followers-only content, the app should:
-    // 1. Check follower status via Firestore rules when fetching posts
-    // 2. Use signed URLs or Cloud Functions for image delivery in Phase 2
+    // フォロワー限定の画像（posts・thumbnails・originals の followers）を読んでよいか ⭐️
+    // - 本人か、持ち主をフォローしている人だけ。フォローしている＝Firestore に follows/{読む人}_{持ち主} の文書がある
+    //   （firestore.rules の isFollowing と同じ条件。向きを逆にしない）
+    // - 約束:「follows の文書がある＝見てよい」。承認制を足すときは、リクエストを別のコレクションに置き、
+    //   承認したときだけ follows を作る（follows に承認待ちの項目を足すと、ここの exists が承認待ちの人まで通す）。
+    //   この約束が効くのは、follows を作れる人が firestore.rules で正しく絞られているときだけ
+    // - request.auth.uid を読むので、必ず isAuthenticated() の後ろに && でつなぐ（未ログインで評価させない）
+    // - Storage のルールから Firestore を読むには IAM の付与が要る（そらともと同じ）。付与しないとフォロワーも拒否される
+    // - キャッシュに無い画像を 1 枚読むごとに、Firestore の exists が 1 回かかる
+    // テスト: functions/postsFollowersStorage.emulator.test.js（Emulator・CI）と
+    //         scripts/rules_test_storage_followers.py（Rules test API。この関数の形を文字列で壊して陽性対照を取るので、形を変えるときは両方直す）
+    function canReadFollowersImage(userId) {
+      return isOwner(userId)
+             || (isAuthenticated()
+                 && firestore.exists(/databases/(default)/documents/follows/$(request.auth.uid + '_' + userId)));
+    }
 
     function isImageFile() {
       return request.resource.contentType.matches('image/.*');
@@ -55,15 +66,9 @@ service firebase.storage {
     }
 
     // Post images - followers only
-    // NOTE: Storage cannot verify Firestore followers collection.
-    // Currently allows authenticated users; actual follower check is done
-    // at Firestore level when fetching post metadata.
-    // Phase 2: Implement signed URLs via Cloud Functions for proper access control.
-    // NOTE: Phase 2でCloud Functionsを使った署名URL方式で完全なアクセス制御を実装予定
-    // 現状はログイン済みユーザー全員が読み取り可能（一時的な制限）
+    // 読み取り（get）は本人とフォロワーだけ（canReadFollowersImage）。一覧（list）は誰にも許さない（アプリは listAll を使っていない）
     match /posts/{userId}/followers/{imageId} {
-      // Authenticated users can read (follower check at Firestore level)
-      allow read: if isAuthenticated();
+      allow get: if canReadFollowersImage(userId);
 
       // Only the owner can upload followers-only images
       allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
@@ -112,12 +117,9 @@ service firebase.storage {
     }
 
     // Thumbnail images - followers only
-    // NOTE: Same limitation as posts - follower check at Firestore level
-    // NOTE: Phase 2でCloud Functionsを使った署名URL方式で完全なアクセス制御を実装予定
-    // 現状はログイン済みユーザー全員が読み取り可能（一時的な制限）
+    // 読み取り（get）は本人とフォロワーだけ（canReadFollowersImage）。一覧（list）は誰にも許さない
     match /thumbnails/{userId}/followers/{imageId} {
-      // Authenticated users can read (follower check at Firestore level)
-      allow read: if isAuthenticated();
+      allow get: if canReadFollowersImage(userId);
 
       // Only the owner can upload followers-only thumbnails
       allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
@@ -154,12 +156,9 @@ service firebase.storage {
     }
 
     // Original images (unedited) - followers only
-    // NOTE: Same limitation as posts - follower check at Firestore level
-    // NOTE: Phase 2でCloud Functionsを使った署名URL方式で完全なアクセス制御を実装予定
-    // 現状はログイン済みユーザー全員が読み取り可能（一時的な制限）
+    // 読み取り（get）は本人とフォロワーだけ（canReadFollowersImage）。一覧（list）は誰にも許さない
     match /originals/{userId}/followers/{imageId} {
-      // Authenticated users can read (follower check at Firestore level)
-      allow read: if isAuthenticated();
+      allow get: if canReadFollowersImage(userId);
 
       // Only the owner can upload followers-only original images
       allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
