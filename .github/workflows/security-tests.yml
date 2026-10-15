@@ -29,6 +29,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1     # v7.0.1
         with:
           persist-credentials: false        # 鍵を .git/config に残さない
+      - name: UI テストの起動の見張り（Emulator への目印を通らない書き方を探す・grep だけ）
+        working-directory: .
+        run: bash scripts/check-uitests-launch-guard.sh
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1   # v7.1.0
         with:
           node-version: "22"
