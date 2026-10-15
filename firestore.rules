@@ -22,6 +22,21 @@ service cloud.firestore {
              exists(/databases/$(database)/documents/follows/$(followId));
     }
 
+    // フォローする相手（followee）にブロックされていないか（follows の create で使う）⭐️（監査 2-3）
+    // - 相手の users/{followeeId}.blockedUserIds に自分の uid があれば false
+    // - 見るのは相手の一覧だけ。ブロックした本人が、ブロックした相手をフォローするのは止めない
+    // - 相手の users 文書が無い・項目が無いときは true（一覧は users 文書の中にあるので、無い＝誰もブロックしていない。
+    //   登録の途中で users を作りそこねた人もいるので、文書が無い相手を拒否にはしない）
+    // - exists と get は同じ文書なので、読み取りの費用は 1 回分
+    // ⚠️ storage.rules の canReadFollowersImage は「follows の文書がある＝フォロワー限定を見てよい」とだけ見る。
+    //    ブロックされた人を除けるのは、ここで follows を作らせないから。外すとブロックした相手にも写真が見える。
+    // ⚠️ この形は scripts/rules_test_follows_block.py の MUTANTS が文字列で狙う。書き換えたら合わせること。
+    function isNotBlockedByFollowee(followeeId) {
+      let followeePath = /databases/$(database)/documents/users/$(followeeId);
+      return !exists(followeePath)
+             || !(request.auth.uid in get(followeePath).data.get('blockedUserIds', []));
+    }
+
     // ============================================
     // Data Validation functions
     // ============================================
@@ -236,11 +251,13 @@ service cloud.firestore {
       //    ズレると退会処理の follows 削除が permission-denied で止まる。
       allow list: if isAuthenticated() && request.query.limit <= 50;
 
-      // フォロー作成: 自分がフォロワーの場合のみ
+      // フォロー作成: 自分がフォロワーの場合のみ。相手にブロックされていたら作れない（isNotBlockedByFollowee）
+      // ブロックの確認は最後に置く（ほかの条件で落ちる要求では users を読まない）
       allow create: if isAuthenticated()
                     && request.resource.data.followerId == request.auth.uid
                     && followId == request.auth.uid + '_' + request.resource.data.followeeId
-                    && request.resource.data.keys().hasAll(['followerId', 'followeeId', 'createdAt']);
+                    && request.resource.data.keys().hasAll(['followerId', 'followeeId', 'createdAt'])
+                    && isNotBlockedByFollowee(request.resource.data.followeeId);
 
       // フォロー解除: 自分のフォローのみ削除可能
       // ＋ フォロワー削除（PR-5）: フォローされている側（followee）も削除可能
