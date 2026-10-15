@@ -24,6 +24,19 @@
 - iOS最小サポートバージョン
 ```
 
+### テストの前にEmulatorを起動する（本番につながないため）⭐️
+テスト（単体テスト・UIテスト）のときだけ、アプリはFirebaseの接続先をEmulator（手元のMacで動く偽物のFirebase）へ切り替える。プロジェクトIDも`demo-soramoyou-security`の偽物になる（`Soramoyou/Soramoyou/Services/FirebaseEmulatorSwitch.swift`）。
+
+```bash
+# 別のターミナルで起動したままにする（Java 21 以上が要る）。ID はアプリ側・functions の test:emulator と同じにする
+firebase emulators:start --only auth,firestore,storage --project demo-soramoyou-security
+```
+
+- 最初に切り替わったかだけを確かめる：単体テストは`-only-testing:SoramoyouTests/FirebaseEmulatorSwitchTests`、UIテストは`-only-testing:SoramoyouUITests/FirebaseEmulatorUITests`。緑になってから、ほかを回す
+- Emulatorを起動していないと、Firebaseを使うテストはつながらずに落ちる（本番へは行かない）。Firestoreの書き込みは失敗せずに待ち続けるので、`-test-timeouts-enabled YES`を付けて回す
+- Functions（そらとも）のEmulatorは起動しない。関数を呼ぶテストは、つながらずに落ちる
+- UIテストは、UIテストのターゲットにある同じ名前の`XCUIApplication`（`SoramoyouUITests/XCUIApplication.swift`）が、起動のたびに目印を渡す。モジュール名（Xcode 27では`XCUIAutomation`）を付けて元の型を直に書くと目印が渡らず本番につながるので、CIの`scripts/check-uitests-launch-guard.sh`が止める
+
 ### 確認項目詳細
 
 #### 画像関連
