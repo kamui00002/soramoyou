@@ -27,7 +27,22 @@ struct SoramoyouApp: App {
 
     init() {
         // Firebase初期化
-        FirebaseApp.configure()
+        // ⭐️ テストのときだけ、接続先を Emulator（手元の偽物の Firebase）へ切り替える（FirebaseEmulatorSwitch.swift）。
+        //    出荷版（Release）と普段の Debug 実行は、今までどおり plist の接続先（本番）につなぐ。
+        //    どちらの道でも Firebase を始めるのは 1 回だけ（2 回呼ぶと落ちる）。
+        #if DEBUG
+            let testSignals = FirebaseEmulatorSwitch.testSignals(
+                environment: ProcessInfo.processInfo.environment,
+                xctestLoaded: NSClassFromString("XCTestCase") != nil
+            )
+            if testSignals.isEmpty {
+                FirebaseApp.configure()
+            } else {
+                FirebaseEmulatorSwitch.configureForTesting(signals: testSignals)
+            }
+        #else
+            FirebaseApp.configure()
+        #endif
 
         // プッシュ通知(FCM)の登録トークン受け取りを有効化（configure() の直後に張る）。
         // ここでは許可ダイアログは出さない（許可済みユーザーの登録は scenePhase で行う）。
@@ -88,6 +103,10 @@ struct SoramoyouApp: App {
                 .environmentObject(likeManager)
                 .environmentObject(favoriteManager)
                 .environmentObject(soratomoGate)
+            #if DEBUG
+                // ⭐️ 接続先の目印（見えない）。UI テストが「Emulator に切り替わったか」を読む（FirebaseEmulatorSwitch.swift）
+                .overlay(alignment: .topLeading) { FirebaseConnectionMarker() }
+            #endif
         }
         .onChange(of: scenePhase) { newPhase in
             // フォアグラウンド復帰のたびに、有効ならゴールデンアワー通知の14日窓を洗い替えする
