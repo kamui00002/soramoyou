@@ -7,6 +7,7 @@
 //   - onPostCreated           posts/{postId}      → フォロワー / 全員（オプトイン）へ「新しい空」
 //   - onFollowCreated         follows/{followId}  → フォローカウンタを整合 ＋ 相手へ「フォローされました」
 //   - onFollowDeleted         follows/{followId}  → フォローカウンタを整合（通知はしない）
+//   - onUserBlockListChanged  users/{userId}      → ブロック一覧に新しく入った相手との両方向のフォローを消す
 //   - onPublicProfileUpdated  publicProfiles/{uid}→ 「おすすめの空」に新しく入った投稿の投稿者へ「選ばれました」
 //   - notifyFeedbackToDiscord feedback/{id}       → 開発者の Discord へ「ご意見・ご要望が届いた」（Webhook）
 //
@@ -29,7 +30,7 @@
 //
 
 const { setGlobalOptions } = require("firebase-functions/v2");
-const { onDocumentCreated, onDocumentDeleted, onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentDeleted, onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
@@ -365,6 +366,35 @@ exports.onFollowDeleted = onDocumentDeleted("follows/{followId}", async (event) 
 
   // フォロー解除は通知しない（される側にとって嬉しい知らせではない）。カウンタだけ直す。
   await reconcileFollowCounters([followerId, followeeId]);
+});
+
+// MARK: - ブロックしたら、その相手との両方向のフォローを消す ⭐️（詳細は functions/followBlock.js）
+//
+// users/{uid}.blockedUserIds に相手が新しく入ったら（そらもよう・そらともどちらのブロックでも）、
+// follows/{uid}_{相手} と follows/{相手}_{uid} を消す。フォロワー限定の写真を見てよい印（Storage Rules が見る
+// follows の文書）を、ブロックした相手に残さないため。
+//   - users は数え直し・通知の設定・FCM トークンなどでもよく書かれる。一覧に新しい人が入っていなければ、
+//     何も読まず・書かずに抜ける（followBlock.removeFollowsForNewBlocks の最初の確認）。
+//   - 止まる理由: 消す → onFollowDeleted → reconcileFollowCounters が users を set → この関数がもう一度起きる →
+//     一覧は変わっていない（差分なし）→ 抜ける。消すのは「増えた相手」だけなので、ループにならない。
+//   - 失敗しても再試行しない（ほかの Functions と同じ）。投げてログとメトリクスに出す。
+//     このトリガーは「新しく増えたとき」にしか動かないので、取りこぼした組と、これを deploy する前から
+//     ブロック済みなのに残っている組は、後からまとめて数えて消す。
+//   - 退会（users の削除）では何もしない。退会の follows は退会の処理が消す。
+
+const followBlock = require("./followBlock");
+
+exports.onUserBlockListChanged = onDocumentWritten("users/{userId}", async (event) => {
+  const userId = event.params.userId;
+  try {
+    const removed = await followBlock.handleUserWritten(db, event);
+    if (removed.length > 0) {
+      logger.info("ブロックした相手とのフォローを消した", { userId, followDocs: removed.length });
+    }
+  } catch (err) {
+    logger.error("ブロックした相手とのフォローを消せなかった", { userId, error: String(err && err.message) });
+    throw err;
+  }
 });
 
 // MARK: - リアクション通知（おすすめの空に選ばれた）⭐️
