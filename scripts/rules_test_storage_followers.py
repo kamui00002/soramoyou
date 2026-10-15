@@ -151,7 +151,9 @@ def build_test_case(c):
 
 
 def evaluate(source, token):
-    """ルールの本文で全ケースを評価し、rules test API の testResults を返す（失敗時は None）"""
+    """ルールの本文で全ケースを評価し、rules test API の testResults を返す（通信の失敗・testResults が無いときは None）。
+    HTTP が 200 以外なら、その場で終了コード 1 で止める（401 のまま --mutants を続けると、
+    全部の壊し方とケースが NG と出て、ルールの問題と見分けがつかないため）"""
     body = json.dumps({
         "source": {"files": [{"name": "storage.rules", "content": source}]},
         "testSuite": {"testCases": [build_test_case(c) for c in CASES]},
@@ -164,13 +166,18 @@ def evaluate(source, token):
     # --mutants は 10 回ほど呼ぶので、接続が切れるなどの一時的な失敗は 3 回まで再試行する（HTTP のエラーは再試行しない）
     for attempt in range(3):
         try:
-            result = json.load(urllib.request.urlopen(req, timeout=60))
+            resp = urllib.request.urlopen(req, timeout=60)
+            if resp.status != 200:
+                # 4xx・5xx は下の HTTPError に来る。ここは 2xx の 200 以外（ふつうは来ない）
+                print("HTTP", resp.status, resp.read().decode()[:600])
+                sys.exit(1)
+            result = json.load(resp)
             break
         except urllib.error.HTTPError as e:
             print("HTTP", e.code, e.read().decode()[:600])
             if e.code == 401:
                 print("トークンが古い。`firebase projects:list > /dev/null` を一度実行してから再実行する")
-            return None
+            sys.exit(1)
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             if attempt == 2:
                 print("通信の失敗:", e)
