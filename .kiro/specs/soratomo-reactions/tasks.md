@@ -37,7 +37,7 @@
 
 - [ ] 1. 実装の前に、設計の前提を現物で確かめる
 
-- [ ] 1.1 (P) 投稿の削除トリガーが、バッチの削除と `recursiveDelete` でも1件ずつ発火するかを確かめる（要確認Q1）
+- [x] 1.1 (P) 投稿の削除トリガーが、バッチの削除と `recursiveDelete` でも1件ずつ発火するかを確かめる（要確認Q1）
   - 前提: なし（1.2とエミュレーターのポートが重ならないよう、別のポートの設定で起こす）
   - 使い捨ての形で確かめる。scratchpadに、`soratomoGroups/{groupId}/skies/{skyId}` の `onDocumentDeleted` だけを持つ関数のフォルダを作り（依存は `functions/node_modules` へのリンクで足りる）、受けたイベントごとに、投稿IDと、消えた文書の中身（`event.data`）の `reactions` の鍵の数を、別のコレクションの文書に書く。リポジトリの `functions/` には置かず、コミットしない
   - `firebase emulators:exec --only functions,firestore`（その使い捨てのフォルダを指す設定を `--config` で渡す）の中で、Admin SDKの台本から次の3つを流し、書き込みが落ち着くまで待ってから発火の数を数える
@@ -49,6 +49,11 @@
   - 結果で分岐する: バッチか `recursiveDelete` のどちらかで1件ずつ発火しない、または消えた文書の中身が載らないなら、design.mdの「投稿の削除」と14.5の件数の出し方は成り立たない（印 `reactionNotices` の削除を共通の削除の側へ移すなど、設計の変更が要る）。2以降の実装を止め、結果と案をAskUserQuestionで利用者に相談し、design.mdを直してから進む
   - エミュレーターの挙動は本番の保証ではないので、本番での裏付けは13.1で取る（任意）
   - _Requirements: 8.1, 8.2, 8.3, 14.5_
+  - 結果（2026-10-18 10:41）: エミュレーター（firebase-tools 15.0.0・Firestore Emulator v1.20.2・firebase-functions 7.4.0・firebase-admin 14.5.0・`HEAD` `7360ea35`）で、Q1は成り立った。scratchpadの使い捨ての関数フォルダ2つ（トリガーを公開した `fn-on` と、exportsから外した写し `fn-off`。差分はexportsの1行だけ。`index.js` の shasum の頭 `7a8bfe498516`／`2a441473d597`、台本 `probe.js` は `8f5e083080ec`）を、別ポート（firestore 8183・websocket 9163・functions 5103・hub 4423・logging 4523）の設定を `--config` で渡して起こした。トリガーはイベントごとに自動IDの文書を1件書く形にし（`event.id` で潰さないので、重複して発火すれば見える）、場面ごとに「期待数に届いてから3秒増えない」まで待って数えた
+    - on: (1) 投稿1件の `delete()` で1件（鍵2。数える仕組みの陽性対照として先に確かめ、通らなければ残りを流さない形にした）。(2) `select().limit(300).get()` から1つのバッチで3件を `batch.delete` して3件（鍵3・4・5）。(3a) 親の文書があるグループ（投稿4件・`members` 2件・`notifyState` 1件）を `recursiveDelete` して4件（鍵6〜9）。(3b) 本番の `delete_group` の形（親の文書を先に消してから `recursiveDelete`）で4件（鍵10・11・12・0。0は空の地図）。どのイベントにも `event.data` が載り、`reactions` の鍵の数と `reactorIds` の長さが台本で入れた数と一致した。`event.id` は12件で12種類（重複なし）。`members`・`notifyState` の削除では発火しない。最初の発火まで約0.3〜1.0秒
+    - off（陽性対照の陰性側）: エミュレーターが読み込んだ関数は `q1Unrelated` だけで、投稿の削除トリガーは登録されなかった。同じ台本の4場面とも15秒待って0件。投稿は消えていた（残り0件）ので、0件は「消せなかった」せいではない
+    - 分岐: 3つの形とも1件ずつ発火し、消えた文書の中身が載ったので、design.mdの「投稿の削除」と14.5の件数の出し方は変えない。2以降へ進んでよい。ただしエミュレーターの挙動であり、本番の保証ではない（本番の裏付けは13.1・任意）
+    - 実行の環境: サンドボックスの中ではローカルのポートを開けない（`listen EPERM`）ため、`emulators:exec` の2回だけサンドボックスの外で流した。firebase CLIは `XDG_CONFIG_HOME` を空の一時フォルダにして、利用者のCLIの設定（ログイン情報）を読まずに起こした。外で起こした関数エミュレーターが「Application Default Credentials detected」と警告したが、プロジェクトは `demo-` で、台本と関数はエミュレーターのFirestoreだけを読み書きした（本番には触れていない）。Javaは Android Studio 同梱のJBRを `JAVA_HOME` と `PATH` で渡した
 
 - [ ] 1.2 iOSのFirebaseFunctionsが `NSNull` をJSONの `null` として送るかを確かめる（要確認Q3）
   - 前提: なし（iOSのビルドとシミュレーターを使うので `(P)` を付けない。1.1とは別のポートのエミュレーターで行う）
