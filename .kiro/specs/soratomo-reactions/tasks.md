@@ -35,7 +35,7 @@
 
 ## (a) 実装の前に、設計の前提を確かめる（要確認Q1・Q3・Q5・Q6）
 
-- [ ] 1. 実装の前に、設計の前提を現物で確かめる
+- [x] 1. 実装の前に、設計の前提を現物で確かめる
 
 - [x] 1.1 (P) 投稿の削除トリガーが、バッチの削除と `recursiveDelete` でも1件ずつ発火するかを確かめる（要確認Q1）
   - 前提: なし（1.2とエミュレーターのポートが重ならないよう、別のポートの設定で起こす）
@@ -55,7 +55,7 @@
     - 分岐: 3つの形とも1件ずつ発火し、消えた文書の中身が載ったので、design.mdの「投稿の削除」と14.5の件数の出し方は変えない。2以降へ進んでよい。ただしエミュレーターの挙動であり、本番の保証ではない（本番の裏付けは13.1・任意）
     - 実行の環境: サンドボックスの中ではローカルのポートを開けない（`listen EPERM`）ため、`emulators:exec` の2回だけサンドボックスの外で流した。firebase CLIは `XDG_CONFIG_HOME` を空の一時フォルダにして、利用者のCLIの設定（ログイン情報）を読まずに起こした。外で起こした関数エミュレーターが「Application Default Credentials detected」と警告したが、プロジェクトは `demo-` で、台本と関数はエミュレーターのFirestoreだけを読み書きした（本番には触れていない）。Javaは Android Studio 同梱のJBRを `JAVA_HOME` と `PATH` で渡した
 
-- [ ] 1.2 iOSのFirebaseFunctionsが `NSNull` をJSONの `null` として送るかを確かめる（要確認Q3）
+- [x] 1.2 iOSのFirebaseFunctionsが `NSNull` をJSONの `null` として送るかを確かめる（要確認Q3）
   - 前提: なし（iOSのビルドとシミュレーターを使うので `(P)` を付けない。1.1とは別のポートのエミュレーターで行う）
   - scratchpadに、受けた `data` の `kind` について「鍵があるか」と「値の型（文字列・null・それ以外）」だけを返す使い捨てのCallableを置き、Functionsのエミュレーターで起こす。リポジトリには置かない
   - iOSのテストからエミュレーターへつなぐ口（`97c34a43`・#188でテストの接続先をエミュレーターに切り替えた現物）を読み、同じ形で `Functions.functions(region: "asia-northeast1")` を `useEmulator` でつなぐ使い捨てのテストを書き、`["groupId": …, "skyId": …, "kind": NSNull()]` を送って返りを見る（`C2E3F752`・`-only-testing` で1本だけ）。使い捨てのテストはコミットしない
@@ -64,6 +64,11 @@
   - 補助（証拠の代わりにしない）: firebase-ios-sdkの `FunctionsSerializer` が `NSNull` をどう書くかを、パッケージの現物で読んで結果に書く
   - 結果で分岐する: 「鍵がある・値は null」で届かなければ、契約を「`kind` の鍵を省いた形を『外す』とする（`null` も外すとして受ける）」に直す。このタスクの中で、design.mdのAPI Contractと、`setReactionTx` の判定の順（手順1の `invalid_input` の条件）と、`SoratomoReactionService` の送る値の記述を同じく直し、直した差分を利用者に報告してから2.2・7.5へ進む
   - _Requirements: 1.3, 1.4, 1.5, 4.4_
+  - 結果（2026-10-18 14:08）: エミュレーター（firebase-tools 15.0.0・firebase-functions 7.4.0・Node 22.20.0・firebase-ios-sdk 12.6.0（`087bb952`）・Xcode 27・iPhone 17e `C2E3F752`・`HEAD` `083da11c`）で、Q3は成り立った。`NSNull()` を入れた `kind` は「鍵がある・値は `null`」で届いた。scratchpadの使い捨てのCallable `q3ProbeKind`（`onCall`・region `asia-northeast1`。`index.js` の shasum の頭 `69b27388f59c`）は、受けた `data` の `kind` の鍵の有無（`hasOwnProperty`）と値の型に加えて、線の上に流れた本文（`rawRequest.body` をJSONに戻したもの）を返す形にした。テストの接続先の作り（`FirebaseEmulatorSwitch` が `Functions.functions(region:)` を `127.0.0.1:5001`・`demo-soramoyou-security` へ向ける）に合わせて、エミュレーターも同じプロジェクトIDとポートで起こした。使い捨てのテスト `Q3NSNullProbeTests.testKindNullArrival`（shasum の頭 `e4ad4497a865`）は、アプリのサービスと同じ `httpsCallable(name).call([String: Any])` の形で3通りを送った
+    - 返り（3通りが見分けられた＝陽性対照）: (1) `["groupId": …, "skyId": …, "kind": NSNull()]` → 鍵あり・`null`。本文は `{"data":{"groupId":…,"kind":null,"skyId":…}}`。(2) `kind` の鍵を省く → 鍵なし（`absent`）。本文に `kind` が無い。(3) `"sunset"` → 鍵あり・文字列。本文は `"kind":"sunset"`。関数のログにも同じ3行が残った（その前の1行は、台本が関数の読み込みを確かめるためにcurlで送った `{"data":{"kind":null}}` で、iOSの証拠には数えない）。テストは1本・0失敗（`Executed 1 test, with 0 failures`・`xcodebuild exit=0`）
+    - 補助（証拠の代わりにしない）: firebase-ios-sdk 12.6.0 の `FunctionsSerializer.encode`（`FirebaseFunctions/Sources/Internal/FunctionsSerializer.swift:35-36`）は `NSNull` をそのまま返し、`Functions.swift:569-571` が `["data": encoded]` を `JSONSerialization` で書く。現物の返りと合う
+    - 分岐: 「鍵がある・値は null」で届いたので、契約（外すときは `kind: null` を送る）と、design.mdのAPI Contract・`setReactionTx` の判定の順（手順1の `invalid_input` は `kind` の鍵が無いとき）・`SoratomoReactionService` の送る値（`kind?.rawValue ?? NSNull()`）は変えない。2.2・7.5へ進んでよい。ただしエミュレーターでの確かめで、配備した関数へ「外す」を送るのは13.1の通しで見る
+    - 実行の環境: ビルドは `nice -n 19`・`-jobs 4` の `build-for-testing`（`-only-testing` でこのクラスだけ）、テストは `emulators:exec --only functions` の中で `test-without-building`・`-only-testing` の1本・`-parallel-testing-enabled NO`・`-test-timeouts-enabled YES`。サンドボックスの中ではDerivedData（外付けのSSD）に書けず、ローカルのポートも開けない（`listen EPERM`）ので、ビルドと `emulators:exec` の2回をサンドボックスの外で流した（前に `uptime` の負荷が3〜4台・ほかの `xcodebuild` が無い・5001が空いていることを確かめた）。firebase CLIは `XDG_CONFIG_HOME` を空の一時フォルダにして起こし、JavaはJBRを `JAVA_HOME` と `PATH` で渡した。関数エミュレーターが「Application Default Credentials detected」と警告したが、プロジェクトは `demo-` で、使い捨ての関数は受けた値を返すだけ（ほかのサービスに触れない）。テストの間のアプリのログに出た `-1001`（タイムアウト）は、Callableの3回の要求とは別の通信で（3回とも返りが届いている）、行き先は確かめていない。終わった後、5001などのポートと `xcodebuild` が残っていないことを確かめた。使い捨てのテストは消し、`git status` が空に戻ったことを確かめた（写しはscratchpad）
 
 - [x] 1.3 (P) 既存のテストのうち、形が変わって直す必要がある箇所を数える（要確認Q5・Q6）
   - 前提: なし（検索だけ）
