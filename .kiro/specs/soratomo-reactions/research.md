@@ -13,7 +13,7 @@
 ### 1.15.0のアプリは投稿の文書に足した項目で壊れないか
 - **Context**: 要件11.2。保存場所の候補「投稿の文書に埋め込む」の前提。
 - **Sources Consulted**: 現物（HEAD `c1a1ea22`）。
-  - メインがgit logで確かめた。1.15.0（build 113・`9a56d5e8`）の後、次の5つは変わっていない。
+  - メインがgit logで確かめた。1.15.0（build 113・archiveの出し元`08023ea7`）の後、次の5つは変わっていない。
   - `SoratomoSkyService.swift`・`SoratomoModels.swift`・`SoratomoRouter.swift`・`GoldenHourNotificationManager.swift`・`project.pbxproj`。
 - **Findings**:
   - `Services/SoratomoSkyService.swift:417`の`decodeSky`は、`authorId`・`width`・`height`・`createdAt`・`caption`（任意）を名前で読むだけ。知らない項目は見ない。`SoratomoSky`を`Codable`（`data(as:)`）で読む口は無い。

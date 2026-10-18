@@ -30,7 +30,7 @@
 
 | # | 事実 | 現物 | 設計への効き方 |
 |---|---|---|---|
-| F1 | 1.15.0（build 113・`9a56d5e8`）の後、`SoratomoSkyService.swift`・`SoratomoModels.swift`・`SoratomoRouter.swift`・`GoldenHourNotificationManager.swift`・`project.pbxproj`は変わっていない | メインのgit log | 下のF2〜F6は、1.15.0のアプリの振る舞いそのもの |
+| F1 | 1.15.0（build 113・archiveの出し元`08023ea7`）の後、`SoratomoSkyService.swift`・`SoratomoModels.swift`・`SoratomoRouter.swift`・`GoldenHourNotificationManager.swift`・`project.pbxproj`は変わっていない | メインのgit log | 下のF2〜F6は、1.15.0のアプリの振る舞いそのもの |
 | F2 | `decodeSky`は5つの項目を名前で読むだけで、知らない項目を見ない。`Codable`で読む口は無い | `Services/SoratomoSkyService.swift:417-447` | 投稿の文書に項目を足しても、1.15.0の変換は壊れない（11.2） |
 | F3 | タイムラインは、変換後の投稿の並びと「続きがありうるか」が同じなら何もしない。`SoratomoSky`の`Equatable`にリアクションは無い | `ViewModels/SoratomoTimelineViewModel.swift:558`（1.15.0の後に変わっていないので、1.15.0でも同じ行） | リアクションだけの更新では、1.15.0は再描画しない。新しい版は`SoratomoSky`にリアクションを持たせるので、同じ行で再描画する |
 | F4 | 投稿詳細は、覚え（`SoratomoSkyLookup`・ObservableObjectでない）をbodyで1回読むだけ。`:95-96`のコメントは「開いている間に変わるのは削除だけ」として読み直さない。投稿1件の監視は「有るか」しか届けない | `Views/Soratomo/SoratomoSkyDetailView.swift:95-97`・`:136-154`、`Services/SoratomoSkyService.swift:200`・`:575` | 覚えの更新だけでは、詳細はリアクションの変化に追従しない（2.5）。監視の`.present`にリアクションを載せる |
