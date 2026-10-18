@@ -16,6 +16,7 @@
 // - 通報の受け付け（reportSkyTx・release-gate 2.3）もここに置く。記録は soratomoReports（グループの外）に作る。
 // - ガイドラインへの同意の記録（agreeGuidelineTx・release-gate 2.4）もここに置く。soratomoUsers/{uid} に merge で書く。
 // - 本人のリアクション（setReactionTx・soratomo-reactions 2.2）もここに置く。投稿の文書の reactions.{uid} と reactorIds だけを書く。
+// - 投稿者へのリアクションの通知の枠（claimReactionNotifySlot・soratomo-reactions 2.3）もここに置く。新着投稿の notifyState とは別に数える。
 // - テストは soratomoStore.test.js（Firestore のエミュレーターに対して直接呼ぶ）。
 //
 // ⚠️ Firestore のトランザクションは「読みを全部終えてから書く」決まり。招待コードの重なりの確認（最大5回の読み）も
@@ -40,6 +41,9 @@ const USERS = "soratomoUsers";
 const USER_GROUPS = "groups";
 const SKIES = "skies";
 const REPORTS = "soratomoReports";
+/** リアクションの通知の記録（soratomo-reactions design.md の Physical Data Model。書き手は Functions だけ）。 */
+const REACTION_NOTIFY_STATE = "reactionNotifyState";
+const REACTION_NOTICES = "reactionNotices";
 
 /** 招待コードが既存と重なったときに作り直す最大の回数（要件3.2）。 */
 const MAX_INVITE_CODE_ATTEMPTS = 5;
@@ -587,6 +591,51 @@ async function claimNotifySlot(db, { groupId, uid, skyId, nowMs }) {
   });
 }
 
+// MARK: - リアクションの通知の枠（soratomo-reactions）
+
+/**
+ * 投稿者へのリアクションの通知を送るかを、間引きと「同じ人の同じ投稿で1通まで」の両方で1回だけ決める
+ * （soratomo-reactions 要件6.5・6.6・6.8）。
+ * - 1つのトランザクションで、投稿の文書・reactionNotices/{skyId}・reactionNotifyState/{authorId} を読む
+ * - 投稿が無ければ何も書かずに sky_gone（付けた直後に消された投稿へは送らない）
+ * - 判定は soratomoCore.decideReactionNotify（印に付けた人がいれば duplicate → 5分以内なら throttled → send）
+ * - send のときだけ、送る前に reactionNotifyState/{authorId} の lastSentAt と、reactionNotices/{skyId} の
+ *   notifiedReactorIds（arrayUnion・無ければ作る）を書く。間引き・重複のときは書かない（間引かれた人は印に入らないので、
+ *   5分を過ぎて付け直せば届く）
+ * - 新着投稿の notifyState/{uid} には触れない（別に数え、リアクションのせいで新着投稿の通知を間引かない・6.6）
+ * - 同じ投稿者への同時の確保はトランザクションで直列になる。送信が後で失敗しても、書いた記録は戻さない（claimNotifySlot と同じ）
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ groupId: string, skyId: string, authorId: string, reactorUid: string, nowMs: number }} params
+ *   authorId は受信者（投稿者）、reactorUid は付けた人
+ * @returns {Promise<"send"|"throttled"|"duplicate"|"sky_gone">}
+ */
+async function claimReactionNotifySlot(db, { groupId, skyId, authorId, reactorUid, nowMs }) {
+  if (![groupId, skyId, authorId, reactorUid].every((id) => isDocumentId(id))) {
+    throw new TypeError("soratomo: groupId・skyId・authorId・reactorUid が文書IDとして使えない");
+  }
+  if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) throw new TypeError("soratomo: nowMs が数値でない");
+
+  const groupRef = db.collection(GROUPS).doc(groupId);
+  const skyRef = groupRef.collection(SKIES).doc(skyId);
+  const noticeRef = groupRef.collection(REACTION_NOTICES).doc(skyId);
+  const stateRef = groupRef.collection(REACTION_NOTIFY_STATE).doc(authorId);
+  return db.runTransaction(async (tx) => {
+    const [skySnap, noticeSnap, stateSnap] = await tx.getAll(skyRef, noticeRef, stateRef);
+    if (!skySnap.exists) return "sky_gone";
+    const decision = core.decideReactionNotify({
+      state: stateSnap.exists ? stateSnap.data() : null,
+      notifiedReactorIds: noticeSnap.exists ? noticeSnap.get("notifiedReactorIds") : undefined,
+      reactorUid,
+      nowMs,
+    });
+    if (decision === "send") {
+      tx.set(stateRef, { lastSentAt: Timestamp.fromMillis(nowMs) });
+      tx.set(noticeRef, { notifiedReactorIds: FieldValue.arrayUnion(reactorUid) }, { merge: true });
+    }
+    return decision;
+  });
+}
+
 module.exports = {
   SoratomoDomainError,
   createGroupTx,
@@ -598,4 +647,5 @@ module.exports = {
   claimNotifySlot,
   // リアクション（soratomo-reactions）
   setReactionTx,
+  claimReactionNotifySlot,
 };

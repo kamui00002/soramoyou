@@ -85,7 +85,7 @@
 
 ## (b) Functions: リアクションの規則（純関数とトランザクション）
 
-- [ ] 2. リアクションの規則をサーバーに作る
+- [x] 2. リアクションの規則をサーバーに作る
 
 - [x] 2.1 (P) 7種類の絵文字・通知文・間引きの判定を、純関数で作る（陽性対照C5）
   - 前提: 1.1, 1.3（1.1の結果で設計が変わらなかったこと。変わったら、直したdesign.mdに従う。1.2（Q3）は純関数に効かないので待たない）
@@ -123,12 +123,19 @@
     - 陽性対照: mA（付ける・選び直すで `reactions` の地図を丸ごと書き直す・`e3833be20af6`）で「ほかの人のリアクションは残る」が赤（ほかに一続き・`.`・未同意とブロック・同時実行2本の計6本）。mB（`assertNotSuspended` を外す・`a361f7381bd2`）で拒否4種のテストと判定の順の2本が赤。mC（`self_reaction` の判定を外す・`88aa82fbc8d4`）で拒否4種のテストの1本だけが赤。mD（`arrayUnion` を書かない・`1f5478dd3e11`）でI1を見る6本が赤。追加のmE（本人のキーを `FieldPath` でなく文字列 `reactions.${uid}` で指す・`a93cf633e09a`）で「uidに `.` を含む人」の1本だけが赤
     - 全体のエミュレーターのテスト（`npm run test:emulator`）は、同じ `soratomoStore.js` を触る2.3の後にまとめて1回流す（2.3の結果に書く）
 
-- [ ] 2.3 通知の間引きと「同じ人の同じ投稿で1通まで」を、1つのトランザクションで決める `claimReactionNotifySlot` を作る（陽性対照C4）
+- [x] 2.3 通知の間引きと「同じ人の同じ投稿で1通まで」を、1つのトランザクションで決める `claimReactionNotifySlot` を作る（陽性対照C4）
   - 前提: 2.2（同じ `soratomoStore.js` を触る）
   - design.mdの「claimReactionNotifySlot」のとおり。1つのトランザクションで、投稿の文書・`reactionNotices/{skyId}`・`reactionNotifyState/{authorId}` を読み、投稿が無ければ何も書かずに `sky_gone`。`send` のときだけ、`reactionNotifyState/{authorId}.lastSentAt` と `reactionNotices/{skyId}.notifiedReactorIds`（`arrayUnion`・無ければ作る）を書く。間引かれたときは印を書かない。新着投稿の `notifyState/{uid}` には触れない
   - `soratomoStore.test.js`: `send` の直後の別の人は `throttled`。同じ付けた人は、5分を過ぎても `duplicate`。別の投稿者は別に数える。投稿が無ければ `sky_gone` で何も書かない。間引かれた付け方は印を残さない
   - 陽性対照（C4）: 場面は「投稿者へリアクションの通知を送った直後に、同じグループで新しい投稿がある」。期待は、既存の `claimNotifySlot`（新着投稿）が `send` を返すこと。リアクションの記録を `notifyState/{uid}`（新着投稿と同じ文書）に書く写しで、新着投稿の側が `throttled` になってこのテストが赤になることを先に確かめる
   - _Requirements: 6.5, 6.6, 6.8_
+  - 結果（2026-10-18 15:05）: `HEAD` `97d5b4e3`（2.2の後）の上で作った。`functions/soratomoStore.js` に `claimReactionNotifySlot` と、コレクションの名前の定数 `REACTION_NOTIFY_STATE`（`reactionNotifyState`）・`REACTION_NOTICES`（`reactionNotices`）を足した。判定は2.1の `decideReactionNotify` に任せ、`send` のときだけ `reactionNotifyState/{authorId}` を `{ lastSentAt }` で書き（`claimNotifySlot` と同じく上書き）、`reactionNotices/{skyId}` に `notifiedReactorIds` の `arrayUnion` を `merge` で書く。引数の形の誤りは `claimNotifySlot` と同じく `TypeError`
+    - テスト: `soratomoStore.test.js` の末尾に7本を足した（初回の書き込み／別の人の間引き（5分ちょうどを含む）と間引かれた人の印の無さ／同じ人の重複（24時間後も）と別の投稿／別の投稿者・別のグループ／`sky_gone`（記録が残っていても）／同時実行（2人で1通・同じ人の2回で1通）／C4）
+    - C4のテストの作り直し: 最初の形は「リアクションの後に新着投稿の `notifyState` が無いこと」を新着投稿の判定より先にassertしていて、C4の写しはそのassertで赤になり、「新着投稿の側が `throttled` になる」まで届いていなかった（陽性対照として取れていない）。新着投稿の判定を最初にassertする順に直して、写しと本物を流し直した。下の数はすべて流し直した後のもの（最初の回のログはscratchpadの `pc-2.3/first-run`）
+    - 流し方: 2.2と同じく、エミュレーター（`emulators:exec --only firestore`・`demo-soramoyou-security`・8080）の1回の中で、台本 `run-2.3.sh` から「実装の前の写し（`HEAD` の `soratomoStore.js`・頭 `ccc0341d8c35`）→本物→壊した写し4通り→本物」を流した（サンドボックスの外・空の `XDG_CONFIG_HOME`・JBR）。本物の shasum の頭は `soratomoStore.js` が `f9af65440f23`、`soratomoStore.test.js` が `01065a86d9d7`（写しへ配ったテストも6つとも同じ頭）
+    - 結果: 実装の前の写しは80本中7本が赤で、赤は新しい7本だけ。本物は2回とも80本・0失敗。同時実行は2回とも、2人が `send` 1・`throttled` 1、同じ人の2回が `send` 1・`duplicate` 1（競合0）
+    - 陽性対照（C4）: 写し mC4（`REACTION_NOTIFY_STATE` を `notifyState` にした＝リアクションの記録を新着投稿と同じ文書に書く・頭 `aca288430692`）で、C4のテストが新着投稿の `claimNotifySlot` の `actual: 'throttled'`／`expected: 'send'` で赤（ほかに `reactionNotifyState` を読む5本も赤・計6本）。追加の写し: mX（間引き・重複のときも印を書く・`36c4d7d552bc`）で、2回目の間引きが `duplicate` になり「間引かれた付け方は印を残さない」が赤（ほかに同時実行の1本）。mY（投稿の有無を見ない・`74781152df92`）で `sky_gone` の1本だけが `actual: 'send'` で赤。mZ（`send` で印を書かない・`a42a497dd90d`）で、同じ人の2回目が `send` になり重複のテストが赤（ほかに印を読む4本・計5本）
+    - 全体（2.2と2.3をまとめて）: lintが緑。`npm test` が417本・0失敗、`npm run test:emulator`（firestore と storage・Storageの一時置き場は専用の `TMPDIR`）が325本・0失敗（どちらもサンドボックスの外・Node 22.20.0）。終わった後、エミュレーターのプロセスが残っていないことを `ps` で確かめた
 
 ## (c) Functions: Callableと削除トリガーの配線
 

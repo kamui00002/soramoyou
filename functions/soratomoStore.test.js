@@ -1634,3 +1634,127 @@ test("リアクション（同時実行）: 19人が同時に付けても19件�
   });
   assert.deepEqual(counts, expected, "絵文字ごとの数が、実際に付けた人の数と一致する");
 });
+
+// MARK: - リアクションの通知の枠（claimReactionNotifySlot・soratomo-reactions 2.3）
+
+async function reactionNotifyStateOf(groupId, authorId) {
+  const snap = await db.collection(GROUPS).doc(groupId).collection("reactionNotifyState").doc(authorId).get();
+  return snap.exists ? snap.data() : null;
+}
+async function reactionNoticeOf(groupId, skyId) {
+  const snap = await db.collection(GROUPS).doc(groupId).collection("reactionNotices").doc(skyId).get();
+  return snap.exists ? snap.data() : null;
+}
+
+/** g1 の alice の投稿 sky1 に、bob が T0 に付けた場面の確保（overrides で変える）。 */
+function claimReaction(overrides = {}) {
+  return store.claimReactionNotifySlot(db, { groupId: "g1", skyId: "sky1", authorId: "alice", reactorUid: "bob", nowMs: T0, ...overrides });
+}
+
+test("リアクションの通知の枠: 初回は send。送る前に、投稿者の最後の時刻と、印に付けた人を書く", async () => {
+  await seedReactionSky("g1", "sky1", { authorId: "alice" });
+  assert.equal(await claimReaction(), "send");
+  const state = await reactionNotifyStateOf("g1", "alice");
+  assert.deepEqual(Object.keys(state), ["lastSentAt"]);
+  assert.ok(state.lastSentAt instanceof Timestamp, "最後の時刻は Firestore の時刻で書く");
+  assert.equal(state.lastSentAt.toMillis(), T0);
+  assert.deepEqual(await reactionNoticeOf("g1", "sky1"), { notifiedReactorIds: ["bob"] });
+});
+
+test("リアクションの通知の枠: send の直後の別の人は throttled（5分ちょうどを含む）・5分を過ぎれば send。間引かれた付け方は印を残さない", async () => {
+  await seedReactionSky("g1", "sky1", { authorId: "alice" });
+  assert.equal(await claimReaction(), "send");
+
+  assert.equal(await claimReaction({ reactorUid: "carol", nowMs: T0 + 1_000 }), "throttled");
+  assert.equal(await claimReaction({ reactorUid: "carol", nowMs: T0 + core.THROTTLE_MS }), "throttled");
+  assert.deepEqual(await reactionNoticeOf("g1", "sky1"), { notifiedReactorIds: ["bob"] }, "間引かれた人は印に入らない");
+  assert.equal((await reactionNotifyStateOf("g1", "alice")).lastSentAt.toMillis(), T0, "送らないときは最後の時刻を書かない");
+
+  // 印に入っていないので、5分を過ぎて付け直せば届く
+  assert.equal(await claimReaction({ reactorUid: "carol", nowMs: T0 + core.THROTTLE_MS + 1 }), "send");
+  assert.deepEqual([...(await reactionNoticeOf("g1", "sky1")).notifiedReactorIds].sort(), ["bob", "carol"]);
+  assert.equal((await reactionNotifyStateOf("g1", "alice")).lastSentAt.toMillis(), T0 + core.THROTTLE_MS + 1);
+});
+
+test("リアクションの通知の枠: 同じ付けた人の同じ投稿は、5分を過ぎても（何時間後でも）duplicate。別の投稿なら1通目として数える", async () => {
+  await seedReactionSky("g1", "sky1", { authorId: "alice" });
+  await seedReactionSky("g1", "sky2", { authorId: "alice" });
+  assert.equal(await claimReaction(), "send");
+
+  assert.equal(await claimReaction({ nowMs: T0 + core.THROTTLE_MS + 1 }), "duplicate");
+  assert.equal(await claimReaction({ nowMs: T0 + 24 * 60 * 60 * 1000 }), "duplicate");
+  assert.equal((await reactionNotifyStateOf("g1", "alice")).lastSentAt.toMillis(), T0, "重複のときは最後の時刻を書かない");
+  assert.deepEqual(await reactionNoticeOf("g1", "sky1"), { notifiedReactorIds: ["bob"] });
+
+  // 印は投稿ごと。同じ bob でも、alice の別の投稿 sky2 なら（5分を過ぎていれば）送る
+  assert.equal(await claimReaction({ skyId: "sky2", nowMs: T0 + core.THROTTLE_MS + 1 }), "send");
+  assert.deepEqual(await reactionNoticeOf("g1", "sky2"), { notifiedReactorIds: ["bob"] });
+});
+
+test("リアクションの通知の枠: 別の投稿者・別のグループは別に数える", async () => {
+  await seedReactionSky("g1", "sky1", { authorId: "alice" });
+  await seedReactionSky("g1", "sky3", { authorId: "dave" });
+  await seedReactionSky("g2", "sky4", { authorId: "alice" });
+  assert.equal(await claimReaction(), "send");
+  assert.equal(await claimReaction({ skyId: "sky3", authorId: "dave", nowMs: T0 + 1_000 }), "send", "別の投稿者");
+  assert.equal(await claimReaction({ groupId: "g2", skyId: "sky4", nowMs: T0 + 2_000 }), "send", "別のグループの同じ投稿者");
+  assert.equal((await reactionNotifyStateOf("g1", "dave")).lastSentAt.toMillis(), T0 + 1_000);
+  assert.equal((await reactionNotifyStateOf("g2", "alice")).lastSentAt.toMillis(), T0 + 2_000);
+  assert.equal((await reactionNotifyStateOf("g1", "alice")).lastSentAt.toMillis(), T0);
+});
+
+test("リアクションの通知の枠: 投稿が無ければ sky_gone で、何も書かない（記録が残っていても）", async () => {
+  await seedReactionSky("g1", "sky1", { authorId: "alice" });
+  assert.equal(await claimReaction({ skyId: "nope" }), "sky_gone");
+  assert.equal(await reactionNotifyStateOf("g1", "alice"), null, "最後の時刻を書かない");
+  assert.equal(await reactionNoticeOf("g1", "nope"), null, "印を作らない");
+
+  // 記録があって5分を過ぎていても、投稿が無ければ送らない
+  assert.equal(await claimReaction(), "send");
+  await skyRefOf("g1", "sky1").delete();
+  assert.equal(await claimReaction({ reactorUid: "carol", nowMs: T0 + core.THROTTLE_MS + 1 }), "sky_gone");
+  assert.equal((await reactionNotifyStateOf("g1", "alice")).lastSentAt.toMillis(), T0);
+  assert.deepEqual(await reactionNoticeOf("g1", "sky1"), { notifiedReactorIds: ["bob"] });
+});
+
+test("リアクションの通知の枠（同時実行）: 同じ投稿者へ2人がほぼ同時に付けても、送るのは1通だけ。同じ人の2回も1通だけ", async (t) => {
+  await seedReactionSky("g1", "sky1", { authorId: "alice" });
+  await seedReactionSky("g1", "sky2", { authorId: "alice" });
+  const summarize = (results) => {
+    const decisions = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
+    const contention = results.filter((r) => r.status === "rejected" && isTxContention(r.reason)).length;
+    const unexpected = results.filter((r) => r.status === "rejected" && !isTxContention(r.reason)).map((r) => String(r.reason && r.reason.message));
+    return { decisions, contention, unexpected };
+  };
+
+  const two = summarize(await Promise.allSettled([claimReaction(), claimReaction({ reactorUid: "carol", nowMs: T0 + 10 })]));
+  t.diagnostic(`2人: ${JSON.stringify(two)}`);
+  assert.deepEqual(two.unexpected, []);
+  assert.equal(two.decisions.filter((d) => d === "send").length, 1, "2人のうち送るのは1通");
+  assert.equal((await reactionNoticeOf("g1", "sky1")).notifiedReactorIds.length, 1);
+
+  // 同じ人の同じ投稿への2回（別の投稿 sky2）: 1通だけ。前半でどちらが送っても（最後の時刻が T0 でも T0+10 でも）
+  // 間引きに入らないよう、10分後にする
+  const later = T0 + 2 * core.THROTTLE_MS;
+  const same = summarize(await Promise.allSettled([claimReaction({ skyId: "sky2", nowMs: later }), claimReaction({ skyId: "sky2", nowMs: later + 10 })]));
+  t.diagnostic(`同じ人: ${JSON.stringify(same)}`);
+  assert.deepEqual(same.unexpected, []);
+  assert.equal(same.decisions.filter((d) => d === "send").length, 1, "同じ人の2回のうち送るのは1通");
+  assert.deepEqual(await reactionNoticeOf("g1", "sky2"), { notifiedReactorIds: ["bob"] });
+});
+
+test("リアクションの通知の枠: リアクションの通知を送った直後でも、同じグループの新着投稿の通知は send（陽性対照C4・新着投稿の notifyState に触れない）", async () => {
+  await seedReactionSky("g1", "sky1", { authorId: "alice" });
+  // リアクション → 新着投稿: alice へリアクションの通知を送った1秒後に、bob が新しく投稿する。
+  // 陽性対照で「新着投稿の側が throttled になる」ことを赤の理由にするため、新着投稿の判定を最初に確かめる
+  assert.equal(await claimReaction(), "send");
+  const postStateBefore = await notifyState("g1", "alice");
+  assert.equal(await store.claimNotifySlot(db, { groupId: "g1", uid: "alice", skyId: "sky2", nowMs: T0 + 1_000 }), "send");
+  assert.equal(postStateBefore, null, "リアクションは新着投稿の notifyState を書かない");
+
+  // 新着投稿 → リアクション: 別のグループで、alice へ新着投稿の通知を送った1秒後に、bob が alice の投稿に付ける
+  await seedReactionSky("g2", "sky5", { authorId: "alice" });
+  assert.equal(await store.claimNotifySlot(db, { groupId: "g2", uid: "alice", skyId: "sky6", nowMs: T0 }), "send");
+  assert.equal(await claimReaction({ groupId: "g2", skyId: "sky5", nowMs: T0 + 1_000 }), "send");
+  assert.equal((await notifyState("g2", "alice")).lastSkyId, "sky6", "新着投稿の記録はそのまま");
+});
