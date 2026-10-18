@@ -15,6 +15,7 @@
 // - 投稿の作成（createSkyTx・release-gate 2.2）もここに置く。利用停止・メンバー・NGワードを確かめてから書く。
 // - 通報の受け付け（reportSkyTx・release-gate 2.3）もここに置く。記録は soratomoReports（グループの外）に作る。
 // - ガイドラインへの同意の記録（agreeGuidelineTx・release-gate 2.4）もここに置く。soratomoUsers/{uid} に merge で書く。
+// - 本人のリアクション（setReactionTx・soratomo-reactions 2.2）もここに置く。投稿の文書の reactions.{uid} と reactorIds だけを書く。
 // - テストは soratomoStore.test.js（Firestore のエミュレーターに対して直接呼ぶ）。
 //
 // ⚠️ Firestore のトランザクションは「読みを全部終えてから書く」決まり。招待コードの重なりの確認（最大5回の読み）も
@@ -25,7 +26,7 @@
 
 "use strict";
 
-const { FieldValue, Timestamp } = require("firebase-admin/firestore");
+const { FieldPath, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const core = require("./soratomoCore");
 
 // MARK: - 定数
@@ -52,7 +53,7 @@ class SoratomoDomainError extends Error {
   /**
    * @param {"invalid_name"|"invalid_format"|"not_found"|"group_full"|"user_limit"|"not_owner"
    *   |"suspended"|"consent_required"|"ng_word"|"invalid_input"|"not_member"|"invalid_reason"|"sky_not_found"
-   *   |"self_report"|"outdated_guideline"|"leave_pending"} reason
+   *   |"self_report"|"outdated_guideline"|"leave_pending"|"self_reaction"|"invalid_reaction"} reason
    * @param {{ currentVersion: number }|null} [details] 利用者へ返してよい詳細。いまは consent_required と
    *   outdated_guideline の現行のガイドラインの版だけ（アプリが「同意が要る」と「アプリが古い」を見分けるため・
    *   release-gate 2.1・2.4）。
@@ -479,6 +480,85 @@ async function regenerateInviteCodeTx(db, { uid, groupId }, { randomInt } = {}) 
   });
 }
 
+// MARK: - リアクション（soratomo-reactions）
+
+/**
+ * 投稿の文書の reactions.{uid} の今の値を読む（setReactionTx の判定用）。
+ * - 値が無い（undefined）: 付いていない
+ * - 物で、kind が7つの名前のどれか: その名前が付いている
+ * - それ以外（物でない・null・配列・kind が無い・知らない名前）: 壊れた値。「付いている」とみなし、kind は null にする
+ *   （付ける要求で正しい形に書き直し、外す要求で消す。壊れた値を残さない）
+ * @param {unknown} entry
+ * @returns {{ present: boolean, kind: string|null }}
+ */
+function readOwnReaction(entry) {
+  if (entry === undefined) return { present: false, kind: null };
+  const valid = entry !== null && typeof entry === "object" && !Array.isArray(entry) && core.isReactionKind(entry.kind);
+  return { present: true, kind: valid ? entry.kind : null };
+}
+
+/**
+ * 本人のリアクションを付ける・選び直す・外す（soratomo-reactions 要件4.1〜4.11・4.14・5.5・12.1・12.7）。
+ * 判定の順: invalid_input（トランザクションの前）→ invalid_reaction（前）→ トランザクションで soratomoUsers/{uid}・
+ * members/{uid}・投稿の文書を getAll で読む → suspended → not_member → sky_not_found → self_reaction。
+ * - invalid_input: 本文が物でない・groupId か skyId が自動IDの形でない・kind の鍵が無い（外すときは kind: null を送る契約。
+ *   iOS の FirebaseFunctions が NSNull を JSON の null で送ることは、エミュレーターで確かめた・要確認Q3）
+ * - invalid_reaction: kind が null でなく、7つの名前のどれでもない（絵文字そのもの・FE0F の無い形も・4.4〜4.6）
+ * - self_reaction: 投稿者が本人。外す要求も拒否する（自分の投稿にリアクションは存在しない・4.3）
+ * - 同意（guidelineVersion）とブロックの一覧（users/{uid}.blockedUserIds）は読まない（4.14・5.5）
+ * 書き方: FieldPath で本人のキーだけを指す（uid に「.」が含まれても、ほかの人のキーに触れない）。
+ * - 付ける・選び直す: reactions.{uid} に { kind, at: サーバーの時刻 }、reactorIds に arrayUnion(uid)
+ * - 外す: reactions.{uid} を消し、reactorIds から arrayRemove(uid)
+ * - 同じ kind を付ける・付いていないものを外す要求は、書かずに unchanged
+ * - 今の値が壊れているときは「付いている」とみなし、付けると replaced・外すと removed（readOwnReaction）
+ * - 投稿のほかの項目（authorId・createdAt・caption・width・height）とグループの文書には書かない（12.7。lastActivityAt を
+ *   動かさない）。数は保存せず、読む側が数える（4.10）
+ * - 同じ人の同時の要求は投稿の文書のトランザクションで直列になり、地図のキーが1つなので2つ残らない（4.9）
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ uid: string, input: unknown }} params input は要求の本文（{ groupId, skyId, kind }。kind は名前か null）
+ * @returns {Promise<{ outcome: "added"|"replaced"|"removed"|"unchanged", kind: string|null, authorId: string }>}
+ *   kind は書いた後の本人のリアクション。authorId は通知の宛先で、利用者へは返さない（配線・tasks 3.1）
+ */
+async function setReactionTx(db, { uid, input }) {
+  assertUid(uid);
+  const data = input && typeof input === "object" && !Array.isArray(input) ? input : null;
+  if (!data || !core.isAutoId(data.groupId) || !core.isAutoId(data.skyId) || !Object.prototype.hasOwnProperty.call(data, "kind")) {
+    throw new SoratomoDomainError("invalid_input");
+  }
+  const { groupId, skyId, kind } = data;
+  if (kind !== null && !core.isReactionKind(kind)) throw new SoratomoDomainError("invalid_reaction");
+
+  return db.runTransaction(async (tx) => {
+    const groupRef = db.collection(GROUPS).doc(groupId);
+    const skyRef = groupRef.collection(SKIES).doc(skyId);
+    const [userSnap, memberSnap, skySnap] = await tx.getAll(
+      db.collection(USERS).doc(uid),
+      groupRef.collection(MEMBERS).doc(uid),
+      skyRef
+    );
+
+    assertNotSuspended(userSnap.exists ? userSnap.data() : {});
+    if (!memberSnap.exists) throw new SoratomoDomainError("not_member");
+    if (!skySnap.exists) throw new SoratomoDomainError("sky_not_found");
+    const authorId = skySnap.get("authorId");
+    if (!isDocumentId(authorId)) throw new Error("soratomo: リアクションの対象の投稿の authorId が壊れている");
+    if (authorId === uid) throw new SoratomoDomainError("self_reaction");
+
+    const ownPath = new FieldPath("reactions", uid);
+    const current = readOwnReaction(skySnap.get(ownPath));
+
+    // ここから書き込み（読みはすべて終わっている）
+    if (kind === null) {
+      if (!current.present) return { outcome: "unchanged", kind: null, authorId };
+      tx.update(skyRef, ownPath, FieldValue.delete(), "reactorIds", FieldValue.arrayRemove(uid));
+      return { outcome: "removed", kind: null, authorId };
+    }
+    if (current.present && current.kind === kind) return { outcome: "unchanged", kind, authorId };
+    tx.update(skyRef, ownPath, { kind, at: FieldValue.serverTimestamp() }, "reactorIds", FieldValue.arrayUnion(uid));
+    return { outcome: current.present ? "replaced" : "added", kind, authorId };
+  });
+}
+
 // MARK: - 通知の枠
 
 /**
@@ -516,4 +596,6 @@ module.exports = {
   agreeGuidelineTx,
   regenerateInviteCodeTx,
   claimNotifySlot,
+  // リアクション（soratomo-reactions）
+  setReactionTx,
 };

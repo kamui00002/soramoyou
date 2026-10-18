@@ -103,7 +103,7 @@
     - テスト: `soratomoCore.test.js` の末尾に18本を足した（`REACTION_KINDS` 2・`isReactionKind` 4・`buildReactionNotification` 5・`decideReactionNotify` 7）。テストだけを足した状態で18本中17本が赤（関数が無い）。残る1本（`kind` が名前でないと `TypeError`）は、関数が無いことによる `TypeError` で偶然通っていたので、下のm4で陽性対照を別に取った。実装の後、`node --test soratomoCore.test.js` が102本・0失敗、lintが緑、`npm test`（サンドボックスの外・Node 22.20.0）が417本・0失敗（399＋18）
     - 陽性対照（C5ほか）: 本物のファイルには触らず、scratchpadに「壊した写しの `soratomoCore.js`」と「テストの写し」を並べて流した（本物の shasum の頭は、流す前と後で `soratomoCore.js` が `6a626f68719e`、`soratomoCore.test.js` が `7dbc99e9fb9e` のまま）。m1（C5・`decideReactionNotify` の中身を `decideThrottle(state, skyId, nowMs)` に置き換え・写しの頭 `63fc8dbde5ba`）で、C5のテストが `actual: 'duplicate'`／`expected: 'send'` で赤（ほかに `decideReactionNotify` の5本も赤・計6本）。m2（☁️などの絵文字そのものも受ける `isReactionKind`・`beab402c9fee`）で「絵文字そのものと FE0F の無い形は偽」の1本だけが赤。m3（キャプションを本文の末尾に足す `buildReactionNotification`・`a94180671d4c`）で「キャプションを本文に入れない」の1本だけが赤。m4（知らない `kind` で投げずに空の本文を返す・`4542fe6e6339`）で `TypeError` の1本だけが赤。m5（くもの絵文字から U+FE0F を落とす・`1b59918d5a57`）で、7行の表・7種類の本文・「だれか」の3本が赤（数値で固定した効き目の確かめ）。どの写しも、赤は狙ったテストに限られた
 
-- [ ] 2.2 本人のリアクションを付ける・外す・選び直すトランザクション `setReactionTx` を作る
+- [x] 2.2 本人のリアクションを付ける・外す・選び直すトランザクション `setReactionTx` を作る
   - 前提: 1.2, 2.1
   - `functions/soratomoStore.js` に、design.mdの「setReactionTx」のとおりに作る。判定の順は、`invalid_input`（前）→`invalid_reaction`（前）→トランザクションで `soratomoUsers/{uid}`・`members/{uid}`・投稿の文書を `getAll` で読む→`suspended`（既存の `assertNotSuspended`）→`not_member`→`sky_not_found`→`self_reaction`（外す要求も拒否）。外すときの `kind` の送り方は、1.2の結果の契約に従う
   - 書き方: `FieldPath` で本人のキーだけを指す。付ける・選び直すは `reactions.{uid}` に `{ kind, at: serverTimestamp }` と `reactorIds` の `arrayUnion`、外すは `FieldValue.delete()` と `arrayRemove`。同じ `kind` か、付いていないものを外す要求は、書かずに `unchanged`。今の値が壊れている（物でない・知らない名前）ときは「付いている」とみなす。投稿のほかの項目とグループの文書には書かない。同意とブロックの一覧は読まない
@@ -116,6 +116,12 @@
     - 同時実行（既存の要確認3の型）: 同じ人が違う絵文字で20回並べても1件。19人が同時に付けても19件で、絵文字ごとの数が実際に付けた人の数と一致する
   - 陽性対照: 本人のキーでなく `reactions` の地図を丸ごと書き直す写しで、「ほかの人のリアクションは残る」が赤になることを先に確かめる。`assertNotSuspended` を外した写しで `suspended` のテストが、`self_reaction` の判定を外した写しで自分の投稿のテストが、`arrayUnion` を書かない写しでI1のテストが、それぞれ赤になることも確かめる
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.14, 5.5, 12.1, 12.7_
+  - 結果（2026-10-18 15:20）: `HEAD` `c087299`（2.1の後）の上で作った。`functions/soratomoStore.js` に `setReactionTx` と、今の値を読む部品 `readOwnReaction` を足し、`firebase-admin/firestore` から `FieldPath` を読み込み、`SoratomoDomainError` の理由の型に `self_reaction`・`invalid_reaction` を足した。判定の順と書き方はdesign.mdのとおり（1.2の結果どおり、`kind` の鍵が無いときを `invalid_input` にする契約のまま）。書くのは `tx.update` の2組（`new FieldPath("reactions", uid)` と `reactorIds`）だけで、投稿のほかの項目とグループの文書には書かない。投稿の `authorId` が文書IDとして使えない形なら、`reportSkyTx` と同じく想定外の失敗（internal）にした
+    - テスト: `soratomoStore.test.js` の末尾に10本を足した（付ける・選び直す・同じもの・外す・無いものを外すの一続き／ほかの人のリアクションは残る／uidに `.` を含む人／壊れた今の値7通り／`invalid_input` 13通りと `invalid_reaction` 12通り／拒否4種を付ける・外すの両方で／判定の順／未同意・古い版・ブロックされた人／同じ人の20回／19人）。I1は `assertReactionInvariant`（鍵の集合と `reactorIds` の比較）で各場面に入れた。「書かない」は投稿とグループの文書の `updateTime` が変わらないことで見た
+    - 流し方: エミュレーター（`emulators:exec --only firestore`・`--project demo-soramoyou-security`・firestore 8080）の1回の中で、scratchpadの台本 `run-2.2.sh` から「実装の前の写し（`HEAD` の `soratomoStore.js`）→本物→壊した写し5通り→本物」の順に `soratomoStore.test.js` を流した。サンドボックスの中ではポートを開けない（`listen EPERM`）ので、この1回だけサンドボックスの外で流した（firebase CLIは空の `XDG_CONFIG_HOME`、JavaはJBRを `JAVA_HOME` と `PATH` で渡した）。本物のファイルには触らず、写しはscratchpadに置いた（本物の shasum の頭は、写しを作る前と流した後で `soratomoStore.js` が `ccc0341d8c35`、`soratomoStore.test.js` が `a1fef0b1ebed` のまま）
+    - 結果: 実装の前の写し（頭 `269e275417e9`）は73本中10本が赤で、赤は新しい10本だけ（既存の63本は緑）。本物は2回とも73本・0失敗。同時実行は、同じ人の20回が成功20・競合0（`added` 1・`replaced` 16・`unchanged` 3）、19人が1回目で19人とも成功（競合による送り直し0）。送り直しの道は今回の流れでは通っていない
+    - 陽性対照: mA（付ける・選び直すで `reactions` の地図を丸ごと書き直す・`e3833be20af6`）で「ほかの人のリアクションは残る」が赤（ほかに一続き・`.`・未同意とブロック・同時実行2本の計6本）。mB（`assertNotSuspended` を外す・`a361f7381bd2`）で拒否4種のテストと判定の順の2本が赤。mC（`self_reaction` の判定を外す・`88aa82fbc8d4`）で拒否4種のテストの1本だけが赤。mD（`arrayUnion` を書かない・`1f5478dd3e11`）でI1を見る6本が赤。追加のmE（本人のキーを `FieldPath` でなく文字列 `reactions.${uid}` で指す・`a93cf633e09a`）で「uidに `.` を含む人」の1本だけが赤
+    - 全体のエミュレーターのテスト（`npm run test:emulator`）は、同じ `soratomoStore.js` を触る2.3の後にまとめて1回流す（2.3の結果に書く）
 
 - [ ] 2.3 通知の間引きと「同じ人の同じ投稿で1通まで」を、1つのトランザクションで決める `claimReactionNotifySlot` を作る（陽性対照C4）
   - 前提: 2.2（同じ `soratomoStore.js` を触る）

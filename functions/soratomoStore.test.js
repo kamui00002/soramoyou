@@ -1272,3 +1272,365 @@ test("通知の枠: 受信者ごと・グループごとに別に数える", asy
   assert.equal(await store.claimNotifySlot(db, { groupId: "g1", uid: "carol", skyId: "sky1", nowMs: T0 }), "send");
   assert.equal(await store.claimNotifySlot(db, { groupId: "g2", uid: "bob", skyId: "skyX", nowMs: T0 }), "send");
 });
+
+// MARK: - リアクション（setReactionTx・soratomo-reactions 2.2）
+
+/** 種のリアクションの時刻（サーバーの時刻と見分けるため、過去の決まった時刻にする）。 */
+const REACTION_AT0 = Timestamp.fromMillis(Date.UTC(2026, 9, 1, 0, 0, 0));
+const SKY_CREATED_AT = Timestamp.fromMillis(Date.UTC(2026, 9, 1, 9, 0, 0));
+
+function skyRefOf(groupId, skyId) {
+  return db.collection(GROUPS).doc(groupId).collection("skies").doc(skyId);
+}
+
+/**
+ * 投稿の文書を、データモデルの形で直接入れる（トランザクションを通さない）。
+ * reactions・reactorIds を渡さなければ、その項目を持たない（リアクションが1つも無い投稿）。
+ */
+async function seedReactionSky(groupId, skyId, { authorId, reactions, reactorIds } = {}) {
+  const sky = { authorId, caption: "夕焼けがきれい", width: 1080, height: 1440, createdAt: SKY_CREATED_AT };
+  if (reactions !== undefined) sky.reactions = reactions;
+  if (reactorIds !== undefined) sky.reactorIds = reactorIds;
+  await skyRefOf(groupId, skyId).set(sky);
+}
+
+/** g1（alice がオーナー・bob と carol がメンバー）に、alice の投稿 sky1 を入れる。carol のリアクション（虹）が付いている。 */
+async function seedReactionScene() {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob", "carol"] });
+  await seedReactionSky("g1", "sky1", {
+    authorId: "alice",
+    reactions: { carol: { kind: "rainbow", at: REACTION_AT0 } },
+    reactorIds: ["carol"],
+  });
+}
+
+/** Callable soratomoSetReaction の data と同じ形の要求の本文。 */
+function reactionInput(overrides = {}) {
+  return { groupId: "g1", skyId: "sky1", kind: "sunset", ...overrides };
+}
+
+/** I1: reactions の鍵の集合と reactorIds が等しい（design.md の Domain Model）。 */
+function assertReactionInvariant(sky, label) {
+  const keys = Object.keys(sky.reactions || {}).sort();
+  assert.deepEqual([...(sky.reactorIds || [])].sort(), keys, `${label}: reactions の鍵と reactorIds が等しい（I1）`);
+}
+
+/** carol の種のリアクション（虹・REACTION_AT0）が、そのまま残っていることを確かめる。 */
+function assertCarolKept(sky, label) {
+  assert.ok(sky.reactions && sky.reactions.carol, `${label}: carol のリアクションが残る`);
+  assert.equal(sky.reactions.carol.kind, "rainbow", `${label}: carol の絵文字が変わらない`);
+  assert.equal(sky.reactions.carol.at.toMillis(), REACTION_AT0.toMillis(), `${label}: carol の時刻が変わらない`);
+  assert.ok(sky.reactorIds.includes("carol"), `${label}: carol が reactorIds に残る`);
+}
+
+/** エミュレーターの競合（ABORTED か、競合で返す INVALID_ARGUMENT の「Transaction is invalid or closed」）か（要確認3と同じ判定）。 */
+function isTxContention(error) {
+  return Boolean(error) && (error.code === 10 || (error.code === 3 && /Transaction is invalid or closed/.test(error.message)));
+}
+
+test("リアクション: 付ける→added・選び直す→replaced・同じもの→unchanged・外す→removed・無いものを外す→unchanged（I1・ほかの項目とグループの文書は書かない）", async () => {
+  await seedReactionScene();
+  const groupBefore = await db.collection(GROUPS).doc("g1").get();
+  const beforeMs = Date.now();
+
+  assert.deepEqual(await store.setReactionTx(db, { uid: "bob", input: reactionInput({ kind: "sunset" }) }), {
+    outcome: "added",
+    kind: "sunset",
+    authorId: "alice",
+  });
+  let sky = (await skyRefOf("g1", "sky1").get()).data();
+  assert.deepEqual(Object.keys(sky.reactions.bob).sort(), ["at", "kind"]);
+  assert.equal(sky.reactions.bob.kind, "sunset");
+  assert.ok(sky.reactions.bob.at instanceof Timestamp, "付けた時刻は Firestore の時刻");
+  assert.ok(Math.abs(sky.reactions.bob.at.toMillis() - beforeMs) < 60_000, "付けた時刻はサーバーの時刻");
+  assertReactionInvariant(sky, "added");
+
+  assert.deepEqual(await store.setReactionTx(db, { uid: "bob", input: reactionInput({ kind: "cloud" }) }), {
+    outcome: "replaced",
+    kind: "cloud",
+    authorId: "alice",
+  });
+  sky = (await skyRefOf("g1", "sky1").get()).data();
+  assert.equal(sky.reactions.bob.kind, "cloud");
+  assertReactionInvariant(sky, "replaced");
+
+  const beforeSame = await skyRefOf("g1", "sky1").get();
+  assert.deepEqual(await store.setReactionTx(db, { uid: "bob", input: reactionInput({ kind: "cloud" }) }), {
+    outcome: "unchanged",
+    kind: "cloud",
+    authorId: "alice",
+  });
+  assert.ok((await skyRefOf("g1", "sky1").get()).updateTime.isEqual(beforeSame.updateTime), "同じものを付ける要求は書かない");
+
+  assert.deepEqual(await store.setReactionTx(db, { uid: "bob", input: reactionInput({ kind: null }) }), {
+    outcome: "removed",
+    kind: null,
+    authorId: "alice",
+  });
+  sky = (await skyRefOf("g1", "sky1").get()).data();
+  assert.equal(Object.prototype.hasOwnProperty.call(sky.reactions, "bob"), false, "外すと本人のキーが消える");
+  assert.deepEqual(sky.reactorIds, ["carol"]);
+  assertReactionInvariant(sky, "removed");
+
+  const beforeNone = await skyRefOf("g1", "sky1").get();
+  assert.deepEqual(await store.setReactionTx(db, { uid: "bob", input: reactionInput({ kind: null }) }), {
+    outcome: "unchanged",
+    kind: null,
+    authorId: "alice",
+  });
+  assert.ok((await skyRefOf("g1", "sky1").get()).updateTime.isEqual(beforeNone.updateTime), "付いていないものを外す要求は書かない");
+
+  // 投稿のリアクション以外の項目と、グループの文書（lastActivityAt を含む）は変わらない（12.7）
+  sky = (await skyRefOf("g1", "sky1").get()).data();
+  assert.deepEqual(Object.keys(sky).sort(), ["authorId", "caption", "createdAt", "height", "reactions", "reactorIds", "width"]);
+  assert.equal(sky.authorId, "alice");
+  assert.equal(sky.caption, "夕焼けがきれい");
+  assert.equal(sky.width, 1080);
+  assert.equal(sky.height, 1440);
+  assert.equal(sky.createdAt.toMillis(), SKY_CREATED_AT.toMillis());
+  assertCarolKept(sky, "最後");
+  const groupAfter = await db.collection(GROUPS).doc("g1").get();
+  assert.ok(groupAfter.updateTime.isEqual(groupBefore.updateTime), "グループの文書を書かない");
+  assert.equal(groupAfter.get("lastActivityAt").toMillis(), groupBefore.get("lastActivityAt").toMillis());
+});
+
+test("リアクション: ほかの人のリアクションは残る（付ける・選び直す・外すのどれでも）", async () => {
+  await seedReactionScene();
+  for (const kind of ["eyes", "sparkles", null]) {
+    await store.setReactionTx(db, { uid: "bob", input: reactionInput({ kind }) });
+    const sky = (await skyRefOf("g1", "sky1").get()).data();
+    assertCarolKept(sky, String(kind));
+    assertReactionInvariant(sky, String(kind));
+  }
+});
+
+test("リアクション: uid に「.」を含む人のキーでも、ほかの人のキー（前半が同じ uid）に触れない", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "a", "a.b"] });
+  await seedReactionSky("g1", "sky1", { authorId: "alice", reactions: { a: { kind: "eyes", at: REACTION_AT0 } }, reactorIds: ["a"] });
+  const assertAKept = (sky, label) => {
+    assert.deepEqual(Object.keys(sky.reactions.a).sort(), ["at", "kind"], `${label}: a のリアクションの中に入り込まない`);
+    assert.equal(sky.reactions.a.kind, "eyes", label);
+    assert.equal(sky.reactions.a.at.toMillis(), REACTION_AT0.toMillis(), label);
+  };
+
+  assert.equal((await store.setReactionTx(db, { uid: "a.b", input: reactionInput({ kind: "sunset" }) })).outcome, "added");
+  let sky = (await skyRefOf("g1", "sky1").get()).data();
+  assert.deepEqual(Object.keys(sky.reactions).sort(), ["a", "a.b"]);
+  assert.equal(sky.reactions["a.b"].kind, "sunset");
+  assertAKept(sky, "added");
+  assertReactionInvariant(sky, "added");
+
+  assert.equal((await store.setReactionTx(db, { uid: "a.b", input: reactionInput({ kind: "cloud" }) })).outcome, "replaced");
+  sky = (await skyRefOf("g1", "sky1").get()).data();
+  assert.equal(sky.reactions["a.b"].kind, "cloud");
+  assertAKept(sky, "replaced");
+
+  assert.equal((await store.setReactionTx(db, { uid: "a.b", input: reactionInput({ kind: null }) })).outcome, "removed");
+  sky = (await skyRefOf("g1", "sky1").get()).data();
+  assert.deepEqual(Object.keys(sky.reactions), ["a"]);
+  assert.deepEqual(sky.reactorIds, ["a"]);
+  assertAKept(sky, "removed");
+});
+
+test("リアクション: 今の値が壊れている（物でない・知らない名前）ときは「付いている」とみなし、付けると replaced・外すと removed", async () => {
+  await seedGroup({ groupId: "g1", ownerId: "alice", inviteCode: "SKYAAAAA", memberIds: ["alice", "bob"] });
+  // 壊れた値と同じ名前（"sunset" という文字列）を付ける要求も、unchanged にせず正しい形に書き直す
+  const brokenValues = ["sunset", 3, null, { kind: "star" }, { kind: "Sunset" }, { at: REACTION_AT0 }, ["sunset"]];
+  for (const [i, broken] of brokenValues.entries()) {
+    await seedReactionSky("g1", `add${i}`, { authorId: "alice", reactions: { bob: broken }, reactorIds: ["bob"] });
+    await seedReactionSky("g1", `del${i}`, { authorId: "alice", reactions: { bob: broken }, reactorIds: ["bob"] });
+  }
+  for (const [i, broken] of brokenValues.entries()) {
+    const label = JSON.stringify(broken);
+    const added = await store.setReactionTx(db, { uid: "bob", input: reactionInput({ skyId: `add${i}`, kind: "sunset" }) });
+    assert.deepEqual(added, { outcome: "replaced", kind: "sunset", authorId: "alice" }, `付ける ${label}`);
+    const addSky = (await skyRefOf("g1", `add${i}`).get()).data();
+    assert.equal(addSky.reactions.bob.kind, "sunset", `付ける ${label}`);
+    assert.ok(addSky.reactions.bob.at instanceof Timestamp, `付ける ${label}`);
+    assertReactionInvariant(addSky, `付ける ${label}`);
+
+    const removed = await store.setReactionTx(db, { uid: "bob", input: reactionInput({ skyId: `del${i}`, kind: null }) });
+    assert.deepEqual(removed, { outcome: "removed", kind: null, authorId: "alice" }, `外す ${label}`);
+    const delSky = (await skyRefOf("g1", `del${i}`).get()).data();
+    assert.deepEqual(delSky.reactions, {}, `外す ${label}`);
+    assert.deepEqual(delSky.reactorIds, [], `外す ${label}`);
+  }
+});
+
+test("リアクション: 入力の誤りは invalid_input、7つの名前でない絵文字は invalid_reaction で、何も書かない", async () => {
+  await seedReactionScene();
+  const skyBefore = await skyRefOf("g1", "sky1").get();
+  const badInputs = [
+    null,
+    undefined,
+    "sky1",
+    3,
+    ["g1", "sky1", "sunset"],
+    {},
+    { skyId: "sky1", kind: "sunset" },
+    { groupId: "g1", kind: "sunset" },
+    { groupId: "g1", skyId: "sky1" }, // kind の鍵が無い（外すときは kind: null を送る契約・要確認Q3）
+    reactionInput({ groupId: "g_1" }),
+    reactionInput({ skyId: "a/b" }),
+    reactionInput({ groupId: "" }),
+    reactionInput({ skyId: 1 }),
+  ];
+  for (const [i, input] of badInputs.entries()) {
+    await assert.rejects(store.setReactionTx(db, { uid: "bob", input }), domainError("invalid_input", null), `入力 ${i}`);
+  }
+  const badKinds = [
+    String.fromCodePoint(0x2601, 0xfe0f), // ☁️（絵文字そのもの）
+    String.fromCodePoint(0x2601), // FE0F の無い ☁
+    String.fromCodePoint(0x1f305), // 🌅
+    "star",
+    "Sunset",
+    " sunset",
+    "",
+    0,
+    false,
+    {},
+    ["sunset"],
+    { kind: "sunset" },
+  ];
+  for (const [i, kind] of badKinds.entries()) {
+    await assert.rejects(store.setReactionTx(db, { uid: "bob", input: reactionInput({ kind }) }), domainError("invalid_reaction", null), `絵文字 ${i}`);
+  }
+  assert.ok((await skyRefOf("g1", "sky1").get()).updateTime.isEqual(skyBefore.updateTime), "投稿を書かない");
+});
+
+test("リアクション: 非メンバーは not_member、無い投稿は sky_not_found、自分の投稿は self_reaction（外す要求も）、利用停止中は suspended で、何も書かない", async () => {
+  await seedReactionScene();
+  const suspendedAt = Timestamp.now();
+  // carol はメンバーで、リアクションが付いているが、利用停止中（停止の日時を書いてから外し終えるまでの間・4.11）
+  await db.collection(USERS).doc("carol").set({ suspendedAt, groupCount: 1 });
+  const skyBefore = await skyRefOf("g1", "sky1").get();
+
+  for (const kind of ["sunset", null]) {
+    await assert.rejects(store.setReactionTx(db, { uid: "dave", input: reactionInput({ kind }) }), domainError("not_member", null), `非メンバー ${kind}`);
+    await assert.rejects(
+      store.setReactionTx(db, { uid: "bob", input: reactionInput({ groupId: "nope", kind }) }),
+      domainError("not_member", null),
+      `無いグループ ${kind}`
+    );
+    await assert.rejects(
+      store.setReactionTx(db, { uid: "bob", input: reactionInput({ skyId: "nope", kind }) }),
+      domainError("sky_not_found", null),
+      `無い投稿 ${kind}`
+    );
+    await assert.rejects(store.setReactionTx(db, { uid: "alice", input: reactionInput({ kind }) }), domainError("self_reaction", null), `自分の投稿 ${kind}`);
+    await assert.rejects(store.setReactionTx(db, { uid: "carol", input: reactionInput({ kind }) }), domainError("suspended", null), `利用停止 ${kind}`);
+  }
+
+  assert.ok((await skyRefOf("g1", "sky1").get()).updateTime.isEqual(skyBefore.updateTime), "投稿を書かない");
+  assert.equal((await skyRefOf("g1", "nope").get()).exists, false, "無い投稿を作らない");
+  assert.equal((await skyRefOf("nope", "sky1").get()).exists, false, "無いグループの投稿を作らない");
+  assert.equal((await db.collection(USERS).doc("carol").get()).get("suspendedAt").toMillis(), suspendedAt.toMillis());
+});
+
+test("リアクション: 判定の順 — invalid_input → invalid_reaction → suspended → not_member → sky_not_found → self_reaction", async () => {
+  await seedReactionScene();
+  await db.collection(USERS).doc("dave").set({ suspendedAt: Timestamp.now() }); // dave は停止中で、メンバーでない
+  await db.collection(USERS).doc("alice").set({ suspendedAt: Timestamp.now() }); // 投稿者 alice も停止中
+
+  // ID の形と絵文字の両方が誤り → invalid_input
+  await assert.rejects(store.setReactionTx(db, { uid: "bob", input: reactionInput({ groupId: "g_1", kind: "star" }) }), domainError("invalid_input", null));
+  // 絵文字の誤りで、停止中・非メンバー → invalid_reaction（トランザクションの前に断る）
+  await assert.rejects(store.setReactionTx(db, { uid: "dave", input: reactionInput({ kind: "star" }) }), domainError("invalid_reaction", null));
+  // 停止中で非メンバー → suspended
+  await assert.rejects(store.setReactionTx(db, { uid: "dave", input: reactionInput() }), domainError("suspended", null));
+  // 非メンバーで、無い投稿 → not_member
+  await assert.rejects(store.setReactionTx(db, { uid: "eve", input: reactionInput({ skyId: "nope" }) }), domainError("not_member", null));
+  // 停止中の投稿者が自分の投稿に → suspended（self_reaction より先）
+  await assert.rejects(store.setReactionTx(db, { uid: "alice", input: reactionInput() }), domainError("suspended", null));
+});
+
+test("リアクション: ガイドラインに未同意・古い版の人も付けられ、投稿者にブロックされた人も付けられる（同意とブロックの一覧を読まない）", async () => {
+  await seedReactionScene();
+  // bob は soratomoUsers の文書が無い（同意が無い）。carol は古い版に同意している
+  await db.collection(USERS).doc("carol").set({ guidelineVersion: core.GUIDELINE_VERSION - 1, groupCount: 1 });
+  // 投稿者 alice は bob と carol をブロックしている（ルートの users/{uid}.blockedUserIds）
+  await db.collection("users").doc("alice").set({ blockedUserIds: ["bob", "carol"] });
+  const aliceUserBefore = await db.collection("users").doc("alice").get();
+
+  assert.equal((await store.setReactionTx(db, { uid: "bob", input: reactionInput({ kind: "sunset" }) })).outcome, "added");
+  assert.equal((await store.setReactionTx(db, { uid: "carol", input: reactionInput({ kind: "cloud" }) })).outcome, "replaced");
+  const sky = (await skyRefOf("g1", "sky1").get()).data();
+  assert.equal(sky.reactions.bob.kind, "sunset");
+  assert.equal(sky.reactions.carol.kind, "cloud");
+  assertReactionInvariant(sky, "未同意とブロック");
+
+  assert.equal((await db.collection(USERS).doc("bob").get()).exists, false, "利用者の文書を作らない");
+  assert.equal((await db.collection(USERS).doc("carol").get()).get("guidelineVersion"), core.GUIDELINE_VERSION - 1, "同意の版を書き換えない");
+  assert.ok((await db.collection("users").doc("alice").get()).updateTime.isEqual(aliceUserBefore.updateTime), "投稿者の users を書かない");
+});
+
+test("リアクション（同時実行）: 同じ人が違う絵文字で20回並べても、本人のリアクションは1件で、絵文字は通った要求のどれか", async (t) => {
+  await seedReactionScene();
+  const kinds = Array.from({ length: 20 }, (_, i) => core.REACTION_KINDS[i % core.REACTION_KINDS.length].name);
+  const results = await Promise.allSettled(kinds.map((kind) => store.setReactionTx(db, { uid: "bob", input: reactionInput({ kind }) })));
+  const fulfilled = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
+  const contention = results.filter((r) => r.status === "rejected" && isTxContention(r.reason)).length;
+  const unexpected = results
+    .filter((r) => r.status === "rejected" && !isTxContention(r.reason))
+    .map((r) => `${r.reason && r.reason.code} ${r.reason && r.reason.message}`);
+  const outcomes = {};
+  for (const v of fulfilled) outcomes[v.outcome] = (outcomes[v.outcome] || 0) + 1;
+  t.diagnostic(`成功=${fulfilled.length} 競合=${contention} 内訳=${JSON.stringify(outcomes)}`);
+
+  assert.deepEqual(unexpected, [], "想定外の失敗が無い");
+  assert.ok(fulfilled.length >= 1, "少なくとも1回は通る");
+  assert.ok((outcomes.added || 0) <= 1, "added は多くても1回（同じ人の要求は直列になる）");
+  const sky = (await skyRefOf("g1", "sky1").get()).data();
+  assert.deepEqual(Object.keys(sky.reactions).sort(), ["bob", "carol"], "本人のリアクションは1件");
+  assert.deepEqual([...sky.reactorIds].sort(), ["bob", "carol"]);
+  assert.ok(
+    fulfilled.map((v) => v.kind).includes(sky.reactions.bob.kind),
+    `残った絵文字（${sky.reactions.bob.kind}）は、通った要求のどれか`
+  );
+  assertCarolKept(sky, "同時実行");
+});
+
+test("リアクション（同時実行）: 19人が同時に付けても19件で、絵文字ごとの数が実際に付けた人の数と一致する", async (t) => {
+  const members = memberIds(20);
+  const reactors = members.slice(1);
+  await seedGroup({ groupId: "g1", ownerId: "m00", inviteCode: "SKYAAAAA", memberIds: members });
+  await seedReactionSky("g1", "sky1", { authorId: "m00" }); // まだ reactions も reactorIds も無い投稿
+  const kindOf = (i) => core.REACTION_KINDS[i % core.REACTION_KINDS.length].name;
+
+  const first = await Promise.allSettled(reactors.map((uid, i) => store.setReactionTx(db, { uid, input: reactionInput({ kind: kindOf(i) }) })));
+  const retry = [];
+  const unexpected = [];
+  for (const [i, r] of first.entries()) {
+    if (r.status === "fulfilled") {
+      assert.equal(r.value.outcome, "added", `${reactors[i]} の1回目`);
+    } else if (isTxContention(r.reason)) {
+      retry.push(i);
+    } else {
+      unexpected.push(`${reactors[i]}: ${r.reason && r.reason.code} ${r.reason && r.reason.message}`);
+    }
+  }
+  assert.deepEqual(unexpected, [], "想定外の失敗が無い");
+
+  // 通った要求は、送り直しの前にすべて残っている（失われた更新が無い）
+  const mid = (await skyRefOf("g1", "sky1").get()).data();
+  for (const [i, r] of first.entries()) {
+    if (r.status === "fulfilled") assert.equal(mid.reactions[reactors[i]].kind, kindOf(i), `${reactors[i]} の付けたものが残る`);
+  }
+  // 競合で失敗した人は送り直す（本番なら Callable の失敗＝アプリの再試行に当たる）
+  for (const i of retry) {
+    const out = await store.setReactionTx(db, { uid: reactors[i], input: reactionInput({ kind: kindOf(i) }) });
+    assert.ok(["added", "unchanged"].includes(out.outcome), `${reactors[i]} の送り直し: ${out.outcome}`);
+  }
+  t.diagnostic(`1回目の成功=${reactors.length - retry.length} 競合で送り直し=${retry.length}`);
+
+  const sky = (await skyRefOf("g1", "sky1").get()).data();
+  assert.equal(Object.keys(sky.reactions).length, 19);
+  assertReactionInvariant(sky, "19人");
+  const counts = {};
+  for (const entry of Object.values(sky.reactions)) counts[entry.kind] = (counts[entry.kind] || 0) + 1;
+  const expected = {};
+  reactors.forEach((_, i) => {
+    expected[kindOf(i)] = (expected[kindOf(i)] || 0) + 1;
+  });
+  assert.deepEqual(counts, expected, "絵文字ごとの数が、実際に付けた人の数と一致する");
+});
