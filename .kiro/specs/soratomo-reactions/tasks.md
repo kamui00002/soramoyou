@@ -87,7 +87,7 @@
 
 - [ ] 2. リアクションの規則をサーバーに作る
 
-- [ ] 2.1 (P) 7種類の絵文字・通知文・間引きの判定を、純関数で作る（陽性対照C5）
+- [x] 2.1 (P) 7種類の絵文字・通知文・間引きの判定を、純関数で作る（陽性対照C5）
   - 前提: 1.1, 1.3（1.1の結果で設計が変わらなかったこと。変わったら、直したdesign.mdに従う。1.2（Q3）は純関数に効かないので待たない）
   - `functions/soratomoCore.js` に、design.mdの「soratomoCoreのリアクションの規則」のとおり、`REACTION_KINDS`（7行・並び・名前・FE0Fを含む絵文字）・`isReactionKind`・`buildReactionNotification`・`decideReactionNotify` を足し、`module.exports` に載せる。間引きの間隔は既存の `THROTTLE_MS`、名前の代わりは既存の `FALLBACK_NAME` を使う。既存の `decideThrottle`・`buildNotification` は変えない
   - `soratomoCore.test.js`（`npm test`）:
@@ -97,6 +97,11 @@
     - `decideReactionNotify`: 印に付けた人がいれば `duplicate`。最後に送ってから5分以内（5分ちょうどを含む）なら `throttled`。記録が無い・時刻が読めない・5分を過ぎたなら `send`。投稿IDに左右されない
   - 陽性対照（C5）: 場面は「Aが投稿Pに付けて送った10分後に、Bが同じPに付ける」。期待は `send`。`decideReactionNotify` の中身を既存の `decideThrottle`（`lastSkyId` を渡す形）に置き換えた写しで、`duplicate` になってこのテストが赤になることを先に確かめる。絵文字そのもの（☁️）を受ける `isReactionKind`、キャプションを本文に足す `buildReactionNotification` の写しでも、それぞれのテストが赤になることを確かめる
   - _Requirements: 4.4, 4.5, 4.6, 6.5, 6.8, 6.9, 6.10, 6.11_
+  - 結果（2026-10-18 14:50）: 着手の前に `origin/main` が1件進んでいた（#191 `ca372cdb`・`functions/package.json` の lint・test・test:emulator に `follows-cleanup` を登録）ので、マージで取り込んだ（`f3c3fc03`。それまでのコミットの番号を変えないため、rebaseしない）。取り込んだ後の基準値は、lintが緑、`npm test` が399本（サンドボックスの中では `skyMotionCore.test.js` の `fetchWithTimeout` の1本がローカルのポートを開けず `listen EPERM` で落ちる。外では緑）
+    - 作ったもの: `functions/soratomoCore.js` の末尾に `// MARK: - リアクション` の節を足し、`REACTION_KINDS`（凍結した7行）・`isReactionKind`・`buildReactionNotification`・`decideReactionNotify` を `module.exports` に載せた。`THROTTLE_MS`・`FALLBACK_NAME`・`toMillisOrNull` を使い、`decideThrottle`・`buildNotification` は変えていない。設計の型に無い振る舞いを2つ決めた。（1）`buildReactionNotification` は、`kind` が7つの名前でないとき `TypeError` を投げる（絵文字の欠けた通知を作らない。呼び出し側の `setReactionTx` が名前を検査済みなので、ふつうは起きない。3.1の `notifyReaction` は例外を `failed` にする）。（2）「だれか」の条件は、tasks 2.1のとおり空・空白だけ（`trim()` で空）・文字列でない（新着投稿の `buildNotification` は空白だけを「だれか」にしない）
+    - 絵文字の書き方: 実装に4桁の `\uXXXX` で書いた下書きが、道具の入力の段階で生の文字（☁️・❤️・✨）に変わった（波かっこの `\u{1F305}` は残った）。見えない U+FE0F を見落とさないよう、7行とも波かっこの形 `\u{2601}\u{FE0F}` などに直し、ASCIIだけで書かれていることを確かめた。テストは絵文字をコードポイントの数値（`[0x2601, 0xfe0f]` など）とUTF-16の単位数で固定した（文字列で書くと、FE0Fが実装とテストの両方から落ちても緑のままになるため）
+    - テスト: `soratomoCore.test.js` の末尾に18本を足した（`REACTION_KINDS` 2・`isReactionKind` 4・`buildReactionNotification` 5・`decideReactionNotify` 7）。テストだけを足した状態で18本中17本が赤（関数が無い）。残る1本（`kind` が名前でないと `TypeError`）は、関数が無いことによる `TypeError` で偶然通っていたので、下のm4で陽性対照を別に取った。実装の後、`node --test soratomoCore.test.js` が102本・0失敗、lintが緑、`npm test`（サンドボックスの外・Node 22.20.0）が417本・0失敗（399＋18）
+    - 陽性対照（C5ほか）: 本物のファイルには触らず、scratchpadに「壊した写しの `soratomoCore.js`」と「テストの写し」を並べて流した（本物の shasum の頭は、流す前と後で `soratomoCore.js` が `6a626f68719e`、`soratomoCore.test.js` が `7dbc99e9fb9e` のまま）。m1（C5・`decideReactionNotify` の中身を `decideThrottle(state, skyId, nowMs)` に置き換え・写しの頭 `63fc8dbde5ba`）で、C5のテストが `actual: 'duplicate'`／`expected: 'send'` で赤（ほかに `decideReactionNotify` の5本も赤・計6本）。m2（☁️などの絵文字そのものも受ける `isReactionKind`・`beab402c9fee`）で「絵文字そのものと FE0F の無い形は偽」の1本だけが赤。m3（キャプションを本文の末尾に足す `buildReactionNotification`・`a94180671d4c`）で「キャプションを本文に入れない」の1本だけが赤。m4（知らない `kind` で投げずに空の本文を返す・`4542fe6e6339`）で `TypeError` の1本だけが赤。m5（くもの絵文字から U+FE0F を落とす・`1b59918d5a57`）で、7行の表・7種類の本文・「だれか」の3本が赤（数値で固定した効き目の確かめ）。どの写しも、赤は狙ったテストに限られた
 
 - [ ] 2.2 本人のリアクションを付ける・外す・選び直すトランザクション `setReactionTx` を作る
   - 前提: 1.2, 2.1
