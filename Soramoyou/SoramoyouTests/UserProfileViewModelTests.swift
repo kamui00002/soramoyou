@@ -182,15 +182,87 @@ final class UserProfileViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isFollowing)
     }
 
+    // MARK: - ブロック（C 項目 3）
+
+    /// ブロックすると、自分→相手の向きで 1 回だけ保存し、一覧に伝える通知（.userBlocked）を相手の ID 付きで送る ⭐️
+    func testBlockUserSavesOnceAndNotifiesWithTargetId() async {
+        // Arrange: ログイン中（me）で、他人（target）のプロフィールを見ている
+        let firestore = MockFirestoreServiceForUserProfile()
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+        let notified = expectation(forNotification: .userBlocked, object: nil) { notification in
+            notification.userInfo?[Notification.blockedUserIdKey] as? String == "target"
+        }
+
+        // Act
+        let blocked = await viewModel.blockUser()
+
+        // Assert: 保存は 1 回だけ・向きは自分→相手。成功を返す（View はこれを見て画面を閉じる）
+        await fulfillment(of: [notified], timeout: 1)
+        XCTAssertEqual(firestore.blockCalls, [["me", "target"]])
+        XCTAssertTrue(blocked)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    /// 保存に失敗したら通知を送らず、文を出して閉じない（一覧から消したのに実際はブロックされていない、を防ぐ）
+    func testBlockUserFailureShowsErrorWithoutNotifying() async {
+        // Arrange: ブロックの保存が失敗する
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedBlockUserError = FirestoreServiceError.notFound
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+        let notified = expectation(forNotification: .userBlocked, object: nil)
+        notified.isInverted = true
+
+        // Act
+        let blocked = await viewModel.blockUser()
+
+        // Assert
+        await fulfillment(of: [notified], timeout: 0.3)
+        XCTAssertFalse(blocked, "失敗したのに閉じると、ブロックできたように見える")
+        XCTAssertNotNil(viewModel.errorMessage, "失敗はエラーとして画面に出す")
+    }
+
+    /// ログインしていないときは保存しない
+    func testBlockUserDoesNothingWhenSignedOut() async {
+        // Arrange: ログインしていない
+        let firestore = MockFirestoreServiceForUserProfile()
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows, ownUserId: nil)
+
+        // Act
+        let blocked = await viewModel.blockUser()
+
+        // Assert
+        XCTAssertTrue(firestore.blockCalls.isEmpty)
+        XCTAssertFalse(blocked)
+    }
+
+    /// 自分のプロフィールでは保存しない（自分をブロックの一覧に入れない）
+    func testBlockUserDoesNothingOnOwnProfile() async {
+        // Arrange: 見ているのが自分のプロフィール
+        let firestore = MockFirestoreServiceForUserProfile()
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows, ownUserId: "target")
+
+        // Act
+        let blocked = await viewModel.blockUser()
+
+        // Assert
+        XCTAssertTrue(firestore.blockCalls.isEmpty)
+        XCTAssertFalse(blocked)
+    }
+
     // MARK: - Helpers
 
     private func makeViewModel(
         firestore: MockFirestoreServiceForUserProfile,
-        follows: MockFollowRepository
+        follows: MockFollowRepository,
+        ownUserId: String? = "me"
     ) -> UserProfileViewModel {
         UserProfileViewModel(
             targetUserId: "target",
-            ownUserId: "me",
+            ownUserId: ownUserId,
             firestoreService: firestore,
             followRepository: follows
         )
@@ -203,7 +275,7 @@ final class UserProfileViewModelTests: XCTestCase {
 
 // MARK: - Mocks
 
-/// `fetchVisibleUserPosts` / `fetchPublicProfile` のみ上書きする最小 Mock。
+/// `fetchVisibleUserPosts` / `fetchPublicProfile` / `blockUser` のみ上書きする最小 Mock。
 /// 残りは FirestoreServiceProtocol+TestDefaults（fatalError）で満たす。
 final class MockFirestoreServiceForUserProfile: FirestoreServiceProtocol {
     /// 呼び出しごとに要求された公開範囲を記録する（呼び出し回数の検証も兼ねる）
@@ -224,6 +296,18 @@ final class MockFirestoreServiceForUserProfile: FirestoreServiceProtocol {
 
     func fetchPublicProfile(userId: String) async throws -> PublicProfile {
         PublicProfile(id: userId, displayName: "テストユーザー")
+    }
+
+    // MARK: ブロック（C 項目 3）⭐️
+
+    /// blockUser を失敗させたいときに設定する
+    var stubbedBlockUserError: Error?
+    /// blockUser に渡された [自分, 相手] の組（呼び出し回数と向きの検証を兼ねる）
+    private(set) var blockCalls: [[String]] = []
+
+    func blockUser(userId: String, blockedUserId: String) async throws {
+        blockCalls.append([userId, blockedUserId])
+        if let stubbedBlockUserError { throw stubbedBlockUserError }
     }
 }
 

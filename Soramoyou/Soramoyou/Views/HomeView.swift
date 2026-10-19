@@ -216,7 +216,7 @@ struct HomeView: View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: DesignTokens.Spacing.lg) {
                 // ストリークチップ・On This Day は「すべて」セグメントのみ表示 ⭐️ PR-7
-                //（あなた向けは「フォロー由来の投稿だけが流れる場所」として純度を保つ）
+                // （あなた向けは「フォロー由来の投稿だけが流れる場所」として純度を保つ）
                 if selectedSegment == .all {
                     // ストリークチップ（🔥◯日連続）— 継続中のみ表示、タップで図鑑へ ⭐️
                     SkyStreakChipView(streak: onThisDayViewModel.streak) {
@@ -811,7 +811,8 @@ struct PostDetailView: View {
                         Task { await blockPostAuthor() }
                     }
                 } message: {
-                    Text("このユーザーをブロックすると、このユーザーの投稿がフィードに表示されなくなります。")
+                    // 本文はプロフィール・ギャラリー・そらともと同じ（C 項目 3・利用者が承認済み 2026-10-19）
+                    Text("この人の投稿が、ホーム・ギャラリー・そらともに表示されなくなります。お互いのフォローも外れます。ブロックしたことは相手に知らされません")
                 }
                 .alert("通報しました", isPresented: $showingReportConfirmation) {
                     Button("OK") {}
@@ -1269,7 +1270,7 @@ struct PostDetailView: View {
     }
 
     // MARK: - Author Section
-    
+
     /// 投稿者ヘッダー。
     /// 引数は `User` ではなく `PublicProfile`（他人の `users` は権限で読めないため）。
     /// 表示に使うのは displayName / photoURL の 2 つだけなので、公開プロフィールで足りる。
@@ -1406,6 +1407,7 @@ struct ShareCardExportPayload: Identifiable {
     let id = UUID()
     let image: UIImage
 }
+
 // MARK: - Home Feed Segment ⭐️ PR-7
 
 /// ホームのフィード切り替えセグメント
@@ -1420,16 +1422,16 @@ enum HomeFeedSegment: String, CaseIterable, Identifiable {
     /// セグメントの表示名
     var title: String {
         switch self {
-        case .all: return "すべて"
-        case .forYou: return "あなた向け"
+        case .all: "すべて"
+        case .forYou: "あなた向け"
         }
     }
 
     /// 計装（home_feed_segment_changed）用の値
     var analyticsValue: String {
         switch self {
-        case .all: return "all"
-        case .forYou: return "for_you"
+        case .all: "all"
+        case .forYou: "for_you"
         }
     }
 }

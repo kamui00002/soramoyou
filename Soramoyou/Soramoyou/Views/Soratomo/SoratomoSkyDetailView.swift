@@ -156,7 +156,7 @@ struct SoratomoSkyDetailView: View {
     /// 「…」メニューを付ける。自分の投稿なら削除だけ（判定はタイムラインと同じ `canDelete`）、
     /// 自分以外なら通報とブロック（`canModerate`・要件 5.1・5.2・9.1）
     @ViewBuilder
-    private func withActionMenu<Content: View>(_ content: Content, sky: SoratomoSky?) -> some View {
+    private func withActionMenu(_ content: some View, sky: SoratomoSky?) -> some View {
         if didDelete || becameUnavailable {
             content
         } else if let sky, let timelineViewModel, timelineViewModel.isHidden(sky) {
@@ -508,7 +508,7 @@ private struct SoratomoSkyModerationMenu: ViewModifier {
                     }
                 }
             } message: {
-                Text("この人の投稿が、そらともとホームに表示されなくなります。ブロックしたことは相手に知らされません")
+                Text("この人の投稿が、ホーム・ギャラリー・そらともに表示されなくなります。お互いのフォローも外れます。ブロックしたことは相手に知らされません")
             }
     }
 }
