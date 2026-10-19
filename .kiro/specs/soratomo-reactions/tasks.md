@@ -141,7 +141,7 @@
 
 - [ ] 3. リアクションのCallableと、投稿の削除トリガーを配線する
 
-- [ ] 3.1 リアクションのCallable `soratomoSetReaction` と、投稿者への通知 `notifyReaction` を作る
+- [x] 3.1 リアクションのCallable `soratomoSetReaction` と、投稿者への通知 `notifyReaction` を作る
   - 前提: 2.3
   - `functions/soratomo.js` の `soratomoLeaveGroup` の直後（いまの333行の後。行番号は書く前に現物で確かめる）に、`soratomoCallable` で作る。選択肢は `respond`（`{ outcome, kind }` だけ。`authorId` は返さない）と `okLogFields`（`uid`・`groupId`・`skyId`・`outcome`・`kind`・`notify`）だけ。関門はほかのCallableと同じ（登録済みのログイン・匿名は拒否）
   - 本体: `setReactionTx` → `outcome === "added"` のときだけ `notifyReaction` を `await` → 応答。`replaced`・`removed`・`unchanged` では送らない
@@ -160,6 +160,15 @@
     - ログ: `notify` の値が場面と合う。グループ名・表示名・キャプション・招待コード・トークンが出ていない
   - 陽性対照: `replaced` でも送る写しで「選び直しで送らない」が、`type` を `soratomoPost` にした写しで `data` のテストが、置き換えキーを `soratomo-{groupId}` にした写しで置き換えキーのテストが、送信の失敗で投げる写しで「リアクションは残り、応答は成功」が、成功のログにグループ名を足した写しでログのテストが、それぞれ赤になることを先に確かめる
   - _Requirements: 4.12, 4.15, 4.16, 5.4, 6.1, 6.2, 6.3, 6.4, 6.7, 6.12, 6.13, 6.14, 6.15, 6.16, 6.17, 6.18, 11.3, 11.4, 11.5, 12.4, 12.5, 12.6, 14.2, 14.3, 14.4_
+  - 結果（2026-10-19 11:37）: `HEAD` `541cd2b3`（2.3と時刻の訂正の後）の上で作った。着手の前に `git fetch -q origin` をして、`origin/main` が進んでいないことを確かめた（取り込みなし）
+    - 作ったもの: `functions/soratomo.js` の `soratomoLeaveGroup` の直後（333行の後）に `// MARK: - リアクション（soratomo-reactions 3.1）` の節を足し、`notifyReaction` と `soratomoSetReaction`（`soratomoCallable`・選択肢は `respond` と `okLogFields` だけ）を置いた。`REASON_TO_CODE` に `self_reaction: "failed-precondition"`・`invalid_reaction: "invalid-argument"` を、`module.exports` に `soratomoSetReaction` を足した（12本目）。ヘッダーの本数と説明・`functions/index.js` のコメントは3.2でまとめて直す
+    - 設計の型に無い振る舞いを3つ決めた。（1）`notifyReaction` は通知文（`buildReactionNotification`）を枠の確保（`claimReactionNotifySlot`）より前に作る（組み立てが投げたとき、間引きの記録と送った印を使ったまま何も送らない形にしないため）。（2）`added` 以外の `notify` は明示的に `null` にする（`undefined` だとログの項目ごと消え、D2の「送らなかったとき `null`」と違う）。（3）`notifyReaction` の失敗のログは `soratomoSetReaction: notify_failed`（warn）で、項目は `uid`（付けた人）・`groupId`・`skyId`・`errorName`・`errorCode`（新着投稿の「宛先1人の処理に失敗」と同じ形）。`classifyRecipient` の `posterId` には付けた人を渡す（投稿者が付けた人をブロックしていれば送らない）
+    - テスト: `soratomo.test.js` の末尾に11本を足し、`CALLABLES` に `soratomoSetReaction` を足して8本にし（関門の4本の名前の「7本」を「8本」に）、公開する関数の一覧のテストを12本に直した（そのテストの名前と、選択肢の名前の検査のコメントの「11本」も12本に）。偽の送信の口に、既存のほかの通知の送信（`sendToToken`・`sendToUid`）を記録だけする形を足した（リアクションで呼ばれないことを見るため）。期待する絵文字はコードポイントの数値（`String.fromCodePoint`）から作った
+    - 足した11本: 応答とログの形（5つの outcome）／拒否（12通り・理由ごとの code と `details.reason`）／通知の形（宛先・題・本文・`data`・スレッド・置き換えキー・キャプションなし・要求に書いた uid を使わない・ログに名前などを出さない）／「だれか」（4通り・FE0Fまで載る）／選び直す・同じもの・外すでは5分を過ぎても送らない／間引きと重複（5分以内の別の人・外して付け直した同じ人・5分を過ぎた後）／宛先の判定（`pref_off`・`blocked`・`no_token` 2通り・`author_left`・`group_missing`）／既存の3つの設定と版の情報を見ない・users を書き換えない（5通り）／失敗（送信が投げる・`failed`・`invalid_token`・組み立てが投げる・枠の確保が投げる）／書いた直後に投稿が消えたら `sky_gone`（`store.setReactionTx` を包んで書いた直後に投稿を消す形。既存の `core.buildNotification` の差し替えと同じ手）／新着投稿の通知との独立（両方の向き）
+    - 流し方: 2.2・2.3と同じく、エミュレーター（`emulators:exec --only firestore`・`demo-soramoyou-security`・8080）の1回の中で、scratchpadの台本 `run-3.1.sh` から「実装の前の写し（`HEAD` の `soratomo.js`・頭 `fcacaf61620f`）→本物→壊した写し7通り→本物」を流した（サンドボックスの外・空の `XDG_CONFIG_HOME`・JBR）。写しの置き場には `soratomo.js`（写し）と `soratomoCore.js`・`soratomoStore.js`・`soratomoDeletion.js`・`soratomoNgWords.js`・`soratomo.test.js` を写した（`pushHelpers` と `soratomoStorage` はテストの偽物が横取りするので写さない）。本物の shasum の頭は、写しを作る前と流した後で `soratomo.js` が `68cf65f29b20`、`soratomo.test.js` が `7dd3d6d5d9fc` のまま（写しへ配ったテストも8つとも同じ頭）
+    - 結果: 実装の前の写しは69本中15本が赤で、赤は新しい11本と、`soratomoSetReaction` を足した関門の3本（未ログイン・匿名・方式の読めないトークン）と、公開する関数の一覧の1本だけ（関門の「クレームの無い登録済みは止められない」は失敗を受け止める形なので、関数が無くても緑のまま）。本物は2回とも69本・0失敗。終わった後、エミュレーターのプロセスが残っていないことを `ps` で確かめた
+    - 陽性対照: m1（`replaced` でも送る・`233889412cca`）で「5分を過ぎていても送らない」が送信1通で赤、応答とログの形の1本が選び直しの `notify` の `duplicate`（期待は `null`）で赤（計2本）。m2（`type` を `soratomoPost`・`1bbdac96c0a5`）で通知の形の1本と新着投稿との独立の1本が `type` の違いで赤。m3（置き換えキーを `soratomo-{groupId}`・`e500ead12832`）で通知の形の1本だけが `collapseId` の違いで赤。m4（`notifyReaction` の失敗を投げ直す・`d606d96ea2ba`）で失敗の1本だけが、最初の場面（送信が投げる）の応答が `internal` になって赤。m5（成功のログにグループ名を足す・`3d63375c5e91`）で、応答とログの形・通知の形（ログの項目の比較）・失敗（「ログに名前を出さない」）の3本が赤。追加の写し: m6（`classifyRecipient` の `posterId` に投稿者を渡す・`3e50147cba0b`）で宛先の判定の1本だけが、ブロックの場面で送ってしまって赤。m7（枠の確保を通知文の組み立てより先にする・`82aede0e3092`）で失敗の1本だけが「組み立てが投げる: 間引きの記録を使わない」の `0` の期待に `1` で赤。どの写しも、赤は狙ったテストに限られた
+    - 全体のテスト（`npm test`・`npm run test:emulator`）は、同じ `soratomo.js` を触る3.2の後にまとめて1回流す（3.2の結果に書く）。lintは緑。`soratomo.js` を読むテストのファイルは `soratomo.test.js` だけ（grepで確かめた）
 
 - [ ] 3.2 投稿の削除トリガー `onSoratomoSkyDeleted` を作り、本数の記載を直す（陽性対照C9）
   - 前提: 3.1（同じ `soratomo.js` を触る）

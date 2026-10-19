@@ -82,6 +82,9 @@ const REASON_TO_CODE = Object.freeze({
   outdated_guideline: "failed-precondition",
   // leave-group（抜けるか退会の片づけ中の参加）
   leave_pending: "failed-precondition",
+  // soratomo-reactions（自分の投稿へのリアクション・7種類にない絵文字）
+  self_reaction: "failed-precondition",
+  invalid_reaction: "invalid-argument",
 });
 
 /**
@@ -328,6 +331,99 @@ const soratomoLeaveGroup = soratomoCallable(
       groupDeleted: result.groupDeleted,
       skiesDeleted: result.skiesDeleted,
       imagesDeleted: result.imagesDeleted,
+    }),
+  }
+);
+
+// MARK: - リアクション（soratomo-reactions 3.1）
+
+/**
+ * 新しく付いたリアクションを、投稿者へ知らせる（soratomo-reactions 要件5.4・6.1〜6.18・11.3〜11.5・design の Event Contract）。
+ * 送ったかどうか・送らなかった理由を、成功のログの notify に出す文字列で返す（要件14.4・要件への差し戻しD2）。
+ * - 読む文書は、グループ・投稿者のメンバーの文書・投稿者と付けた人の users の4件（getAll）
+ * - 判定の順は新着投稿の通知と同じ: グループが無い（group_missing）・投稿者がもうメンバーでない（author_left）→
+ *   classifyRecipient（通知設定OFF→ブロック→トークン無し）→ claimReactionNotifySlot（投稿が消えた sky_gone・
+ *   同じ人の2通目 duplicate・5分以内 throttled）→ sendToTokenGrouped（sent・invalid_token・failed）
+ * - classifyRecipient の posterId には「付けた人」を渡す（投稿者が付けた人をブロックしていれば送らない・要件5.4）
+ * - 既存の3つの通知設定（notifyReactions など）と、宛先のアプリの版は見ない（要件12.4・6.18）
+ * - 通知文は枠の確保より前に作る。作る途中で失敗したとき、間引きの記録と送った印を使ったまま何も送らない形にしないため
+ * - 例外を投げない。失敗は "failed" にして、warn のログに内部IDと errorName・errorCode だけを出す（要件6.16。
+ *   リアクションは確定済みで、送信の失敗で取り消さない）
+ * @param {{ groupId: string, skyId: string, authorId: string, reactorUid: string, kind: string }} params
+ *   kind は setReactionTx が書いた後の本人のリアクション（7つの名前のどれか）
+ * @returns {Promise<"sent"|"invalid_token"|"failed"|"no_token"|"pref_off"|"blocked"|"throttled"|"duplicate"
+ *   |"sky_gone"|"author_left"|"group_missing">}
+ */
+async function notifyReaction({ groupId, skyId, authorId, reactorUid, kind }) {
+  try {
+    const groupRef = db.collection("soratomoGroups").doc(groupId);
+    const [groupSnap, authorMemberSnap, authorUserSnap, reactorUserSnap] = await db.getAll(
+      groupRef,
+      groupRef.collection("members").doc(authorId),
+      db.collection("users").doc(authorId),
+      db.collection("users").doc(reactorUid)
+    );
+    if (!groupSnap.exists) return "group_missing";
+    if (!authorMemberSnap.exists) return "author_left";
+
+    const authorData = authorUserSnap.exists ? authorUserSnap.data() : null;
+    const recipient = core.classifyRecipient({ userData: authorData, posterId: reactorUid });
+    if (recipient !== "eligible") return recipient;
+
+    const notification = core.buildReactionNotification({
+      groupName: groupSnap.get("name"),
+      reactorName: reactorUserSnap.exists ? reactorUserSnap.get("displayName") : null,
+      kind,
+    });
+    const slot = await store.claimReactionNotifySlot(db, { groupId, skyId, authorId, reactorUid, nowMs: Date.now() });
+    if (slot !== "send") return slot;
+
+    // FCM の data の値はすべて文字列。スレッドは新着投稿と同じグループごと、置き換えキーは新着投稿と別（U2 の A）
+    const data = { type: "soratomoReaction", groupId, postId: skyId };
+    const grouping = { threadId: `soratomo-${groupId}`, collapseId: `soratomo-reaction-${groupId}` };
+    return await sendToTokenGrouped(authorId, authorData.fcmToken, notification, data, grouping);
+  } catch (err) {
+    logger.warn("soratomoSetReaction: notify_failed", {
+      uid: reactorUid,
+      groupId,
+      skyId,
+      errorName: err && err.name,
+      errorCode: err && err.code,
+    });
+    return "failed";
+  }
+}
+
+/**
+ * 本人のリアクションを付ける・選び直す・外す。{ groupId, skyId, kind } → { outcome, kind }
+ * （kind は7つの名前か null。null は外す・soratomo-reactions design の API Contract）
+ * - 関門はほかの Callable と同じ（選択肢を渡さない＝登録済みを求め、匿名は拒否する・要件4.12）
+ * - 規則（利用停止・メンバー・投稿の有無・自分の投稿・7種類）と書き込みは soratomoStore.setReactionTx（要件4.1〜4.11）
+ * - 新しく付いた（added）ときだけ、応答の前に投稿者への通知を await する。選び直す・外す・同じもの（unchanged。
+ *   送り直しで unchanged になった要求も）では送らない（要件6.7）。送信の失敗でリアクションを取り消さない（6.16）
+ * - 応答は outcome と kind だけ。投稿者の uid（setReactionTx の authorId）は返さない
+ * - 成功のログ（soratomoSetReaction: ok）は uid・groupId・skyId・outcome・kind・notify だけ（要件14.1〜14.4）。
+ *   notify は送らなかったとき null、送ろうとしたとき notifyReaction の結果（要件への差し戻しD2）
+ */
+const soratomoSetReaction = soratomoCallable(
+  "soratomoSetReaction",
+  async (uid, data) => {
+    const result = await store.setReactionTx(db, { uid, input: data });
+    const notify =
+      result.outcome === "added"
+        ? await notifyReaction({ groupId: data.groupId, skyId: data.skyId, authorId: result.authorId, reactorUid: uid, kind: result.kind })
+        : null;
+    return { ...result, notify };
+  },
+  {
+    respond: (result) => ({ outcome: result.outcome, kind: result.kind }),
+    // groupId と skyId は setReactionTx が自動IDの形を確かめた値（形の違う値は invalid_input で、ここに来ない）
+    okLogFields: (result, data) => ({
+      groupId: data.groupId,
+      skyId: data.skyId,
+      outcome: result.outcome,
+      kind: result.kind,
+      notify: result.notify,
     }),
   }
 );
@@ -721,6 +817,7 @@ module.exports = {
   soratomoAgreeGuideline,
   soratomoDeleteMyData,
   soratomoLeaveGroup,
+  soratomoSetReaction,
   onSoratomoSkyCreated,
   onSoratomoReportCreated,
   soratomoHousekeeping,
