@@ -810,11 +810,11 @@ test("抜ける: 最後の1人なら groupDeleted: true。ログは内部IDと�
   assert.deepEqual(leaveOkLogs(), [
     {
       uid: "bob", groupId: DEL_GROUP, done: true, state: "started", kind: "leave", removed: true,
-      ownerTransferred: false, groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+      ownerTransferred: false, groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2, reactionsDeleted: 0,
     },
     {
       uid: "alice", groupId: DEL_GROUP, done: true, state: "started", kind: "delete_group", removed: true,
-      ownerTransferred: false, groupDeleted: true, skiesDeleted: 1, imagesDeleted: 2,
+      ownerTransferred: false, groupDeleted: true, skiesDeleted: 1, imagesDeleted: 2, reactionsDeleted: 0,
     },
   ]);
   const logs = allLogs();
@@ -1293,7 +1293,7 @@ test("定期実行の仕事C: 確定から30分を過ぎた印を sweep で終�
   assert.deepEqual(sweptLogs(), [
     {
       uid: "bob", groupId: "gl1", done: true, state: "continued", kind: "leave", removed: false,
-      ownerTransferred: false, groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+      ownerTransferred: false, groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2, reactionsDeleted: 0,
     },
   ]);
   const ageMs = logFieldsOf("soratomoLeave: swept")[0].ageMs;
@@ -1325,7 +1325,7 @@ test("定期実行の仕事C（陽性対照C2のサーバー版）: 入り直し
   assert.deepEqual(sweptLogs(), [
     {
       uid: "bob", groupId: "gl1", done: true, state: "stale_marker", kind: null, removed: false,
-      ownerTransferred: false, groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+      ownerTransferred: false, groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0, reactionsDeleted: 0,
     },
   ]);
 });

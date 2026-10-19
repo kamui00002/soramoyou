@@ -336,6 +336,7 @@ const soratomoLeaveGroup = soratomoCallable(
       groupDeleted: result.groupDeleted,
       skiesDeleted: result.skiesDeleted,
       imagesDeleted: result.imagesDeleted,
+      reactionsDeleted: result.reactionsDeleted, // 手順2bで外したリアクションの数（soratomo-reactions 4.3・14.5）
     }),
   }
 );
@@ -790,6 +791,7 @@ async function sweepPendingLeaves(startedMs) {
           groupDeleted: result.groupDeleted,
           skiesDeleted: result.skiesDeleted,
           imagesDeleted: result.imagesDeleted,
+          reactionsDeleted: result.reactionsDeleted, // soratomo-reactions 4.3・14.5
           ageMs: Date.now() - leftAtMs,
         });
         if (done) summary.completed += 1;
