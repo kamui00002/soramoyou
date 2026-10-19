@@ -259,7 +259,7 @@
 
 ## (e) Firestoreのルール
 
-- [ ] 5. (P) Firestoreのルールに、リアクションの通知の記録の拒否を足す（陽性対照C1）
+- [x] 5. (P) Firestoreのルールに、リアクションの通知の記録の拒否を足す（陽性対照C1）
   - 前提: 1.1（ルールとルールのテストだけを触る。エミュレーターを使わないので、2〜4と同時に進めてよい）
   - `firestore.rules` の `soratomoGroups/{groupId}` の中、`notifyState` の `match` の後に、design.mdの「Backend: ルール・インデックス・ルールのテスト」のとおり拒否だけの `match` を2つ（`reactionNotifyState/{uid}`・`reactionNotices/{skyId}`）、コメントつきで足す。`skies` の `match` の条件は変えず、コメントを1行足す。冒頭のコメントの書き手の一覧に「リアクションと、リアクションの通知の記録」を足す。行番号は書く前に現物で確かめる
   - `storage.rules` と `firestore.indexes.json` は変えない
@@ -268,6 +268,12 @@
   - 陽性対照（C1）: `--mutants` で、既存の壊し方「投稿の更新を許す」が、新しい `update` のDENYのケースを期待外れにする。新しい2つの壊し方が、新しい閉じたコレクションのケースを期待外れにする。どの壊し方でも期待外れにならないケースが0件・どのケースも期待外れにしない壊し方が0個・置き換え元が1回でない壊し方が0個。通常の実行がすべて期待どおり。件数を記録する
   - ここではルールをデプロイしない（12.5で行う）
   - _Requirements: 4.13, 12.8, 12.14, 12.16_
+  - 結果（2026-10-19 16:06）: `HEAD` `e781dab7`（4.3とdesign.mdの直しの後）の上で作った。`firestore.rules` の `soratomoGroups/{groupId}` の中、`notifyState` の `match` の後に、拒否だけの `match` を2つ（`reactionNotifyState/{uid}`・`reactionNotices/{skyId}`）コメントつきで足し、`skies` の `match` の前にコメントを1行足し、冒頭の書き手の一覧に「リアクションと、リアクションの通知の記録」を足した（行番号はdesign.mdの値と一致した）。差分はコメントと新しい2つの `match` だけで、既存の `match` の条件は1つも変えていないことを差分で確かめた。`storage.rules` と `firestore.indexes.json` は変えていない。shasum の頭は、`firestore.rules` が `7e2c64c4c9d2`、`scripts/rules_test_soratomo.py` が `6f3d1a83a090`
+    - `scripts/rules_test_soratomo.py`: 先頭のspecの一覧にこのspecを足し、リアクションの付いた投稿を作る `reacted_sky` を足した。`CASES` に6件（更新のDENYが3件・削除のALLOWとDENYが1件ずつ・非メンバーの取得のDENYが1件）、`closed_collection_cases()` に2つ（`soratomoGroups/g1/reactionNotifyState/author` と `soratomoGroups/g1/reactionNotices/s1`。立場は投稿者・付けた人・ほかのメンバー・未ログインで、`get`・`list`・`create`・`update`・`delete` の40件）、`MUTANTS` に2つ（それぞれの `if false` を `if true` へ）を足した
+    - 流し方: rules test API で評価だけをした（本番のデータと deploy 済みのルールには触れない・サンドボックスの外）。最初の実行は firebase CLI のトークンが古く HTTP 401 だったので、台本の説明どおり `firebase projects:list` を一度呼んでから流し直した。直す前のルールの基準は123件・すべて期待どおり
+    - 結果（通常の実行）: 169件（基準の123件に46件）・すべて期待どおり
+    - 陽性対照（C1）: `--mutants` で、壊し方25個（既存の23個に2個）がどれも1件以上を期待外れにし、どの壊し方でも期待外れにならないケースは0件、置き換え元が1回でない壊し方は0個。新しいケースは、更新のDENYの3件が「投稿の更新を許す」（4件中3件）、削除のALLOWが「登録済みの判定を常に偽」と「匿名の判定を逆にする」、削除のDENYが「削除の投稿者判定を外す」と「削除の条件をすべて外す」、非メンバーの取得が「メンバー判定を外す」と「ログイン・匿名・メンバーの判定をすべて外す」で期待外れになった。新しい2つの壊し方は、それぞれのコレクションの20件だけを期待外れにした（ほかの壊し方では、新しい閉じたコレクションのケースは期待外れにならない）
+    - デプロイはしていない（12.5で行う）
 
 ## (f) Functionsとルールのまとめ
 

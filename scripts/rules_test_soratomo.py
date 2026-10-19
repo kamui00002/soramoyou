@@ -7,6 +7,7 @@ spec: .kiro/specs/soratomo/（tasks.md 2.3・要件 11 の各項目を許可と�
       .kiro/specs/soratomo-release-gate/（tasks.md 5・投稿の作成を閉じ、通報の記録と語のリストを誰にも読み書きさせない）
       .kiro/specs/soratomo-leave-group/（tasks.md 4・抜けるの片づけ中の印を誰にも読み書きさせない）
       .kiro/specs/soratomo-public-launch/（tasks.md 2.1・2.2・関門をクレームでなく「登録済みでログイン」で決める）
+      .kiro/specs/soratomo-reactions/（tasks.md 5・リアクションを投稿の更新で書かせず、リアクションの通知の記録を誰にも読み書きさせない）
 
 使い方:
   python3 scripts/rules_test_soratomo.py [firestore.rules のパス]            # 省略時はリポジトリ直下
@@ -87,6 +88,12 @@ def sky(**fields):
         else:
             data[key] = value
     return data
+
+
+def reacted_sky(*reactor_uids):
+    """reactor_uids がリアクションを付けた投稿を返す（soratomo-reactions）。reactions（付けた人の uid → { kind, at }）と
+    reactorIds（付けた人の uid）は投稿の項目で、書き手は Callable（soratomoSetReaction）と片づけ（Admin SDK）だけ"""
+    return sky(reactions={uid: {"kind": "sunset", "at": T} for uid in reactor_uids}, reactorIds=list(reactor_uids))
 
 
 def case(name, expect, uid, method, path, data=None, existing=None):
@@ -193,6 +200,18 @@ CASES = [
     case("削除 ほかのメンバーが他人の投稿を削除", DENY, MEMBER, "delete", SKY, existing=sky()),
     case("削除 未ログインで削除", DENY, None, "delete", SKY, existing=sky()),
 
+    # --- リアクション（soratomo-reactions 要件 4.13・12.8）---
+    # リアクションは投稿の項目。付ける・外すは Callable（soratomoSetReaction）だけで、アプリの投稿の更新はどの形でも拒否する。
+    # リアクションの付いた投稿も、削除と読み取りの条件は変わらない
+    case("更新 メンバーが他人の投稿に自分のリアクションを足す", DENY, MEMBER, "update", SKY,
+         reacted_sky(MEMBER), existing=sky()),
+    case("更新 投稿者が自分の投稿の reactions を消す", DENY, AUTHOR, "update", SKY,
+         sky(), existing=reacted_sky(MEMBER)),
+    case("更新 非メンバーがリアクションを足す", DENY, OUTSIDER, "update", SKY, reacted_sky(OUTSIDER), existing=sky()),
+    case("削除 投稿者がリアクションの付いた自分の投稿を削除", ALLOW, AUTHOR, "delete", SKY, existing=reacted_sky(MEMBER)),
+    case("削除 リアクションを付けたメンバーが他人の投稿を削除", DENY, MEMBER, "delete", SKY, existing=reacted_sky(MEMBER)),
+    case("読取 非メンバーがリアクションの付いた投稿を取得", DENY, OUTSIDER, "get", SKY, existing=reacted_sky(MEMBER)),
+
     # --- 利用者の文書の同意と利用停止（release-gate 要件 8.9・10.14）---
     # 本人の読み取り（同意と利用停止の項目を含む）と他人の拒否は、上の「所属」の get のケースで見る。
     # ここでは、本人が停止を外す・同意を書く書き込みを見る（停止と解除は開発者の運用手順、同意は Callable だけ）
@@ -204,20 +223,30 @@ CASES = [
 
 
 def closed_collection_cases():
-    """通報の記録と語のリスト（release-gate 要件 6.10・11.10）と、抜けるの片づけ中の印（leave-group 要件 10.4）。
+    """通報の記録と語のリスト（release-gate 要件 6.10・11.10）と、抜けるの片づけ中の印（leave-group 要件 10.4）と、
+    リアクションの通知の間引きと送った印（soratomo-reactions 要件 12.14・12.16）。
     Functions（Admin SDK）だけが読み書きする。どの立場の利用者にも get・list・create・update・delete を許さない"""
     report = {"groupId": "g1", "skyId": "s1", "authorId": AUTHOR, "reporterId": MEMBER, "reason": "spam",
               "createdAt": T, "forwardStatus": "pending", "forwardAttempts": 0}
     ng_words = {"words": ["てすとごい"]}  # ダミーの語（実在の語は書かない）
     pending_leave = {"uid": MEMBER, "groupId": "g1", "episodeId": "e1", "leftAt": T}
+    reaction_notify_state = {"lastSentAt": T}
+    reaction_notice = {"notifiedReactorIds": [MEMBER]}
     roles = [("通報者", MEMBER), ("投稿者", AUTHOR), ("ほかのメンバー", OWNER), ("未ログイン", None)]
     leave_roles = [("本人", MEMBER), ("ほかのメンバー", OWNER), ("投稿者", AUTHOR), ("未ログイン", None)]
+    reaction_roles = [("投稿者", AUTHOR), ("付けた人", MEMBER), ("ほかのメンバー", OWNER), ("未ログイン", None)]
     targets = [
         # 通報の記録の ID は「グループ ID_投稿 ID_通報者」（soratomoCore.reportDocId）
         ("通報の記録", "soratomoReports", "g1_s1_" + MEMBER, report, dict(report, forwardStatus="sent"), roles),
         ("語のリスト", "soratomoConfig", "ngWords", ng_words, {"words": []}, roles),
         # 片づけ中の印の ID は「uid_グループ ID」。印の本人（クレームあり）でも拒否する
         ("片づけ中の印", "soratomoPendingLeaves", MEMBER + "_g1", pending_leave, dict(pending_leave, episodeId="e2"), leave_roles),
+        # リアクションの通知の間引き（グループの下・ID は投稿者の uid）と、送った印（グループの下・ID は投稿 ID）。
+        # 間引きの記録の持ち主の投稿者や、印に載った付けた人でも拒否する
+        ("リアクションの間引き", "soratomoGroups/g1/reactionNotifyState", AUTHOR, reaction_notify_state,
+         {"lastSentAt": DEVICE_T}, reaction_roles),
+        ("リアクションの印", "soratomoGroups/g1/reactionNotices", "s1", reaction_notice,
+         {"notifiedReactorIds": []}, reaction_roles),
     ]
     cases = []
     for label, collection, doc_id, data, updated, target_roles in targets:
@@ -250,6 +279,9 @@ USER_GROUPS_READ = "match /groups/{groupId} {\n        allow read: if isSoratomo
 REPORTS_CLOSED = "match /soratomoReports/{reportId} {\n      allow read, write: if false;"
 CONFIG_CLOSED = "match /soratomoConfig/{docId} {\n      allow read, write: if false;"
 PENDING_LEAVES_CLOSED = "match /soratomoPendingLeaves/{markerId} {\n      allow read, write: if false;"
+# グループの下なので字下げは 8 文字。「match /notifyState」とは先頭の「match /r」で別の文字列になる
+REACTION_NOTIFY_STATE_CLOSED = "match /reactionNotifyState/{uid} {\n        allow read, write: if false;"
+REACTION_NOTICES_CLOSED = "match /reactionNotices/{skyId} {\n        allow read, write: if false;"
 
 MUTANTS = [
     # 共通の判定
@@ -287,6 +319,10 @@ MUTANTS = [
     ("語のリストの読み書きを許す", [(CONFIG_CLOSED, CONFIG_CLOSED.replace("if false", "if true"))]),
     # 抜けるの片づけ中の印（leave-group 要確認Q5）
     ("片づけ中の印の読み書きを許す", [(PENDING_LEAVES_CLOSED, PENDING_LEAVES_CLOSED.replace("if false", "if true"))]),
+    # リアクションの通知の記録（soratomo-reactions 陽性対照C1）
+    ("リアクションの通知の間引きの読み書きを許す",
+     [(REACTION_NOTIFY_STATE_CLOSED, REACTION_NOTIFY_STATE_CLOSED.replace("if false", "if true"))]),
+    ("リアクションの通知の印の読み書きを許す", [(REACTION_NOTICES_CLOSED, REACTION_NOTICES_CLOSED.replace("if false", "if true"))]),
 ]
 
 
