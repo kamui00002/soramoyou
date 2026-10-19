@@ -165,6 +165,23 @@ final class UserProfileViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isFollowing)
     }
 
+    /// フォローが断られたら日本語の文を出し、フォロー中にしない ⭐️（C 項目 2）
+    func testToggleFollowShowsJapaneseMessageWhenFollowIsNotAllowed() async {
+        // Arrange: 未フォロー状態でロード済み。フォローはサーバーに断られる
+        let firestore = MockFirestoreServiceForUserProfile()
+        let follows = MockFollowRepository(isFollowingResult: false)
+        follows.followError = FollowRepositoryError.followNotAllowed
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+        await viewModel.load()
+
+        // Act: フォローする
+        await viewModel.toggleFollow()
+
+        // Assert: 文は日本語のまま画面に届き、フォロー中にはならない
+        XCTAssertEqual(viewModel.errorMessage, "フォローできませんでした")
+        XCTAssertFalse(viewModel.isFollowing)
+    }
+
     // MARK: - Helpers
 
     private func makeViewModel(
@@ -217,12 +234,15 @@ final class MockFollowRepository: FollowRepositoryProtocol, @unchecked Sendable 
     private var isFollowingResult: Bool
     /// isFollowing が投げるエラー（フォロー状態の取得失敗を再現する）
     var isFollowingError: Error?
+    /// follow が投げるエラー（サーバーがフォローを断ったときを再現する）
+    var followError: Error?
 
     init(isFollowingResult: Bool) {
         self.isFollowingResult = isFollowingResult
     }
 
     func follow(_: String, by _: String) async throws {
+        if let followError { throw followError }
         isFollowingResult = true
     }
 
