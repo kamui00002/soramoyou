@@ -188,7 +188,7 @@
 
 - [ ] 4. 抜ける・退会・利用停止・後始末で、本人が付けたリアクションを消す
 
-- [ ] 4.1 本人のリアクションが消えることのテストを先に書き、今の現物で赤を確かめる（陽性対照C2）
+- [x] 4.1 本人のリアクションが消えることのテストを先に書き、今の現物で赤を確かめる（陽性対照C2）
   - 前提: 1.3（4.1〜4.3は `soratomoDeletion.test.js` とエミュレーターを使うので、2・3と同時に進めない）
   - `soratomoDeletion.test.js` に、リアクションと印をAdmin SDKで直接入れた種を作る部品を足す（ほかのメンバーの投稿に、本人と別の人のリアクション・`reactorIds`・`reactionNotices` の `notifiedReactorIds`、本人あての `reactionNotifyState`）
   - テストを足す（期待は4.2・4.3の後の姿）:
@@ -197,8 +197,15 @@
     - 運用の削除（`scripts/soratomo-admin.js` の、内部IDを指定した削除）: 同じく消える（`scripts/soratomo-admin.emulator.test.js` に1件）
   - テストだけを足した作業ツリー（コミットしない）で、今の現物（4.2の前の `soratomoDeletion.js`）で流す。そのときの `HEAD` とテストのファイルの shasum の頭を結果に書く。赤の理由が「本人のリアクションが残る」であることをテストごとに確かめ、件数で記録する（`reactionsDeleted` の項目が無いことによる赤は、別に数えて分ける）
   - _Requirements: 9.1, 9.5, 9.6, 9.7, 9.8, 9.9_
+  - 結果（2026-10-19 12:24）: `HEAD` `bd382a12`（3.2の後。着手の前に `git fetch -q origin` をして、`origin/main` が進んでいないことを確かめた）の現物の `soratomoDeletion.js`（shasum の頭 `768625632b3a`）で、テストだけを足した作業ツリー（コミットしない）から流した。足したテストのファイルの shasum の頭は、`soratomoDeletion.test.js` が `97bea90fb111`、`scripts/soratomo-admin.emulator.test.js` が `7a5048ba7fec`
+    - 足したもの: `soratomoDeletion.test.js` の末尾（既存の行番号を動かさないため。1.3で数えた38か所の位置はそのまま）に `// MARK: - 手順2b` の節を切り、種の部品（`seedReactedSky`・`seedReactionNotice`・`seedReactionNotifyState`・`seedReactionScene`）と、状態を丸ごと読む `reactionDump`、期待の形 `G1_AFTER_AMY`・`G2_AFTER_AMY`、見る順を決めた `assertReactionsAfter`（投稿→印→間引きの記録）を置き、テストを4本足した（退会 `self`・利用停止・アカウントの無い人 `account_deleted` は、同じ種と期待を表で回す3本。抜ける `origin: "self"` が1本）。`scripts/soratomo-admin.emulator.test.js` の末尾に `delete-user` の1本を足した。種は Admin SDK で直接入れ、`kind` は名前の文字列だけにした。本人の投稿の印は入れていない（本人の投稿は手順2で消え、その印は削除のトリガーが消すが、このテストは関数を起こさない）
+    - 種の形: amy は g1（owner・bob）と g2（carl・dave）のただのメンバー。g1 は owner の o1 に amy と bob、bob の b1 に amy と owner、owner の o2 に bob、amy の a1 に bob が付けている。g2 は carl の c1 に amy と dave。印は o1 `[amy, bob]`・b1 `[amy]`・o2 `[bob]`・c1 `[amy, dave]`、間引きの記録は g1 が amy・owner・bob、g2 が amy・carl
+    - 見る順: 状態（投稿の `reactions` のキーと `reactorIds`→印→間引きの記録）を先に、戻り値の `reactionsDeleted` を最後にした。戻り値の丸ごとの比較は書いていない（`reactionsDeleted` の欠落で先に落ち、C2の赤を隠すため）。既存の `ZERO_TOTALS`・`NOTHING`・`zero` には、まだ `reactionsDeleted: 0` を足していない（4.2・4.3で足す）
+    - 流し方: 8080 が別のセッションのエミュレーターに使われていた（`port taken`）ので、ポートを替えた設定（firestore 8186・websocket 9166・hub 4426・logging 4526。規則のファイルは作業ツリーの絶対パス）を scratchpad に置いて `--config` で渡し、`emulators:exec --only firestore`・`demo-soramoyou-security` の1回の中で、台本 `run-4.1.sh` から2ファイルを流した（サンドボックスの外・空の `XDG_CONFIG_HOME`・JBR）
+    - 結果（陽性対照C2の赤）: `soratomoDeletion.test.js` は68本中4本が赤（既存の64本は緑）、`soratomo-admin.emulator.test.js` は11本中1本が赤（既存の10本は緑）。赤は足した5本だけで、5本とも最初の状態の assert で落ちた。理由はどれも「本人のリアクションが残る」。4本は g1 の投稿の比較で、o1 と b1 の `reactions` のキーと `reactorIds` に amy が残っていた（期待は o1 が `[bob]`、b1 が `[owner]`）。delete-user の1本は、s2 の `reactions` のキーに deadU が残っていた（期待は `[other]`）。`reactionsDeleted` の項目が無いことによる赤は0本（状態の assert で先に落ち、そこまで届かない）
+    - コミット: 赤のテストはコミットしない。退会・利用停止・後始末・運用の4本は4.2の緑と一緒に、抜けるの1本は4.3の緑と一緒にコミットする
 
-- [ ] 4.2 手順2b `removeUserReactionsInGroup` を作り、退会・利用停止・後始末・運用の削除に差し込む（陽性対照C2）
+- [x] 4.2 手順2b `removeUserReactionsInGroup` を作り、退会・利用停止・後始末・運用の削除に差し込む（陽性対照C2）
   - 前提: 4.1, 3.2（`soratomo.js` のログの項目を触るので、3の後）
   - `functions/soratomoDeletion.js` に、design.mdの「共通の削除」のService Interfaceのとおりに作る。`skies` を `where("reactorIds", "array-contains", uid)` で300件ずつ読み、`beforeDelete`（省略可）を呼び、各文書を `update`（`reactions.{uid}` を `FieldPath` で `delete`・`reactorIds` から `arrayRemove`・前提条件 `{ lastUpdateTime: 読んだ文書の updateTime }`）で同時に10件まで書く。`NOT_FOUND` と `FAILED_PRECONDITION` は数えずに飛ばす（後者は次の区切りで読み直す）。`set(merge)` は使わない。続けて `reactionNotices` を `where("notifiedReactorIds", "array-contains", uid)` で同じく読み、同じ前提条件で `arrayRemove(uid)`。区切りごとに締め切りを確かめる
   - `deleteUserDataInGroup` の手順2の後、残るメンバーがいる（`leave`）ときだけ手順2bを呼ぶ（照合なし）。手順3で `reactionNotifyState/{uid}` も消す。`delete_group` では行わない。行番号はdesign.md（`abaa3bdb` の現物で確かめた値）を目安にし、書く前に現物で確かめる
@@ -208,6 +215,23 @@
   - 4.1の退会・利用停止・アカウントの無い人・運用の削除のテストが緑になったことを並べて記録する
   - 陽性対照: `set(merge)` で書く写しで「消えた投稿を作り直さない」が、`reactions` の地図を丸ごと消す写しで「ほかの人のリアクションは残る」が、`arrayRemove` をしない写しでI1が、それぞれ赤になることを先に確かめる
   - _Requirements: 9.2, 9.3, 9.5, 9.6, 9.7, 9.8, 9.9, 9.10, 9.11, 9.12, 12.12, 12.13, 14.5_
+  - 結果（2026-10-19 15:09）: `HEAD` `bd382a12`（4.1と同じ。コミットの前に `git fetch -q origin` をもう一度して、`origin/main` が進んでいないことを確かめた）の上で作った。`functions/soratomoDeletion.js` に手順2b `removeUserReactionsInGroup` と、部品の `updateEachByQuery`（クエリを `select()` で300件ずつ読み、照合→書く→締め切りの確認の順。毎回先頭から読む）・`updateDocChunk`（同時に10件まで・前提条件 `{ lastUpdateTime: 読んだ文書の updateTime }`・飛ばした書き込みは数えない）と、定数 `REACTION_NOTIFY_STATE`・`REACTION_NOTICES`・`REACTION_UPDATE_CONCURRENCY`（10）・`SKIPPED_WRITE_CODES`（5と9）を足し、`FieldPath` を読み込んだ。投稿は `reactions.{uid}`（`FieldPath`）の削除と `reactorIds` の `arrayRemove` を前提条件つきの1回の `update` で書き（I1）、印は `notifiedReactorIds` から `arrayRemove` するだけで文書は消さない。`deleteUserDataInGroup` は、手順2（投稿）の後・画像の前に、`leave` のときだけ手順2bを照合なしで呼び、手順3で `reactionNotifyState/{uid}` も消す。戻り値と `deleteSoratomoUserData` の合計に `reactionsDeleted` を足し、`soratomo.js` の `soratomoDeleteMyData` の `okLogFields` に足した。`removeUserReactionsInGroup` は exports にも足した（テストで、照合の口から「読んだ後・書く前」の場面を作るため。4.3で抜けるからも呼ぶ）
+    - 前提の実測（scratchpadの使い捨ての台本 `probe-4.2.js`・エミュレーター）: `select()` で読んだ文書にも `updateTime` が載る。前提条件 `lastUpdateTime` つきの `update` は、読んだ後に書き換わった文書でも、読んだ後に消えた文書でも `FAILED_PRECONDITION`（code 9）で失敗し、消えた文書は作り直されない（`NOT_FOUND` では返らなかった）。飛ばすコードは、設計の2つ（5と9）を両方とも残した（本番がどちらで返しても飛ばす）
+    - 既存のテストの直し（D4）: 1.3（Q5）で数えた範囲のうち、退会・利用停止・後始末の分だけに `reactionsDeleted: 0` を足した。`soratomoDeletion.test.js` は12か所（`deleteUserDataInGroup` の結果8か所・`deleteSoratomoUserData` の合計2か所・`suspendSoratomoUser` の合計1か所・共有の定数 `ZERO_TOTALS`。行番号は1.3の値から動いている）、`functions/soratomo.test.js` は3か所（`soratomoDeleteMyData: ok` の2か所と、`soratomoDeletion: summary` の `zero`）。抜けるの分（`NOTHING` と `leaveSoratomoGroup` の結果・`soratomoLeaveGroup: ok`・`soratomoLeave: swept`）は4.3で足す。期待値の追加のほかは、既存のテストを変えていない
+    - 足したテスト（`soratomoDeletion.test.js` の「手順2b」の節）: 4.1の3本（退会 `self`・利用停止・アカウントの無い人）はそのままに、6本を足した（最後の1人では手順2bを行わずすべてが消える／締め切り（301件で1回目は300件・`done: false`、続きで1件、3回目と4回目は件数0で状態が同じ）／読んだ後・書く前に投稿が消えた／書き換わった（照合の口の中で bob が `setReactionTx` で選び直す）／締め切りで止まってもI1がそろう／利用停止の解除で戻らない）。消えた・書き換わった・I1の3本は `removeUserReactionsInGroup` を直接呼び、照合の口で場面を作る。`scripts/soratomo-admin.emulator.test.js` は4.1の1本のまま（shasum の頭 `7a5048ba7fec`・4.1と同じ）
+    - 4.1の抜けるの1本は4.3まで赤なので、作業ツリーから外してscratchpadに置いた（4.3で戻す）。このコミットには含めない
+    - 流し方: 4.1と同じ設定（ポートを替えた設定を `--config` で渡す・`--only firestore,storage`・サンドボックスの外・空の `XDG_CONFIG_HOME`・JBR）で、`emulators:exec` の1回の中で、台本 `run-4.2.sh` から、実装の前の写し→本物→壊した写し7つ→本物→全体（`test:emulator` の `node --test` の部分）の順に流した（13:06に終わった）。テストのファイルの shasum の頭は `soratomoDeletion.test.js` が `bbb8b29b158f`、本物の `soratomoDeletion.js` が `22b905ae3338`。流した後に作業ツリーが変わっていないこと（更新の時刻と、写しの置き場のテストのファイルとの shasum の一致）を確かめた。終わった後、ポート（8186・9196・4426）で待ち受けるプロセスが残っていないことを `lsof` で確かめた
+    - 結果（実装の前の赤）: 実装の前の写し（`HEAD` の `soratomoDeletion.js`・頭 `768625632b3a`）は73本中21本が赤。既存の12本は、期待と実際の差分が `reactionsDeleted: 0` の1行だけ（期待値に足した分）。新しい9本は、C2の3本と解除の1本が g1 の投稿に amy が残る、最後の1人の1本が `reactionsDeleted` が無い、締め切りの1本が `done` が `true`、直接呼ぶ3本が関数が無い（`is not a function`）
+    - 結果（本物）: 本物は2回とも73本・0失敗。`scripts/soratomo-admin.emulator.test.js` は11本・0失敗。4.1で赤だった退会・利用停止・アカウントの無い人・運用の削除の4本が緑になった（陽性対照C2のうち4.2の分）。全体のエミュレーターのテストは350本・0失敗（3.2の後の340本に、このファイルの9本と運用の1本）。サンドボックスの外で、`npm run lint` は緑、`npm test` は417本・0失敗（本数は変わらない）
+    - 陽性対照（写しごとの赤。どれも、落ちた assert の位置と期待・実際まで読んだ）:
+      - m1 `set(merge)` で書く（頭 `b0f7a94a6bb2`）: 1本が赤。消えた投稿の場面の「消えた投稿を作り直さない」（`expected: false`／`actual: true`）
+      - m2 `reactions` の地図を丸ごと消す（`1a8616ed149a`）: 8本が赤。C2の3本・解除・締め切り・消えた・I1の7本は、ほかの人のリアクションのキーまで消えた（例: o1 の期待 `[bob]` が `[]`）。書き換わったの1本は、地図が無くなって `Object.keys` が投げた
+      - m3 `reactorIds` から外さない（`5d84f14002b4`）: I1の1本だけを流して赤（b1 の `reactorIds` に amy が残り、キーと食い違う）。ほかのテストは、外れない投稿がクエリに当たり続けて動かない時計では終わらないので流していない
+      - m4 手順3で `reactionNotifyState/{uid}` を消さない（`9b9bb4e469c5`）: 5本が赤。どれも間引きの記録に amy が残る
+      - m5 印の中の本人を外さない（印のクエリを誰にも当たらない形にした・`4fa12a6c251b`）: 6本が赤。どれも印に amy が残る
+      - m7 飛ばした書き込みも数える（`46e03e64d0a1`）: 2本が赤。消えたの場面の `deleted` が `2`（期待は `1`）、書き換わったの場面が `3`（期待は `2`）
+      - m6 最後の1人でも手順2bを行う（`9e3eac6cba98`）: 73本・0失敗で、赤にならなかった（陽性対照が取れていない）。手順2bは全投稿を消した後に走るので投稿のクエリが空で、印から本人を外しても直後の `recursiveDelete` で消えるため、結果が同じになる（等価な写し）。そのため「最後の1人では手順2bを行わず」のテストが確かめているのは「すべてが消える」と `reactionsDeleted` が0であることまでで、「手順2bを呼ばない」ことは確かめていない。4.3の抜けるの最後の1人のテストは、照合の口が呼ばれた回数で見る
+    - コミット: 4.1の退会・利用停止・アカウントの無い人・運用の削除の4本と、4.2のテストと実装を一緒にコミットする
 
 - [ ] 4.3 抜けるに手順2bを照合つきで差し込み、入り直しとの競合を確かめる（陽性対照C2・C3・C10）
   - 前提: 4.2

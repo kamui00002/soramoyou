@@ -406,3 +406,39 @@ test("list-unforwarded: 未送信の通報だけを、受け付けた時刻の�
   assert.ok(out.lines[2].startsWith(`  ${newer}  `), out.lines[2]);
   assert.equal(out.lines.join("\n").includes(sent), false);
 });
+
+// MARK: - 手順2b（soratomo-reactions 4.1）
+
+test("delete-user（soratomo-reactions 陽性対照C2）: 本人がほかのメンバーの投稿に付けたリアクション・印の中の本人・本人あての間引きの記録を消し、ほかの人の分は残す", async () => {
+  await seedGroup({
+    groupId: "gA",
+    members: [
+      { uid: "alive", role: "owner" },
+      { uid: "deadU", role: "member" },
+      { uid: "other", role: "member" },
+    ],
+    skies: [
+      { skyId: "s1", authorId: "deadU" },
+      { skyId: "s2", authorId: "alive" },
+    ],
+  });
+  // リアクションと通知の記録は Admin SDK で直接入れる（コレクション名は functions/soratomoStore.js と同じ文字列）
+  const gA = db.collection(GROUPS).doc("gA");
+  const at = Timestamp.now();
+  await gA.collection("skies").doc("s2").update({
+    reactions: { deadU: { kind: "sunset", at }, other: { kind: "rainbow", at } },
+    reactorIds: ["deadU", "other"],
+  });
+  await gA.collection("reactionNotices").doc("s2").set({ notifiedReactorIds: ["deadU", "other"] });
+  await gA.collection("reactionNotifyState").doc("deadU").set({ lastSentAt: at });
+  await gA.collection("reactionNotifyState").doc("alive").set({ lastSentAt: at });
+  const d = deps({ existing: ["alive", "other"] });
+
+  const out = await admin.cmdDeleteUser(d, { uid: "deadU", groupIds: [] });
+  assert.equal(out.exitCode, 0, out.lines.join("\n"));
+  const s2 = await gA.collection("skies").doc("s2").get();
+  assert.deepEqual(Object.keys(s2.get("reactions")).sort(), ["other"], "本人のリアクションが消え、ほかの人の分は残る");
+  assert.deepEqual(s2.get("reactorIds"), ["other"], "reactorIds から本人だけが外れる（I1）");
+  assert.deepEqual((await gA.collection("reactionNotices").doc("s2").get()).get("notifiedReactorIds"), ["other"], "印の中の本人が消える");
+  assert.deepEqual((await gA.collection("reactionNotifyState").get()).docs.map((doc) => doc.id), ["alive"], "本人あての間引きの記録だけが消える");
+});

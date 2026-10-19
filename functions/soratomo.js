@@ -292,6 +292,7 @@ const soratomoDeleteMyData = soratomoCallable(
       groupsLeft: totals.groupsLeft,
       ownersTransferred: totals.ownersTransferred,
       groupsDeleted: totals.groupsDeleted,
+      reactionsDeleted: totals.reactionsDeleted, // 手順2bで外したリアクションの数（soratomo-reactions D4・14.5）
     }),
   }
 );

@@ -694,7 +694,7 @@ test("退会: 機能フラグのクレームが無い人（匿名を含む）・
   assert.equal((await db.collection("soratomoUsers").doc("alice").get()).exists, false, "利用者の文書も消える");
 
   assert.deepEqual(deleteOkLogs(), [
-    { uid: "alice", done: true, skiesDeleted: 1, imagesDeleted: 2, groupsLeft: 1, ownersTransferred: 1, groupsDeleted: 0 },
+    { uid: "alice", done: true, skiesDeleted: 1, imagesDeleted: 2, groupsLeft: 1, ownersTransferred: 1, groupsDeleted: 0, reactionsDeleted: 0 },
   ]);
   const logs = allLogs();
   for (const secret of ["ひみつの空の会", "SKYDELAA", "夕焼けがきれい"]) {
@@ -705,7 +705,7 @@ test("退会: 機能フラグのクレームが無い人（匿名を含む）・
   record.logs = [];
   assert.deepEqual(await call("soratomoDeleteMyData", authOf("alice", { soratomoBeta: false }), {}), { done: true });
   assert.deepEqual(deleteOkLogs(), [
-    { uid: "alice", done: true, skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0 },
+    { uid: "alice", done: true, skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0, reactionsDeleted: 0 },
   ]);
 });
 
@@ -1179,7 +1179,7 @@ test("定期実行の仕事A: アカウントの無い人（文書の無い親�
   assert.deepEqual([...storageFiles].sort(), ["soratomo/gh1/alice/sa1/display.jpg", "soratomo/gh1/alice/sa1/thumb.jpg"]);
 
   assert.deepEqual([...record.getUsersCalls[0]].sort(), ["alice", "carol", "dave", "erin", "frank"]);
-  const zero = { skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0 };
+  const zero = { skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0, reactionsDeleted: 0 };
   assert.deepEqual(logFieldsOf("soratomoDeletion: summary").sort(bySummaryUid), [
     { uid: "carol", trigger: "account_deleted", done: true, ...zero, skiesDeleted: 1, imagesDeleted: 2, groupsLeft: 1 },
     { uid: "dave", trigger: "account_deleted", done: true, ...zero, skiesDeleted: 1, imagesDeleted: 2, groupsLeft: 1, groupsDeleted: 1 },
