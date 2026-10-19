@@ -393,7 +393,7 @@ test("Callable（public-launch 1.9）: クレームのある登録済み（1.14.
 
 /**
  * soratomo.js の本文の module.exports の前に1行足した写しを、偽物の読み込みを入れた間だけ読み込み、その exports を返す。
- * soratomoCallable は公開していない（公開するのは関数の12本だけ）ので、本文に呼び出しを足して「読み込みの時点」の挙動を見る。
+ * soratomoCallable は公開していない（公開するのは関数の13本だけ）ので、本文に呼び出しを足して「読み込みの時点」の挙動を見る。
  * @param {string} extraLine 足す1行
  */
 function loadSoratomoWith(extraLine) {
@@ -414,7 +414,7 @@ function loadSoratomoWith(extraLine) {
 }
 
 test("選択肢の名前の検査（public-launch 3.2）: soratomoCallable に知らない選択肢（1.14 期の requireFlag を含む）を渡すと、読み込みの時点で例外になる", () => {
-  // 対照: 知っている選択肢だけなら、写しも読み込めて同じ12本を公開する（下の例外が、写しの読み込みの失敗でないことの確かめ）
+  // 対照: 知っている選択肢だけなら、写しも読み込めて同じ13本を公開する（下の例外が、写しの読み込みの失敗でないことの確かめ）
   const probed = loadSoratomoWith('soratomoCallable("soratomoProbe", async () => ({}), { allowAnonymous: false });');
   assert.deepEqual(Object.keys(probed).sort(), Object.keys(fns).sort());
 
@@ -823,7 +823,7 @@ test("抜ける: 最後の1人なら groupDeleted: true。ログは内部IDと�
   }
 });
 
-test("抜ける: 関数の設定は、制限時間120秒・メモリ512MiB・既存と同じリージョン。公開する関数は12本", () => {
+test("抜ける: 関数の設定は、制限時間120秒・メモリ512MiB・既存と同じリージョン。公開する関数は13本", () => {
   const endpoint = fns.soratomoLeaveGroup.__endpoint;
   assert.equal(endpoint.timeoutSeconds, 120);
   assert.equal(endpoint.availableMemoryMb, 512);
@@ -831,6 +831,7 @@ test("抜ける: 関数の設定は、制限時間120秒・メモリ512MiB・既
   assert.deepEqual(Object.keys(fns).sort(), [
     "onSoratomoReportCreated",
     "onSoratomoSkyCreated",
+    "onSoratomoSkyDeleted",
     "soratomoAgreeGuideline",
     "soratomoCreateGroup",
     "soratomoCreateSky",
@@ -2073,4 +2074,116 @@ test("リアクション（6.6）: リアクションの通知の直後でも新
   assert.deepEqual(await react("a", "eyes", "s3"), { outcome: "added", kind: "eyes" });
   assert.deepEqual(record.sends.map((s) => [s.uid, s.data.type]), [["f", "soratomoReaction"]]);
   assert.deepEqual(record.otherSends, [], "既存のほかの通知の送信を呼ばない");
+});
+
+// MARK: - トリガー: onSoratomoSkyDeleted（soratomo-reactions 3.2）
+
+/** g1 の投稿の、消す前のスナップショット（本番では、消えた文書の中身が削除のイベントに載る・要確認Q1）。 */
+function skySnapshot(skyId) {
+  return db.collection("soratomoGroups").doc(REACTION_GROUP).collection("skies").doc(skyId).get();
+}
+/** 削除のトリガーのハンドラーを、消えた投稿のスナップショットで呼ぶ。 */
+function runSkyDeleted(skyId, snap) {
+  return fns.onSoratomoSkyDeleted.run({ params: { groupId: REACTION_GROUP, skyId }, data: snap });
+}
+/** g1 の送った印の文書。 */
+function reactionNotice(skyId) {
+  return db.collection("soratomoGroups").doc(REACTION_GROUP).collection("reactionNotices").doc(skyId).get();
+}
+
+test("投稿の削除（8.1〜8.5・14.5・陽性対照C9）: リアクションの付いた投稿が消えたら、その投稿の送った印を消し、消えたリアクションの数をログに出す。ほかの投稿の印と通知の間引きの記録は残る。再配信（印が無い）でも成功し、ログに名前などを出さない", async () => {
+  await seedReactionScene();
+  const skies = db.collection("soratomoGroups").doc(REACTION_GROUP).collection("skies");
+  await skies.doc("s2").set({ authorId: "poster", width: 1, height: 1, createdAt: Timestamp.now() });
+  await react("a", "sunset"); // 送る（s1 の印に a）
+  await react("b", "eyes"); // 間引く（印に入らない）
+  await setReactionLastSentAt(TEN_MINUTES_MS);
+  await react("b", "rainbow", "s2"); // 送る（s2 の印に b）
+  assert.deepEqual((await reactionNotice("s1")).get("notifiedReactorIds"), ["a"]);
+  assert.deepEqual((await reactionNotice("s2")).get("notifiedReactorIds"), ["b"]);
+
+  // s1（a と b の2つのリアクション）を消す
+  const snap = await skySnapshot("s1");
+  await skies.doc("s1").delete();
+  record.logs = [];
+  await runSkyDeleted("s1", snap);
+
+  assert.equal((await reactionNotice("s1")).exists, false, "消えた投稿の印を消す");
+  assert.deepEqual((await reactionNotice("s2")).get("notifiedReactorIds"), ["b"], "ほかの投稿の印は残る");
+  assert.equal(
+    (await db.collection("soratomoGroups").doc(REACTION_GROUP).collection("reactionNotifyState").doc("poster").get()).exists,
+    true,
+    "通知の間引きの記録は残る"
+  );
+  assert.deepEqual(logFieldsOf("soratomoReaction: sky_deleted"), [{ groupId: "g1", skyId: "s1", reactionsDeleted: 2 }]);
+  assert.deepEqual(record.logs.filter((l) => l.level === "error"), []);
+
+  // 同じイベントの再配信: 印はもう無いが、成功して同じ件数を出す
+  record.logs = [];
+  await runSkyDeleted("s1", snap);
+  assert.equal((await reactionNotice("s1")).exists, false);
+  assert.deepEqual(logFieldsOf("soratomoReaction: sky_deleted"), [{ groupId: "g1", skyId: "s1", reactionsDeleted: 2 }]);
+  assert.deepEqual(record.logs.filter((l) => l.level === "error"), []);
+
+  const logs = allLogs();
+  for (const secret of REACTION_SECRETS) {
+    assert.ok(!logs.includes(secret), `ログに「${secret}」を出さない`);
+  }
+});
+
+test("投稿の削除（14.5）: reactions が地図でない（無い・null・配列・文字列）・空の地図の投稿は0件と数え、印が無くても成功する。イベントに中身が無くても投げない", async () => {
+  await seedReactionScene();
+  const skies = db.collection("soratomoGroups").doc(REACTION_GROUP).collection("skies");
+  const cases = [
+    ["無い", {}],
+    ["null", { reactions: null }],
+    ["配列", { reactions: ["a", "b"] }],
+    ["文字列", { reactions: "a" }],
+    ["空の地図", { reactions: {} }],
+  ];
+  for (const [i, [, extra]] of cases.entries()) {
+    const skyId = `x${i}`;
+    await skies.doc(skyId).set({ authorId: "poster", width: 1, height: 1, createdAt: Timestamp.now(), ...extra });
+    const snap = await skySnapshot(skyId);
+    await skies.doc(skyId).delete();
+    await runSkyDeleted(skyId, snap);
+  }
+  await runSkyDeleted("x9", undefined);
+
+  assert.deepEqual(
+    logFieldsOf("soratomoReaction: sky_deleted").map((f) => [f.skyId, f.reactionsDeleted]),
+    [...cases.map((_, i) => [`x${i}`, 0]), ["x9", 0]]
+  );
+  assert.deepEqual(record.logs.filter((l) => l.level === "error"), []);
+});
+
+test("投稿の削除（14.5）: 印の削除に失敗しても例外を投げず、sky_deleted_failed を error で内部IDと errorName・errorCode だけ出す", async () => {
+  await seedReactionScene();
+  await react("a", "sunset");
+  const snap = await skySnapshot("s1");
+  const originalCollection = db.collection;
+  db.collection = function (name) {
+    if (name === "soratomoGroups") throw Object.assign(new Error("書き込みの失敗 ひみつの空の会"), { code: 14 });
+    return originalCollection.call(this, name);
+  };
+  record.logs = [];
+  try {
+    await runSkyDeleted("s1", snap);
+  } finally {
+    db.collection = originalCollection;
+  }
+  assert.deepEqual(logFieldsOf("soratomoReaction: sky_deleted_failed"), [
+    { groupId: "g1", skyId: "s1", errorName: "Error", errorCode: 14 },
+  ]);
+  assert.equal(record.logs.filter((l) => l.level === "error").length, 1);
+  assert.deepEqual(logFieldsOf("soratomoReaction: sky_deleted"), []);
+  assert.ok(!allLogs().includes("書き込みの失敗"), "エラーの本文をログに出さない");
+});
+
+test("投稿の削除: 関数の設定は、投稿の文書の削除・既存と同じリージョン・再試行なし", () => {
+  const endpoint = fns.onSoratomoSkyDeleted.__endpoint;
+  assert.deepEqual(endpoint.region, ["asia-northeast1"]);
+  assert.equal(endpoint.eventTrigger.eventType, "google.cloud.firestore.document.v1.deleted");
+  assert.deepEqual(endpoint.eventTrigger.eventFilterPathPatterns, { document: "soratomoGroups/{groupId}/skies/{skyId}" });
+  assert.equal(endpoint.eventTrigger.retry, false);
 });

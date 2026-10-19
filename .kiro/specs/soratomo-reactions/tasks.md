@@ -139,7 +139,7 @@
 
 ## (c) Functions: Callableと削除トリガーの配線
 
-- [ ] 3. リアクションのCallableと、投稿の削除トリガーを配線する
+- [x] 3. リアクションのCallableと、投稿の削除トリガーを配線する
 
 - [x] 3.1 リアクションのCallable `soratomoSetReaction` と、投稿者への通知 `notifyReaction` を作る
   - 前提: 2.3
@@ -170,13 +170,19 @@
     - 陽性対照: m1（`replaced` でも送る・`233889412cca`）で「5分を過ぎていても送らない」が送信1通で赤、応答とログの形の1本が選び直しの `notify` の `duplicate`（期待は `null`）で赤（計2本）。m2（`type` を `soratomoPost`・`1bbdac96c0a5`）で通知の形の1本と新着投稿との独立の1本が `type` の違いで赤。m3（置き換えキーを `soratomo-{groupId}`・`e500ead12832`）で通知の形の1本だけが `collapseId` の違いで赤。m4（`notifyReaction` の失敗を投げ直す・`d606d96ea2ba`）で失敗の1本だけが、最初の場面（送信が投げる）の応答が `internal` になって赤。m5（成功のログにグループ名を足す・`3d63375c5e91`）で、応答とログの形・通知の形（ログの項目の比較）・失敗（「ログに名前を出さない」）の3本が赤。追加の写し: m6（`classifyRecipient` の `posterId` に投稿者を渡す・`3e50147cba0b`）で宛先の判定の1本だけが、ブロックの場面で送ってしまって赤。m7（枠の確保を通知文の組み立てより先にする・`82aede0e3092`）で失敗の1本だけが「組み立てが投げる: 間引きの記録を使わない」の `0` の期待に `1` で赤。どの写しも、赤は狙ったテストに限られた
     - 全体のテスト（`npm test`・`npm run test:emulator`）は、同じ `soratomo.js` を触る3.2の後にまとめて1回流す（3.2の結果に書く）。lintは緑。`soratomo.js` を読むテストのファイルは `soratomo.test.js` だけ（grepで確かめた）
 
-- [ ] 3.2 投稿の削除トリガー `onSoratomoSkyDeleted` を作り、本数の記載を直す（陽性対照C9）
+- [x] 3.2 投稿の削除トリガー `onSoratomoSkyDeleted` を作り、本数の記載を直す（陽性対照C9）
   - 前提: 3.1（同じ `soratomo.js` を触る）
   - design.mdの「onSoratomoSkyDeleted」のとおり、`onDocumentDeleted({ document: "soratomoGroups/{groupId}/skies/{skyId}", region: REGION })` で作る（再試行は付けない）。消えた文書の `reactions` の鍵の数を数え（地図でなければ0）、`reactionNotices/{skyId}` を消し、`soratomoReaction: sky_deleted`（`groupId`・`skyId`・`reactionsDeleted`）をinfoで出す。失敗は `soratomoReaction: sky_deleted_failed`（`groupId`・`skyId`・`errorName`・`errorCode`）をerrorで出し、投げない
   - `module.exports` に足して13本にし、公開する関数の数を確かめる既存のテストを13本に直す。`functions/soratomo.js` のヘッダー（2行目の本数・説明の箇条に `soratomoSetReaction` と `onSoratomoSkyDeleted`・23行目の「11 本」）と、`functions/index.js` の580行のコメント（Callable 9本・トリガー3本・定期実行1本）を直す
   - `soratomo.test.js`: 印が消える・件数のログ（地図でない `reactions` は0）・2回目も成功（印が無くても成功）・ログに名前などが無い。公開する関数が13本で、選択肢の名前の検査が通る
   - 陽性対照（C9）: 場面は「リアクションの付いた投稿を消し、削除のイベントを渡す」。印を消さない写し（本体を件数のログだけにした形＝トリガーを外したのと同じ結果）で、「印が消える」が赤になることを先に確かめる
   - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 14.3, 14.5_
+  - 結果（2026-10-19 11:48）: `HEAD` `51c42ca4`（3.1の後）の上で作った。`functions/soratomo.js` の `onSoratomoSkyCreated` の後に `// MARK: - 投稿の削除（soratomo-reactions 3.2）` の節を足し、`handleSoratomoSkyDeleted` と `onSoratomoSkyDeleted`（`onDocumentDeleted`・region `asia-northeast1`・再試行なし）を置いた。消えた文書の `reactions` を `event.data.get` で読み、地図（null・配列でない物）のときだけ鍵の数を数える。印のコレクションの名前は `soratomoStore.js` の `REACTION_NOTICES` と同じ文字列で書いた（コメントで結んだ）。`module.exports` に足して13本。ヘッダー（2行目を Callable 9本・トリガー3本・定期実行1本に、説明の箇条に `soratomoSetReaction` と `onSoratomoSkyDeleted`、23行目を「13 本」）と `functions/index.js` の580行のコメント（Callable 9本・トリガー3本）を直した。直した後、3つのファイルで古い本数（「11本」「12本」「Callable 8本」「トリガー2本」）が0件であることを検索で確かめた（同じ検索は直す前の「11本」を拾えていた）
+    - テスト: `soratomo.test.js` の末尾に4本を足し、公開する関数の一覧のテストを13本に直した（名前と、選択肢の名前の検査のコメントも13本に）。足した4本: 印が消える・ほかの投稿の印と間引きの記録は残る・件数のログ（2件）・再配信でも成功・ログに名前などを出さない／地図でない `reactions`（無い・null・配列・文字列）と空の地図は0件・イベントに中身が無くても投げない／印の削除の失敗（`db.collection` を一時的に差し替えて投げさせる）で投げず、`sky_deleted_failed` を error で内部IDと `errorName`・`errorCode` だけ／関数の設定（削除のイベント・文書のパターン・リージョン・`retry: false`。設定の形は先に使い捨ての関数で確かめた）
+    - 流し方: エミュレーター（`emulators:exec --only firestore,storage`・`demo-soramoyou-security`・Storageの一時置き場は専用の `TMPDIR`）の1回の中で、scratchpadの台本 `run-3.2.sh` から「実装の前の写し（`HEAD` の `soratomo.js`・頭 `68cf65f29b20`）→本物→壊した写し3通り→本物」を流し、続けて `package.json` の `test:emulator` の `node --test` の部分をそのまま `functions/` で流した（サンドボックスの外・空の `XDG_CONFIG_HOME`・JBR）。本物の shasum の頭は、写しを作る前と流した後で `soratomo.js` が `9cba95389070`、`soratomo.test.js` が `c1b5e6c3a74c`、`index.js` が `0cdf347c9677` のまま
+    - 結果: 実装の前の写しは73本中5本が赤で、赤は新しい4本（関数が無い）と公開する関数の一覧の1本だけ。本物は2回とも73本・0失敗
+    - 陽性対照（C9）: 写し mC9（本体から印の削除の1行を外し、件数のログだけにした形＝トリガーを外したのと同じ結果・頭 `1fb568bb86d1`）で、C9のテストが「消えた投稿の印を消す」の `expected: false`／`actual: true` で赤（ほかに、削除を呼ばないので失敗のログが出ない失敗の1本も赤・計2本）。追加の写し: mD-throw（失敗を投げ直す・`f181ba871993`）で失敗の1本だけが、差し替えで投げさせたエラーで赤。mD-array（配列も地図として数える・`70adbbb6b3ba`）で地図でない値の1本だけが、配列の場面の `2`（期待は `0`）で赤
+    - 全体（3.1と3.2をまとめて）: lintが緑。`npm test` が417本・0失敗、`npm run test:emulator` の中身が340本・0失敗（2.3の後の325本＋3.1の11本＋3.2の4本。どちらもサンドボックスの外・Node 22.20.0）。終わった後、エミュレーターのプロセスが残っていないことを `ps` で確かめた
 
 ## (d) Functions: 共通の削除（手順2b）
 
