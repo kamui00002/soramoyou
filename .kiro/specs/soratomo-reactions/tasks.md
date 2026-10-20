@@ -457,7 +457,7 @@
 
 - [ ] 8. iOSの画面を変える
 
-- [ ] 8.1 リアクションの部品の画面（数の表示・メニュー・押した人の一覧）を作る
+- [x] 8.1 リアクションの部品の画面（数の表示・メニュー・押した人の一覧）を作る
   - 前提: 7.1, 7.6
   - `Views/Soratomo/SoratomoReactionViews.swift`（新規）に、design.mdの「リアクションの部品の画面」のとおり3つを作る
     - `SoratomoReactionSummaryView`: 絵文字と数のカプセルを、絵文字の並び順に並べる（押せない）。自分の絵文字は色付きの枠と太字。0件なら何も出さない。VoiceOverでは `summary.accessibilityLabel` の1つの要素
@@ -466,6 +466,21 @@
   - シートは新しい画面にしない（ルーターの行き先と、画面名の計測 `logScreen` を足さない）。開いたことは `soratomo_reactions_viewed` で記録する（記録を呼ぶのは8.3）
   - ビルドが通り、Previewで3つの見た目（0件・自分の印あり・一覧の代替表示）を確かめる
   - _Requirements: 1.2, 2.1, 2.2, 2.3, 3.2, 3.3, 3.4, 3.7, 3.8, 8.7, 13.1, 13.2, 13.3, 13.5, 15.6_
+  - 結果（2026-10-21 07:55）: 7.6の作業ツリー（`HEAD` `5dba27d9`）で、アプリ1ファイルを新しく書いた（サブエージェントは使っていない）。着手前に `git fetch` し、`HEAD..origin/main` は空だった
+    - `Views/Soratomo/SoratomoReactionViews.swift`（新規・433行）: 3つの部品と、`#Preview` を5つ（求められた3つと、「一覧（読み込めない）」「一覧（表示できない）」）。部品はViewModelを持たず、7.1の `SoratomoReactionSummary`・`SoratomoReactorEntry`・`SoratomoReactionKind`（`emoji`・`spokenName`）と、7.6の `summary(for:server:)`・`isSending(_:)` の値を引数で受け取る
+    - `SoratomoReactionSummaryView(summary:)`: `summary.counts`（並び順のまま・1以上だけ）をカプセルで並べる。折り返しは既存の `FlowLayout`（`Views/PostInfoView.swift:899`）を使った。自分の絵文字は、グループのアイコンの濃い青（`SoratomoGroupIcon` の2色目と同じ値）の枠と太字。`total == 0` なら何も出さない。VoiceOverは `.accessibilityElement(children: .ignore)` と `summary.accessibilityLabel` の1つの要素
+    - `SoratomoReactionMenuButton(summary:isSending:onChoose:)`: `onChoose` は同期のクロージャで、`choose` を `Task` で呼ぶのは置く側（8.2・8.3）。項目は `ForEach(SoratomoReactionKind.allCases, id: \.self)` で、いまの絵文字だけ `Label(…, systemImage: "checkmark")`、VoiceOverは日本語名と `isSelected`。見た目は `face.smiling` かいまの絵文字で、`frame(minWidth: 44, minHeight: 44)` と `contentShape`。ラベルとヒントと `.disabled(isSending)` は `Menu` そのものに付けた。ラベルの文は `static func accessibilityLabel(myKind:)`
+    - 送っている間の見た目（利用者の決定・2026-10-21）: 1回目の画像で、`.disabled` だけでは、いまの絵文字を出しているボタンが送っている間でも見た目が変わらないと分かった（絵文字は自分の色で描かれ、無効の灰色にならない）。フォロー一覧のボタン（`Views/Components/UserRowComponents.swift:106`）と同じ `.opacity(isSending ? 0.5 : 1)` を足した版を焼き直し、前後の2枚を見比べて、利用者が足した版を選んだ
+    - `SoratomoReactorsSheet(entries:isUnavailable:profileStore:)`: `profileStore` はメンバー一覧（`SoratomoMembersView.swift:36-46`）と同じく、明示の `init` で `@ObservedObject` に入れる。`NavigationStack` の中に `.soratomoSkyBackground()`・`.plain` の `List`・行は `.soratomoClearRowBackground()`。「閉じる」は右上（`.navigationBarTrailing`・iOS 16で使える置き場所）で、`@Environment(\.dismiss)` で閉じる。`prefetch` は `.task(id:)`（行の人の uid の集合）で、一覧を出すときだけ呼ぶ。出し分けは `isUnavailable`→「この投稿は表示できなくなりました」、行が0件→「リアクションを読み込めませんでした」、それ以外→一覧
+    - 行のVoiceOver: メンバー一覧の行は `.combine` だが、それだと絵文字の字を読むので、ここは `.ignore` と「{表示名}、{日本語名}」（`static func rowAccessibilityLabel(displayName:kind:)`）にした
+    - design.mdに書いていなかったことを、次のとおり決めた（どれも後で変えられる）。（1）題の人数は一覧を出しているときだけ。代わりの文を出しているときは「リアクション」だけ（消えた投稿の数を出さない・8.6、読めていないのに「0人」と言わない・3.8）。（2）この引数の形では「0件」と「読めていない」を見分けられないので、行が0件は「読めていない」として扱う（詳細は1人以上のときだけ入口を出す・design.md）
+    - 計測: シートは `logScreen` も `didOpenReactors(count:)` も呼ばない（開いたことの記録は8.3の詳細）。ルーターの行き先も足していない
+    - ビルド: iPhone 17e `885A74C7` でアプリだけの `build` が通った（07:39:36〜07:40:09）。ログに `SwiftCompile … SoratomoReactionViews.swift` の行があり、このファイルの警告・エラーは0行。同じ数え方で、ほかのファイルの既存の警告（`Services/PaymentService.swift:47`・`GeneratedAssetSymbols.swift:79`）は拾えた。`.opacity` を足した後は、下の焼き直しの回（`test`・07:49:07〜07:51:15）でこのファイルがもう一度コンパイルされ、警告・エラーは0行（既存の警告は12行拾えた）
+    - Previewの見た目: 利用者が「私がして見せて」を選んだので、一時のテスト（`SoramoyouTests/SoratomoReactionViewsSnapshotScratch.swift`・コミットしていない・見せた後に消した）で、Previewと同じ値の5つを `885A74C7` の中で `UIHostingController` の窓ごとPNGに焼いた（テストは1本・失敗0）。5枚はメインが先に見てから利用者に送った。0件＝カプセル無しで右に `face.smiling` だけ。自分の印あり＝🌅2だけ青い枠と太字で、🌈1・💙1は枠なし、ボタンは🌅。一覧の代替表示＝題「リアクション（4人）」・右上に「閉じる」・「そら」は名前、表示名が空白だけの人と取れない人は「ユーザー」と人型のアイコン・並びは新しい順。読み込めない・表示できない＝題「リアクション」と真ん中の文
+    - 確かめていないこと: Xcodeの Canvas そのものでは見ていない（`#Preview` の本体はビルドでコンパイルされたところまで）。メニューを開いた中身（7つ・`checkmark`）は画像に焼けないので見ていない。VoiceOverの読み上げ（`Menu` の項目で `isSelected` が読まれるか・行の読み上げ）は実機で未確認。画面への配線は8.2・8.3
+    - 整形のフック: 本物のファイルは、Writeの前に同じ中身を scratchpad に置き、Writeの後に `diff -u` で比べて差が無かった。`.opacity` の Edit の差分は足した3行だけ。一時のテストはフックが書き換えたが、消したので残っていない
+    - shasum の頭（コミットするもの）: `SoratomoReactionViews.swift` `de28ac27e108`
+    - 実行の環境: ビルド・テスト・`pgrep`・`simctl` はサンドボックスの外で流した。DerivedDataはXcodeの設定のままで、`-derivedDataPath` は渡していない。負荷を見るフックは1回も止めなかった（流す前の1分平均は3.4〜3.7）
 
 - [ ] 8.2 容れ物とタイムラインに、リアクションのViewModelと操作を配線する
   - 前提: 7.2, 8.1
