@@ -356,7 +356,7 @@
     - shasum の頭（コミットするもの）: `SoratomoServiceContracts.swift` `f9b3ef204dd6`・`SoratomoSkyService.swift` `f85ca72d396f`・`SoratomoTimelineViewModel.swift` `7d0b7c01f158`・`SoratomoServiceContractsTests.swift` `e65f092a355b`・`SoratomoSkyServiceTests.swift` `41a181a7b419`・`SoratomoTimelineViewModelTests.swift` `2c767938212c`
     - 実行の環境: ビルド・テスト・`pgrep`・`simctl`・xcresultの読み取りは、7.1と同じくサンドボックスの外で流した。途中で1分平均が74.89に、5分平均が407に跳ねた（ほかの `xcodebuild` は無かった）。そこで1分平均が40を切るまで（2回目は、あわせて5分平均が80を切るまで）待ってから流した
 
-- [ ] 7.3 リアクションの通知のタップのテストを先に書き、今の現物（1.15.0と同じルーター）で赤を確かめる（陽性対照C6）
+- [x] 7.3 リアクションの通知のタップのテストを先に書き、今の現物（1.15.0と同じルーター）で赤を確かめる（陽性対照C6）
   - 前提: 1
   - 1.15.0の出し元を確かめる: 1.15.0（build 113）のarchiveの出し元は `08023ea7`（public-launch 12.1の結果。design.mdのF1も2026-10-18のタスクの承認のときに `9a56d5e8` から直した）。`git log --oneline 08023ea7..HEAD -- <SoratomoSkyService.swift・SoratomoModels.swift・SoratomoRouter.swift・GoldenHourNotificationManager.swift・project.pbxproj>` が空であることを確かめ、今のルーターが1.15.0のルーターと同じであることを結果に書く（空でなければ、`08023ea7` のルーターを写して同じテストを流す）
   - `SoratomoRouterTests` にテストを足す。今のAPIだけで書く（`receive(userInfo:)` に `["type": "soratomoReaction", "groupId": …, "postId": …]` を渡し、`resolvePending` → `reportAccessible` の後の `path` と、記録したイベントの名前とパラメータの文字列を見る）ので、今の現物でコンパイルできる
@@ -364,6 +364,19 @@
     - 既存の `soratomoPost` のテストは変えない（`post_created` のまま）
   - テストだけを足した作業ツリー（コミットしない）で、今の現物で流す。そのときの `HEAD` とテストのファイルの shasum の頭を結果に書く。新しいテストが「`path` が空・記録が0件」で赤になることを記録する。これは、1.15.0のアプリがリアクションの通知をタップされても、落ちず、遷移せず、新着投稿として記録しないことの証拠でもある
   - _Requirements: 7.1, 7.2, 7.3, 7.4, 11.4, 11.5, 15.5_
+  - 結果（2026-10-21 01:02）: 着手の前に `git fetch -q origin` をした。`origin/main` が #192（`2cbc5645`・ブロックまわりのアプリの直し）の1つだけ進んでいたので、マージで取り込んだ（`df32776b`）。この枝の変更とファイルが重ならず、衝突は無かった。その作業ツリーで `SoratomoRouterTests.swift` に7本を足し（コミットしない）、今の現物で流した
+    - 1.15.0の出し元: 5ファイルの `git log --oneline 08023ea7..HEAD` は空でなかった。出たのはこのspecの7.1（`c63fa2d1`・`SoratomoModels.swift`）と7.2（`41035868`・`SoratomoSkyService.swift`）だけで、どちらも `parse`・`receive` に触れていない
+    - `git diff 08023ea7 HEAD` は、`SoratomoRouter.swift`・`GoldenHourNotificationManager.swift`・`SoratomoAnalytics.swift`・`project.pbxproj`・`SoratomoRouterTests.swift` で差分が0だった。`SoramoyouApp.swift` は #188（`97c34a43`）の2か所だけが変わっていた（テストのときだけ接続先をEmulatorにする切り替えと、DEBUGだけの見えない目印）。通知のデリゲートの配線は変わっていない。そこで、今のルーターは1.15.0のルーターと同じと判断し、`08023ea7` のルーターを写さずに今の現物で流した
+    - 足したテスト（7本）: 赤を取るのは6本。`testParse_readsReactionPayload`（読めて `groupId`・`postId` が合う）と `testReactionTap_` の5本で、5本は開いて読めたら `opened`・冷えた起動（判定の前とWhat's Newの間は保留、表示できたら開く）・抜けたグループで `not_member`・未ログインで `signed_out`・匿名で `flag_off` を見る。どれも記録は `type` = `reaction` で1回だけ
+    - 残りの1本 `testPostTap_logsPostCreatedOpenedWithSameComparison` は対照で、同じ比べ方で `soratomoPost` が `post_created` の `opened` になることを見る（今の現物でも緑）。赤が「比べ方が壊れている」せいでないことを確かめるため。既存の `soratomoPost` のテストは変えていない
+    - 書き方: 今のAPIだけで書いた。記録はイベントの値でなく、`name` と `parameters` の文字列で比べる（テストの中の `SentEvent`）。保留は値で比べず `XCTAssertNotNil` にした（7.4で種類が付くと、`SoratomoNotificationPayload(groupId:postId:)` と等しくならないため）。そのため、赤はコンパイルのエラーでなく期待外れで取れている
+    - 赤（陽性対照C6）: iPhone 17e `885A74C7` で `-only-testing:SoramoyouTests/SoratomoRouterTests` を流した（`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`・`-test-timeouts-enabled YES`）。xcresultで59本・53合格・6失敗。失敗の6本は足した赤の6本そのもので、対照の1本と既存の52本は緑
+    - 失敗のassertは16個（ログの「16 failures」と一致）。`parse` が nil で3・開くテストが `isPresented` 偽と `path` が `[]` と記録が `[]` で3・冷えた起動が4・抜けたグループが4・未ログインと匿名が記録 `[]` で1ずつ。どれも「`path` が空・記録が0件（`parse` は nil）」の形で、1.15.0のアプリがリアクションの通知をタップされても、遷移せず、新着投稿として記録しないことの証拠になる（11.4・11.5）
+    - テストのファイルの警告は0行（同じ数え方で、ログ全体の警告35行を拾えることも確かめた）。終了コードは65（テストの失敗）
+    - 赤の証拠: `HEAD` `df32776b`・`SoratomoRouterTests.swift` の shasum（SHA-256の頭）`69953763ad18`（流す前と後で同じ）・`SoratomoRouter.swift` `e802061b62d2`。このテストのファイルはコミットせず、作業ツリーに残す。7.4で緑にしてから、実装と一緒にコミットする
+    - design.md: SoratomoSkyServiceの節の `decodeSky` と `resolveObservedSky` の行に、7.2で足した既定値つきの `path:` を書き足した（7.2の結果の（1）（2）。利用者の決定 2026-10-21）
+    - 実行の環境: ビルド・テスト・`pgrep`・`simctl`・xcresultの読み取りは、7.1・7.2と同じくサンドボックスの外で流した。DerivedDataはXcodeの設定（`IDECustomDerivedDataLocation`＝外付けのSSD）のままで、`-derivedDataPath` は渡していない
+    - 負荷: 流す前に、ほかのセッションの `xcodebuild`（followersのworktreeの `test-without-building`・別の端末）が動いていたので、終わるのを待った。その直後に1分平均が90.51に跳ねたので、40を切る（36.53）まで待ってから流した。テストは00:52ごろに終わったが、xcodebuildが抜けたのは01:02だった（gRPCの後始末の待ち。止めずに自分で抜けた）
 
 - [ ] 7.4 ルーターと計測に、リアクションの通知と4つのイベントを足す（陽性対照C6・要確認Q6の反映）
   - 前提: 7.1, 7.3

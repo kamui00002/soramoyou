@@ -741,7 +741,7 @@ struct SoratomoReactorEntry: Identifiable, Equatable, Sendable {
 | Requirements | 2.5, 2.7, 9.13 |
 
 - `Field`（`:373-379`）に`reactions = "reactions"`を足す。`reactorIds`はアプリでは読まない。
-- `decodeSky`（`:417`）は、最後に`SoratomoReactions.decode(data[Field.reactions])`を入れる。リアクションの形が壊れていても投稿を飛ばさない（2.7）。
+- `decodeSky`（`:417`）は、最後に`SoratomoReactions.decode(data[Field.reactions])`を入れる。リアクションの形が壊れていても投稿を飛ばさない（2.7）。`decodeSky`には既定値つきの`path: String? = nil`を足す。`decodeSkies`は文書のパスを渡し、`SoratomoReactions.decode(data[Field.reactions], path: path)`にする。壊れたリアクションのコンソールの行で、文書を特定するため（既存の呼び出しはそのまま通る・2026-10-21に7.2の結果から書き足した）。
 - 投稿1件の監視の結果の型を広げる（`SoratomoServiceContracts.swift:173-178`）。
 
   ```swift
@@ -753,7 +753,7 @@ struct SoratomoReactorEntry: Identifiable, Equatable, Sendable {
   }
   ```
 
-- `resolveObservedSky`（`:575`）に`data: [String: Any]?`の引数を足し、`.present(SoratomoReactions.decode(data?[Field.reactions]))`を返す。監視は1本のまま（同じ文書へ2本目のリスナーを張らない）。
+- `resolveObservedSky`（`:575`）に`data: [String: Any]?`の引数を足し、`.present(SoratomoReactions.decode(data?[Field.reactions]))`を返す。監視は1本のまま（同じ文書へ2本目のリスナーを張らない）。`data:`は既定値なし。あわせて既定値つきの`path: String? = nil`を足し、`.present(SoratomoReactions.decode(data?[Field.reactions], path: path))`にする。パスは`observeSky`が監視の結果の文書から渡す（2026-10-21に7.2の結果から書き足した）。
 - 影響: 詳細の`case .success(.present), .failure: break`（`SoratomoSkyDetailView.swift:145`）と、既存のモックとテストの`.present`を`.present(_)`か`.present(.empty)`に直す。
 
 #### SoratomoReactionService（`Services/SoratomoReactionService.swift`・新規）
