@@ -315,7 +315,7 @@
 
 - [ ] 7. iOSの土台を作る
 
-- [ ] 7.1 7種類の絵文字・投稿の中のリアクション・画面に出す数の型を作る
+- [x] 7.1 7種類の絵文字・投稿の中のリアクション・画面に出す数の型を作る
   - 前提: 1.1, 1.3（Functionsと別のセッションで並行してよい）
   - `Models/SoratomoReactions.swift`（新規）に、design.mdの形で `SoratomoReactionKind`（7つ・並び・`rawValue` は保存と計測の名前・`emoji`・`spokenName`）・`SoratomoReaction`・`SoratomoReactions`（`decode` は投げない）・`SoratomoReactionOverride`・`SoratomoReactionSummary`（`make`・`accessibilityLabel`）・`SoratomoReactorEntry` を置く
   - `SoratomoSky`（`Models/SoratomoModels.swift`）に `var reactions: SoratomoReactions = .empty` を足し、型の説明の「作成と削除だけで、更新しない」を「リアクションはサーバーが更新する」に直す。既存の `SoratomoSky(...)` の呼び出しは変えない。`Post` へ変換する口は作らない
@@ -323,6 +323,13 @@
   - `SoratomoReactionsTests`（新規）: `decode`（無い→空・地図でない→空・知らない名前→その1人だけ飛ばす・値の形の違い）。`make`（絵文字の並び順で1以上だけ・0件は空・自分の印・ブロックの一覧の人を除く・自分の上書き・一覧の人数＝数の合計・一覧は新しい順で、時刻が同じか無いものはuidの順・投稿者本人のキーがあっても数える）。`accessibilityLabel` の文（例: 「リアクション、夕焼け3人、虹1人。あなたは夕焼けを付けています」）
   - 陽性対照: ブロックの除外を外した写しで除外のテストが、上書きを使わない写しで上書きのテストが、数の多い順に並べ替える写しで並び順のテストが、それぞれ赤になることを先に確かめる
   - _Requirements: 1.2, 2.1, 2.2, 2.3, 2.4, 2.7, 3.6, 5.1, 5.3, 12.2, 12.3, 13.2, 13.3, 15.4_
+  - 結果（2026-10-20 19:00）: `HEAD` `a6332c78`（着手の前に `git fetch -q origin` をして、`origin/main`（`ca372cdb`）が `HEAD` の祖先であることを `git merge-base --is-ancestor` で確かめた。取り込みなし）の作業ツリーで、`Models/SoratomoReactions.swift`（新規）・`SoratomoModels.swift`（2か所）・テスト2つ（新規）を足した。テストは iPhone 17e `C2E3F752` で、`-only-testing` の2クラスだけ・`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`・`-test-timeouts-enabled YES`。xcresult で28本・28合格・0失敗（`SoratomoReactionKindTests` 6本・`SoratomoReactionsTests` 22本）。触った4ファイルの警告・エラーは0行（数え方が、ほかのファイルの警告8行を拾えることも確かめた）。アプリとテストのターゲットの全体がビルドできたので、既存の `SoratomoSky(...)` の呼び出しは変えずに通っている
+    - 値: `SoratomoReactionKind` の並び・名前・絵文字は `functions/soratomoCore.js` の `REACTION_KINDS`（587〜594行）と同じ。絵文字は実装を `\u{...}` のエスケープで書き、テストはコードポイントの数値（`unicodeScalars`）とUTF-16の単位数で7行とも固定した（`soratomoCore.test.js` の `EXPECTED_REACTION_KINDS` と同じ値）。日本語名・名前の英小文字のスネークケース・`rawValue` がケース名や絵文字を受けないことも固定した
+    - `SoratomoSky`: `var reactions: SoratomoReactions = .empty` を `createdAt` の後に足し、型の説明を「リアクション（`reactions`）はサーバーが更新する（ほかの項目は作成の後に変わらない）」に直した。`git diff` はこの2か所だけ（整形のフックの巻き込みなし）。`Post` へ変換する口は作っていない
+    - design.mdに書いていなかったことを、次のとおり決めてテストで固定した（どれも後で変えられる）。（1）`decode` に既定値つきの `path: String? = nil` を足した（「地図でないときはパスと項目名を出す」のため。7.2の1引数の呼び方はそのまま使え、文書のパスを渡せる）。コンソールに出すのはパスと項目名 `reactions` だけで、値は出さない。（2）1人分の値が地図でない・`kind` が文字列でない・知らない名前はその1人だけ飛ばし、`at` が無い・`Timestamp` でないときはリアクションを残して時刻を nil にする。（3）一覧の並びは、時刻の新しい順・時刻の無いものは最後・同じ時刻どうしと時刻の無いものどうしは uid の順。（4）上書き `.set` の行の時刻は、サーバーに自分の分があればその時刻のまま（確定の前後で一覧の中の位置を動かさない）、無ければ nil。ログアウト中（`myUid` が nil）は上書きを使わない。ブロックの一覧に自分の uid があっても自分の分は除かない。（5）`accessibilityLabel` は0件で「リアクションなし」、自分の印が無いときは「。あなたは…を付けています」を付けない
+    - 陽性対照: 作業ツリーの本物の `SoratomoReactions.swift` を Edit で1か所ずつ壊し、赤を確かめてから逆の Edit で戻し、そのたびに shasum が控え（頭 `cf311d2c9eac`。写しは scratchpad）と一致することを確かめた。（1）ブロックの除外を外す（`blockedUserIds` の代わりに空の集合）→ `testBlockedReactorsAreExcludedFromCountsTotalAndList`・`testReactorCountEqualsTotal` の2本が赤（このとき整形のフックが、使われなくなった引数を `blockedUserIds _:` に変えた。壊した関数の引数の1行で、戻すEditで一緒に戻した）。（2）上書きを使わない（条件に `myUid.isEmpty` を足す）→ 上書きの3本と `testReactorCountEqualsTotal` の4本が赤。（3）数の多い順に並べ替える → `testCountsFollowEmojiOrderNotCountOrder` と、数が1と2になる上書きのテストの2本が赤。（4）くもの絵文字から `\u{FE0F}` を落とす（このタスクの壊し方に足した）→ `testEmojiCodePointsIncludeVariationSelector` が赤（コードポイントとUTF-16の単位数の2か所）。どれもほかのテストは緑のまま。戻した後に4ファイルの shasum が控えと一致し、本物で上の28本が緑
+    - shasum の頭（コミットするもの）: `SoratomoReactions.swift` `cf311d2c9eac`・`SoratomoModels.swift` `395998312ca0`・`SoratomoReactionsTests.swift` `02ff3763cc46`・`SoratomoReactionKindTests.swift` `54c76f78f3a6`
+    - 実行の環境: サンドボックスの中では xcodebuild がパッケージを解決できず（`permissionDenied`。DerivedDataが外付けのSSD）、`pgrep` と `simctl` も動かないので、ビルド・テスト・`pgrep`・`simctl`・xcresultの読み取りはサンドボックスの外で流した。途中で1分平均が193と227に跳ね（ほかの `xcodebuild` は無かった）、40を切るまで待ってから流した。負荷の見張りのフックが「シミュレーターが2台動いている」と止めたが、2台は別の端末（iPhone 17 Pro `BF678DA1`・`DCFBF2D6`）で閉じず、1分平均が40以下（33）だったので `LOAD_OK=1` で流した
 
 - [ ] 7.2 投稿の変換と投稿1件の監視に、リアクションを載せる（陽性対照C7・C8・要確認Q6の反映）
   - 前提: 1.3, 7.1

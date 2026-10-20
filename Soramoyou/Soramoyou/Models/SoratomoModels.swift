@@ -61,7 +61,7 @@ struct SoratomoMember: Identifiable, Equatable, Sendable {
 
 /// そらともの投稿（Firestore の `soratomoGroups/{groupId}/skies/{skyId}`）
 ///
-/// 作成と削除だけで、更新しない。画像の場所は持たず、`imagePaths` で ID から導く
+/// リアクション（`reactions`）はサーバーが更新する（ほかの項目は作成の後に変わらない）。画像の場所は持たず、`imagePaths` で ID から導く
 /// （ルールが画像のパスや URL の項目を拒否するため・要件 11.12）。
 struct SoratomoSky: Identifiable, Equatable, Sendable {
     /// 投稿 ID（Firestore の自動 ID）
@@ -78,6 +78,11 @@ struct SoratomoSky: Identifiable, Equatable, Sendable {
     let pixelHeight: Int
     /// 作成日時（サーバーの時刻。送信直後は推定値で読む）
     let createdAt: Date
+    /// 付いているリアクション（書き手は Functions だけ。項目が無い投稿は空）
+    ///
+    /// 既定値つきの `var` にして、既存の `SoratomoSky(...)` の呼び出しを変えずに済ませている。
+    /// `Equatable` に入るので、リアクションだけが変わってもタイムラインは描き直す（soratomo-reactions design.md の F3）。
+    var reactions: SoratomoReactions = .empty
 
     /// この投稿の画像のパス（表示用とサムネイル）
     var imagePaths: SoratomoImagePaths {
