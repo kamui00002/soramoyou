@@ -14,6 +14,8 @@ struct UserProfileView: View {
     /// おすすめの空（この人がプロフィールに飾っている最大3枚）⭐️
     @StateObject private var recommendedSkiesViewModel = RecommendedSkiesViewModel()
     @Environment(\.dismiss) private var dismiss
+    /// ブロックの確認を出しているか ⭐️（C 項目 3）
+    @State private var isConfirmingBlock = false
 
     /// フォロー一覧への遷移に使う（ViewModel 内の同名プロパティは private のため保持）⭐️ PR-5
     private let targetUserId: String
@@ -49,6 +51,38 @@ struct UserProfileView: View {
         .background(DesignTokens.Colors.detailBackground.ignoresSafeArea())
         .navigationTitle(viewModel.publicProfile?.displayName ?? "プロフィール")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // 右上の「…」からブロックする ⭐️（C 項目 3。投稿が 0 件の人には投稿の「…」が無く、ここが唯一の入口）
+            ToolbarItem(placement: .navigationBarTrailing) {
+                // 自分以外のプロフィールを、ログインして見ているときだけ出す
+                if ownUserId != nil, !viewModel.isOwnProfile {
+                    Menu {
+                        Button(role: .destructive) {
+                            isConfirmingBlock = true
+                        } label: {
+                            Label("このユーザーをブロック", systemImage: "hand.raised")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("その他の操作")
+                }
+            }
+        }
+        // ブロックの確認 ⭐️（C 項目 3。本文はホーム・ギャラリー・そらともと同じ・利用者が承認済み 2026-10-19）
+        .alert(blockConfirmationTitle, isPresented: $isConfirmingBlock) {
+            Button("キャンセル", role: .cancel) {}
+            Button("ブロック", role: .destructive) {
+                Task {
+                    // 保存できたら閉じる。失敗したら下の「エラー」の知らせが出て、画面は残す
+                    if await viewModel.blockUser() {
+                        dismiss()
+                    }
+                }
+            }
+        } message: {
+            Text("この人の投稿が、ホーム・ギャラリー・そらともに表示されなくなります。お互いのフォローも外れます。ブロックしたことは相手に知らされません")
+        }
         .task {
             await viewModel.load()
             // おすすめの空は公開プロフィール（load で取得済み）の一覧から解決する ⭐️
@@ -66,6 +100,14 @@ struct UserProfileView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
+    }
+
+    /// ブロックの確認の見出し（表示名は画面に出すだけで、ログと計測には渡さない）
+    private var blockConfirmationTitle: String {
+        if let name = viewModel.publicProfile?.displayName, !name.isEmpty {
+            return "\(name)さんをブロックしますか？"
+        }
+        return "このユーザーをブロックしますか？"
     }
 
     // MARK: - Header

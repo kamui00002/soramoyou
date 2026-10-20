@@ -88,25 +88,30 @@ final class FollowRepository: FollowRepositoryProtocol {
 
         // トランザクションは follows の「存在確認 → 作成」だけを原子的に行う。
         // カウンタはここでは触らない（Cloud Functions が count() の結果を代入する）。
-        _ = try await db.runTransaction { transaction, errorPointer -> Any? in
-            do {
-                // 既にフォロー中なら何もしない（冪等性確保）
-                let existing = try transaction.getDocument(followRef)
-                if existing.exists {
+        // 失敗は mapFollowError に通してから投げる（権限の拒否を英語の文のまま画面に出さないため）。
+        do {
+            _ = try await db.runTransaction { transaction, errorPointer -> Any? in
+                do {
+                    // 既にフォロー中なら何もしない（冪等性確保）
+                    let existing = try transaction.getDocument(followRef)
+                    if existing.exists {
+                        return nil
+                    }
+
+                    let follow = Follow(
+                        id: followId,
+                        followerId: ownUserId,
+                        followeeId: targetUserId
+                    )
+                    transaction.setData(follow.toFirestoreData(), forDocument: followRef)
+                    return nil
+                } catch let err as NSError {
+                    errorPointer?.pointee = err
                     return nil
                 }
-
-                let follow = Follow(
-                    id: followId,
-                    followerId: ownUserId,
-                    followeeId: targetUserId
-                )
-                transaction.setData(follow.toFirestoreData(), forDocument: followRef)
-                return nil
-            } catch let err as NSError {
-                errorPointer?.pointee = err
-                return nil
             }
+        } catch {
+            throw Self.mapFollowError(error)
         }
 
         logger.info("フォロー成功 \(ownUserId, privacy: .private) -> \(targetUserId, privacy: .private)")
@@ -226,17 +231,35 @@ final class FollowRepository: FollowRepositoryProtocol {
         try await deleteFollowIfExists(followId: followId)
         logger.info("フォロワー削除 \(followerUserId, privacy: .private) を \(ownUserId, privacy: .private) から")
     }
+
+    // MARK: - 純関数
+
+    /// フォローの失敗を写す。権限の拒否（Firestore の permissionDenied）だけを `.followNotAllowed` にし、
+    /// それ以外（通信の失敗など）はそのまま返す
+    static func mapFollowError(_ error: Error) -> Error {
+        // ErrorHandler 全体では訳さない（ProfileViewModel などは code 7 を自分で見分けているため）。
+        // フォローの失敗だけをここで写す
+        let nsError = error as NSError
+        if nsError.domain == FirestoreErrorDomain, nsError.code == FirestoreErrorCode.permissionDenied.rawValue {
+            return FollowRepositoryError.followNotAllowed
+        }
+        return error
+    }
 }
 
 // MARK: - Errors
 
 enum FollowRepositoryError: LocalizedError {
     case cannotFollowSelf
+    /// サーバーがフォローを断った（ブロックしている／されている）。理由は画面に出さない
+    case followNotAllowed
 
     var errorDescription: String? {
         switch self {
         case .cannotFollowSelf:
             "自分自身をフォローすることはできません"
+        case .followNotAllowed:
+            "フォローできませんでした"
         }
     }
 }

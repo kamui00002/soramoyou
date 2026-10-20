@@ -6,11 +6,10 @@
 //  「アップデートした既存ユーザーに1回だけ」を保証する条件を検証する。
 //
 
-import XCTest
 @testable import Soramoyou
+import XCTest
 
 final class WhatsNewGateTests: XCTestCase {
-
     private let currentID = "v-current"
 
     /// 既存ユーザー（オンボ完了）で未読 → 表示する
@@ -83,6 +82,7 @@ final class WhatsNewGateTests: XCTestCase {
             "2026-09-ranking-recommended",
             "2026-09-ranking-sky-ae",
             "2026-10-soratomo-beta",
+            "2026-10-soratomo-public",
         ]
         for pastID in pastIDs {
             XCTAssertNotEqual(WhatsNewContent.currentID, pastID, "過去の値 \(pastID) と同じ")

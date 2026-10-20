@@ -18,17 +18,20 @@ enum WhatsNewContent {
     /// 今回の新機能セットの識別子。
     /// 新機能を追加したら、この文字列を変更する（例: "2026-09-phase2"）。
     /// `lastSeenWhatsNewVersion` がこの値と一致していれば「既読」とみなす。
+    // 2026-10-19: ほかの人のプロフィールの「…」からブロックできるようにした（C 項目 3・ブロックするとお互いのフォローも外れる）。
+    //   1.15.0 のそらとも 2 ページは出し切った（既読）ので載せない（利用者の決定 2026-10-19）。
     // 2026-10-12: 1.15.0 = そらとも（友達グループで空を共有）の一般公開＋「グループを抜ける」（soratomo-public-launch 7.1）。
     //   1.13.0〜1.14.x は、クレームのある人だけに別の識別子で「先行公開」の紹介を出していた。1.15.0 で登録済みの
     //   全員が使えるようになったので、先行公開の紹介をやめ、全員向けのこの What's New に載せ直した。
     // ⚠️ 過去の値はすべて使えない（同じ ID のままページを足しても、既読の人には表示されない）。
-    //    `WhatsNewGateTests.testCurrentIDDiffersFromPastIDs` が、下の 5 つと違うことを確かめる:
+    //    `WhatsNewGateTests.testCurrentIDDiffersFromPastIDs` が、下の 6 つと違うことを確かめる:
     //    - "2026-09-sky-camera"（空カメラ段階A＋空だけ編集）: 1.11.0 / 1.11.1 で全ユーザーが既読
     //    - "2026-09-sky-ae"（空優先AE 単独）: 検証用 build 102 のテスターが既読
     //    - "2026-09-ranking-recommended"（ランキング＋おすすめの空）: 未リリース。ページ構成が変わったので使わなかった
     //    - "2026-09-ranking-sky-ae"（いいねランキング＋私のおすすめの空＋空優先AE）: 1.12.0〜1.14.x で既読
     //    - "2026-10-soratomo-beta"（そらともの先行公開の紹介・別のキーで既読にしていた）: 紛らわしいので使わない
-    static let currentID = "2026-10-soratomo-public"
+    //    - "2026-10-soratomo-public"（そらともの一般公開＋グループを抜ける）: 1.15.0 で既読
+    static let currentID = "2026-10-block-from-profile"
 
     // MARK: - 永続化キー（UserDefaults / @AppStorage）
 
@@ -45,30 +48,20 @@ enum WhatsNewContent {
 
     // MARK: - 紹介ページ
 
-    /// 今回（1.15.0: そらともの一般公開）の新機能紹介ページ。文言は soratomo-public-launch 9.1 で利用者が承認済み（2026-10-12）。変えるときは承認を取り直す。
-    /// アイコンは実UIと揃えている（person.2.circle = ホーム右上のそらともの入口 `SoratomoEntryButton`、
-    /// rectangle.portrait.and.arrow.right = タイムライン右上のメニューの「グループを抜ける」）。
-    /// ⚠️ 1.12.0 のページ（ランキング・おすすめの空・空優先AE）は出し切った（既読）ので載せない。
-    /// ⚠️ 1 ページ目の入口の言い方は、オンボーディングの「そらとも」のページ（`OnboardingView`）とそろえる。
+    /// 今回（C 項目 3: プロフィールからブロック）の新機能紹介ページ。文言は利用者が承認済み（2026-10-19）。変えるときは承認を取り直す。
+    /// アイコンは実UIと揃えている（hand.raised = プロフィール右上の「…」の「このユーザーをブロック」）。
+    /// 新規ユーザー向けのオンボーディングには入れない（利用者の決定 2026-10-19）。
+    /// ⚠️ 1.15.0 のページ（そらとも・グループの出入り）は出し切った（既読）ので載せない。
+    ///    オンボーディングの「そらとも」のページ（`OnboardingView`）は、1.15.0 のそのページとそろえて作った。
     static let pages: [WhatsNewPage] = [
         WhatsNewPage(
-            icon: "person.2.circle",
+            icon: "hand.raised",
             badge: "新機能",
-            title: "そらとも",
-            description: "家族や友達だけの小さなグループで、\n撮った空を見せ合えます\nホーム右上のボタンから始めましょう",
+            title: "プロフィールからブロック",
+            description: "ほかの人のプロフィール右上の「…」から\nブロックできるようになりました\nお互いのフォローも外れます",
             gradientColors: [
-                Color(red: 0.55, green: 0.80, blue: 0.98),
-                Color(red: 0.36, green: 0.58, blue: 0.90),
-            ]
-        ),
-        WhatsNewPage(
-            icon: "rectangle.portrait.and.arrow.right",
-            badge: "新機能",
-            title: "グループの出入り",
-            description: "招待コードでグループに参加できます\n抜けたいときは、タイムライン右上のメニューの\n「グループを抜ける」から",
-            gradientColors: [
-                Color(red: 0.62, green: 0.78, blue: 0.95),
-                Color(red: 0.40, green: 0.45, blue: 0.85),
+                Color(red: 0.58, green: 0.72, blue: 0.90),
+                Color(red: 0.38, green: 0.50, blue: 0.80),
             ]
         ),
     ]
