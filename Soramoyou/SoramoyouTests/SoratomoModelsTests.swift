@@ -110,8 +110,22 @@ final class SoratomoModelsTests: XCTestCase {
             [
                 "id", "createdAt", "updatedAt", "email", "displayName", "photoURL", "bio",
                 "customEditTools", "customEditToolsOrder", "followersCount", "followingCount", "postsCount",
-                "notifyReactions", "notifyNewPostsFromFollowing", "notifyNewPostsFromEveryone", "blockedUserIds",
+                "notifyReactions", "notifyNewPostsFromFollowing", "notifyNewPostsFromEveryone",
             ]
         )
+    }
+
+    // MARK: - User のブロックの一覧（書き込みに載せない）
+
+    func testBlockedUserIdsIsNotWrittenByToFirestoreData() {
+        // ブロックの一覧は User 全体の書き込み（updateUser の setData(merge)）に載せない。
+        // 載せると、プロフィールを開いた時点の古い一覧でサーバーの一覧が丸ごと置き換わり、
+        // その後に足したブロックが消える。書くのは blockUser / unblockUser（arrayUnion / arrayRemove）だけ。
+        // 空の配列も書かない（空で上書きすると、ブロックが全部消える）
+        let values: [[String]?] = [["u2"], [], nil]
+        for value in values {
+            let user = User(id: "u1", blockedUserIds: value)
+            XCTAssertNil(user.toFirestoreData()["blockedUserIds"], "blockedUserIds=\(String(describing: value))")
+        }
     }
 }

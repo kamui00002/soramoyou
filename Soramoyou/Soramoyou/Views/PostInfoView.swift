@@ -758,6 +758,15 @@ struct PostInfoView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(.white.opacity(0.2))
             )
+
+            // 「フォロワーのみ」を選んだときだけ、誰の画面に表示されるかを書く ⭐️（C 項目 4）
+            // 文は Visibility.selectionNote に置く（テストで文を固定するため）。
+            // lineLimit は付けない（文字を大きくしても切らずに折り返す）
+            if let note = viewModel.visibility.selectionNote {
+                Text(note)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
         }
     }
 

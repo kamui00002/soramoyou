@@ -152,16 +152,15 @@ struct User: Identifiable, Codable {
         data["notifyNewPostsFromFollowing"] = notifyNewPostsFromFollowing
         data["notifyNewPostsFromEveryone"] = notifyNewPostsFromEveryone
 
-        if let blockedUserIds {
-            data["blockedUserIds"] = blockedUserIds
-        }
-
         // フォロー中タグ ⭐️: followedTags はここでは書かない（読み取り専用）。
         // このフィールドは followTag/unfollowTag の arrayUnion/arrayRemove 専用で、
         // User 全体を setData(merge) する updateUser 経由で書くと、キャッシュ済みの旧配列が
         // サーバーの最新値を巻き戻してしまうため
         // （updateNotificationPreferences が field-scoped に切られているのと同じ理由）。
         // そらとも通知 ⭐️: notifySoratomo も同じ理由でここでは書かない（読み取り専用）。
+        // ブロックの一覧 ⭐️: blockedUserIds も同じ理由でここでは書かない（読み取り専用）。
+        // 書くのは blockUser/unblockUser の arrayUnion/arrayRemove だけ。ここで書くと、
+        // プロフィールを開いた後に足したブロックが保存で消える（空の配列なら全部消える）。
 
         return data
     }

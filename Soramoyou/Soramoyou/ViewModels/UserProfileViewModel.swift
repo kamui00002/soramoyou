@@ -15,7 +15,6 @@ private let logger = Logger(
 
 @MainActor
 class UserProfileViewModel: ObservableObject {
-
     // MARK: - Published State
 
     /// 他ユーザーから読める公開プロフィール（users コレクションは
@@ -67,11 +66,11 @@ class UserProfileViewModel: ObservableObject {
         async let followingTask = fetchIsFollowingSafe()
 
         let (profile, following) = await (profileTask, followingTask)
-        self.publicProfile = profile
-        self.isFollowing = following
+        publicProfile = profile
+        isFollowing = following
 
         // フォロー状態が確定してから、閲覧できる公開範囲だけを絞って投稿を取得する
-        self.posts = await fetchVisiblePostsSafe()
+        posts = await fetchVisiblePostsSafe()
     }
 
     /// 他ユーザーの公開プロフィールを取得する。
@@ -126,7 +125,7 @@ class UserProfileViewModel: ObservableObject {
     /// 「rules の followers 枝が通るか」を確かめる R1 プローブの結果まで誤読させる。
     /// そのため安全側への降格そのものは維持しつつ、原因は必ずユーザーとログの両方に出す。
     private func fetchIsFollowingSafe() async -> Bool {
-        guard let ownUserId = ownUserId, ownUserId != targetUserId else { return false }
+        guard let ownUserId, ownUserId != targetUserId else { return false }
         do {
             return try await followRepository.isFollowing(targetUserId, by: ownUserId)
         } catch {
@@ -141,7 +140,7 @@ class UserProfileViewModel: ObservableObject {
 
     /// フォローボタン押下時の動作（既にフォロー中なら解除、でなければフォロー）
     func toggleFollow() async {
-        guard let ownUserId = ownUserId else {
+        guard let ownUserId else {
             errorMessage = "ログインが必要です"
             return
         }
@@ -174,10 +173,38 @@ class UserProfileViewModel: ObservableObject {
             // フォロー状態が変わると閲覧できる範囲（フォロワー限定投稿）が変わるため、
             // フォロー時は増える／解除時は消える分を反映するために必ず再取得する。
             // 上で `isFollowing` を更新済みなので、新しい状態に対応した公開範囲で取得される。
-            self.posts = await fetchVisiblePostsSafe()
+            posts = await fetchVisiblePostsSafe()
         } catch {
             logger.error("toggleFollow 失敗: \(error.localizedDescription)")
             errorMessage = error.userFriendlyMessage
+        }
+    }
+
+    // MARK: - Block
+
+    /// この人をブロックする ⭐️（C 項目 3。投稿が 0 件の人には投稿の「…」が無く、ブロックできなかった）
+    ///
+    /// 投稿詳細のブロック（`PostDetailViewModel.blockPostAuthor`）と同じく、保存できたときだけ
+    /// `.userBlocked` を送り、開いている一覧（ホーム・あなた向け・タグ・ギャラリー・そらとも）から
+    /// その人の投稿を消してもらう。お互いのフォローは Functions（onUserBlockListChanged）が消す。
+    /// - Returns: ブロックを保存できたら true（View はこれを見て画面を閉じる）
+    func blockUser() async -> Bool {
+        // ログインしていない・自分のプロフィールなら何もしない（View も ⋯ を出さないが、念のため）
+        guard let ownUserId, ownUserId != targetUserId else { return false }
+
+        do {
+            try await firestoreService.blockUser(userId: ownUserId, blockedUserId: targetUserId)
+            // 失敗したときは送らない（一覧から消したのに実際はブロックされていない、を防ぐ）
+            NotificationCenter.default.post(
+                name: .userBlocked,
+                object: nil,
+                userInfo: [Notification.blockedUserIdKey: targetUserId]
+            )
+            return true
+        } catch {
+            logger.error("blockUser 失敗: \(error.localizedDescription)")
+            errorMessage = error.userFriendlyMessage
+            return false
         }
     }
 }
