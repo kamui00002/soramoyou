@@ -386,3 +386,24 @@ final class MockSoratomoLeaveService: SoratomoLeaveServiceProtocol, @unchecked S
         return membershipResultsByGroup[groupId] ?? membershipResult
     }
 }
+
+// MARK: - 投稿へのリアクション（soratomo-reactions 7.5）
+
+/// `SoratomoReactionServiceProtocol` のモック
+final class MockSoratomoReactionService: SoratomoReactionServiceProtocol, @unchecked Sendable {
+    // 返す結果
+    var setReactionResult: Result<SoratomoReactionChange, SoratomoError> = .failure(.unknown)
+    /// 呼ばれたとき、結果を返す前に流す処理（順序の確かめや、処理中で止めておくのに使う）
+    var onSetReaction: (@Sendable () async -> Void)?
+
+    // 呼ばれた引数
+    private(set) var setReactionCalls: [(groupId: String, skyId: String, kind: SoratomoReactionKind?)] = []
+
+    func setReaction(groupId: String, skyId: String, kind: SoratomoReactionKind?)
+        async throws(SoratomoError) -> SoratomoReactionChange
+    {
+        setReactionCalls.append((groupId, skyId, kind))
+        await onSetReaction?()
+        return try setReactionResult.soratomoValue()
+    }
+}

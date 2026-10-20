@@ -407,3 +407,45 @@ protocol SoratomoLeaveDataSource: Sendable {
     /// アカウントが替わっていないかを、回ごとに確かめるために使う（leave-group /review-full D1）。
     func currentUid() -> String?
 }
+
+// MARK: - 投稿へのリアクション（soratomo-reactions 7.5）
+
+/// サーバーが返したリアクションの結果（rawValue がサーバーの `outcome` の値）
+enum SoratomoReactionOutcome: String, Sendable {
+    /// 初めて付けた
+    case added
+    /// 別の絵文字に選び直した
+    case replaced
+    /// 外した
+    case removed
+    /// 変わらなかった（同じ絵文字をもう一度送った・付いていないのに外した、など。戻り値の形が違ったときの代わりにも使う）
+    case unchanged
+}
+
+/// リアクションを送った結果
+struct SoratomoReactionChange: Equatable, Sendable {
+    let outcome: SoratomoReactionOutcome
+    /// 書いた後の自分のリアクション（外れていれば nil）
+    let kind: SoratomoReactionKind?
+}
+
+/// リアクションのサービス
+///
+/// - 失敗はすべて `SoratomoError` に写して投げる。サーバーの文言は画面に出さない。
+protocol SoratomoReactionServiceProtocol: Sendable {
+    /// 自分のリアクションを kind にする（nil なら外す）。Callable `soratomoSetReaction`・20 秒
+    func setReaction(groupId: String, skyId: String, kind: SoratomoReactionKind?)
+        async throws(SoratomoError) -> SoratomoReactionChange
+}
+
+/// リアクションの Functions の窓口（テストで差し替える。形は `SoratomoLeaveDataSource` の Callable と同じ）
+///
+/// 窓口は元のエラーのまま投げる。写すのは `SoratomoReactionService` の役目。
+protocol SoratomoReactionDataSource: Sendable {
+    /// Callable を呼んで、戻り値（デコード済みの JSON）を返す
+    /// - Parameters:
+    ///   - name: Callable の名前
+    ///   - payload: 送る値
+    ///   - timeout: 制限時間（秒）
+    func callCallable(_ name: String, payload: [String: Any], timeout: TimeInterval) async throws -> Any
+}

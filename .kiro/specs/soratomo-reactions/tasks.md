@@ -404,13 +404,26 @@
     - shasum の頭（コミットするもの）: `SoratomoRouter.swift` `3867a18052ac`・`SoratomoAnalytics.swift` `dc9478735960`・`SoratomoRouterTests.swift` `f87d93243eb3`・`SoratomoAnalyticsTests.swift` `a697294edaab`
     - 実行の環境: ビルド・テスト・`pgrep`・`simctl`・xcresultの読み取りは、7.1〜7.3と同じくサンドボックスの外で流した。DerivedDataはXcodeの設定のままで、`-derivedDataPath` は渡していない。負荷を見るフックが2回、流す前に止めた（1分平均48・スワップ8.0G、と、負荷123・スワップ8.1G）。どちらも押し切らず、1分平均が40を切るまで（2回目は、あわせて5分平均が80を切るまで）待ってから流した。種類の陽性対照の回は、テストが01:45に終わり、xcodebuildが抜けたのは01:55だった（gRPCの後始末の待ち。止めずに自分で抜けた）
 
-- [ ] 7.5 リアクションのサービス `SoratomoReactionService` を作る
+- [x] 7.5 リアクションのサービス `SoratomoReactionService` を作る
   - 前提: 1.2（要確認Q3の結果の契約）, 7.1
   - `SoratomoServiceContracts.swift` に、design.mdの形で `SoratomoReactionOutcome`・`SoratomoReactionChange`・`SoratomoReactionServiceProtocol`・`SoratomoReactionDataSource` を置く。既存の `SoratomoSkyServiceProtocol` にはメソッドを足さない
   - `Services/SoratomoReactionService.swift`（新規）: Callable `soratomoSetReaction`、制限時間は既存の `SoratomoGroupService.callTimeout`。送る値は `groupId`・`skyId`・`kind`（外すときは1.2の結果の形）。失敗は `SoratomoGroupService.mapCallableError` で写す（`not_member`→`.notMember`・`sky_not_found`→`.skyGone`・`suspended`→`.suspended`・通信と制限時間切れ→`.network`。`self_reaction`・`invalid_reaction`・`invalid_input` は種類を作らず `.unknown`）。戻り値の形が違うときは失敗にせず、`SoratomoError.record`（固定の文脈）に残し、`outcome: .unchanged` と送った `kind` で返す
   - テスト用のモックは、`SoratomoServiceMocks.swift` に新しいクラスとして足す。`SoratomoReactionServiceTests`（新規・DataSourceのモック）: 送る値（名前・外す形）・応答の読み方・失敗の写し方（`not_member`・`sky_not_found`・`suspended`・`self_reaction`・通信）・形の違い
   - 陽性対照: 外すときの形を1.2の結果と違う形にした写しで送る値のテストが、`sky_not_found` を `.unknown` に写す写しで写し方のテストが、それぞれ赤になることを先に確かめる
   - _Requirements: 1.3, 1.4, 1.5, 4.15, 10.4, 10.7_
+  - 結果（2026-10-21 02:14）: 7.4と同じ作業ツリー（`HEAD` `381f1e4c`）で、アプリ2ファイル・テスト2ファイルを書いた。コードとテストは7.4と並行で、サブエージェントが7.4と同じ約束で書き、メインが現物を読んで確かめた。緑は7.4と同じ1回の `test` で流し、7.4をコミット（`31276f3`）した後に陽性対照を流した
+    - `SoratomoServiceContracts.swift`（末尾）: `SoratomoReactionOutcome`（`added`・`replaced`・`removed`・`unchanged`）・`SoratomoReactionChange`（`outcome` と書いた後の `kind`）・`SoratomoReactionServiceProtocol`（`setReaction(groupId:skyId:kind:) async throws(SoratomoError)`）・`SoratomoReactionDataSource`（`callCallable(_:payload:timeout:)`）を置いた。`SoratomoSkyServiceProtocol` にはメソッドを足していない
+    - `Services/SoratomoReactionService.swift`（新規）: Callable `soratomoSetReaction`・制限時間は `SoratomoGroupService.callTimeout`（20秒）・region は `SoratomoGroupService.region`。送る値は `groupId`・`skyId`・`kind` の3つで、外すときは `kind` の鍵を残して値を `NSNull()` にする（1.2の結果の形）。失敗は `SoratomoGroupService.mapCallableError` で写して投げる。戻り値の形が違うときは投げず、`SoratomoError.record`（文脈 `soratomo.setReaction.response`・IDを持たない固定のエラー）に残し、`outcome: .unchanged` と送った `kind` で返す
+    - `SoratomoServiceMocks.swift`（末尾）: `MockSoratomoReactionService`（返す結果・呼ばれる前に流す処理・呼ばれた引数）を新しいクラスとして足した
+    - `SoratomoReactionServiceTests`（新規・14本）: 窓口の偽物（`FakeReactionDataSource`）で、送る値（Callableの名前と20秒・付けるときの3つの値・7種類の名前・外すときの鍵と `NSNull`）・応答の読み方（`added`・`replaced`・`unchanged` と名前、`removed` と `unchanged` と null）・失敗の写し方（`not_member`→`.notMember`・`sky_not_found`→`.skyGone`・`suspended`→`.suspended`、`self_reaction`・`invalid_reaction`・`invalid_input`→`.unknown`、`unavailable`・`deadlineExceeded`・`NSURLErrorNotConnectedToInternet`・`NSURLErrorTimedOut`→`.network`、失敗では結果を返さない）・形の違い（8通りで `.unchanged` と送った `kind`・外すときは `nil`）・応答を読む純関数を見る。期待値は実装から組み立てず、文字列と値を直に書いた
+    - 緑: 7.4の結果の「緑」の1回（iPhone 17e `885A74C7`・90本・90合格）のうち、`SoratomoReactionServiceTests` は14本・14合格・0失敗。4ファイルがすべてコンパイルされ、その警告・エラーは0行（数え方は7.4の結果と同じ）
+    - 陽性対照（送る値）: 作業ツリーの本物の `payload` を Edit で、`kind` が nil のとき鍵を省く形に変え、`-only-testing:SoramoyouTests/SoratomoReactionServiceTests` を流した。14本のうち赤は `testSendsNullKindWithKeyWhenRemoving` の1本だけ（assert 3つ。鍵が無い・値が `NSNull` でない・項目が2つ）。ほかの13本は緑。逆の Edit で戻し、shasum が控え（頭 `37ed94538732`）と一致した
+    - 陽性対照（写し方）: 本物の `setReaction` の catch で、写した `.skyGone` を `.unknown` に置き換える1行を Edit で足し、同じく流した。14本のうち赤は `testMapsDomainFailures` の1本だけ（assert 1つ。`sky_not_found` が `.skyGone` でなく `.unknown`）。ほかの13本は緑。逆の Edit で戻し、shasum が控えと一致した。共用の `mapCallableError` は壊していない（ほかのサービスのテストに響かないように）
+    - design.mdに書いていなかったことを、次のとおり決めた（どれも後で変えられる）。（1）失敗の記録は、design 798行と手本の `SoratomoGuidelineService` に合わせ、写した結果が `.unknown` か `.permissionDenied` のときだけ、元のエラーを文脈 `soratomo.setReaction` で `SoratomoError.record` に残す。（2）形の違いの記録には、IDも中身も持たない非公開の `SoratomoReactionFailure.malformedResponse` を使う（要件14.1）。（3）送る値と応答の読み方は、テストで直に見られるように `static` の純関数 `payload(groupId:skyId:kind:)`・`change(from:)` にした。（4）本物の窓口 `SoratomoReactionFirebaseDataSource` は状態を持たず、呼ばれるたびに `Functions` を引く（単体テストで作っても Firebase に触れない）。（5）応答の `kind` の鍵が無いときは、形の違いとして扱う（null は `NSNull` として鍵ごと残るため、区別できる）
+    - 確かめていないこと: `SoratomoError.record` が呼ばれること・呼ばれないことは、テストで見ていない（記録の差し替え口が無いため）。配備した関数やエミュレーターへ実際に送るのは、13.1の通しで見る
+    - 7.6への持ち越し: このサービスが `.unknown` を元のエラーで記録するので、7.6のdesign（「`.unknown` なら `SoratomoError.record`」）のままViewModelでも記録すると二重になる。7.6の着手の前に利用者に相談する
+    - shasum の頭（コミットするもの）: `SoratomoServiceContracts.swift` `cdf8895c7f26`・`SoratomoReactionService.swift` `37ed94538732`・`SoratomoServiceMocks.swift` `5d5bc50b8d83`・`SoratomoReactionServiceTests.swift` `31a668026264`
+    - 実行の環境: 7.4の結果と同じ。負荷を見るフックが、2回の陽性対照の前にそれぞれ止めた（負荷80・メモリ逼迫・スワップ8.9G・ほかのセッションのシミュレーター331%、と、負荷193・スワップ8.9G・Spotlight 161%）。どちらも押し切らず、1分平均が40を切り、5分平均が80を切るまで待ってから流した。起動中のiOSのシミュレーターは0台で、331%はこのセッションの端末ではなかった
 
 - [ ] 7.6 リアクションの操作の状態 `SoratomoReactionViewModel` を作る
   - 前提: 7.4, 7.5
