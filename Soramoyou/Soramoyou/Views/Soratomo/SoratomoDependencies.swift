@@ -108,6 +108,8 @@ final class SoratomoDependencies {
     let leaveService: any SoratomoLeaveServiceProtocol
     /// ⭐️ この端末で抜けたグループの記録（leave-group 7.4）。サインアウトでは消さない（同じ人が入り直したときも隠す）
     let leftGroups: SoratomoLeftGroups
+    /// ⭐️ リアクションを付ける・外す（soratomo-reactions 8.2）
+    let reactionService: any SoratomoReactionServiceProtocol
     /// いまログインしている利用者の uid（未ログインなら nil）
     let currentUid: () -> String?
 
@@ -118,6 +120,12 @@ final class SoratomoDependencies {
     ///   ⚠️ タイムラインの `onDisappear` で消さない（投稿詳細を上に積んだときにも呼ばれるため）
     /// - 投稿詳細は、グループ ID が一致するときだけ使う（別のグループの ViewModel を使わないため）
     weak var activeTimelineViewModel: SoratomoTimelineViewModel?
+
+    /// いま開いているタイムラインのリアクションの ViewModel（soratomo-reactions 8.2）
+    ///
+    /// 投稿詳細（8.3）が、タイムラインと同じ上書き（送っている間・確定から 10 秒）と操作の経路を使うため。
+    /// 入れ方・弱参照・グループ ID が一致するときだけ使うことは、`activeTimelineViewModel` と同じ
+    weak var activeReactionViewModel: SoratomoReactionViewModel?
 
     /// - Parameters: 各サービス。テストや Preview では、モックを渡す
     ///   （`skyLookup`・`blockedAuthors`・`reportedSkies` に既定値を付けないのは、既定の引数がメインアクターの外で
@@ -137,6 +145,7 @@ final class SoratomoDependencies {
         reportedSkies: SoratomoReportedSkies,
         leaveService: any SoratomoLeaveServiceProtocol,
         leftGroups: SoratomoLeftGroups,
+        reactionService: any SoratomoReactionServiceProtocol,
         currentUid: @escaping () -> String?
     ) {
         self.groupService = groupService
@@ -153,6 +162,7 @@ final class SoratomoDependencies {
         self.reportedSkies = reportedSkies
         self.leaveService = leaveService
         self.leftGroups = leftGroups
+        self.reactionService = reactionService
         self.currentUid = currentUid
     }
 
@@ -196,6 +206,7 @@ final class SoratomoDependencies {
         reportedSkies: SoratomoReportedSkies(),
         leaveService: SoratomoLeaveService(),
         leftGroups: SoratomoLeftGroups(),
+        reactionService: SoratomoReactionService(),
         currentUid: { Auth.auth().currentUser?.uid }
     )
 }

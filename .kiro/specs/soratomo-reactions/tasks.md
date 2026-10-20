@@ -482,7 +482,7 @@
     - shasum の頭（コミットするもの）: `SoratomoReactionViews.swift` `de28ac27e108`
     - 実行の環境: ビルド・テスト・`pgrep`・`simctl` はサンドボックスの外で流した。DerivedDataはXcodeの設定のままで、`-derivedDataPath` は渡していない。負荷を見るフックは1回も止めなかった（流す前の1分平均は3.4〜3.7）
 
-- [ ] 8.2 容れ物とタイムラインに、リアクションのViewModelと操作を配線する
+- [x] 8.2 容れ物とタイムラインに、リアクションのViewModelと操作を配線する
   - 前提: 7.2, 8.1
   - `SoratomoDependencies`: `reactionService` を足し、`live` で本物を入れる。`weak var activeReactionViewModel` を足す。`init` の引数が増えるので、組み立てている箇所を `grep -rn "SoratomoDependencies(" Soramoyou` で探して全部直す（`SoratomoDependenciesTests` とPreviewを含む）
   - `SoratomoTimelineView`: ViewModelの組（`makeViewModels`）に `SoratomoReactionViewModel` を足して3つにする（`onSkyGone` は `[weak timeline] in timeline?.removeGoneSky($0)`）。`@StateObject` で持ち、`.task` で `dependencies.activeReactionViewModel` に入れる
@@ -491,6 +491,17 @@
   - 失敗の知らせ（`reactionViewModel.notice`）は、タイムラインが一番上のときだけ出す（既存の `isShowingModerationNotice` と同じ型）
   - ビルドが通り、`SoratomoDependenciesTests` と `SoratomoTimelineViewModelTests` が通る
   - _Requirements: 1.1, 1.6, 1.7, 1.8, 1.11, 8.8, 12.9, 12.10, 13.4_
+  - 結果（2026-10-21 08:35）: 8.1の作業ツリー（`HEAD` `34965367`）で、アプリ2ファイル・テスト1ファイルを Edit で直した（サブエージェントは使っていない）。着手前に `git fetch` し、`HEAD..origin/main` は空だった
+    - `SoratomoDependencies`: `reactionService: any SoratomoReactionServiceProtocol`（`leftGroups` の後・`currentUid` の前）と `weak var activeReactionViewModel` を足し、`live` に `SoratomoReactionService()` を入れた。組み立ては `grep -rn "SoratomoDependencies(" Soramoyou` で `live` と `SoratomoDependenciesTests.swift:55` の2か所だけ（design.mdが言うPreviewの組み立ては現物に無い）。テストは `MockSoratomoReactionService()` を1行足しただけで、新しいアサーションは足していない（design 1108の「組み立ての引数」のとおり）
+    - `SoratomoTimelineView`: ViewModelの組を3つにした（`ViewModelPair`→`ViewModelSet`・init の取り出しも3つ）。リアクションのViewModelは `onSkyGone: { [weak timeline] in timeline?.removeGoneSky($0) }`・`isOnline` はタイムラインと同じ・`blockedAuthors` と `currentUid` は容れ物から。`.task` で `activeTimelineViewModel` の次に `activeReactionViewModel` を入れる
+    - カード（`row(for:)`）: ラベルを `VStack`（行と、数の行）にした。数の行は「自分以外の投稿」か「1件以上」のときだけ置き、自分以外の投稿では右端に44pt四方の空き（`Color.clear`・VoiceOverから隠す）を置いて、数が0件でもボタンの幅と高さを空ける。数の表示（`FlowLayout`）と `Spacer` を並べると幅を半分ずつ分けて早く折り返すので、0件のときだけ `Spacer` にした。修飾子の順は `.buttonStyle(.plain)`→`.soratomoCard()`→`.accessibilityHint`（変えない）→`.contextMenu`（中身は変えない）→`.overlay(alignment: .bottomTrailing)`（`canReact` のときだけメニュー・右と下に14ptの内寄せで空きに重ねる・`onChoose` は `Task` の中で `choose(…, source: .timeline)`）→`.accessibilityElement(children: .contain)`→`.onAppear`（続き読み・変えない）
+    - 失敗の知らせ: `isShowingReactionNotice` を `isShowingModerationNotice` と同じ形（`router.path.last == .timeline(groupId:)` だけ）で足した。1回目に既存の修飾子の列の中へ `.alert` を足したら、2回目のビルドで `body` が「型の推論が時間内に終わらない」で落ちた。既存の列は動かさずに `private var timelineBody` へ入れ、リアクションの知らせだけ `body` の側で外から付けた
+    - 整形のフック: `SoratomoDependencies` で、引数と代入を別々の Edit で足したら、引数が `reactionService _:` に、代入が `self.` の消えた自己代入にされた（メモの10/4と同じ型）。触られたのは足した2行だけで、2行をまたぐ1回の Edit で直し、`git diff -U0` で足した5か所だけが差分であることを確かめた。タイムラインとテストのファイルに巻き込みは無い
+    - 緑: iPhone 17e `885A74C7` で、`-only-testing` に `SoratomoDependenciesTests`・`SoratomoTimelineViewModelTests`・一時の見た目のテストを並べて流した（`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`・`-test-timeouts-enabled YES`）。xcresultで `SoratomoDependenciesTests` 6本・6合格、`SoratomoTimelineViewModelTests` 47本・47合格（`removeGoneSky` のテストは7.2のもの）、一時のテスト1本・1合格。変えた3ファイルは3回のどれかでコンパイルされ（1回目に容れ物、2回目にテスト、3回目にタイムライン）、その警告・エラーは0行。同じ数え方で、ほかのファイルの既存の警告（`GeneratedAssetSymbols.swift:79`・`PaymentService.swift:47`）は拾えた。1回目は一時のテストの `store` が async 版に決まって `try await` が無く、テストのターゲットのコンパイルで落ちた（本物は関係ない）
+    - 見た目（利用者が「私がPNGに焼いて見せて」を選んだ）: 一時のテスト（`SoramoyouTests/SoratomoTimelineReactionSnapshotScratch.swift`・コミットしていない・見せた後に消した）で、モックの監視に投稿を流した本物の `SoratomoTimelineView` を、`885A74C7` の中で窓ごとPNGに焼いた。サムネイルは先にメモリの覚えへ入れ、本番の Storage には問い合わせていない。3枚（他人の投稿3件・自分の投稿まじり・文字を大きくした設定）をメインが先に見てから利用者に送った。0件の他人の投稿＝右下に `face.smiling` があり、2行のキャプションに重ならず、角丸からはみ出ない。自分の印あり＝🌅2だけ枠と太字で、ボタンは🌅。7種類＝2行に折り返しても右下の空きに入らない（大きい文字でも同じ）。自分の投稿＝メニューは出ず、0件は今までと同じ高さ。0件の他人の投稿は44ptの行の分だけ下が空いて見えるが、利用者が「このままでいい」を選んだ
+    - 確かめていないこと: リストの行の中でメニューが1回目のタップで開くか・カードのボタンのタップに巻き込まれないか・メニューの上の長押しで長押しのメニューが出ないか・VoiceOverでカードとメニューが別の要素になるか（9.2の要確認Q2の前半と13.1・14.3）。メニューを開いた中身は画像に焼けないので見ていない。失敗の知らせが実際に出ることも画面では見ていない（8.3の詳細と13.1）
+    - shasum の頭（コミットするもの）: `SoratomoDependencies.swift` `328be57e23ea`・`SoratomoTimelineView.swift` `fb8d6ffd980a`・`SoratomoDependenciesTests.swift` `0e169614f2fb`
+    - 実行の環境: ビルド・テスト・`pgrep`・`simctl`・xcresultの読み取りは、サンドボックスの外で流した。DerivedDataはXcodeの設定のままで、`-derivedDataPath` は渡していない。流す前の1分平均は4.7で、負荷を見るフックは1回も止めなかった
 
 - [ ] 8.3 投稿詳細に、リアクションの欄と押した人の一覧の入口を置く
   - 前提: 8.2

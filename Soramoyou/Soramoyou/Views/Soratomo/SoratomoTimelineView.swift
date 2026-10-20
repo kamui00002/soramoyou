@@ -14,6 +14,8 @@
 //    （release-gate 10.2・要件 5.1〜5.3・9.1・9.2・9.10）
 //  - 右上のメニューから、このグループだけを抜ける。確認・処理中の覆いを出し、抜けた後の後片づけをつなぐ
 //    （leave-group 8.5・要件 1.1〜1.3・1.6・1.9・5.1・5.4・5.5）
+//  - カードの中にリアクションの数を出し、自分以外の投稿のカードの右下にリアクションのメニューを重ねる
+//    （soratomo-reactions 8.2・要件 1.1・1.6〜1.8・8.8・13.4）
 //  ⚠️ init のシグネチャは変えない（呼び出し側の SoratomoRootView が使う）
 //
 
@@ -40,6 +42,8 @@ struct SoratomoTimelineView: View {
     @StateObject private var viewModel: SoratomoTimelineViewModel
     /// グループを抜ける画面の状態（タイムラインの ViewModel と、互いを弱参照でつないだ 1 組で作る・leave-group 8.5）
     @StateObject private var leaveViewModel: SoratomoLeaveViewModel
+    /// リアクションの操作の状態（タイムラインと同じ組で作る。投稿詳細も `activeReactionViewModel` で借りる・soratomo-reactions 8.2）
+    @StateObject private var reactionViewModel: SoratomoReactionViewModel
     /// 投稿者の表示名とアイコン（容れ物越しには変化が伝わらないので、別に持つ）
     @ObservedObject private var profileStore: SoratomoProfileStore
     /// 通信の有無（オフラインの表示に使う）
@@ -73,40 +77,49 @@ struct SoratomoTimelineView: View {
         _profileStore = ObservedObject(wrappedValue: dependencies.profileStore)
         _network = ObservedObject(wrappedValue: dependencies.network)
 
-        // タイムラインと抜けるの ViewModel は、互いを弱参照でつないだ 1 組として作る（leave-group 8.5）。
+        // タイムライン・抜ける・リアクションの ViewModel は、互いを弱参照でつないだ 1 組として作る
+        // （leave-group 8.5・soratomo-reactions 8.2）。
         // `StateObject` の中身（オートクロージャ）は、画面が最初に置かれたときに 1 回だけ評価され、
-        // 作り直しの init では評価されない。2 つの `@StateObject` が同じ組を受け取れるように、組をこの init の
+        // 作り直しの init では評価されない。3 つの `@StateObject` が同じ組を受け取れるように、組をこの init の
         // ローカル変数に覚え、最初に取り出したときにだけ作る（別々に作ると、互いに別の相手とつながってしまう）
-        var pair: ViewModelPair?
-        func makePair() -> ViewModelPair {
-            if let pair {
-                return pair
+        var viewModels: ViewModelSet?
+        func makeViewModelSet() -> ViewModelSet {
+            if let viewModels {
+                return viewModels
             }
             let made = Self.makeViewModels(groupId: groupId, router: router, dependencies: dependencies)
-            pair = made
+            viewModels = made
             return made
         }
-        _viewModel = StateObject(wrappedValue: makePair().timeline)
-        _leaveViewModel = StateObject(wrappedValue: makePair().leave)
+        _viewModel = StateObject(wrappedValue: makeViewModelSet().timeline)
+        _leaveViewModel = StateObject(wrappedValue: makeViewModelSet().leave)
+        _reactionViewModel = StateObject(wrappedValue: makeViewModelSet().reaction)
     }
 
     // MARK: - ViewModel の組
 
-    /// タイムラインと抜けるの ViewModel の組
-    private typealias ViewModelPair = (timeline: SoratomoTimelineViewModel, leave: SoratomoLeaveViewModel)
+    /// タイムライン・抜ける・リアクションの ViewModel の組
+    private typealias ViewModelSet = (
+        timeline: SoratomoTimelineViewModel,
+        leave: SoratomoLeaveViewModel,
+        reaction: SoratomoReactionViewModel
+    )
 
-    /// タイムラインと抜けるの ViewModel を、互いを弱参照でつないだ 1 組として作る（leave-group 8.5）
+    /// タイムライン・抜ける・リアクションの ViewModel を、互いを弱参照でつないだ 1 組として作る
+    /// （leave-group 8.5・soratomo-reactions 8.2）
     ///
     /// - タイムラインの「読めなかった」の知らせは、先に抜けるの ViewModel に渡す（`absorbLostMembership`）。
     ///   未確定の抜けるが実は済んでいたと分かったら、そちらが「抜けた後」へ進めるので、ルーターへは知らせない（D1）
     /// - 抜けるの ViewModel は、タイムラインが監視しているグループを読み、監視を止める・張り直す（8.2）
-    /// - どちらの向きも弱参照にして、輪を作らない（それぞれを強く持つのは、自分の `@StateObject` だけ）
+    /// - リアクションの ViewModel は、送った先の投稿がもう無いと分かったら、タイムラインから取り除く
+    ///   （`removeGoneSky`・soratomo-reactions 要件 8.8）
+    /// - どの向きも弱参照にして、輪を作らない（それぞれを強く持つのは、自分の `@StateObject` だけ）
     /// - ViewModel には容れ物を渡さず、中身（protocol とクロージャ）を取り出して渡す
     private static func makeViewModels(
         groupId: String,
         router: SoratomoRouter,
         dependencies: SoratomoDependencies
-    ) -> ViewModelPair {
+    ) -> ViewModelSet {
         let network = dependencies.network
         let skyLookup = dependencies.skyLookup
         let profileStore = dependencies.profileStore
@@ -168,12 +181,36 @@ struct SoratomoTimelineView: View {
             }
         )
         weakLeave = leave
-        return (timeline: timeline, leave: leave)
+
+        // リアクションの操作。ブロックした投稿者は、すべてのグループと投稿詳細が読む同じ集合を渡す（要件 5.1〜5.3）
+        let reaction = SoratomoReactionViewModel(
+            groupId: groupId,
+            reactionService: dependencies.reactionService,
+            blockedAuthors: dependencies.blockedAuthors,
+            currentUid: dependencies.currentUid,
+            isOnline: { network.isOnline },
+            onSkyGone: { [weak timeline] in timeline?.removeGoneSky($0) }
+        )
+        return (timeline: timeline, leave: leave, reaction: reaction)
     }
 
     // MARK: - Body
 
     var body: some View {
+        // ⚠️ 修飾子を 1 つの式に並べすぎると「型の推論が時間内に終わらない」でビルドが落ちる
+        //    （soratomo-reactions 8.2 でリアクションの知らせを足したら越えた）。リアクションの知らせは本体の式の外で付ける
+        timelineBody
+            // リアクションの失敗の知らせ（soratomo-reactions 要件 10.1〜10.5）。文言は固定で、内部のエラーコードを出さない
+            .alert(
+                reactionViewModel.notice?.userMessage ?? "",
+                isPresented: isShowingReactionNotice
+            ) {
+                Button("OK", role: .cancel) {}
+            }
+    }
+
+    /// 本体（中身・覆い・ツールバー・シート・確認と知らせ・監視の開始）
+    private var timelineBody: some View {
         content
             .safeAreaInset(edge: .top, spacing: 0) {
                 // オフラインの間は、読み込んだ投稿を出したまま、先頭にオフラインであることを出す（要件 12.1）
@@ -304,6 +341,8 @@ struct SoratomoTimelineView: View {
             .task {
                 // 投稿詳細が同じ ViewModel で削除できるように、いま開いているタイムラインとして知らせる
                 dependencies.activeTimelineViewModel = viewModel
+                // 投稿詳細が同じ上書きと操作の経路でリアクションできるように、同じく知らせる（soratomo-reactions 8.2）
+                dependencies.activeReactionViewModel = reactionViewModel
                 await viewModel.start()
             }
             // 投稿者の表示名とアイコンを、まだ持っていない分だけ取りに行く
@@ -388,16 +427,31 @@ struct SoratomoTimelineView: View {
     }
 
     /// 投稿 1 件のカード（選ぶと投稿詳細へ進む）
+    ///
+    /// リアクション（soratomo-reactions 8.2）:
+    /// - 数の表示はカードのボタンのラベルの中に置く（押すと詳細へ進み、VoiceOver ではカードの読み上げに数が入る・1.8・13.2）
+    /// - メニューはラベルの外の `overlay` に、自分以外の投稿にだけ重ねる（押しても詳細へ進まない・1.6・1.7）。
+    ///   長押しのメニューは `overlay` より先に付けるので、メニューのボタンの上の長押しでは出ない（中身は変えない・12.10）
+    /// - `.accessibilityElement(children: .contain)` で、カードのボタンとメニューを VoiceOver の別の要素にする（13.4）
     private func row(for sky: SoratomoSky) -> some View {
-        Button {
+        // 数と一覧は、タイムラインの監視の値に、自分の分の上書きを重ねてブロックした人の分を除いたもの
+        let summary = reactionViewModel.summary(for: sky, server: sky.reactions)
+        let showsReactionMenu = reactionViewModel.canReact(to: sky)
+        return Button {
             router.path.append(.skyDetail(groupId: sky.groupId, skyId: sky.id))
         } label: {
-            SoratomoTimelineRow(
-                sky: sky,
-                authorName: profileStore.displayName(for: sky.authorId),
-                authorPhotoURL: profileStore.photoURL(for: sky.authorId),
-                isDeleting: viewModel.deletingSkyIds.contains(sky.id)
-            )
+            VStack(alignment: .leading, spacing: 8) {
+                SoratomoTimelineRow(
+                    sky: sky,
+                    authorName: profileStore.displayName(for: sky.authorId),
+                    authorPhotoURL: profileStore.photoURL(for: sky.authorId),
+                    isDeleting: viewModel.deletingSkyIds.contains(sky.id)
+                )
+                // 自分の投稿で 0 件なら、行ごと出さない（今までのカードと同じ高さのまま）
+                if showsReactionMenu || summary.total > 0 {
+                    reactionLine(summary: summary, reservesMenuSpace: showsReactionMenu)
+                }
+            }
             // 行そのものが上下に 4pt の余白を持つので、上下は 10pt にして 14pt にそろえる
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -437,12 +491,57 @@ struct SoratomoTimelineView: View {
                 .disabled(viewModel.blockingAuthorIds.contains(sky.authorId))
             }
         }
+        // リアクションのメニュー（ラベルの外・長押しのメニューより後に付ける・1.7・12.10）
+        .overlay(alignment: .bottomTrailing) {
+            if showsReactionMenu {
+                SoratomoReactionMenuButton(
+                    summary: summary,
+                    isSending: reactionViewModel.isSending(sky),
+                    onChoose: { kind in
+                        Task { await reactionViewModel.choose(kind, for: sky, server: sky.reactions, source: .timeline) }
+                    }
+                )
+                // カードの余白の内側（数の行で空けた場所）に重ねる。カードの角丸からはみ出さないため。
+                // 下は、カードの余白 10pt と数の行の下の 4pt を足した 14pt
+                .padding(.trailing, 14)
+                .padding(.bottom, 14)
+            }
+        }
+        .accessibilityElement(children: .contain)
         .onAppear {
             // 末尾の投稿が出たら、続きを読む（要件 8.3）
             if sky.id == viewModel.skies.last?.id {
                 viewModel.loadMoreIfNeeded()
             }
         }
+    }
+
+    /// カードの中のリアクションの行（数の表示と、メニューのボタンを重ねる場所・soratomo-reactions 8.2）
+    ///
+    /// 数の表示（`FlowLayout`）はもらった幅を全部使うので、自分以外の投稿では、右下に重ねるメニューのボタン
+    /// （44pt 四方）の分の幅と高さを、ここで空けておく。数が 0 件でも空ける（空けないと、ボタンがキャプションに重なる）
+    /// - Parameters:
+    ///   - summary: 画面に出す数と一覧
+    ///   - reservesMenuSpace: メニューのボタンの場所を空けるか（自分以外の投稿）
+    private func reactionLine(summary: SoratomoReactionSummary, reservesMenuSpace: Bool) -> some View {
+        HStack(spacing: 8) {
+            // 0 件のときは数の表示が何も描かず場所も取らないので、代わりに空白を置いて、メニューの場所を右端に寄せる
+            // （⚠️ 数の表示と空白を並べない。どちらも幅を取りたがるので、数が半分の幅で折り返してしまう）
+            if summary.total > 0 {
+                SoratomoReactionSummaryView(summary: summary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Spacer(minLength: 0)
+            }
+            if reservesMenuSpace {
+                // ボタンそのものはラベルの外の overlay で重ねる（ラベルの中に置くと、押すと詳細へ進んでしまう・1.7）
+                Color.clear
+                    .frame(width: 44, height: 44)
+                    .accessibilityHidden(true)
+            }
+        }
+        // 行（SoratomoTimelineRow）と同じく下に 4pt を持たせ、カードの下の余白を 14pt にそろえる
+        .padding(.bottom, 4)
     }
 
     /// 上部のグループの頭文字のアイコン・グループ名・メンバー数（要件 8.13）
@@ -669,6 +768,21 @@ struct SoratomoTimelineView: View {
             set: { isPresented in
                 if !isPresented {
                     viewModel.moderationNotice = nil
+                }
+            }
+        )
+    }
+
+    /// リアクションの失敗の知らせを出しているか（閉じたら知らせを消す・soratomo-reactions 8.2）
+    ///
+    /// 通報とブロックの知らせと同じく、タイムラインが一番上に出ているときだけ出す。投稿詳細は同じ ViewModel を借り、
+    /// 開いている間は詳細が自分で知らせを出すので、下に隠れたタイムラインからは出さない（二重に出さないため・8.3）
+    private var isShowingReactionNotice: Binding<Bool> {
+        Binding(
+            get: { reactionViewModel.notice != nil && router.path.last == .timeline(groupId: groupId) },
+            set: { isPresented in
+                if !isPresented {
+                    reactionViewModel.notice = nil
                 }
             }
         )
