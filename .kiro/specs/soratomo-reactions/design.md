@@ -135,7 +135,7 @@
 | 10.3, 10.4 | 失敗で戻す・原因の文言 | SoratomoReactionViewModel・SoratomoReactionNotice | — | 付ける |
 | 10.5 | 利用停止の文言 | 既存の`SoratomoError.suspended` | — | — |
 | 10.6 | オフラインでも以前の数 | 既存のFirestoreのキャッシュ | — | — |
-| 10.7 | 想定外は記録 | `SoratomoError.record` | — | — |
+| 10.7 | 想定外は記録 | SoratomoReactionService（`setReaction`の失敗の写しで`.unknown`・`.permissionDenied`なら`SoratomoError.record`。ViewModelでは記録しない・利用者の決定・2026-10-21） | — | — |
 | 11.1, 11.2 | 古い版を壊さない | 埋め込み（F2・F3） | — | — |
 | 11.3, 11.4, 11.5 | 通知の種類を分ける | notifyReaction（`soratomoReaction`）・1.15.0の現物（F5） | Event Contract | — |
 | 11.6 | 1.15.0で通す | Migration | — | — |
@@ -862,7 +862,7 @@ enum SoratomoReactionNotice: Equatable {
   3. 通信が無ければ送らずに`notice = .failed(.network)`、`soratomo_reaction_failed`（`reason: offline`）を記録して終える（10.1・10.2）。
   4. 上書きを`.sending`で入れる（楽観的な表示）。`setReaction`を呼ぶ。
   5. 成功: 上書きを`.confirmed`にして、10秒後に同じ札のときだけ消す。`added`→`reaction_added`（`replaced: false`）、`replaced`→`reaction_added`（`replaced: true`）、`removed`→`reaction_removed`、`unchanged`→記録しない。
-  6. 失敗: 上書きをすぐ消す（10.3）。`notice = .failed(error)`。`.skyGone`なら`onSkyGone(sky)`（8.8）。`.unknown`なら`SoratomoError.record`（10.7）。`soratomo_reaction_failed`を記録する。
+  6. 失敗: 上書きをすぐ消す（10.3）。`notice = .failed(error)`。`.skyGone`なら`onSkyGone(sky)`（8.8）。想定外（`.unknown`）の記録はサービス（SoratomoReactionService）が済ませているので、ここでは`SoratomoError.record`を呼ばない（1回の失敗を2件にしない・10.7・利用者の決定・2026-10-21）。`soratomo_reaction_failed`を記録する。
 - `SoratomoBlockedAuthors`の`$ids`を購読し、変わったら`objectWillChange`を送る（5.2。ブロックの保存で、手動で更新しなくても数が変わる）。
 - 文言（`SoratomoReactionNotice.userMessage`）:
 
