@@ -1,0 +1,90 @@
+//
+//  PostImageSource.swift
+//  Soramoyou
+//
+//  投稿の画像を「URL で読むか・Storage のパスで読むか」を決める ⭐️（URL 側の C・C-1）
+//
+//  フォロワー限定・非公開の画像は、トークン付きの URL で読むと Storage のルールを通らない
+//  （URL を知っている人なら誰でも、フォローを外した後でも見られる）。
+//  そこで公開以外は、URL が残っていても Storage のパスで読む（毎回ルールが本人かフォロワーかを確かめる）。
+//
+
+import Foundation
+
+/// 投稿の画像の読み方
+enum PostImageSource: Equatable {
+    /// 公開の画像：今までどおり URL で読む
+    case remote(URL)
+    /// 公開以外の画像：Storage のパスで読む
+    case storage(String)
+    /// 読めない（灰色の枠を出す）
+    case unavailable
+
+    /// 画像の読み方を決める
+    ///
+    /// 1. 使うパスを決める（サムネイルは thumbnailStoragePath → サムネイルの URL から取り出したパス、
+    ///    手がかりが無ければ本体。本体は storagePath → URL から取り出したパス）
+    /// 2. パスの区分（3 つ目）がちょうど public で、URL が読める → URL で読む
+    /// 3. それ以外でパスがある → URL が残っていてもパスで読む（D-2 でトークンを消しても壊れないように）
+    /// 4. パスが無い → URL が読めれば URL（Storage の URL でないごく古いデータ）、読めなければ読めない
+    ///
+    /// 判定をパスの区分で行うのは、Storage のルールもパスの区分で読める人を決めているため（storage.rules）。
+    /// - Parameters:
+    ///   - image: 投稿の画像の情報
+    ///   - prefersThumbnail: サムネイルを読みたいか（一覧など）。false なら本体
+    /// - Returns: 読み方
+    static func resolve(_ image: ImageInfo, prefersThumbnail: Bool) -> PostImageSource {
+        // 本体のパスと URL
+        var path = nonEmpty(image.storagePath) ?? pathInDownloadURL(image.url)
+        var urlString: String? = image.url
+
+        // サムネイルが欲しく、その手がかり（パスか URL）があるときだけサムネイルに替える。
+        // 手がかりが何も無いときは本体に落とす（今の画面の「サムネイルが無ければ本体」と同じ）
+        if prefersThumbnail {
+            let thumbnailPath = nonEmpty(image.thumbnailStoragePath) ?? pathInDownloadURL(image.thumbnail)
+            if thumbnailPath != nil || readableURL(image.thumbnail) != nil {
+                path = thumbnailPath
+                urlString = image.thumbnail
+            }
+        }
+
+        if let path {
+            if isPublicPath(path), let url = readableURL(urlString) {
+                return .remote(url)
+            }
+            return .storage(path)
+        }
+        if let url = readableURL(urlString) {
+            return .remote(url)
+        }
+        return .unavailable
+    }
+
+    // MARK: - Private
+
+    /// パスの区分（`posts/{uid}/{区分}/…` の 3 つ目）がちょうど public か
+    ///
+    /// posts・thumbnails・originals とも 3 つ目が区分。大文字・似た名前は公開扱いにしない（安全な側に倒す）。
+    private static func isPublicPath(_ path: String) -> Bool {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        return parts.count >= 3 && parts[2] == "public"
+    }
+
+    /// Storage のダウンロード URL の文字列から、Storage のパスを取り出す（取り出せなければ nil）
+    private static func pathInDownloadURL(_ string: String?) -> String? {
+        guard let url = readableURL(string) else { return nil }
+        return nonEmpty(StorageService.storagePathFromDownloadURL(url))
+    }
+
+    /// 空でなく、URL として読める文字列だけを URL にする
+    private static func readableURL(_ string: String?) -> URL? {
+        guard let string, !string.isEmpty else { return nil }
+        return URL(string: string)
+    }
+
+    /// 空の文字列は「無い」と同じに扱う
+    private static func nonEmpty(_ string: String?) -> String? {
+        guard let string, !string.isEmpty else { return nil }
+        return string
+    }
+}
