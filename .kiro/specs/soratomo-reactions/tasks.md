@@ -331,7 +331,7 @@
     - shasum の頭（コミットするもの）: `SoratomoReactions.swift` `cf311d2c9eac`・`SoratomoModels.swift` `395998312ca0`・`SoratomoReactionsTests.swift` `02ff3763cc46`・`SoratomoReactionKindTests.swift` `54c76f78f3a6`
     - 実行の環境: サンドボックスの中では xcodebuild がパッケージを解決できず（`permissionDenied`。DerivedDataが外付けのSSD）、`pgrep` と `simctl` も動かないので、ビルド・テスト・`pgrep`・`simctl`・xcresultの読み取りはサンドボックスの外で流した。途中で1分平均が193と227に跳ね（ほかの `xcodebuild` は無かった）、40を切るまで待ってから流した。負荷の見張りのフックが「シミュレーターが2台動いている」と止めたが、2台は別の端末（iPhone 17 Pro `BF678DA1`・`DCFBF2D6`）で閉じず、1分平均が40以下（33）だったので `LOAD_OK=1` で流した
 
-- [ ] 7.2 投稿の変換と投稿1件の監視に、リアクションを載せる（陽性対照C7・C8・要確認Q6の反映）
+- [x] 7.2 投稿の変換と投稿1件の監視に、リアクションを載せる（陽性対照C7・C8・要確認Q6の反映）
   - 前提: 1.3, 7.1
   - `SoratomoSkyService.swift`: `Field` に `reactions` を足す（`reactorIds` はアプリでは読まない）。`decodeSky` の最後に `SoratomoReactions.decode(data[Field.reactions])` を入れる（壊れていても投稿を飛ばさない）。`resolveObservedSky` に `data` の引数を足し、`.present(SoratomoReactions.decode(...))` を返す。監視は1本のまま（同じ文書へ2本目のリスナーを張らない）
   - `SoratomoServiceContracts.swift` の `SoratomoSkyPresence` を `case present(SoratomoReactions)` にする。1.3（Q6）で数えた `.present` の一致（詳細の `case .success(.present)`・`SoratomoServiceMocks.swift`・既存のテスト）を、`.present(_)` か `.present(.empty)` に直す
@@ -340,6 +340,21 @@
   - 陽性対照（C8）: `decode` が壊れた値で投げる（`decodeSky` の変換を失敗させる）写しで、壊れたリアクションの投稿が `decodeSkies` で飛ばされ、「投稿を飛ばさない」が赤になることを先に確かめる
   - 陽性対照（C7）: `SoratomoSky` の `Equatable` をリアクションを比べない形にした写しで、リアクションだけを変えた結果で `skies` が変わらず、テストが赤になることを先に確かめる
   - _Requirements: 2.5, 2.7, 8.6, 9.13, 11.2_
+  - 結果（2026-10-21 00:21）: `HEAD` `c63fa2d1`（着手の前に `git fetch -q origin` をして、`HEAD..origin/main` が空であることを確かめた。取り込みなし）の作業ツリーで、アプリ3ファイル・テスト3ファイル・design.md を直した。テストは `-only-testing` の3クラスだけ・`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`・`-test-timeouts-enabled YES`。本物の緑は iPhone 17e `885A74C7`（下の「端末」）で流し、xcresult で99本・99合格・0失敗だった。内訳は `SoratomoSkyServiceTests` 36本・`SoratomoTimelineViewModelTests` 47本・`SoratomoServiceContractsTests` 16本で、このタスクで足したのは7本。この回で触った8ファイル（投稿詳細と `SoratomoModels.swift` を含む）がすべてコンパイルされ、その警告・エラーは0行（同じ数え方で、ほかのファイルの警告29行を拾えることも確かめた）
+    - `SoratomoServiceContracts.swift`: `SoratomoSkyPresence` を `case present(SoratomoReactions)` にした
+    - `SoratomoSkyService.swift`: `Field` に `reactions` を足した（`reactorIds` は置かない）。`decodeSky` は最後に `SoratomoReactions.decode(data[Field.reactions], path: path)` を入れる（投げないので、壊れていても投稿を飛ばさない）。`resolveObservedSky` に `data:` を足し、`.present(SoratomoReactions.decode(data?[Field.reactions], path: path))` を返す。`observeSky` は、同じ1本の監視の中で `snapshot?.data(with: .estimate)` と `snapshot?.reference.path` を渡す（2本目のリスナーは張らない）
+    - `SoratomoTimelineViewModel.swift`: `removeGoneSky(_:)` を足した（中身は既存の非公開の `removeFromTimeline` を呼ぶだけ・ほかは変えない）
+    - テスト: `SoratomoSkyServiceTests` に5本を足した。`decodeSky` がリアクションを読む・項目が無ければ空・`resolveObservedSky` がリアクションを運ぶ（キャッシュの結果でも）・壊れていても `.present(.empty)` の4本と、C8の1本である。C8の1本は、壊れたリアクション（地図でない文字列と数・1人分が地図でない・知らない名前）の投稿を `decodeSkies` が飛ばさず、変換の失敗にも数えないことを見る。`SoratomoTimelineViewModelTests` には2本を足した。リアクションだけが変わった結果で `skies` と覚えが作り直される（外して空に戻ったときも・C7）1本と、`removeGoneSky` の1本である。後者は、投稿が消えて画像と記録に触れず、遅れた古い結果にも出ないことを見る。C7のテストは投稿の配列どうしでなく `reactions` を比べる（`SoratomoSky` の比較が壊れたとき、壊れた比較で緑に化けないため）
+    - design.md: 型の節の `SoratomoReactions.decode` に、既定値つきの `path:` を書き足した（7.1の結果の（1）。利用者の決定 2026-10-20）
+    - 要確認Q6の反映（1.3の一覧のとおり）: `.present` の5か所のうち4か所を直した。アプリの値1か所は `SoratomoSkyService.swift` の `resolveObservedSky` である。テストの値3か所（`SoratomoServiceContractsTests.swift` の2か所と `SoratomoSkyServiceTests.swift` の1か所）は `.present(.empty)` にした。モックは0か所のまま。`resolveObservedSky` の呼び出し8か所（アプリ1・テスト7）に `data:` を渡した。投稿詳細の `case .success(.present), .failure:`（`SoratomoSkyDetailView.swift:145`）は直していない（下の「整形のフック」）。Swiftは関連値のある case を値を書かずに当てられるので、そのままで値つきの `.present` に当たる。投稿詳細を元のままにした回でビルドが通ったことで確かめた。値を受け取る形（`.present(let reactions)`）にするのは8.3
+    - design.mdに書いていなかったことを、次のとおり決めた（どれも後で変えられる）。（1）`decodeSky` に既定値つきの `path: String? = nil` を足し、`decodeSkies` が文書のパスを渡す（壊れたリアクションのコンソールの行で文書を特定するため。既存の呼び出しはそのまま通る）。（2）`resolveObservedSky` には `data:`（既定値なし。呼び出し8か所に渡した）と、既定値つきの `path:` を足した。（3）`observeSky` は、タイムラインと同じく `.estimate` で読む。（4）壊れたリアクションは、投稿の変換の失敗（`DecodeFailure`・`soratomo_sky_decode_failed`）として数えない。残るのは `decode` のコンソールの1行（パスと項目名だけ）
+    - 陽性対照（C8）: 作業ツリーの本物の `decodeSky` を Edit で壊し（`reactions` があって地図でなければ `invalidField("reactions")` を投げる＝`decode` が壊れた値で投げる形）、iPhone 17e `C2E3F752` で流した。99本のうち赤は `testDecodeSkiesKeepsSkiesWhoseReactionsAreBroken` の1本だけ（assert 3つ。投稿が4件でなく1件になる・変換の失敗が3件残る・リアクションの並びが合わない）。ほかの98本は緑。逆の Edit で戻し、shasum が控え（頭 `f85ca72d396f`）と一致した
+    - 陽性対照（C7）: `SoratomoSky` に、リアクションを比べない `==` を Edit で足した。iPhone 17e `885A74C7` で流し、99本のうち赤は `testReactionOnlyChangeUpdatesSkies` の1本だけだった（assert 4つ。リアクションが変わらない・覚え直しが2回目と3回目に起きない）。ほかの98本は緑。逆の Edit で戻し、shasum が控え（頭 `395998312ca0`＝7.1のコミットのまま）と一致した
+    - 端末: C7の1回目は `C2E3F752` に `com.apple.instruments.deviceservice.lockdown` が120秒つながらず、テストの実行役が接続の前に止まった（943秒・0本。赤として数えない）。2回目は `Unable to find a device matching the provided destination specifier` で始まらなかった。`simctl list` から `C2E3F752` が消えていて、共用の `AC2D43EF` と、7.1で見たほかのセッションの `BF678DA1` も無かった。このセッションは端末を消していない。だれがなぜ消したかは確かめていない。利用者の決定で iPhone 17e（iOS 27.0）を新しく作り、`iPhone 17e soratomo`（`885A74C7-404F-46B8-8882-68A2C9D7F92F`）とした。C7の3回目と本物の緑はこの端末で流した。7.3以降もこの端末を使う
+    - 整形のフック（1）: `decodeSky` の引数と、それを使う行を別々の Edit で足したところ、間のフックが引数を `path _:` に変えた。使う行を足した後に、同じ行を Edit で `path:` に戻した（関係ない行の巻き込みはない）
+    - 整形のフック（2）: 投稿詳細の145行目だけを Edit したところ、フックが関係ない159行目まで書き換えた。`withActionMenu` の引数の書き方が、型の名前 `<Content: View>` から `some View` に変わった。そこで止めて利用者に知らせ、利用者が `git restore` で戻した。7.2では投稿詳細を触らない（利用者の決定）。8.3で投稿詳細を直す前に、同じ相談をする
+    - shasum の頭（コミットするもの）: `SoratomoServiceContracts.swift` `f9b3ef204dd6`・`SoratomoSkyService.swift` `f85ca72d396f`・`SoratomoTimelineViewModel.swift` `7d0b7c01f158`・`SoratomoServiceContractsTests.swift` `e65f092a355b`・`SoratomoSkyServiceTests.swift` `41a181a7b419`・`SoratomoTimelineViewModelTests.swift` `2c767938212c`
+    - 実行の環境: ビルド・テスト・`pgrep`・`simctl`・xcresultの読み取りは、7.1と同じくサンドボックスの外で流した。途中で1分平均が74.89に、5分平均が407に跳ねた（ほかの `xcodebuild` は無かった）。そこで1分平均が40を切るまで（2回目は、あわせて5分平均が80を切るまで）待ってから流した
 
 - [ ] 7.3 リアクションの通知のタップのテストを先に書き、今の現物（1.15.0と同じルーター）で赤を確かめる（陽性対照C6）
   - 前提: 1

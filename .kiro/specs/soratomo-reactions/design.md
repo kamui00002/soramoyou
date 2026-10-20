@@ -684,7 +684,8 @@ struct SoratomoReactions: Equatable, Sendable {
     /// Firestore の `reactions` の値から作る。投げない
     /// - 無い・地図でない → 空（地図でないときはパスと項目名だけをコンソールに出す）
     /// - 値が地図でない・`kind` が知らない名前 → その 1 人分だけ飛ばす（新しい版で種類が増えても落ちない）
-    static func decode(_ raw: Any?) -> SoratomoReactions
+    /// - `path`: 文書のパス（地図でないときのログに出す。既定値つきなので 1 引数でも呼べる・2026-10-20 に 7.1 の結果から書き足した）
+    static func decode(_ raw: Any?, path: String? = nil) -> SoratomoReactions
 }
 
 /// 自分の分の一時の上書き（送っている間と、確定してから 10 秒）

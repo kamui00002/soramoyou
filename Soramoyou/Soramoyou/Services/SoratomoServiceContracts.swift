@@ -171,8 +171,10 @@ struct SoratomoTimelineSnapshot: Equatable, Sendable {
 
 /// 投稿 1 件の監視の結果（release-gate 9.3・要件 1.7）
 enum SoratomoSkyPresence: Equatable, Sendable {
-    /// 投稿がある（端末のキャッシュの結果を含む）
-    case present
+    /// 投稿がある（端末のキャッシュの結果を含む）。いまのリアクションを持つ（soratomo-reactions 要件 2.5）
+    ///
+    /// 投稿詳細は、開いている間のリアクションの変化をこの値で受け取る（同じ文書へ 2 本目の監視は張らない）。
+    case present(SoratomoReactions)
     /// 投稿がもう無い（サーバーで確かめた不在だけ。キャッシュだけの不在では届けない）
     case gone
 }

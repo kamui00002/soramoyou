@@ -492,6 +492,16 @@ final class SoratomoTimelineViewModel: ObservableObject {
         finishDeletion(of: sky)
     }
 
+    // MARK: - リアクション（soratomo-reactions）
+
+    /// 投稿がもう無いと分かったときに、タイムラインから取り除き、覚えから外す（soratomo-reactions 要件 8.8）
+    ///
+    /// リアクションの ViewModel が、送った先の投稿がサーバーに無い（`.skyGone`）と知ったときに呼ぶ口。
+    /// 通報で「もう無い」と分かったときと同じ扱い（`removeFromTimeline`）で、画像の後始末はしない（他人の投稿の画像を消しに行かない）。
+    func removeGoneSky(_ sky: SoratomoSky) {
+        removeFromTimeline(sky)
+    }
+
     // MARK: - Private: 監視
 
     /// グループの監視を張る（札の上書きで、前の監視は止まる）

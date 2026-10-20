@@ -7,6 +7,7 @@
 //  確かめるもの: 文書の項目 → SoratomoSky の変換と壊れた 1 件の読み飛ばし、続きの有無の判定、
 //  投稿の作成で送る値（functions/soratomoCore.js の validateSkyInput に合わせた形）と、作成の Callable の失敗の写し、
 //  投稿 1 件の監視の結果の決め方（存在・不在・権限）。
+//  ⭐️ リアクション（soratomo-reactions 7.2）: 変換と投稿 1 件の監視がリアクションを読み、壊れたリアクションで投稿を飛ばさないこと。
 //  ⚠️ Firestore への実際の読み書き（トランザクションがオフラインで失敗して積まれないこと・
 //     監視の isFromCache・count()）は、単体テストでは確かめられない。実機かシミュレータで確かめる。
 //  ⚠️ 作成の Callable には接続しない。窓口（SoratomoSkyDataSource）を偽物に差し替える。
@@ -114,6 +115,70 @@ final class SoratomoSkyServiceTests: XCTestCase {
                 XCTAssertEqual(error as? SoratomoSkyService.DecodeError, .invalidField(key))
             }
         }
+    }
+
+    // MARK: - リアクション（soratomo-reactions 7.2・要件 2.5・2.7）
+
+    /// 文書の `reactions` の値（functions/soratomoStore.js の setReactionTx が書く形 `{ kind, at }`）
+    private func reactionsData() -> [String: Any] {
+        [
+            "u1": ["kind": "sunset", "at": Timestamp(seconds: 1_700_000_100, nanoseconds: 0)],
+            "u2": ["kind": "red_heart", "at": Timestamp(seconds: 1_700_000_200, nanoseconds: 0)],
+        ]
+    }
+
+    /// 上の値から読めるリアクション
+    private let expectedReactions = SoratomoReactions(byUser: [
+        "u1": SoratomoReaction(kind: .sunset, reactedAt: Date(timeIntervalSince1970: 1_700_000_100)),
+        "u2": SoratomoReaction(kind: .redHeart, reactedAt: Date(timeIntervalSince1970: 1_700_000_200)),
+    ])
+
+    func testDecodeSkyReadsReactions() throws {
+        var data = validData()
+        data["reactions"] = reactionsData()
+        let sky = try SoratomoSkyService.decodeSky(id: "sky1", groupId: "g1", data: data)
+        XCTAssertEqual(sky.reactions, expectedReactions)
+    }
+
+    func testDecodeSkyWithoutReactionsHasEmptyReactions() throws {
+        // リアクションを足す前の投稿・まだだれも付けていない投稿には、項目そのものが無い
+        let sky = try SoratomoSkyService.decodeSky(id: "sky1", groupId: "g1", data: validData())
+        XCTAssertEqual(sky.reactions, .empty)
+    }
+
+    func testDecodeSkiesKeepsSkiesWhoseReactionsAreBroken() {
+        // 陽性対照 C8: リアクションの形が壊れていても、投稿は飛ばさない（リアクションは空か、読めた分だけ）
+        var notMap = validData()
+        notMap["reactions"] = "broken" // 地図でない
+        var number = validData()
+        number["reactions"] = 42 // 地図でない
+        var entryNotMap = validData()
+        entryNotMap["reactions"] = ["u1": "sunset"] // 1 人分が地図でない
+        var unknownKind = validData()
+        unknownKind["reactions"] = [
+            "u1": ["kind": "fire"], // 知らない名前（新しい版で増えた種類）
+            "u2": ["kind": "rainbow", "at": Timestamp(seconds: 1_700_000_300, nanoseconds: 0)],
+        ]
+        let documents = [
+            document(id: "a", data: notMap),
+            document(id: "b", data: number),
+            document(id: "c", data: entryNotMap),
+            document(id: "d", data: unknownKind),
+        ]
+        var failures: [SoratomoSkyService.DecodeFailure] = []
+
+        let skies = SoratomoSkyService.decodeSkies(documents, groupId: "g1") { failures.append($0) }
+
+        XCTAssertEqual(skies.map(\.id), ["a", "b", "c", "d"], "リアクションが壊れていても投稿は残る")
+        XCTAssertTrue(failures.isEmpty, "投稿の変換の失敗として数えない")
+        XCTAssertEqual(skies.map(\.reactions), [
+            .empty,
+            .empty,
+            .empty,
+            SoratomoReactions(byUser: [
+                "u2": SoratomoReaction(kind: .rainbow, reactedAt: Date(timeIntervalSince1970: 1_700_000_300)),
+            ]),
+        ])
     }
 
     // MARK: - 壊れた 1 件の読み飛ばし
@@ -333,47 +398,75 @@ final class SoratomoSkyServiceTests: XCTestCase {
     // MARK: - 投稿 1 件の監視（release-gate 9.3・要件 1.7）
 
     func testResolveObservedSkyIsPresentWhenDocumentExists() {
-        // キャッシュの結果でも、あるものはある
+        // キャッシュの結果でも、あるものはある（リアクションの項目が無い文書は、空のリアクションで届く）
         for isFromCache in [true, false] {
-            let result = SoratomoSkyService.resolveObservedSky(exists: true, isFromCache: isFromCache, error: nil)
-            XCTAssertEqual(result, .success(.present), "isFromCache=\(isFromCache)")
+            let result = SoratomoSkyService.resolveObservedSky(
+                exists: true, isFromCache: isFromCache, data: validData(), error: nil
+            )
+            XCTAssertEqual(result, .success(.present(.empty)), "isFromCache=\(isFromCache)")
         }
     }
 
+    func testResolveObservedSkyCarriesReactionsOfTheDocument() {
+        // 投稿詳細は、同じ監視の結果でリアクションの変化を受け取る（soratomo-reactions 要件 2.5）
+        var data = validData()
+        data["reactions"] = reactionsData()
+        for isFromCache in [true, false] {
+            let result = SoratomoSkyService.resolveObservedSky(
+                exists: true, isFromCache: isFromCache, data: data, error: nil
+            )
+            XCTAssertEqual(result, .success(.present(expectedReactions)), "isFromCache=\(isFromCache)")
+        }
+    }
+
+    func testResolveObservedSkyIsPresentWithEmptyReactionsWhenReactionsAreBroken() {
+        // リアクションが壊れていても「ある」のまま（「もう無い」や失敗にしない・要件 2.7）
+        var data = validData()
+        data["reactions"] = "broken"
+        let result = SoratomoSkyService.resolveObservedSky(
+            exists: true, isFromCache: false, data: data, path: "soratomoGroups/g1/skies/sky1", error: nil
+        )
+        XCTAssertEqual(result, .success(.present(.empty)))
+    }
+
     func testResolveObservedSkyIsGoneOnlyWhenServerConfirmsAbsence() {
-        let result = SoratomoSkyService.resolveObservedSky(exists: false, isFromCache: false, error: nil)
+        let result = SoratomoSkyService.resolveObservedSky(exists: false, isFromCache: false, data: nil, error: nil)
         XCTAssertEqual(result, .success(.gone))
     }
 
     func testResolveObservedSkyIgnoresAbsenceOnlyFromCache() {
         // オフラインで開いた・まだ端末に写しが無い投稿は「無い」として届く。これを「もう無い」にしない
         // （監視は続くので、つながればサーバーの結果が届く）
-        let result = SoratomoSkyService.resolveObservedSky(exists: false, isFromCache: true, error: nil)
+        let result = SoratomoSkyService.resolveObservedSky(exists: false, isFromCache: true, data: nil, error: nil)
         XCTAssertNil(result)
     }
 
     func testResolveObservedSkyIsNotMemberWhenPermissionIsLost() {
         // メンバーでなくなると、ルールが読み取りを拒否する
         let result = SoratomoSkyService.resolveObservedSky(
-            exists: nil, isFromCache: false, error: firestoreError(.permissionDenied)
+            exists: nil, isFromCache: false, data: nil, error: firestoreError(.permissionDenied)
         )
         XCTAssertEqual(result, .failure(.notMember))
     }
 
     func testResolveObservedSkyMapsOtherErrorsAsRead() {
         XCTAssertEqual(
-            SoratomoSkyService.resolveObservedSky(exists: nil, isFromCache: false, error: firestoreError(.unavailable)),
+            SoratomoSkyService.resolveObservedSky(
+                exists: nil, isFromCache: false, data: nil, error: firestoreError(.unavailable)
+            ),
             .failure(.network)
         )
         XCTAssertEqual(
-            SoratomoSkyService.resolveObservedSky(exists: nil, isFromCache: false, error: firestoreError(.internal)),
+            SoratomoSkyService.resolveObservedSky(
+                exists: nil, isFromCache: false, data: nil, error: firestoreError(.internal)
+            ),
             .failure(.unknown)
         )
     }
 
     func testResolveObservedSkyWithoutSnapshotOrErrorIsUnknown() {
         // 起きない想定。起きても「もう無い」とは決めない
-        let result = SoratomoSkyService.resolveObservedSky(exists: nil, isFromCache: false, error: nil)
+        let result = SoratomoSkyService.resolveObservedSky(exists: nil, isFromCache: false, data: nil, error: nil)
         XCTAssertEqual(result, .failure(.unknown))
     }
 
