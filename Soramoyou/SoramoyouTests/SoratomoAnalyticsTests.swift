@@ -2,11 +2,12 @@
 //  SoratomoAnalyticsTests.swift
 //  SoramoyouTests
 //
-//  そらともの計測（SoratomoEvent・SoratomoScreen と理由の写し方）のテスト ⭐️（tasks 10.2・release-gate 8・leave-group 6）
+//  そらともの計測（SoratomoEvent・SoratomoScreen と理由の写し方）のテスト ⭐️（tasks 10.2・release-gate 8・leave-group 6・soratomo-reactions 7.4）
 //
 //  期待値は requirements.md の要件 14 の表を写したもの。表を変えたら、ここも同時に変えること。
 //  release-gate で足したものは .kiro/specs/soratomo-release-gate/requirements.md の要件 15 の表を写したもの。
 //  leave-group で足したものは .kiro/specs/soratomo-leave-group/requirements.md の要件 12 の表を写したもの。
+//  soratomo-reactions で足したものは .kiro/specs/soratomo-reactions/requirements.md の要件 15 の表と 15.5 を写したもの。
 //
 
 @testable import Soramoyou
@@ -112,13 +113,97 @@ final class SoratomoAnalyticsTests: XCTestCase {
         XCTAssertEqual(Set((table + releaseGateTable + leaveGroupTable).map(\.name)).count, 23)
     }
 
+    // MARK: - soratomo-reactions の 4 イベントの名前とパラメータ（soratomo-reactions 要件 15 の表）
+
+    /// soratomo-reactions 要件 15 の表の 4 イベント（値の組み合わせを変えた例）と、期待する名前・パラメータ
+    ///
+    /// `source` は `timeline` と `detail` の両方、`replaced` は真と偽の両方、`action` は `add` と `remove` の両方を入れる。
+    private let reactionsTable: [(event: SoratomoEvent, name: String, parameters: [String: SoratomoAnalyticsValue])] = [
+        (
+            .reactionAdded(kind: .sunset, source: .timeline, replaced: false), "soratomo_reaction_added",
+            ["kind": .value("sunset"), "source": .value("timeline"), "replaced": .bool(false)]
+        ),
+        (
+            .reactionAdded(kind: .redHeart, source: .detail, replaced: true), "soratomo_reaction_added",
+            ["kind": .value("red_heart"), "source": .value("detail"), "replaced": .bool(true)]
+        ),
+        (.reactionRemoved(source: .timeline), "soratomo_reaction_removed", ["source": .value("timeline")]),
+        (.reactionRemoved(source: .detail), "soratomo_reaction_removed", ["source": .value("detail")]),
+        (
+            .reactionFailed(action: .add, reason: .offline), "soratomo_reaction_failed",
+            ["action": .value("add"), "reason": .value("offline")]
+        ),
+        (
+            .reactionFailed(action: .remove, reason: .notFound), "soratomo_reaction_failed",
+            ["action": .value("remove"), "reason": .value("not_found")]
+        ),
+        (.reactionsViewed(reactionCount: 12), "soratomo_reactions_viewed", ["reaction_count": .int(12)]),
+    ]
+
+    func testReactionEventsHaveFixedNamesAndParameters() {
+        XCTAssertEqual(reactionsTable.count, 7)
+        for row in reactionsTable {
+            XCTAssertEqual(row.event.name, row.name)
+            XCTAssertEqual(row.event.parameters, row.parameters, "\(row.name) のパラメータが表と違う")
+        }
+        // 4 個の名前は互いに違い、既存の 23 個と合わせても重複しない（4 個増えて 27 個）
+        XCTAssertEqual(Set(reactionsTable.map(\.name)).count, 4)
+        XCTAssertEqual(Set((table + releaseGateTable + leaveGroupTable + reactionsTable).map(\.name)).count, 27)
+    }
+
+    /// `kind` は絵文字そのものでなく、7 種類とも名前（英小文字のスネークケース）で送る（要件 15.4）
+    ///
+    /// 期待する名前は functions/soratomoCore.js の REACTION_KINDS と同じ文字列を直に書く（実装の rawValue から作らない）。
+    func testReactionAddedSendsKindAsNameForAllSevenKinds() {
+        let expected: [(kind: SoratomoReactionKind, name: String)] = [
+            (.sunset, "sunset"), (.cloud, "cloud"), (.rainbow, "rainbow"), (.sparkles, "sparkles"),
+            (.eyes, "eyes"), (.redHeart, "red_heart"), (.blueHeart, "blue_heart"),
+        ]
+        // 7 種類のどれも漏らさない（種類が増えたら、ここで赤になる）
+        XCTAssertEqual(expected.count, 7)
+        XCTAssertEqual(SoratomoReactionKind.allCases.count, 7)
+        for row in expected {
+            let parameters = SoratomoEvent.reactionAdded(kind: row.kind, source: .detail, replaced: false).parameters
+            XCTAssertEqual(parameters["kind"], .value(row.name), "\(row.name)")
+        }
+    }
+
+    // MARK: - 通知のタップの type（soratomo-reactions 要件 15.5）
+
+    /// `type` を渡さなければ新着投稿（`post_created`・1.15.0 までと同じ値）、`.reaction` を渡せば `reaction` になる。
+    /// どちらも、パラメータは `type` と `result` の 2 つだけ
+    func testNotificationOpenedTypeDefaultsToPostCreatedAndCanBeReaction() {
+        // 既定（既存の書き方）と明示の postCreated は、どちらも post_created
+        XCTAssertEqual(
+            SoratomoEvent.notificationOpened(.opened).parameters,
+            ["type": .value("post_created"), "result": .value("opened")]
+        )
+        XCTAssertEqual(
+            SoratomoEvent.notificationOpened(.opened, type: .postCreated).parameters,
+            ["type": .value("post_created"), "result": .value("opened")]
+        )
+        // リアクションの通知は、4 つの結果のどれでも type が reaction になり、名前は変わらない
+        let reactionCases: [(result: SoratomoNotificationOpenResult, value: String)] = [
+            (.opened, "opened"), (.notMember, "not_member"), (.flagOff, "flag_off"), (.signedOut, "signed_out"),
+        ]
+        for row in reactionCases {
+            let event = SoratomoEvent.notificationOpened(row.result, type: .reaction)
+            XCTAssertEqual(event.name, "soratomo_notification_opened")
+            XCTAssertEqual(event.parameters, ["type": .value("reaction"), "result": .value(row.value)], row.value)
+        }
+        // 種類の違う記録は別の値として比べられる（ルーターのテストが、値の比較で種類を見分けられる前提）
+        XCTAssertEqual(SoratomoEvent.notificationOpened(.opened), .notificationOpened(.opened, type: .postCreated))
+        XCTAssertNotEqual(SoratomoEvent.notificationOpened(.opened), .notificationOpened(.opened, type: .reaction))
+    }
+
     func testNamesAndParameterKeysAreLowerSnakeCase() {
         // 要件 14.2: 英小文字のスネークケース。そらとものイベントは soratomo_ で始める
         let pattern = try! NSRegularExpression(pattern: "^[a-z]+(_[a-z]+)*$")
         func isSnakeCase(_ text: String) -> Bool {
             pattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
         }
-        for row in table + releaseGateTable + leaveGroupTable {
+        // soratomo-reactions 要件 15.2 の 4 イベント（reactionsTable）も同じ規則で確かめる
+        for row in table + releaseGateTable + leaveGroupTable + reactionsTable {
             XCTAssertTrue(row.name.hasPrefix("soratomo_"), row.name)
             XCTAssertTrue(isSnakeCase(row.name), row.name)
             for key in row.event.parameters.keys {
@@ -174,6 +259,13 @@ final class SoratomoAnalyticsTests: XCTestCase {
         // leave-group 要件 12 の表の値
         XCTAssertEqual(SoratomoLeaveRole.allCases.map(\.rawValue), ["owner", "member"])
         XCTAssertEqual(SoratomoLeaveFailReason.allCases.map(\.rawValue), ["network", "unknown"])
+        // soratomo-reactions 要件 15 の表と 15.5 の値
+        XCTAssertEqual(SoratomoNotificationOpenType.allCases.map(\.rawValue), ["post_created", "reaction"])
+        XCTAssertEqual(SoratomoReactionFailAction.allCases.map(\.rawValue), ["add", "remove"])
+        XCTAssertEqual(
+            SoratomoReactionFailReason.allCases.map(\.rawValue),
+            ["offline", "network", "not_found", "not_member", "suspended", "unknown"]
+        )
     }
 
     // MARK: - 画面名（要件 14.5・release-gate 要件 15.3）
@@ -266,6 +358,17 @@ final class SoratomoAnalyticsTests: XCTestCase {
             [.network: .network, .skyGone: .notFound],
             unknown: SoratomoReportFailReason.unknown,
             SoratomoReportFailReason.init
+        )
+    }
+
+    func testReactionFailReasonMapping() {
+        // soratomo-reactions 要件 15 の表: 投稿がもう無いときは not_found（招待コードの notFound は unknown）。
+        // offline は送る前の確認で ViewModel が入れる値で、失敗の種類からは作らない
+        // （下の表に無いので、どれかの種類が offline になれば赤になる）
+        assertMapping(
+            [.network: .network, .skyGone: .notFound, .notMember: .notMember, .suspended: .suspended],
+            unknown: SoratomoReactionFailReason.unknown,
+            SoratomoReactionFailReason.init
         )
     }
 

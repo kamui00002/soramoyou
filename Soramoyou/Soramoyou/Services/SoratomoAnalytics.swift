@@ -9,6 +9,8 @@
 //  SoratomoAnalyticsTests の期待値と requirements.md の表も同時に変えること。
 //  release-gate 8 で足した値・イベント・画面名は、.kiro/specs/soratomo-release-gate/requirements.md の要件 15 の表と対応する。
 //  leave-group 6 で足した値・イベントは、.kiro/specs/soratomo-leave-group/requirements.md の要件 12 の表と対応する。
+//  soratomo-reactions 7.4 で足した値・イベント（リアクションの 4 個と、通知のタップの `type` の `reaction`）は、
+//  .kiro/specs/soratomo-reactions/requirements.md の要件 15 の表と 15.5 と対応する。
 //
 
 import Foundation
@@ -246,7 +248,43 @@ enum SoratomoLeaveFailReason: String, CaseIterable {
     case network, unknown
 }
 
-// MARK: - イベント（要件 14 の表の 17 個と、release-gate 要件 15.1 の表の 4 個と、leave-group 要件 12 の表の 2 個）
+/// 通知の種類（`soratomo_notification_opened` の `type`・soratomo-reactions 要件 15.5）
+///
+/// 遷移を決めるルーター（`SoratomoRouter`）が、タップされた通知の種類（`SoratomoNotificationKind`）から写す。
+/// 新着投稿の `post_created` は 1.15.0 までと同じ値のまま（既存の集計を割らないため）。リアクションの通知は `reaction`。
+enum SoratomoNotificationOpenType: String, CaseIterable {
+    case postCreated = "post_created", reaction
+}
+
+/// `soratomo_reaction_failed` の `action`（soratomo-reactions 要件 15 の表）
+///
+/// 選び直し（別の絵文字に付け替える）の失敗も `add` にする（要件 15 の表）。
+enum SoratomoReactionFailAction: String, CaseIterable {
+    case add, remove
+}
+
+/// `soratomo_reaction_failed` の `reason`（soratomo-reactions 要件 15 の表）
+///
+/// `offline` は、送る前に通信が無いと分かって送らなかったとき。失敗の種類（`SoratomoError`）からは作らず、
+/// 送る前の確認をする側（リアクションの ViewModel）が直接入れる。送った後の通信の失敗は `network`。
+enum SoratomoReactionFailReason: String, CaseIterable {
+    case offline, network, notFound = "not_found", notMember = "not_member", suspended, unknown
+
+    /// 失敗の種類から理由を決める（表に無い組み合わせは unknown・design.md の SoratomoAnalytics（変更））
+    ///
+    /// 投稿がもう無い（`skyGone`）は `not_found`。招待コードの `notFound` とは別の種類なので、`notFound` は unknown になる。
+    init(_ error: SoratomoError) {
+        switch error {
+        case .network: self = .network
+        case .skyGone: self = .notFound
+        case .notMember: self = .notMember
+        case .suspended: self = .suspended
+        default: self = .unknown
+        }
+    }
+}
+
+// MARK: - イベント（要件 14 の表の 17 個と、release-gate 要件 15.1 の表の 4 個と、leave-group 要件 12 の表の 2 個と、soratomo-reactions 要件 15 の表の 4 個）
 
 /// そらともの計測イベント
 enum SoratomoEvent: Equatable {
@@ -268,8 +306,11 @@ enum SoratomoEvent: Equatable {
     case postFailed(stage: SoratomoPostFailStage, reason: SoratomoPostFailReason)
     /// 通知の事前説明で操作を選んだ
     case notificationPromptResult(choice: SoratomoPrimerChoice, granted: Bool)
-    /// そらともの通知をタップした（`type` は "post_created" に固定）
-    case notificationOpened(SoratomoNotificationOpenResult)
+    /// そらともの通知をタップした（`type` は通知の種類。新着投稿は "post_created"、リアクションは "reaction"）
+    ///
+    /// `type` は既定を新着投稿（`.postCreated`）にして、`.notificationOpened(.opened)` のような既存の書き方と値を
+    /// そのまま通す（1.15.0 までの記録と同じ値・soratomo-reactions 要件 15.5）。
+    case notificationOpened(SoratomoNotificationOpenResult, type: SoratomoNotificationOpenType = .postCreated)
     /// 招待コードの再発行に成功した
     case inviteCodeRegenerated
     /// 招待コードの再発行に失敗した
@@ -298,6 +339,17 @@ enum SoratomoEvent: Equatable {
     case groupLeft(role: SoratomoLeaveRole, groupDeleted: Bool, completed: Bool)
     /// グループを抜けられなかった（leave-group。メンバーのまま・要件 4.4）
     case leaveFailed(SoratomoLeaveFailReason)
+    /// リアクションを付けた、または選び直した（soratomo-reactions。サーバーが受け付けたとき）
+    /// - `kind`: 付けた絵文字。送るのは絵文字そのものでなく名前（`SoratomoReactionKind.rawValue`・要件 15.4）
+    /// - `source`: 操作した画面（通報とブロックと同じ `timeline` / `detail`）
+    /// - `replaced`: 別の絵文字からの選び直しか
+    case reactionAdded(kind: SoratomoReactionKind, source: SoratomoModerationSource, replaced: Bool)
+    /// 自分のリアクションを外した（soratomo-reactions。サーバーが受け付けたとき）
+    case reactionRemoved(source: SoratomoModerationSource)
+    /// 付ける・外す・選び直すに失敗した（soratomo-reactions。選び直しの失敗は `action: add`）
+    case reactionFailed(action: SoratomoReactionFailAction, reason: SoratomoReactionFailReason)
+    /// 押した人の一覧を開いた（soratomo-reactions。`reactionCount` は一覧の人数）
+    case reactionsViewed(reactionCount: Int)
 
     /// イベント名（英小文字のスネークケース・`soratomo_` で始める・要件 14.2）
     var name: String {
@@ -325,6 +377,10 @@ enum SoratomoEvent: Equatable {
         case .guidelineResult: "soratomo_guideline_result"
         case .groupLeft: "soratomo_group_left"
         case .leaveFailed: "soratomo_leave_failed"
+        case .reactionAdded: "soratomo_reaction_added"
+        case .reactionRemoved: "soratomo_reaction_removed"
+        case .reactionFailed: "soratomo_reaction_failed"
+        case .reactionsViewed: "soratomo_reactions_viewed"
         }
     }
 
@@ -350,9 +406,9 @@ enum SoratomoEvent: Equatable {
             ["stage": .value(stage.rawValue), "reason": .value(reason.rawValue)]
         case let .notificationPromptResult(choice, granted):
             ["choice": .value(choice.rawValue), "granted": .bool(granted)]
-        case let .notificationOpened(result):
-            // v1 の通知の種類は新着投稿だけ
-            ["type": .value("post_created"), "result": .value(result.rawValue)]
+        case let .notificationOpened(result, type):
+            // 通知の種類は、新着投稿（post_created・1.15.0 までと同じ値）とリアクション（reaction）（soratomo-reactions 要件 15.5）
+            ["type": .value(type.rawValue), "result": .value(result.rawValue)]
         case let .inviteRegenerateFailed(reason):
             ["reason": .value(reason.rawValue)]
         case let .postDeleted(imageCleanup):
@@ -379,6 +435,16 @@ enum SoratomoEvent: Equatable {
             ["role": .value(role.rawValue), "group_deleted": .bool(groupDeleted), "completed": .bool(completed)]
         case let .leaveFailed(reason):
             ["reason": .value(reason.rawValue)]
+        case let .reactionAdded(kind, source, replaced):
+            // 絵文字そのものでなく名前を送る（異体字セレクタの有無で、同じ絵文字が集計で割れないように・要件 15.4）。
+            // uid・グループ ID・投稿 ID は、型の上で入らない（要件 15.3）
+            ["kind": .value(kind.rawValue), "source": .value(source.rawValue), "replaced": .bool(replaced)]
+        case let .reactionRemoved(source):
+            ["source": .value(source.rawValue)]
+        case let .reactionFailed(action, reason):
+            ["action": .value(action.rawValue), "reason": .value(reason.rawValue)]
+        case let .reactionsViewed(reactionCount):
+            ["reaction_count": .int(reactionCount)]
         }
     }
 }
