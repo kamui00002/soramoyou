@@ -91,6 +91,8 @@ struct ContentView: View {
                 soratomoGate.reset()
                 SoratomoImageCache.clear()
                 SoratomoDependencies.live.clearSessionState()
+                // 公開以外（フォロワー限定・非公開）の投稿の画像のキャッシュも同じ理由で消す ⭐️ URL 側の C-1
+                PostStorageImageCache.clear()
             }
         }
         // そらともを使えるかを、ログインが確定するたびに評価する ⭐️ tasks 14.1
