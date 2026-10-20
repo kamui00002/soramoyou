@@ -155,6 +155,17 @@ final class PostImageSourceTests: XCTestCase {
         XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .storage("thumbnails/u1/followers/a_thumb.jpg"))
     }
 
+    func testStoredThumbnailPathWinsOverPathInThumbnailURL() {
+        // サムネイルの URL の中のパスと thumbnailStoragePath が食い違うときは、thumbnailStoragePath を使う（URL の public を信じない）
+        let info = image(
+            url: "",
+            thumbnail: publicThumbURL,
+            storagePath: "posts/u1/followers/a.jpg",
+            thumbnailStoragePath: "thumbnails/u1/followers/a_thumb.jpg"
+        )
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .storage("thumbnails/u1/followers/a_thumb.jpg"))
+    }
+
     func testOldFollowersThumbnailUsesPathFromThumbnailURL() {
         // thumbnailStoragePath の無い古い投稿は、サムネイルの URL からパスを取り出す（本体に落とさない）
         let info = image(url: followersBodyURL, thumbnail: followersThumbURL)
