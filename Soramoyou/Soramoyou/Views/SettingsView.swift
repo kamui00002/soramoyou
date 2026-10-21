@@ -352,7 +352,7 @@ struct SettingsView: View {
                         notificationToggleRow(
                             icon: "person.3.fill", iconColor: .indigo,
                             title: "そらとも通知",
-                            // 説明は下書き（soratomo-reactions 8.4・確定は 10 で画面の現物を見せてから）
+                            // 説明は利用者が承認済み（soratomo-reactions 10・2026-10-22）。変えるときは承認を取り直す
                             description: "そらともで友達が空を投稿したときと、あなたの空にリアクションが付いたときにお知らせします",
                             isOn: pushSoratomoBinding
                         )
