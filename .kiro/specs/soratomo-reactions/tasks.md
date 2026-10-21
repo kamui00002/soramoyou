@@ -548,7 +548,7 @@
 
 - [ ] 9. iOS全体を点検する
 
-- [ ] 9.1 ログと個人情報・変更なしで満たすこと・既存の挙動を点検する
+- [x] 9.1 ログと個人情報・変更なしで満たすこと・既存の挙動を点検する
   - 前提: 7, 8
   - そらともの端末のログ・クラッシュの記録・計測のパラメータに、グループ名・表示名（付けた人と投稿者）・キャプション・招待コード・通知トークンが出ていないことを、そらとものSwiftの外へ出る口（print・`SoratomoEvent` の連想値とパラメータ・`LoggingService` などへの直接の送信・`SoratomoError.record` の文脈）を拾って許可リストと突き合わせて確かめる（leave-group 9.1と同じ方法）。陽性対照: 写しに該当の文字列を1か所ずつ植えて、検査が引っかかることを先に確かめる
   - 変更なしで満たす要件を、コードで確かめる:
@@ -562,6 +562,17 @@
   - 差分で確かめる: 既存の `LikeManager`・お気に入り・おすすめの空・プロフィールの数・ランキングにリアクションを混ぜていない。`SoratomoSky` を `Post` へ変換する口が無い。タイムラインの長押しのメニューと詳細の「…」のメニューの中身・退会と抜けるの確認の文言・退会の8手順・既存の3つの通知設定・既存の通知のタップの挙動と計測（`soratomoPost` の `post_created` を含む）・通知の事前説明が変わっていない。そらともの既存の動き（タイムラインと続きの読み込み・投稿・削除・抜ける・退会・通報・ブロック・メンバー一覧・招待）のテストが変わらずに通る
   - 新しいイベントと値が、要件15の表と名前・パラメータ名・値で一致している
   - _Requirements: 1.11, 5.6, 7.5, 7.6, 7.9, 7.10, 8.6, 9.14, 9.15, 10.6, 12.2, 12.3, 12.9, 12.10, 12.11, 14.1, 15.2, 15.3, 16.7_
+  - 結果（2026-10-22 02:10）: `HEAD` `b48b277f`（作業ツリーはclean）で、読むだけの点検をサブエージェント2人（A＝外へ出る口・B＝変更なしで満たすこと・差分・イベントの表）に並行で分けた。2人ともリポジトリに書かない約束で、検査器と写しはリポジトリの外（`/tmp/claude-501/9-1-A/`）に置いた。基準は main との分かれ目 `2cbc5645`。違反は0
+    - 外へ出る口（leave-group 9.1と同じ方法）: 前例の検査器は残っていなかったので、前例の記述（leave-group tasks.md 381〜385行）どおりに `check91r.py` を作り直した。対象はそらともの Swift 52本（`Soratomo*.swift`・基準では48本）。A＝print 系8か所（増えたのは `Models/SoratomoReactions.swift:99` の1か所で、補間は内部IDのパスと固定の項目名だけ）、B＝`SoratomoEvent` の case 27（連想値は Int・Bool・生の値を持つ列挙だけ）と `.value(` 27（`<名前>.rawValue` と固定の文字列だけ）、C＝直接の送信4か所（前例と同じ）、D＝`SoratomoError.record` の呼び出し50か所（増えたのは `Services/SoratomoReactionService.swift:69` の `"soratomo.setReaction"` と `:78` の `"soratomo.setReaction.response"` の2か所・どれも固定の文字列か `StaticString` の素通し）。禁止はグループ名・表示名（付けた人と投稿者）・キャプション・招待コード・通知トークン。メインが本物に流し直して終了コード0・違反0。本数52・record の呼び出し50・print の行8は、メインが grep で数え直して一致
+    - 陽性対照: 写しに7種類（前例の5種類と、`case reactionLeak(reactorName: String)`・print に `\(sky.caption)`）を1回に1つずつ植え、メインが台本を流し直して、7種類とも終了コード1・違反は植えた1行だけ（植える前の写しは終了コード0）。3と6は同じ決まりを試すもの
+    - 検査器の限界: 前例のすり抜けの書き方に、`fatalError(`・`assert(`・`precondition(`・`NSException`・`fcmToken`・`deviceToken`・`apnsToken`・`Messaging` を足して検索し、本物の52本ですべて0件。同じ検索が `LoggingService.swift` では当たる（`#"` 3・`Logger` 1・`logger.` 10）。検査器そのものが捕まえないのは6種類（`malformedDocument(path:)` に名前を入れる・`logger?.`・`os_log`・`FileHandle`・`fputs`・`fatalError` の文）で、検索だけが頼り
+    - 間接の経路: `SoratomoReactionFailure.malformedResponse` は連想値を持たない。サービスが記録する `FunctionsError` の中身は、サーバーの固定の文か理由のコードだけ（`setReactionTx` が投げるのは詳細の無い `SoratomoDomainError`・`toHttpsError` は `functions/soratomo.js:120-126`）。ViewModel に `SoratomoError.record(` は0件。表示名は押した人の一覧の `Text` と読み上げ、ブロックの確認の題にだけ渡る。通知のペイロードから計測へ渡るのは種類と結果の列挙だけ（`SoratomoRouter.swift:76-95`）
+    - 変更なしで満たす7項目は、すべて成り立つ（根拠は点検Bの file:line をメインが要所で現物と照らした）。隠した投稿は `rebuildSkies` が `skies` から外す。リアクションは投稿の文書の項目からしか読まない。前面の通知は `GoldenHourNotificationManager.swift:43` の定数のまま（差分なし）。抜ける・サインアウト・退会はメモリの覚えを消し、上書きは ViewModel の `@Published` だけ（差分の追加行に端末へ書く API は0件）。オフラインでは監視のキャッシュの値を出したまま、`.failure` では値を変えない。ブロックで除いたことを知らせる文言は0件。読み取りのクエリの口は基準と同じ9個（差分で `collection(`・`getDocument`・`addSnapshotListener`・`whereField` などは0件）
+    - 差分で確かめたこと: LikeManager・いいね・お気に入り・おすすめ・ランキング・プロフィールの数に触れる差分は、「混ぜない」と書いたコメント1行だけ。そらとものファイルに `Post` へ変換する口は無い（同じ検索が `FirestoreService.swift` では26件）。長押しのメニュー・詳細の「…」・退会と抜けるの確認・3つの通知設定・事前説明・通知の許可は差分0。`.notificationOpened(` は5か所のまま、`soratomoPost` は `post_created` のまま。既存のテストの期待値を弱めた箇所は無い
+    - 要件15の表との照合: 4つの新しいイベントの名前・パラメータ名・値、`notificationOpened` の `type` の `reaction`、記録する時点（`unchanged` は記録しない・D3）は、表と一致した（食い違い0）
+    - 範囲の注意（違反ではない）: (1) メモリの覚えは消えるが、本番の Firestore の端末のキャッシュ（既定の永続キャッシュ）には、`reactions` と `reactorIds` を含む投稿の文書が、キャプションなど既存の項目と同じく残る（design.md 1013行の範囲内）。(2) 押した人の一覧は、取れていない人の公開プロフィールを1件ずつ読む（既存の `prefetch` の新しい呼び出し元で、新しいクエリではない）
+    - 端の場面（利用者が「このまま」を選んだ・2026-10-22）: 押した人の一覧を開いている間に全員が外して0件になると、「リアクションを読み込めませんでした」が出る（8.1で「行が0件は読めていない」と決めたため）。送っている最中に一覧を開くと、上書きの変化で一覧は描き直されず、失敗の知らせはシートの下で出せない
+    - そのほか: `GoldenHourNotificationManager.swift:250` のコメントが「type が soratomoPost のものだけ」のまま（7.4の結果に記録済みの宿題）
 
 - [ ] 9.2 iOSのビルドとテストを通す（要確認Q2の前半）
   - 前提: 9.1
