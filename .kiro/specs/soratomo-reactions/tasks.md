@@ -689,7 +689,7 @@
     - この結果は、マージ後の `origin/main`（`9738c774`）から切った枝 `ドキュメント-そらともリアクションの反映の記録` に書いた（利用者の決定・squashなので元の枝の35コミットはmainの祖先にならず、元の枝に書いてPRにすると機能の差分がもう一度出るため）。12.3・12.5の結果も、この枝に書く
     - 12.3（Functions 13本）と12.5（ルール）が終わるまで、mainからアプリの版を作らない
 
-- [ ] 12.3 Functionsをデプロイする（ユーザーのGOを取ってから実行）
+- [x] 12.3 Functionsをデプロイする（ユーザーのGOを取ってから実行）
   - 前提: 12.2
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 出し元: `git fetch` の後、作業ツリーがcleanで `HEAD == origin/main` のところから出す。出し元のコミットを記録する
@@ -697,6 +697,18 @@
   - コマンド: そらともの関数だけを名前で指定して出す。名前は `functions/soratomo.js` の `module.exports` の13本から機械で作る（手で打たない）。`firebase deploy --only functions:<名前>,…（13本） --project soramoyou-ios --non-interactive`。変わった関数だけにしないのは、共通の部品（`soratomoCore.js`・`soratomoStore.js`・`soratomoDeletion.js`）を、そらともの関数がみな読むため。本番にあってソースに無い関数の削除は行わない
   - 出した後: 出力で、作成2本（`soratomoSetReaction`・`onSoratomoSkyDeleted`）と更新11本がすべて成功。`firebase functions:list` で、追加2行・削除0行・合計24本・リージョンとランタイムが既存と同じ。初めての削除トリガーで権限の伝播の待ちが出たら、出力の指示どおり時間をおいて同じコマンドをもう一度（GO）
   - _Requirements: 8.2, 8.3, 9.6, 11.1, 16.8_
+  - 結果（2026-10-22 07:34・デプロイ）: 記録の枝 `ecc93949`・作業ツリーはclean から始めた。`git fetch -q origin` の後、`origin/main` は `9738c774`（12.2 のマージのまま＝mainは進んでいない）
+    - 前回のそらともの関数の出し元: `cdc7c3e3`（public-launch 11.2 の出し元で、11.5 で 2026-10-13 18:27 に 11 本を更新）。その後にそらともの関数を出した記録は無い
+    - `git log --stat cdc7c3e3..origin/main -- functions/` は5件: `9738c774`（#193・このspec）・`abaa3bdb`（#190・`onUserBlockListChanged` と `followBlock.js`。2026-10-16 06:43 JST に本番へ出た記録が監査①の D-1 の引き継ぎメモにあり、本番の一覧でも ACTIVE）・`f0623b52`（#185）・`30a90230`（#189）・`ca372cdb`（#191）。後の3件は `package.json` の `scripts` の行とテストのファイルだけで、`dependencies`・`engines`・`package-lock.json` は変わっていない（動くコードに効かない）。この内訳をGOの質問に書いた
+    - 出す前の本番の `firebase functions:list`（07:23・サンドボックスの外・`--json` をファイルに保存し、名前・リージョン・ランタイム・種類・メモリ・状態だけを出した。環境変数の値は画面に出していない）: **23本**・すべて asia-northeast1・nodejs22・ACTIVE。見込みの22本より1本多いのは #190 の `onUserBlockListChanged`。そらとも系は11本。ソースの公開（`index.js` 10・`skyMotion.js` 2・`soratomo.js` 13 の計25本）のうち、本番に無いのは `soratomoSetReaction`・`onSoratomoSkyDeleted` だけ。出した後の期待値を24本でなく25本に直すことをGOの質問に書いた
+    - 名前: `functions/soratomo.js` の `module.exports` から台本（scratchpad の `build_deploy_names.py`。13本・重複なし・新しい2本を含むことを assert）で組み立て、手で打っていない。陽性対照: `cdc7c3e3` の `soratomo.js` を渡すと「11 本」で落ちた。13本のうち本番にあった11本は、本番のそらとも系11本と同じ
+    - `functions/` に `.env` 系のファイルは無い（本番の環境変数もシステムの値だけ・秘密は `DISCORD_REPORT_WEBHOOK_URL` を2本が名前で参照）。`firebase.json` の `ignore` に入っていない `firestore-debug.log`（エミュレーターのログ）は一緒に上がった（前回の出し元の作業フォルダにもあった＝前例どおり）
+    - 出し元: `git switch --detach origin/main` で `9738c774` へ移り、`git rev-parse HEAD` が `9738c774`・作業ツリーがclean なことを見てから出した
+    - 利用者のGO（25本で確かめる）で、サンドボックスの外で `firebase deploy --only functions:<13本> --project soramoyou-ios --non-interactive`（07:30:59〜07:33:36 JST）→ 終了コード0・**作成2（`soratomoSetReaction`・`onSoratomoSkyDeleted`）・更新11・すべて `Successful`・`Deploy complete!`**。上げたソースは 401.04 KB。ログに警告・失敗・公開呼び出しの許可（IAM）の行は0。ほかの12本は出していない
+    - 出した後の `functions:list`（07:34）: **25本**。出す前と比べて追加2行（`onSoratomoSkyDeleted`＝Firestore の削除のトリガー・`soratomoSetReaction`＝callable。どちらも asia-northeast1・256MB・nodejs22・ACTIVE）・削除0行・ほかの行の変化0（リージョン・ランタイム・種類・メモリ・状態）
+    - 補足（ソースの指紋 `hash`）: 指紋が変わったのは更新した11本だけで、作成の2本を含むそらともの13本はすべて新しい指紋（秘密を使う2本と使わない11本の2組。出す前も同じ分かれ方）。ほかの12本の指紋は変わっていない。指紋は秘密の使い方でも分かれるので、出した時刻の証拠にはしていない
+    - この結果は、記録の枝 `ドキュメント-そらともリアクションの反映の記録` に戻って書いた
+    - 12.5（ルール）が終わるまで、mainからアプリの版を作らない。次は 12.4（公開呼び出しの許可）と 12.5
 
 - [ ] 12.4 新しいCallableの公開呼び出しの許可を確かめる（ユーザーのGOを取ってから実行）
   - 前提: 12.3
