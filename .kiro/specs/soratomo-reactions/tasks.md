@@ -503,7 +503,7 @@
     - shasum の頭（コミットするもの）: `SoratomoDependencies.swift` `328be57e23ea`・`SoratomoTimelineView.swift` `fb8d6ffd980a`・`SoratomoDependenciesTests.swift` `0e169614f2fb`
     - 実行の環境: ビルド・テスト・`pgrep`・`simctl`・xcresultの読み取りは、サンドボックスの外で流した。DerivedDataはXcodeの設定のままで、`-derivedDataPath` は渡していない。流す前の1分平均は4.7で、負荷を見るフックは1回も止めなかった
 
-- [ ] 8.3 投稿詳細に、リアクションの欄と押した人の一覧の入口を置く
+- [x] 8.3 投稿詳細に、リアクションの欄と押した人の一覧の入口を置く
   - 前提: 8.2
   - `dependencies.activeReactionViewModel` を、グループIDが一致するときだけ借りる（`activeTimelineViewModel` と同じ）。借りられないとき（起きない想定）は数の表示だけを出し、ブロックの除外は `dependencies.blockedAuthors` で行う
   - `@State private var liveReactions` を足し、監視の `.success(.present(let reactions))` で入れる。表示に使う値は `liveReactions ?? sky.reactions`（覚えの値は最初の表示だけ）
@@ -511,6 +511,19 @@
   - 失敗の知らせは、詳細が開いている間は詳細が出す。「…」のメニュー（削除、または通報とブロック）は変えない
   - シミュレーター（`C2E3F752`）でビルドし、詳細の欄の並び（0件で数を出さない・自分の投稿にメニューが出ない）を目視する。本番のデータでの表示は13.1で行う
   - _Requirements: 1.1, 1.6, 2.4, 2.5, 3.1, 3.5, 8.7, 12.10, 15.1_
+  - 結果（2026-10-21 12:20）: 8.2の作業ツリー（`HEAD` `ff413056`）で、アプリ1ファイル（`SoratomoSkyDetailView.swift`）だけを Edit で直した（サブエージェントは使っていない）。着手前に `git fetch` し、`HEAD..origin/main` は空だった
+    - 借りる: init で、`activeTimelineViewModel` と同じ形で `dependencies.activeReactionViewModel` をグループIDが一致するときだけ `private let reactionViewModel` に借りる
+    - 監視: `observeSky` の `case .success(.present), .failure: break` を分け、`case let .success(.present(reactions))` で `@State liveReactions` に入れる。表示の値は `liveReactions ?? sky.reactions`。「`.present` には反応しない」と書いていた doc コメントを同じ Edit で直した
+    - 欄: 投稿者の行（`.accessibilityElement(children: .combine)`）の外、その直後に `reactionSection(sky)` を置いた（メニューを読み上げの別の要素にするため）。詳細の画面そのものはViewModelを監視していないので、欄は `@ObservedObject` で持つ部品 `SoratomoSkyReactionSection` に分けた（送っている間・確定の上書き・ブロックの変化で描き直す）。並びは8.2のカードと同じで、1件以上なら数、0件なら `Spacer` で、自分以外の投稿ならメニューを右端に置く。自分の投稿で0件なら欄ごと出さない（親の `VStack(spacing: 16)` の間隔を増やさない）。1人以上なら「押した人を見る（{人数}人）」のボタンで、押すと `didOpenReactors(count: summary.reactors.count)` を呼んでからシートを出す。`choose` の `source` は `.detail`
+    - 借りられないとき: `SoratomoBlockedAuthors` を監視する部品 `SoratomoSkyReactionCounts` で、数の表示だけを出す（上書きなし・メニューと入口なし）
+    - シート: `.sheet` は `detail(sky)` の中でなく、body の外側（`.navigationTitle` などと同じ並び）に付けた。中身は投稿が消えると「表示できなくなりました」に切り替わって消えるので、中に付けるとシートが勝手に閉じて8.7の文を出せない。`isUnavailable` は `becameUnavailable || 覚えに無い`
+    - 失敗の知らせ: 通報とブロックの知らせ（`SoratomoModerationNoticeAlert`）と同じ二段の形で `SoratomoReactionNoticeAlert` を足した（借りたViewModelが無ければ何もしない・閉じたら知らせを消すだけで、詳細は閉じない）。タイムラインは一番上のときだけ出すので、二重にはならない
+    - 「…」のメニュー（`SoratomoSkyDeleteMenu`・`SoratomoSkyModerationMenu`）は触っていない。差分で消えた行は、書き換えた監視のコメント2行と `case` の1行だけ
+    - 緑: iPhone 17e `885A74C7`（tasks.mdの `C2E3F752` は引き継ぎの端末に無いので、こちらで焼いた）で、`-only-testing` に `SoratomoDependenciesTests` と一時の見た目のテストを並べて流した（`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`・`-test-timeouts-enabled YES`）。xcresultで6本・6合格と1本・1合格。`SoratomoSkyDetailView.swift` はこの回でコンパイルされ、その警告・エラーは0行。同じ数え方で、ほかのファイルの既存の警告は5行拾えた。8.3に列挙されたテストは無いので、この緑は「コンパイルが通り、既存のテストが壊れていない」の意味だけ
+    - 見た目: 8.2と同じく、一時のテスト（`SoramoyouTests/SoratomoSkyDetailReactionSnapshotScratch.swift`・コミットしていない・見せた後に消した）で本物の `SoratomoSkyDetailView` を窓ごとPNGに焼いた。画像はサムネイルと表示用の2枚とも先にメモリの覚えへ入れ、本番の Storage には問い合わせていない。容れ物の `activeReactionViewModel` は弱参照なので、テストのローカルで強く持ってから入れた。4枚をメインが先に見てから利用者に送り、利用者が「このままでいい」を選んだ。他人の投稿（覚えは1人・監視で4人を流した）＝監視の4人で出た（🌅2は枠と太字・🌈1・💙1・右端のボタンは🌅・「押した人を見る（4人）」）。これが `liveReactions` の配線の目視の証拠。他人・0件＝数は出ず、右端に `face.smiling` だけ。自分・数あり＝メニューは出ず、数と「押した人を見る（2人）」。自分・0件＝欄ごと出ず、キャプションは今までの位置
+    - 確かめていないこと: メニューのタップで実際に付く・外れること、シートを開いた中身と、開いている間に投稿が消えたときの切り替わり、失敗の知らせが実際に出ること、VoiceOverの読み上げ（9.2・13.1・14.3）。本番のデータでの表示は13.1
+    - shasum の頭（コミットするもの）: `SoratomoSkyDetailView.swift` `3cb139f739bd`
+    - 実行の環境: ビルド・テスト・`pgrep`・`simctl`・xcresultの読み取りは、サンドボックスの外で流した。DerivedDataはXcodeの設定のまま。流す前の1分平均は6.0で、負荷を見るフックは1回も止めなかった
 
 - [ ] 8.4 設定の「そらとも通知」の説明と What's New を、下書きの文言で直す
   - 前提: 1
