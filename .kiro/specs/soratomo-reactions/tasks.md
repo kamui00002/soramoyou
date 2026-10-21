@@ -574,13 +574,26 @@
     - 端の場面（利用者が「このまま」を選んだ・2026-10-22）: 押した人の一覧を開いている間に全員が外して0件になると、「リアクションを読み込めませんでした」が出る（8.1で「行が0件は読めていない」と決めたため）。送っている最中に一覧を開くと、上書きの変化で一覧は描き直されず、失敗の知らせはシートの下で出せない
     - そのほか: `GoldenHourNotificationManager.swift:250` のコメントが「type が soratomoPost のものだけ」のまま（7.4の結果に記録済みの宿題）
 
-- [ ] 9.2 iOSのビルドとテストを通す（要確認Q2の前半）
+- [x] 9.2 iOSのビルドとテストを通す（要確認Q2の前半）
   - 前提: 9.1
   - ビルドにエラーと新しい警告が無いこと（変更したSwiftファイルが再コンパイルされ、警告0であることをログで確かめる）、そらともと既存のテストが通ることを確かめる（`C2E3F752`・負荷を見て・`nice`・1本ずつ・全体は時間切れ60秒）
   - 既存のテストのうちmainで既に落ちているもの（leave-group 9.2とpublic-launch 9.2で確かめた34本など）は、変更前のmainでも同じく落ちることを確かめて区別する
   - 7〜8の各テストが、陽性対照で赤になった記録があることを確かめる（記録の無いテストは、先に陽性対照を取り直す）
   - 要確認Q2の前半: シミュレーターで、カードの読み上げの要素（`idb ui describe-all` など）が、カードのボタンとリアクションのメニューで別になっていること、メニューのボタンの上の長押しで長押しのメニューが出ないことを見る（実機とVoiceOverは14.3）
   - _Requirements: 1.7, 1.8, 12.9, 12.15, 13.4_
+  - 結果（2026-10-22 02:20）: `HEAD` `b48b277f`〜`71674bfd`（この間のコミットは文書だけ・Swift は同じ）。端末は iPhone 17e `885A74C7`（`C2E3F752` は無い）。ビルド・テスト・`pgrep`・`simctl`・`idb`・xcresult の読み取りはサンドボックスの外で流した
+    - 全体（01:16〜01:38）: 9.1 の読むだけの点検と同時に流した（9.1 は Swift を1字も変えておらず、流す前後で作業ツリーは clean）。先に `clean` してから `-only-testing:SoramoyouTests`（`nice -n 19`・`-jobs 4`・`-parallel-testing-enabled NO`・`-test-timeouts-enabled YES -default-test-execution-time-allowance 60`）。xcresult で 1,655本・合格1,618・失敗33・スキップ4
+    - main で既に落ちるものの区別: 失敗33本は、leave-group 9.x（tasks.md 417行）で変更前の main でも落ちると確かめた34本から `AuthServiceTests` の1本を除いたものと、クラスごとの数が一致（`FirestoreServiceTests` 20・`StorageServiceTests` 4・`ProfileViewModelTests` 2・`FilterGraphBuilderTests` 2・`AuthViewModelTests`・`EditViewModelTests`・`ImageServiceTests`・`IntegrationTests`・`UserModelTests` が各1）。`AuthServiceTests` は今回は通った。そらとも・What's New・設定のテストの失敗は0。今回の変更で落ちるようになったテストは0。main はその後 #189〜#192 が入っているが、増えた失敗が無いので、main で取り直していない
+    - 警告: clean の後なので、この spec で変えた Swift 27本（`git diff --name-only 2cbc5645...HEAD -- Soramoyou/`）はすべて再コンパイルされ（ログの `SwiftCompile` で1本ずつ確かめた）、その警告・エラーは0行。同じ数え方で、ほかのファイルの既存の警告は29行拾えた
+    - 陽性対照の記録の棚卸し（点検Bが tasks.md の7.1〜8.4の結果から作った表）: この spec で足したテスト89本のうち、赤の記録があるのは25本で、63本は記録が無かった（8.1〜8.3の画面は、見た目を確かめた一時のテストを消したので、コミットしたテストが無い）。利用者の決定（2026-10-22）で、要件に直結する約10本だけ取り直した
+    - 陽性対照の取り直し（11本・ビルド2回）: 壊す前に4ファイルの写しと shasum を控えた（`SoratomoReactionViewModel.swift` 頭 `320c223abc31`・`SoratomoTimelineViewModel.swift` `484638c03988`・`SoratomoSkyService.swift` `32303b0517f3`・`SoratomoAnalytics.swift` `79ee9045c65a`）。壊すときも、整形のフックが引数を `_` に変えないよう、引数を使ったままの形にした
+      - 1回目（01:42〜・5か所）: `canReact` を自分の投稿でも真に・失敗の `.skyGone` で `onSkyGone` を呼ばない・`removeGoneSky` を空に・投稿1件の監視でリアクションを捨てる・リアクションの通知の記録の `type` を `post_created` に。xcresult で129本のうち赤は狙った6本だけ（`testCanReactOnlyToOthersSkiesWhileSignedIn`・`testChooseDoesNothingWhenCannotReact`〔1.6〕・`testSkyGoneFailureCallsOnSkyGoneOnceWithThatSky`・`testRemoveGoneSkyRemovesItWithoutTouchingImages`〔8.8〕・`testResolveObservedSkyCarriesReactionsOfTheDocument`〔2.5〕・`testNotificationOpenedTypeDefaultsToPostCreatedAndCanBeReaction`〔15.5〕）。整形のフックが、壊した `canReact` の引数を `to _:` に変えた（その関数の中だけ）ので、戻すときに一緒に戻した
+      - 2回目（01:55〜・5か所）: `choose` の送っている間の判定を外す・ブロックの購読で `objectWillChange` を送らない・確定の上書きを手放さない・投稿の変換でリアクションを捨てる・`soratomo_reactions_viewed` の項目名を `reactionCount` に。xcresult で82本のうち赤は9本。狙った5本（`testChooseWhileSendingIsIgnored`〔1.10〕・`testBlockingSendsObjectWillChangeAndHidesTheirReaction`〔5.2〕・`testConfirmedOverlayIsReleasedAfterTenSeconds`〔2.6〕・`testDecodeSkyReadsReactions`〔2.5〕・`testNamesAndParameterKeysAreLowerSnakeCase`〔15.2〕）と、失敗の文で原因を確かめた4本（`testReactionEventsHaveFixedNamesAndParameters`・`testDidOpenReactorsLogsReactionCount`＝項目名・`testOlderExpiryDoesNotRemoveNewerOverlay`＝手放さない・`testDecodeSkiesKeepsSkiesWhoseReactionsAreBroken`＝リアクションを捨てる）
+      - 戻すたびに `shasum -c` で4ファイルとも控えと一致し、作業ツリーは clean に戻った。戻した中身は全体の回と同じなので、緑は全体の回のものを使う
+      - 取り直していない52本（63本から11本を除く）は、赤の記録が無いままで、「検証済み」とは書かない
+    - 要確認Q2の前半（利用者の決定・2026-10-22＝一時のテストの中で数える）: 一時のテスト（`SoramoyouTests/SoratomoTimelineAccessibilityScratch.swift`・コミットしていない・確かめた後に消した）で、モックの監視に他人の投稿（数あり）と自分の投稿（数あり）を流した本物の `SoratomoTimelineView` を出したまま60秒止め、その間に `idb ui describe-all --json` で読み上げの要素を書き出した（画像は先にメモリの覚えへ入れ、本番には触れていない）。他人の投稿は、カード＝Button「夕方の空、ゆうと、2:13、夕方の空、リアクション、夕焼け2人、虹1人。あなたは夕焼けを付けています」と、メニュー＝PopUpButton「リアクションを変える。いまは夕焼け」（右下・44×44）の別の要素になった。カードの読み上げに数が入り、メニューの文は入っていない。自分の投稿は Button「うちのベランダから、わたし、2:12、うちのベランダから、リアクション、くも1人」だけで、メニューの要素は無い。画面の写しでも同じ並びを見た。一覧には、テストを動かすアプリの後ろのオンボーディングの要素も混ざっていた（関係ない）
+    - 確かめていないこと: メニューのボタンの上の長押しで長押しのメニューが出ないこと（この方法では見られないので14.3の実機へ回す・利用者の決定）。実機と VoiceOver の読み上げそのもの（14.3）
+    - 実行の環境: 負荷を見るフックが1回、一時のテストを流す前に止めた（負荷53・メモリ逼迫・スワップ7.1G・ほかのところのシミュレーター442%）。押し切らず、1分平均が40を切り、5分平均が80を切るまで待ってから流した。2回目の陽性対照の途中で1分平均が120まで上がったが、xcodebuild は1本（`nice -n 19`）のまま終わった
 
 ## (j) 文言の確定
 
