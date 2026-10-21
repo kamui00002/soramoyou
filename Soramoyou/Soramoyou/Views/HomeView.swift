@@ -657,18 +657,9 @@ struct PostImageView: View {
 
     var body: some View {
         // サムネイルを優先的に表示
-        if let thumbnailURL = imageInfo.thumbnail, let url = URL(string: thumbnailURL) {
-            KFImage(url)
-                .placeholder {
-                    ProgressView()
-                }
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(maxWidth: .infinity, minHeight: imageHeight, maxHeight: imageHeight)
-                .clipped()
-        } else if let imageURL = URL(string: imageInfo.url) {
-            // サムネイルがない場合はフルサイズ画像を表示
-            KFImage(imageURL)
+        // 公開は URL、公開以外は Storage のパスで読む（サムネイルの手がかりが無ければフルサイズ画像。判定は PostImageSource）
+        if let image = KFImage.post(PostImageSource.resolve(imageInfo, prefersThumbnail: true)) {
+            image
                 .placeholder {
                     ProgressView()
                 }
@@ -677,7 +668,7 @@ struct PostImageView: View {
                 .frame(maxWidth: .infinity, minHeight: imageHeight, maxHeight: imageHeight)
                 .clipped()
         } else {
-            // URLが無効な場合
+            // 読めない場合（パスも URL も無い）
             Rectangle()
                 .fill(Color.gray.opacity(0.3))
                 .frame(maxWidth: .infinity, minHeight: imageHeight, maxHeight: imageHeight)
@@ -1327,8 +1318,9 @@ struct PostDetailImageView: View {
 
     var body: some View {
         // フルサイズ画像を表示
-        if let imageURL = URL(string: imageInfo.url) {
-            KFImage(imageURL)
+        // 公開は URL、公開以外は Storage のパスで読む（判定は PostImageSource）
+        if let image = KFImage.post(PostImageSource.resolve(imageInfo, prefersThumbnail: false)) {
+            image
                 .placeholder {
                     ProgressView()
                 }
