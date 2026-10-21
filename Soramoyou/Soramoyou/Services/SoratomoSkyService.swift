@@ -231,9 +231,12 @@ final class SoratomoSkyService: SoratomoSkyServiceProtocol, @unchecked Sendable 
         let registration = skiesCollection(groupId: groupId)
             .document(skyId)
             .addSnapshotListener(includeMetadataChanges: true) { snapshot, error in
+                // Firestore の型（非 Sendable かもしれない）はここで値に変えてから渡す（`observeTimeline` と同じ読み方）
                 guard let result = SoratomoSkyService.resolveObservedSky(
                     exists: snapshot?.exists,
                     isFromCache: snapshot?.metadata.isFromCache ?? false,
+                    data: snapshot?.data(with: .estimate),
+                    path: snapshot?.reference.path,
                     error: error
                 ) else {
                     // キャッシュだけの不在は届けない（つながれば、サーバーの結果が届く）
@@ -370,12 +373,15 @@ extension SoratomoSkyService {
     ///
     /// 読み取り（`decodeSky`）と日次件数の集計で使う。作成で送る値の名前も同じ（`makeCreatePayload`）。
     /// ⚠️ アプリの `SoratomoSky.pixelWidth` / `pixelHeight` は、Firestore では `width` / `height`。
+    /// ⚠️ `reactions` は Functions の `setReactionTx` だけが書く（アプリは読むだけ）。
+    ///    同じく Functions が書く `reactorIds`（付けた人の uid の並び）は、アプリでは読まないので名前を置かない。
     enum Field {
         static let authorId = "authorId"
         static let caption = "caption"
         static let width = "width"
         static let height = "height"
         static let createdAt = "createdAt"
+        static let reactions = "reactions"
     }
 
     /// 読み取った 1 件の文書（Firestore の型に依存しない形）
@@ -413,8 +419,10 @@ extension SoratomoSkyService {
     ///   - id: 文書 ID
     ///   - groupId: 投稿先のグループ ID（文書の中には持たない。パスから決まる）
     ///   - data: 文書の項目
+    ///   - path: 文書のパス（リアクションが読めないときのログに使う。分からなければ nil）
     /// - Throws: 必須の項目が無い、または型・値が想定と違うとき `DecodeError`
-    static func decodeSky(id: String, groupId: String, data: [String: Any]) throws -> SoratomoSky {
+    ///   （リアクションの形が壊れていても投げない。投稿は出し、読めた分のリアクションだけを持たせる）
+    static func decodeSky(id: String, groupId: String, data: [String: Any], path: String? = nil) throws -> SoratomoSky {
         let authorId = try requiredValue(Field.authorId, in: data, as: String.self)
         guard !authorId.isEmpty else {
             throw DecodeError.invalidField(Field.authorId)
@@ -435,7 +443,7 @@ extension SoratomoSkyService {
             caption = text
         }
 
-        return SoratomoSky(
+        var sky = SoratomoSky(
             id: id,
             groupId: groupId,
             authorId: authorId,
@@ -444,6 +452,10 @@ extension SoratomoSkyService {
             pixelHeight: pixelHeight,
             createdAt: createdAt
         )
+        // リアクションは最後に読む。`decode` は投げないので、壊れていても投稿を飛ばさない（soratomo-reactions 要件 2.7）。
+        // 項目が無い投稿（リアクションを足す前の投稿・まだだれも付けていない投稿）は空になる
+        sky.reactions = SoratomoReactions.decode(data[Field.reactions], path: path)
+        return sky
     }
 
     /// 文書の一覧を `SoratomoSky` の配列に変換する（壊れた 1 件だけを飛ばす）
@@ -463,7 +475,7 @@ extension SoratomoSkyService {
         var skies: [SoratomoSky] = []
         for document in documents {
             do {
-                try skies.append(decodeSky(id: document.id, groupId: groupId, data: document.data))
+                try skies.append(decodeSky(id: document.id, groupId: groupId, data: document.data, path: document.path))
             } catch {
                 // decodeSky が投げるのは DecodeError だけ。万一ほかの型が来ても、同じ形で記録して飛ばす
                 let reason = error as? DecodeError ?? DecodeError.invalidField("unknown")
@@ -559,7 +571,7 @@ extension SoratomoSkyService {
     /// | 監視の結果 | 届ける結果 |
     /// |---|---|
     /// | エラー | `SoratomoError.fromFirestore(_:access: .read)`（権限の拒否・不在は `.notMember`、通信は `.network`） |
-    /// | 文書がある（キャッシュの結果を含む） | `.present` |
+    /// | 文書がある（キャッシュの結果を含む） | `.present`（文書の `reactions` から読んだリアクションを持つ） |
     /// | 文書が無い（サーバーで確かめた結果） | `.gone` |
     /// | 文書が無い（端末のキャッシュだけの結果） | 届けない（nil） |
     /// | 結果もエラーも無い | `.unknown`（起きない想定） |
@@ -567,14 +579,20 @@ extension SoratomoSkyService {
     /// - Important: オフラインで開いた・まだ端末に写しが無い投稿は「無い」として届く（エラーにならない）。
     ///   これを `.gone` にすると、通信できないだけで「この投稿は表示できなくなりました」になる。
     ///   監視は続くので、つながればサーバーの結果が届く。
+    /// - Note: リアクションの形が壊れていても `.present` のまま届ける（リアクションは空か、読めた分だけ・soratomo-reactions 要件 2.7）。
+    ///   リアクションが変わるたびに同じ監視から結果が届くので、投稿詳細は 2 本目の監視を張らずに追従できる（要件 2.5）。
     /// - Parameters:
     ///   - exists: 文書があるか（監視の結果が無ければ nil）
     ///   - isFromCache: 端末のキャッシュだけから作った結果か
+    ///   - data: 文書の項目（文書が無い・監視の結果が無ければ nil）
+    ///   - path: 文書のパス（リアクションが読めないときのログに使う。分からなければ nil）
     ///   - error: 監視のエラー
     /// - Returns: 届ける結果。届けないときは nil
     static func resolveObservedSky(
         exists: Bool?,
         isFromCache: Bool,
+        data: [String: Any]?,
+        path: String? = nil,
         error: Error?
     ) -> Result<SoratomoSkyPresence, SoratomoError>? {
         if let error {
@@ -584,7 +602,7 @@ extension SoratomoSkyService {
             return .failure(.unknown)
         }
         if exists {
-            return .success(.present)
+            return .success(.present(SoratomoReactions.decode(data?[Field.reactions], path: path)))
         }
         return isFromCache ? nil : .success(.gone)
     }

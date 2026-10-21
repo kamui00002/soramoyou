@@ -977,4 +977,56 @@ final class SoratomoTimelineViewModelTests: XCTestCase {
         XCTAssertEqual(fixture.viewModel.moderationNotice, .blockFailed)
         XCTAssertTrue(fixture.recorder.events.isEmpty)
     }
+
+    // MARK: - リアクション（soratomo-reactions 7.2）
+
+    func testReactionOnlyChangeUpdatesSkies() async {
+        // 陽性対照 C7: 投稿のほかの項目は同じで、リアクションだけが変わった結果でも作り直す（要件 2.5）。
+        // ⚠️ 比べるのは `reactions` そのもの（SoratomoReactions の比較）。投稿の配列どうしを比べると、
+        //    SoratomoSky の比較がリアクションを見ない形に壊れたとき、壊れた比較で緑に化ける
+        let fixture = makeFixture()
+        let sky = makeSky(id: "s1", authorId: "bob")
+        await showing(sky, in: fixture)
+        XCTAssertEqual(fixture.viewModel.skies.first?.reactions, .empty)
+
+        var reacted = sky
+        reacted.reactions = SoratomoReactions(byUser: [
+            "carol": SoratomoReaction(kind: .rainbow, reactedAt: Date(timeIntervalSince1970: 2000)),
+        ])
+        fixture.skyService.emitTimeline(.success(
+            SoratomoTimelineSnapshot(skies: [reacted], isFromCache: false, mayHaveMore: false)
+        ))
+
+        XCTAssertEqual(fixture.viewModel.skies.first?.reactions, reacted.reactions)
+        // 投稿詳細が読む覚えも、新しいリアクションで覚え直す
+        XCTAssertEqual(fixture.recorder.remembered.count, 2)
+        XCTAssertEqual(fixture.recorder.remembered.last?.first?.reactions, reacted.reactions)
+
+        // 外された（空に戻った）ときも作り直す
+        fixture.skyService.emitTimeline(.success(
+            SoratomoTimelineSnapshot(skies: [sky], isFromCache: false, mayHaveMore: false)
+        ))
+        XCTAssertEqual(fixture.viewModel.skies.first?.reactions, .empty)
+        XCTAssertEqual(fixture.recorder.remembered.count, 3)
+    }
+
+    func testRemoveGoneSkyRemovesItWithoutTouchingImages() async {
+        // リアクションを送った投稿がもう無い（`.skyGone`）と分かったときの口（要件 8.8）。通報で分かったときと同じ扱い
+        let fixture = makeFixture()
+        let (a, _) = await showingOthers(in: fixture)
+
+        fixture.viewModel.removeGoneSky(a)
+
+        XCTAssertEqual(fixture.viewModel.skies.map(\.id), ["b1"])
+        XCTAssertEqual(fixture.recorder.forgotten.map(\.skyId), ["a1"])
+        // 他人の投稿の画像は消しに行かない。記録もしない（記録はリアクションの ViewModel が行う）
+        XCTAssertTrue(fixture.recorder.removedCaches.isEmpty)
+        XCTAssertTrue(fixture.imageStore.deleteCalls.isEmpty)
+        XCTAssertTrue(fixture.recorder.events.isEmpty)
+        // 遅れて届いた古い結果に混ざっていても出さない
+        fixture.skyService.emitTimeline(.success(
+            SoratomoTimelineSnapshot(skies: [a, makeSky(id: "c1", authorId: "carol")], isFromCache: true, mayHaveMore: false)
+        ))
+        XCTAssertEqual(fixture.viewModel.skies.map(\.id), ["c1"])
+    }
 }

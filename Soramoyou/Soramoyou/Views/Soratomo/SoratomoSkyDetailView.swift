@@ -17,6 +17,9 @@
 //    通報が受け付けられたら知らせを閉じた後に、ブロックが保存されたらすぐに詳細を閉じる。隠す集合に当たる投稿は「表示できません」
 //  - 開いている間は投稿 1 件を監視し、「もう無い」か「メンバーでなくなった」が届いたら「この投稿は表示できなくなりました」を出し、
 //    覚えから外す（release-gate 10.6・要件 1.7）
+//  - 投稿者の行の下にリアクションの欄（数・自分以外の投稿ならメニュー・1 人以上なら押した人の一覧の入口）を置く。
+//    操作と上書きはタイムラインのリアクションの ViewModel（`dependencies.activeReactionViewModel`）を借り、数は監視の最新で出す
+//    （soratomo-reactions 8.3・要件 1.1・1.6・2.4・2.5・3.1・3.5・8.7）
 //  - 画像の VoiceOver の説明はキャプション。無ければ「{表示名}さんの空」
 //  - ⚠️ 画像は必ず `SoratomoStorageImageProvider` と `.targetCache(SoratomoImageCache.cache(forStoragePath:))`
 //    （パスは provider と同じ）で読み、processor（ダウンサンプリングなど）は付けない
@@ -45,6 +48,14 @@ struct SoratomoSkyDetailView: View {
     @ObservedObject private var profileStore: SoratomoProfileStore
     /// この投稿のグループのタイムラインの ViewModel（削除に使う。開いていない・別のグループなら nil）
     private let timelineViewModel: SoratomoTimelineViewModel?
+    /// この投稿のグループのリアクションの ViewModel（タイムラインと同じ上書きと操作の経路・soratomo-reactions 8.3。
+    /// 開いていない・別のグループなら nil）
+    private let reactionViewModel: SoratomoReactionViewModel?
+
+    /// 監視で届いた最新のリアクション（nil の間は、タイムラインの覚えの値を最初の表示にだけ使う・soratomo-reactions 要件 2.5）
+    @State private var liveReactions: SoratomoReactions?
+    /// 押した人の一覧のシートを出しているか（soratomo-reactions 要件 3.1）
+    @State private var isShowingReactors = false
 
     /// 削除して閉じる途中か（閉じるまでの間に「表示できません」が一瞬出ないようにする）
     @State private var didDelete = false
@@ -87,6 +98,12 @@ struct SoratomoSkyDetailView: View {
         } else {
             timelineViewModel = nil
         }
+        // リアクションの ViewModel も同じく、グループ ID が一致するときだけ借りる（soratomo-reactions 8.3）
+        if let viewModel = dependencies.activeReactionViewModel, viewModel.groupId == groupId {
+            reactionViewModel = viewModel
+        } else {
+            reactionViewModel = nil
+        }
     }
 
     // MARK: - Body
@@ -124,6 +141,13 @@ struct SoratomoSkyDetailView: View {
             await observeSky()
         }
         .modifier(SoratomoModerationNoticeAlert(viewModel: timelineViewModel, onFinished: { dismiss() }))
+        // 押した人の一覧（soratomo-reactions 8.3）。⚠️ 中身（detail）でなく、ここに付ける。中身は投稿が消えると
+        // 「表示できなくなりました」に切り替わって消えるので、そこに付けるとシートが勝手に閉じ、8.7 の文を出せない
+        .sheet(isPresented: $isShowingReactors) {
+            reactorsSheet
+        }
+        // リアクションの失敗の知らせ（詳細が開いている間は詳細が出す。タイムラインは一番上のときだけ出す）
+        .modifier(SoratomoReactionNoticeAlert(viewModel: reactionViewModel))
         // 画面名の記録は根の画面（SoratomoRootView）がパスの変化で 1 回だけ行う（14.3 の点検で集約）
     }
 
@@ -131,8 +155,9 @@ struct SoratomoSkyDetailView: View {
 
     /// 開いている間、投稿 1 件を監視する（画面が消えて task が取り消されたら止める）
     ///
-    /// `.present` は何度も届きうるので、`.gone` と `.notMember` だけに反応する。
-    /// ほかの失敗（通信など）では、出している中身を変えない。
+    /// `.gone` と `.notMember` では「表示できなくなりました」にする。`.present` は何度も届きうるので、
+    /// 中のリアクションを最新として覚えるだけにする（soratomo-reactions 要件 2.5）。
+    /// ほかの失敗（通信など）では、出している中身を変えない（数も最後に届いた値のまま）。
     private func observeSky() async {
         let skyLookup = dependencies.skyLookup
         let groupId = groupId
@@ -142,7 +167,9 @@ struct SoratomoSkyDetailView: View {
             case .success(.gone), .failure(.notMember):
                 becameUnavailable = true
                 skyLookup.forget(groupId: groupId, skyId: skyId)
-            case .success(.present), .failure:
+            case let .success(.present(reactions)):
+                liveReactions = reactions
+            case .failure:
                 break
             }
         }
@@ -209,6 +236,10 @@ struct SoratomoSkyDetailView: View {
                 .padding(.horizontal, 16)
                 .accessibilityElement(children: .combine)
 
+                // リアクションの欄（投稿者の行にまとめない。メニューを VoiceOver の別の要素にするため・13.4）
+                reactionSection(sky)
+                    .padding(.horizontal, 16)
+
                 // キャプションは全文（行数を制限しない・要件 8.9）
                 if let caption = sky.caption, !caption.isEmpty {
                     Text(caption)
@@ -219,6 +250,46 @@ struct SoratomoSkyDetailView: View {
             }
             .padding(.bottom, 24)
         }
+    }
+
+    /// リアクションの欄（soratomo-reactions 8.3）
+    ///
+    /// 表示に使う値は、監視で届いた最新（`liveReactions`）。まだ届いていなければタイムラインの覚えの値（要件 2.5）。
+    /// 借りた ViewModel が無いとき（起きない想定）は数の表示だけを出し、ブロックした人の分は容れ物の一覧で除く
+    /// - Parameter sky: 表示している投稿
+    @ViewBuilder
+    private func reactionSection(_ sky: SoratomoSky) -> some View {
+        let server = liveReactions ?? sky.reactions
+        if let reactionViewModel {
+            SoratomoSkyReactionSection(
+                viewModel: reactionViewModel,
+                sky: sky,
+                server: server,
+                onOpenReactors: { isShowingReactors = true }
+            )
+        } else {
+            SoratomoSkyReactionCounts(
+                blockedAuthors: dependencies.blockedAuthors,
+                server: server,
+                myUid: dependencies.currentUid()
+            )
+        }
+    }
+
+    /// 押した人の一覧のシートの中身
+    ///
+    /// 開いている間に投稿が消えた・グループから外れた（覚えから外れた）ら、「この投稿は表示できなくなりました」を出す（8.7）。
+    /// 行は、欄と同じく監視の最新に自分の分の上書きを重ね、ブロックした人の分を除いたもの
+    private var reactorsSheet: some View {
+        let sky = dependencies.skyLookup.sky(groupId: groupId, skyId: skyId)
+        let entries = sky.flatMap { sky in
+            reactionViewModel?.summary(for: sky, server: liveReactions ?? sky.reactions).reactors
+        } ?? []
+        return SoratomoReactorsSheet(
+            entries: entries,
+            isUnavailable: becameUnavailable || sky == nil,
+            profileStore: profileStore
+        )
     }
 
     /// 拡大できる画像（サムネイルを先に出し、表示用画像を重ねて置き換える）
@@ -558,6 +629,125 @@ private struct SoratomoModerationNoticeAlert: ViewModifier {
                     viewModel.moderationNotice = nil
                     if notice == .reportAccepted || notice == .skyGone {
                         onFinished()
+                    }
+                }
+            )
+        }
+    }
+}
+
+// MARK: - リアクション（soratomo-reactions 8.3）
+
+/// 投稿詳細のリアクションの欄（数の表示・自分以外の投稿ならメニュー・1 人以上なら押した人の一覧の入口）
+///
+/// 借りた ViewModel を監視するので、送っている間・確定の上書き・ブロックの変化で描き直す
+/// （詳細の画面そのものは ViewModel を監視していないため、欄を部品に分けている）。
+/// - 自分の投稿で 0 件なら、欄ごと出さない（親の VStack の間隔を増やさない）
+/// - 数が 0 件でも、メニューは右端に置く（タイムラインのカードと同じ位置。数の表示は 0 件だと場所を取らないので空白で寄せる）
+private struct SoratomoSkyReactionSection: View {
+    /// タイムラインから借りたリアクションの ViewModel
+    @ObservedObject var viewModel: SoratomoReactionViewModel
+    /// 表示している投稿
+    let sky: SoratomoSky
+    /// 監視の最新のリアクション（まだ届いていなければタイムラインの覚えの値）
+    let server: SoratomoReactions
+    /// 押した人の一覧を開く
+    let onOpenReactors: () -> Void
+
+    var body: some View {
+        let summary = viewModel.summary(for: sky, server: server)
+        let showsMenu = viewModel.canReact(to: sky)
+        if showsMenu || summary.total > 0 {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    if summary.total > 0 {
+                        SoratomoReactionSummaryView(summary: summary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Spacer(minLength: 0)
+                    }
+                    if showsMenu {
+                        SoratomoReactionMenuButton(
+                            summary: summary,
+                            isSending: viewModel.isSending(sky),
+                            onChoose: { kind in
+                                Task { await viewModel.choose(kind, for: sky, server: server, source: .detail) }
+                            }
+                        )
+                    }
+                }
+                // 1 人以上なら、押した人の一覧の入口（人数は一覧の人数＝合計・3.1・3.5）
+                if summary.total > 0 {
+                    Button {
+                        viewModel.didOpenReactors(count: summary.reactors.count)
+                        onOpenReactors()
+                    } label: {
+                        Text("押した人を見る（\(summary.reactors.count)人）")
+                            .font(.subheadline)
+                    }
+                    .accessibilityHint("リアクションした人の一覧を開きます")
+                }
+            }
+        }
+    }
+}
+
+/// 借りた ViewModel が無いとき（起きない想定）の、数の表示だけの欄
+///
+/// ブロックの一覧の変化で描き直すため、`SoratomoBlockedAuthors` を監視する。上書きは無いので、監視の値そのままを出す
+private struct SoratomoSkyReactionCounts: View {
+    /// ブロックした投稿者（数からブロックした人の分を除く・5.1〜5.3）
+    @ObservedObject var blockedAuthors: SoratomoBlockedAuthors
+    /// 監視の最新のリアクション（まだ届いていなければタイムラインの覚えの値）
+    let server: SoratomoReactions
+    /// いまの利用者の uid（自分の絵文字の印に使う。未ログインなら nil）
+    let myUid: String?
+
+    var body: some View {
+        SoratomoReactionSummaryView(
+            summary: SoratomoReactionSummary.make(
+                reactions: server,
+                myUid: myUid,
+                myOverride: nil,
+                blockedUserIds: blockedAuthors.ids
+            )
+        )
+    }
+}
+
+/// 投稿詳細で、リアクションの失敗の知らせを出す（詳細が開いている間は詳細が出す・タイムラインは一番上のときだけ出す）
+///
+/// 通報とブロックの知らせ（`SoratomoModerationNoticeAlert`）と同じく、ViewModel が無ければ何もしない
+private struct SoratomoReactionNoticeAlert: ViewModifier {
+    /// タイムラインから借りたリアクションの ViewModel（無ければ何もしない）
+    let viewModel: SoratomoReactionViewModel?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let viewModel {
+            content.modifier(Observed(viewModel: viewModel))
+        } else {
+            content
+        }
+    }
+
+    /// ViewModel を監視して知らせを出す本体
+    private struct Observed: ViewModifier {
+        @ObservedObject var viewModel: SoratomoReactionViewModel
+
+        func body(content: Content) -> some View {
+            content.alert(viewModel.notice?.userMessage ?? "", isPresented: isShowingNotice) {
+                Button("OK", role: .cancel) {}
+            }
+        }
+
+        /// 知らせを出しているか（閉じたら知らせを消す。詳細は閉じない＝もう一度操作できる）
+        private var isShowingNotice: Binding<Bool> {
+            Binding(
+                get: { viewModel.notice != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        viewModel.notice = nil
                     }
                 }
             )

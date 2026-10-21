@@ -8,6 +8,10 @@
 //   グループごとの削除」をトランザクションで行う。
 // - 手順2〜4（このファイルの deleteUserDataInGroup・タスク 3.2）: 投稿と画像・通知の間引き・所属の写しを消す。
 //   時間の予算（締め切り）を、グループの前・投稿300件ごと・画像100件ごとに確かめる。
+// - 手順2b（このファイルの removeUserReactionsInGroup・soratomo-reactions 4.2）: 手順2の投稿の後、残るメンバーがいるときだけ、
+//   本人がほかのメンバーの投稿に付けたリアクションと、送った印の中の本人を消す。本人あてのリアクションの通知の間引き
+//   （reactionNotifyState/{uid}）は手順3で消す。時間の予算は300件ごとに確かめる。抜ける（leaveSoratomoGroup）も
+//   手順2の後に照合つきで呼び、間引きは finishLeaveTx で消す（soratomo-reactions 4.3）。
 // - 利用者単位（deleteSoratomoUserData・タスク 3.3）: 所属の写しと追加のグループIDの和について手順1〜4を繰り返し、
 //   最後に利用者の文書を消す（利用停止のときだけ、停止の日時と所属数0で残す）。利用停止・解除（suspendSoratomoUser・
 //   unsuspendSoratomoUser）と、投稿1件の削除（deleteSoratomoSky・開発者の運用手順から使う）もここに置く。
@@ -34,7 +38,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
-const { FieldValue, Timestamp } = require("firebase-admin/firestore");
+const { FieldPath, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const core = require("./soratomoCore");
 
 // MARK: - 定数
@@ -49,6 +53,9 @@ const USERS = "soratomoUsers";
 const USER_GROUPS = "groups";
 /** 抜けるの片づけ中の印（leave-group・文書IDは「uid_グループID」）。書き手は Functions だけ。 */
 const PENDING_LEAVES = "soratomoPendingLeaves";
+/** リアクションの通知の記録（soratomo-reactions・soratomoStore.js と同じ）。書き手は Functions だけ。 */
+const REACTION_NOTIFY_STATE = "reactionNotifyState";
+const REACTION_NOTICES = "reactionNotices";
 
 /** 投稿を1回に読んで消す件数。消し終えるたびに締め切りを確かめる（design の「投稿300件ごと」）。 */
 const SKY_PAGE_SIZE = 300;
@@ -56,6 +63,14 @@ const SKY_PAGE_SIZE = 300;
 const IMAGE_CHECK_EVERY = 100;
 /** 画像を同時に消す最大の件数（design の「同時に10件まで」）。 */
 const IMAGE_DELETE_CONCURRENCY = 10;
+/** 手順2bで、本人のリアクションを外す文書を同時に書く最大の件数（soratomo-reactions design の「同時に10件まで」）。 */
+const REACTION_UPDATE_CONCURRENCY = 10;
+/**
+ * 手順2bで、投げずに飛ばす書き込みの失敗のコード（gRPC の NOT_FOUND＝読んだ後に消えた・FAILED_PRECONDITION＝読んだ後に
+ * 書き換わった）。エミュレーター（cloud-firestore-emulator v1.20.2・2026-10-19）は、読んだ後に消えた文書への前提条件つきの
+ * update も FAILED_PRECONDITION で返した。本番がどちらで返しても飛ばす。
+ */
+const SKIPPED_WRITE_CODES = Object.freeze([5, 9]);
 
 /**
  * 削除の呼び手（design の DeletionTrigger）。本人の退会・アカウントの無い人の後始末・管理スクリプト・利用停止。
@@ -299,6 +314,105 @@ async function deleteImagesByPrefix(storage, prefix, pastDeadline, beforeDelete)
   return { done: true, deleted };
 }
 
+// MARK: - 手順2b: 本人が付けたリアクション（soratomo-reactions）
+
+/**
+ * 1区切りの文書を、同時に REACTION_UPDATE_CONCURRENCY 件まで write で書く。書けた数を返す。
+ * - write には前提条件 { lastUpdateTime: 読んだ文書の updateTime } を渡す（読んだ後に書き換わった文書には書かない）
+ * - SKIPPED_WRITE_CODES（読んだ後に消えた・書き換わった）は投げずに飛ばし、数えない
+ * - ほかの失敗が出ても、走っている書き込みを全部待ってから最初の失敗を投げる（deleteImageChunk と同じ）
+ * @param {FirebaseFirestore.QueryDocumentSnapshot[]} docs
+ * @param {(ref: FirebaseFirestore.DocumentReference, precondition: FirebaseFirestore.Precondition) => Promise<unknown>} write
+ * @returns {Promise<number>}
+ */
+async function updateDocChunk(docs, write) {
+  let next = 0;
+  let written = 0;
+  const worker = async () => {
+    while (next < docs.length) {
+      const doc = docs[next];
+      next += 1;
+      try {
+        await write(doc.ref, { lastUpdateTime: doc.updateTime });
+        written += 1;
+      } catch (err) {
+        if (!(err && SKIPPED_WRITE_CODES.includes(err.code))) throw err;
+      }
+    }
+  };
+  const workers = Array.from({ length: Math.min(REACTION_UPDATE_CONCURRENCY, docs.length) }, worker);
+  const failed = (await Promise.allSettled(workers)).find((r) => r.status === "rejected");
+  if (failed) throw failed.reason;
+  return written;
+}
+
+/**
+ * クエリに当たる文書を SKY_PAGE_SIZE 件ずつ読み、updateDocChunk で書く。1区切り書くたびに締め切りを確かめる。
+ * - 読むのは文書の参照と updateTime だけ（select() で項目を読まない）
+ * - クエリは毎回先頭から読む。書けた文書は本人を含まなくなり、消えた文書も当たらないので、カーソルは要らない。
+ *   書き換わって飛ばした文書は、まだ本人を含んでいれば次の区切りで読み直し、照合を通ってから書く
+ * - beforeDelete（省略できる・leave-group の照合）: 1区切りを読んだ後、書く前に呼ぶ。偽なら書かずに stopped: true
+ *   （deleteSkiesByQuery と同じ「読む→照合→書く」の順）
+ * @param {FirebaseFirestore.Query} query
+ * @param {(ref: FirebaseFirestore.DocumentReference, precondition: FirebaseFirestore.Precondition) => Promise<unknown>} write
+ * @param {() => boolean} pastDeadline
+ * @param {(() => Promise<boolean>)|undefined} [beforeDelete]
+ * @returns {Promise<{ done: boolean, written: number, stopped?: true }>}
+ */
+async function updateEachByQuery(query, write, pastDeadline, beforeDelete) {
+  let written = 0;
+  for (;;) {
+    const snap = await query.select().limit(SKY_PAGE_SIZE).get();
+    if (snap.empty) return { done: true, written };
+    if (beforeDelete && !(await beforeDelete())) return { done: true, written, stopped: true };
+    written += await updateDocChunk(snap.docs, write);
+    if (pastDeadline()) return { done: false, written };
+  }
+}
+
+/**
+ * 手順2b（soratomo-reactions design の removeUserReactionsInGroup・要件9.1〜9.3・9.5〜9.11）。そのグループで本人が
+ * ほかのメンバーの投稿に付けたリアクションと、送った印の中の本人を消す。
+ * 1. 投稿を reactorIds に本人を含むもので読み、各投稿の reactions.{uid}（FieldPath で本人のキーだけを指す）を消し、
+ *    reactorIds から本人を外す。同じ update で書くので、reactions のキーと reactorIds がそろったまま（I1）
+ * 2. 送った印（reactionNotices）を notifiedReactorIds に本人を含むもので読み、本人を外す。印の文書は消さない
+ *    （空の配列で残っても、投稿の削除のトリガーかグループごとの削除が消す）
+ * - 書き方・飛ばし方・照合・締め切りは updateEachByQuery のとおり。update だけで書き、set(merge) は使わない
+ *   （読んだ後に消えた投稿を作り直さないため）
+ * - 手順1の後なので、本人のメンバーの文書は無い。setReactionTx はメンバーの文書を読むので、本人の新しいリアクションは
+ *   増えない（入り直した場合は、抜けるの照合と前提条件で止める・design の Implementation Notes）
+ * - 本人の投稿は手順2で消えている（そのリアクションと印は、投稿と削除のトリガーが消す）。数えるのは、ほかのメンバーの
+ *   投稿から外した本人のリアクションの数だけ
+ * - 冪等: 外した分はクエリに再び当たらないので、何度呼んでも1回で成功した場合と同じ（9.10）
+ * - 呼び手は残るメンバーがいる（leave）ときだけ呼ぶ。delete_group は全投稿の削除と recursiveDelete で消える
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {{ uid: string, groupId: string }} params 形は呼び手が確かめておく
+ * @param {() => boolean} pastDeadline
+ * @param {(() => Promise<boolean>)|undefined} [beforeDelete]
+ * @returns {Promise<{ done: boolean, deleted: number, stopped?: true }>} deleted は外したリアクションの数
+ */
+async function removeUserReactionsInGroup(db, { uid, groupId }, pastDeadline, beforeDelete) {
+  const groupRef = db.collection(GROUPS).doc(groupId);
+  const ownPath = new FieldPath("reactions", uid);
+  const skies = await updateEachByQuery(
+    groupRef.collection(SKIES).where("reactorIds", "array-contains", uid),
+    (ref, precondition) => ref.update(ownPath, FieldValue.delete(), "reactorIds", FieldValue.arrayRemove(uid), precondition),
+    pastDeadline,
+    beforeDelete
+  );
+  if (skies.stopped) return { done: true, deleted: skies.written, stopped: true };
+  if (!skies.done) return { done: false, deleted: skies.written };
+
+  const notices = await updateEachByQuery(
+    groupRef.collection(REACTION_NOTICES).where("notifiedReactorIds", "array-contains", uid),
+    (ref, precondition) => ref.update("notifiedReactorIds", FieldValue.arrayRemove(uid), precondition),
+    pastDeadline,
+    beforeDelete
+  );
+  if (notices.stopped) return { done: true, deleted: skies.written, stopped: true };
+  return { done: notices.done, deleted: skies.written };
+}
+
 // MARK: - 手順4: 所属の写し
 
 /**
@@ -338,9 +452,13 @@ async function removeMembershipCopyTx(db, { uid, groupId }) {
 
 /**
  * 1人の利用者の、グループ1つ分のデータを消す（release-gate 要件1.1〜1.3・1.5・2.4・2.9・3.3・6.11）。
- * 手順はグループの前の締め切りの確認 → 手順1（leaveOrDeleteGroupTx）→ 手順2 → 手順3 → 手順4（写しは最後）。
- * - leave（ほかのメンバーが残る）: 退会者の投稿（authorId の一致）と soratomo/{groupId}/{uid}/ の画像を消し、
- *   退会者あての通知の間引きの状態（notifyState/{uid}）を消す。ほかのメンバーの投稿と画像には触れない（1.5）
+ * 手順はグループの前の締め切りの確認 → 手順1（leaveOrDeleteGroupTx）→ 手順2 → 手順2b（leave のときだけ）→ 手順3 →
+ * 手順4（写しは最後）。
+ * - leave（ほかのメンバーが残る）: 退会者の投稿（authorId の一致）を消した後、退会者がほかのメンバーの投稿に付けた
+ *   リアクションと、送った印の中の退会者を外し（手順2b・removeUserReactionsInGroup・soratomo-reactions 要件9.5〜9.8）、
+ *   soratomo/{groupId}/{uid}/ の画像を消し、退会者あての通知の間引きの状態（notifyState/{uid}）とリアクションの通知の
+ *   間引き（reactionNotifyState/{uid}）を消す。ほかのメンバーの投稿と画像には触れない（1.5。リアクションは退会者の
+ *   キーだけを外す）
  * - delete_group（ほかのメンバーの文書が無い）: グループの全投稿と soratomo/{groupId}/ の画像を消し、
  *   残り（メンバー・通知の間引き）を recursiveDelete で消す。グループの文書が無い再実行でも、手順1がほかのメンバーの
  *   文書の無いことを確かめて delete_group を返したときだけ、ここへ来る。グループの文書と招待コードが無いので、
@@ -351,9 +469,9 @@ async function removeMembershipCopyTx(db, { uid, groupId }) {
  *   storage: import("./soratomoStorage").SoratomoStorageGateway, nowMs: () => number }} deps
  * @param {{ uid: string, groupId: string, deadlineMs: number }} request
  * @returns {Promise<{ done: boolean, kind: "leave"|"delete_group"|null, removed: boolean, ownerTransferred: boolean,
- *   groupDeleted: boolean, skiesDeleted: number, imagesDeleted: number }>}
+ *   groupDeleted: boolean, skiesDeleted: number, imagesDeleted: number, reactionsDeleted: number }>}
  *   kind はグループの前に締め切りを過ぎたときだけ null。groupDeleted はこの実行でグループの文書を消したか
- *   （再実行で二重に数えない）
+ *   （再実行で二重に数えない）。reactionsDeleted は手順2bで外したリアクションの数（delete_group では0）
  */
 async function deleteUserDataInGroup(deps, { uid, groupId, deadlineMs }) {
   const { db, storage, nowMs } = assertDeps(deps, { needsClock: true });
@@ -370,6 +488,7 @@ async function deleteUserDataInGroup(deps, { uid, groupId, deadlineMs }) {
     groupDeleted: false,
     skiesDeleted: 0,
     imagesDeleted: 0,
+    reactionsDeleted: 0,
   };
   if (pastDeadline()) return result;
 
@@ -391,17 +510,25 @@ async function deleteUserDataInGroup(deps, { uid, groupId, deadlineMs }) {
   result.skiesDeleted = skies.deleted;
   if (!skies.done) return result;
 
+  // 手順2b（残るメンバーがいるときだけ。グループごとのときは、全投稿と recursiveDelete でリアクションと印も消える）
+  if (!wholeGroup) {
+    const reactions = await removeUserReactionsInGroup(db, { uid, groupId }, pastDeadline);
+    result.reactionsDeleted = reactions.deleted;
+    if (!reactions.done) return result;
+  }
+
   const prefix = wholeGroup ? `soratomo/${groupId}/` : `soratomo/${groupId}/${uid}/`;
   const images = await deleteImagesByPrefix(storage, prefix, pastDeadline);
   result.imagesDeleted = images.deleted;
   if (!images.done) return result;
 
   if (wholeGroup) {
-    // 残りの子（メンバー・通知の間引き）を消す。親の文書は手順1で消えている（要確認1）
+    // 残りの子（メンバー・通知の間引き・リアクションの通知の記録）を消す。親の文書は手順1で消えている（要確認1）
     await db.recursiveDelete(groupRef);
   } else {
-    // 手順3: 退会者あての通知の間引きの状態（無くても失敗しない）
+    // 手順3: 退会者あての通知の間引きの状態と、リアクションの通知の間引き（どちらも無くても失敗しない）
     await groupRef.collection(NOTIFY_STATE).doc(uid).delete();
+    await groupRef.collection(REACTION_NOTIFY_STATE).doc(uid).delete();
   }
 
   // 手順4（最後）
@@ -513,8 +640,9 @@ async function isLeaveEpisodeCurrent(db, { uid, groupId, episodeId }) {
 /**
  * 抜けるの手順4（leave-group design の finishLeaveTx・要件3.3・3.4・3.5・3.12）。removeMembershipCopyTx を型にした
  * トランザクションで、利用者の文書・写しの全件・メンバーの文書・印を読む。
- * - 照合（episodeMatches）が通ったときだけ、写し・印・（残るメンバーがいれば）通知の間引き notifyState/{uid} を消し、
- *   所属数を残りの写しの数で代入する（1減らすのではなく数え直す）。delete_group の通知の間引きは recursiveDelete が消した
+ * - 照合（episodeMatches）が通ったときだけ、写し・印・（残るメンバーがいれば）通知の間引き notifyState/{uid} と
+ *   リアクションの通知の間引き reactionNotifyState/{uid}（soratomo-reactions 4.3）を消し、所属数を残りの写しの数で代入する
+ *   （1減らすのではなく数え直す）。delete_group の通知の間引きとリアクションの通知の記録は recursiveDelete が消した
  * - 照合が通らなければ、何も書かずに false（別の実行が終えた・入り直した。呼び手は superseded にする）
  * - 写しが既に無くても（退会の手順4が先に消した）失敗しない。利用者の文書が無ければ作らない
  * - finishUserTx は呼ばない（抜けるは利用者の文書を消さない・同意と停止の項目を残す）
@@ -537,7 +665,10 @@ async function finishLeaveTx(db, { uid, groupId, episodeId, kind }) {
     // ここから書き込み
     tx.delete(copyRef);
     tx.delete(markerRef);
-    if (kind === "leave") tx.delete(groupRef.collection(NOTIFY_STATE).doc(uid));
+    if (kind === "leave") {
+      tx.delete(groupRef.collection(NOTIFY_STATE).doc(uid));
+      tx.delete(groupRef.collection(REACTION_NOTIFY_STATE).doc(uid));
+    }
     if (userSnap.exists) {
       tx.update(userRef, { groupCount: remaining, updatedAt: FieldValue.serverTimestamp() });
     }
@@ -552,9 +683,12 @@ async function finishLeaveTx(db, { uid, groupId, episodeId, kind }) {
  * - 手順0: 締め切りを過ぎていれば、何もせずに done: false
  * - 手順1: beginLeaveTx（nothing・stale_marker なら done: true で終える）
  * - 手順2: 残るメンバーがいれば本人の投稿（authorId の一致）を、最後の1人ならグループの全投稿を、300件ずつ読み、照合し、消す
+ * - 手順2b: 残るメンバーがいれば、本人がほかのメンバーの投稿に付けたリアクションと印の中の本人を、removeUserReactionsInGroup
+ *   で300件ずつ読み、照合し、外す（soratomo-reactions 4.3）。照合の後・書く前に入り直して付け直したリアクションは、書き込みの
+ *   前提条件（読んだ文書の updateTime）で消さず、次の区切りの照合で止まる。最後の1人なら行わない
  * - 手順3: 残るメンバーがいれば soratomo/{groupId}/{uid}/ の下（取り残しの画像を含む）を、最後の1人なら
  *   soratomo/{groupId}/ の下を、100件ずつ一覧し、照合し、消す。最後の1人なら、照合の後に残りの記録を recursiveDelete で消す
- * - 手順4: finishLeaveTx（写し・印・通知の間引き・所属数）
+ * - 手順4: finishLeaveTx（写し・印・通知の間引き・リアクションの通知の間引き・所属数）
  * - 照合（isLeaveEpisodeCurrent）が外れたら、その区切りを消さずに state: "superseded"・done: true で止める（8.6）。
  *   それまでに消した件数は結果に残す
  * - 締め切りは、手順0・投稿300件ごと・画像100件ごとに確かめる（deleteUserDataInGroup と同じ位置）。過ぎたら done: false で
@@ -562,18 +696,24 @@ async function finishLeaveTx(db, { uid, groupId, episodeId, kind }) {
  * - 途中の失敗（Firestore・Storage）は投げる。印と写しは残る
  * - 引数の誤りは TypeError で、何も書かない。ログは出さない（呼び手が出す）
  * @param {{ db: FirebaseFirestore.Firestore, storage: import("./soratomoStorage").SoratomoStorageGateway,
- *   nowMs: () => number, newEpisodeId?: () => string }} deps newEpisodeId は省略したら crypto.randomUUID
+ *   nowMs: () => number, newEpisodeId?: () => string,
+ *   wrapReactionCheck?: (check: () => Promise<boolean>) => () => Promise<boolean> }} deps
+ *   newEpisodeId は省略したら crypto.randomUUID。wrapReactionCheck はテスト用の口（soratomo-reactions 4.3）で、手順2bに渡す
+ *   照合を包む（照合の前後で別の実行や入り直しを走らせるため）。省略したら何もしない形（照合をそのまま渡す）
  * @param {{ uid: string, groupId: string, deadlineMs: number, origin: "self"|"sweep" }} request
  * @returns {Promise<{ done: boolean, state: "nothing"|"started"|"continued"|"stale_marker"|"superseded",
  *   kind: "leave"|"delete_group"|null, removed: boolean, ownerTransferred: boolean, groupDeleted: boolean,
- *   skiesDeleted: number, imagesDeleted: number }>}
+ *   skiesDeleted: number, imagesDeleted: number, reactionsDeleted: number }>}
  *   state は手順0で止まったときだけ null。started・continued は、締め切りで止まれば done: false、終えれば done: true。
- *   removed・ownerTransferred・groupDeleted は手順1の値（この実行でメンバーの文書・グループの文書を消したか）
+ *   removed・ownerTransferred・groupDeleted は手順1の値（この実行でメンバーの文書・グループの文書を消したか）。
+ *   reactionsDeleted はこの実行の手順2bで外したリアクションの数（delete_group では0）
  */
 async function leaveSoratomoGroup(deps, { uid, groupId, deadlineMs, origin }) {
   const { db, storage, nowMs } = assertDeps(deps, { needsClock: true });
   const newEpisodeId = deps.newEpisodeId === undefined ? () => crypto.randomUUID() : deps.newEpisodeId;
   if (typeof newEpisodeId !== "function") throw new TypeError("soratomo: newEpisodeId が関数でない");
+  const wrapReactionCheck = deps.wrapReactionCheck === undefined ? (check) => check : deps.wrapReactionCheck;
+  if (typeof wrapReactionCheck !== "function") throw new TypeError("soratomo: wrapReactionCheck が関数でない");
   if (!isUid(uid)) throw new TypeError("soratomo: uid が文書IDとして使えない");
   if (!core.isAutoId(groupId)) throw new TypeError("soratomo: groupId が自動IDの形でない");
   assertDeadline(deadlineMs);
@@ -589,6 +729,7 @@ async function leaveSoratomoGroup(deps, { uid, groupId, deadlineMs, origin }) {
     groupDeleted: false,
     skiesDeleted: 0,
     imagesDeleted: 0,
+    reactionsDeleted: 0,
   };
   // 手順0
   if (pastDeadline()) return result;
@@ -626,6 +767,15 @@ async function leaveSoratomoGroup(deps, { uid, groupId, deadlineMs, origin }) {
   result.skiesDeleted = skies.deleted;
   if (skies.stopped) return superseded();
   if (!skies.done) return result;
+
+  // 手順2b（残るメンバーがいるときだけ・soratomo-reactions 4.3）。読んだ後・書く前に照合し、入り直した後のリアクションを
+  // 消さない（書き込みの前提条件が、照合の後・書く前の入り直しを止める）。最後の1人なら、全投稿と recursiveDelete で消える
+  if (!wholeGroup) {
+    const reactions = await removeUserReactionsInGroup(db, { uid, groupId }, pastDeadline, wrapReactionCheck(stillCurrent));
+    result.reactionsDeleted = reactions.deleted;
+    if (reactions.stopped) return superseded();
+    if (!reactions.done) return result;
+  }
 
   // 手順3
   const prefix = wholeGroup ? `soratomo/${groupId}/` : `soratomo/${groupId}/${uid}/`;
@@ -699,13 +849,14 @@ async function finishUserTx(db, { uid, trigger }) {
  * - 件数（14.4）: groupsLeft はこの実行でメンバーの文書を消したグループの数、ownersTransferred はそのうちオーナーを
  *   引き継いだ数。groupsDeleted はこの実行でグループの文書を消した数。ふつうは groupsLeft の内訳だが、
  *   extraGroupIds で渡したメンバーのいない孤児のグループの文書を消したときは、groupsLeft に数えずに数える
- *   （運用の出力で「消したのに0」と見えないように）
+ *   （運用の出力で「消したのに0」と見えないように）。reactionsDeleted は各グループの手順2bで外したリアクションの数の和
+ *   （soratomo-reactions D4・14.5）
  * @param {{ db: FirebaseFirestore.Firestore,
  *   storage: import("./soratomoStorage").SoratomoStorageGateway, nowMs: () => number }} deps
  * @param {{ uid: string, trigger: "self"|"account_deleted"|"admin"|"suspension", deadlineMs: number,
  *   extraGroupIds?: string[] }} request
  * @returns {Promise<{ done: boolean, skiesDeleted: number, imagesDeleted: number,
- *   groupsLeft: number, ownersTransferred: number, groupsDeleted: number }>}
+ *   groupsLeft: number, ownersTransferred: number, groupsDeleted: number, reactionsDeleted: number }>}
  */
 async function deleteSoratomoUserData(deps, { uid, trigger, deadlineMs, extraGroupIds = [] }) {
   const { db, nowMs } = assertDeps(deps, { needsClock: true });
@@ -716,7 +867,15 @@ async function deleteSoratomoUserData(deps, { uid, trigger, deadlineMs, extraGro
     throw new TypeError("soratomo: extraGroupIds が自動IDの配列でない");
   }
 
-  const totals = { done: false, skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0 };
+  const totals = {
+    done: false,
+    skiesDeleted: 0,
+    imagesDeleted: 0,
+    groupsLeft: 0,
+    ownersTransferred: 0,
+    groupsDeleted: 0,
+    reactionsDeleted: 0,
+  };
   const userRef = db.collection(USERS).doc(uid);
   // 追加のグループIDは最初の1周だけ（未完了で返ったときは、呼び手が同じ要求で呼び直す）
   let extras = extraGroupIds;
@@ -728,6 +887,7 @@ async function deleteSoratomoUserData(deps, { uid, trigger, deadlineMs, extraGro
       const r = await deleteUserDataInGroup(deps, { uid, groupId, deadlineMs });
       totals.skiesDeleted += r.skiesDeleted;
       totals.imagesDeleted += r.imagesDeleted;
+      totals.reactionsDeleted += r.reactionsDeleted;
       if (r.removed) totals.groupsLeft += 1;
       if (r.ownerTransferred) totals.ownersTransferred += 1;
       if (r.groupDeleted) totals.groupsDeleted += 1;
@@ -768,7 +928,7 @@ async function markSuspendedTx(db, uid) {
  *   storage: import("./soratomoStorage").SoratomoStorageGateway, nowMs: () => number }} deps
  * @param {{ uid: string, deadlineMs: number }} params
  * @returns {Promise<{ done: boolean, skiesDeleted: number, imagesDeleted: number,
- *   groupsLeft: number, ownersTransferred: number, groupsDeleted: number }>}
+ *   groupsLeft: number, ownersTransferred: number, groupsDeleted: number, reactionsDeleted: number }>}
  */
 async function suspendSoratomoUser(deps, { uid, deadlineMs }) {
   // 停止の日時を書く前に、削除の引数を確かめる（引数の誤りで停止だけが書かれないように）
@@ -838,6 +998,9 @@ module.exports = {
   suspendSoratomoUser,
   unsuspendSoratomoUser,
   deleteSoratomoSky,
+  // soratomo-reactions
+  removeUserReactionsInGroup, // テストで、読んだ後・書く前に投稿を消す・書き換える場面を照合の口から作るため
+  updateDocChunk, // テストで、偽の write から NOT_FOUND(5) を飛ばす枝と 5・9 以外を投げ直す枝を通すため（エミュレーターは消えた文書にも 9 を返す）
   // leave-group
   PENDING_LEAVES,
   LEAVE_ORIGINS,

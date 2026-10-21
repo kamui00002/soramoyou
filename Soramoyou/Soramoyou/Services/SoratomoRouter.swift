@@ -5,7 +5,8 @@
 //  そらともへの遷移を 1 か所で決めるルーター ⭐️
 //  （tasks 12.1・design.md の SoratomoRouter・要件 10.7〜10.12・14.3）
 //
-//  ホームの入口のボタンと、そらともの新着通知のタップから、そらともの画面へ行く遷移をここで決める。
+//  ホームの入口のボタンと、そらともの通知（新着投稿・リアクション）のタップから、そらともの画面へ行く遷移をここで決める。
+//  リアクションの通知は soratomo-reactions 7.4 で足した（行き先は新着投稿と同じ。記録の `type` だけが違う）。
 //  既存の画面（GoldenHourNotificationManager・ContentView・MainTabView・HomeView）への差し込みは
 //  tasks 14.1 の担当で、このファイルは既存のファイルを一切参照しない。
 //  ただし leave-group 8.3 から、抜けたグループの判定だけは `SoratomoDependencies`（そらともの型）を引く
@@ -16,37 +17,84 @@ import Foundation
 
 // MARK: - 通知のデータ
 
-/// そらともの新着通知のデータ（FCM の data）
+/// そらともの通知の種類（FCM の data の `type` で分ける・soratomo-reactions 7.4）
 ///
-/// 送信側（functions/soratomo.js の `onSoratomoSkyCreated`）が `{ type: "soratomoPost", groupId, postId }` を送る。
-/// FCM の data の値はすべて文字列で、`postId` には投稿（空）の ID が入る。
+/// どちらの通知も行き先は同じ「一覧の上にタイムライン」で、保留・結果待ち・結果の決まり方も同じ
+/// （soratomo-reactions 要件 7.1〜7.4・決定事項 P14）。違うのは、計測の `type` の値だけ（要件 15.5）。
+enum SoratomoNotificationKind: Equatable, Sendable {
+    /// 新着投稿の通知（`type` が `soratomoPost`）
+    case post
+    /// リアクションの通知（`type` が `soratomoReaction`）
+    case reaction
+
+    /// 計測（`soratomo_notification_opened` の `type`）の値
+    ///
+    /// 新着投稿は 1.15.0 までと同じ `post_created` のまま（既存の集計を割らない・要件 7.5・15.5）。
+    var analyticsType: SoratomoNotificationOpenType {
+        switch self {
+        case .post: .postCreated
+        case .reaction: .reaction
+        }
+    }
+}
+
+/// そらともの通知（新着投稿・リアクション）のデータ（FCM の data）
+///
+/// 送信側（functions/soratomo.js）は、新着投稿の `onSoratomoSkyCreated` が `{ type: "soratomoPost", groupId, postId }` を、
+/// リアクションの `notifyReaction` が `{ type: "soratomoReaction", groupId, postId }` を送る。
+/// FCM の data の値はすべて文字列で、`postId` にはどちらも投稿（空）の ID が入る（リアクションでは、付けられた投稿）。
 struct SoratomoNotificationPayload: Equatable, Sendable {
-    /// 通知のデータの `type` の値
+    /// 新着投稿の通知のデータの `type` の値
     ///
     /// ⚠️ 送信側（functions/soratomo.js）の `type` と同じ文字列にする。
     ///    既存の通知の `type`（like・comment・newPost・follow・recommend）とは重ならない。
     static let typeValue = "soratomoPost"
 
+    /// リアクションの通知のデータの `type` の値（soratomo-reactions 7.4）
+    ///
+    /// ⚠️ 送信側（functions/soratomo.js の `notifyReaction`）の `type` と同じ文字列にする。
+    ///    既存の通知の `type` とも、新着投稿の `soratomoPost` とも重ならない。
+    static let reactionTypeValue = "soratomoReaction"
+
     /// 通知のグループの ID
     let groupId: String
     /// 通知の投稿の ID
     let postId: String
+    /// 通知の種類（新着投稿かリアクションか）
+    ///
+    /// 既定は新着投稿。既定値があるので、`SoratomoNotificationPayload(groupId:postId:)` の書き方はそのまま新着投稿になる。
+    var kind: SoratomoNotificationKind = .post
 
     /// 通知のデータから行き先を読む
     ///
-    /// `type` が `soratomoPost` で、`groupId` と `postId` が使える文字列のときだけ返す。
+    /// `type` が `soratomoPost` か `soratomoReaction` で、`groupId` と `postId` が使える文字列のときだけ返す。
+    /// 返す値の `kind` は `type` から決める（`soratomoPost` は新着投稿、`soratomoReaction` はリアクション）。
     /// 既存の通知（いいね・コメント・新着投稿・フォロー・おすすめ）は `type` が違うので、ここで nil になる。
     /// ゴールデンアワーの通知は `userInfo` を持たない（空）ので、これも nil になる。
     /// - Parameter userInfo: 通知のタップで渡された `content.userInfo`
     /// - Returns: 行き先。そらともの通知でない・データが揃わないときは nil
     static func parse(_ userInfo: [AnyHashable: Any]) -> SoratomoNotificationPayload? {
-        guard let typeText = userInfo["type"] as? String, typeText == typeValue,
+        guard let typeText = userInfo["type"] as? String, let kind = notificationKind(ofType: typeText),
               let groupId = userInfo["groupId"] as? String, isUsableId(groupId),
               let postId = userInfo["postId"] as? String, isUsableId(postId)
         else {
             return nil
         }
-        return SoratomoNotificationPayload(groupId: groupId, postId: postId)
+        return SoratomoNotificationPayload(groupId: groupId, postId: postId, kind: kind)
+    }
+
+    /// 通知のデータの `type` から、そらともの通知の種類を決める
+    ///
+    /// 大文字小文字の違いも含め、2 つの値と完全に一致するときだけ種類を返す（そらともの通知でなければ nil）。
+    /// 名前をプロパティの `kind` と分けているのは、`parse` の中の `let kind = …` と名前の解決が重ならないようにするため。
+    /// - Parameter typeText: 通知のデータの `type` の値
+    /// - Returns: 通知の種類。そらともの通知の `type` でなければ nil
+    private static func notificationKind(ofType typeText: String) -> SoratomoNotificationKind? {
+        switch typeText {
+        case typeValue: .post
+        case reactionTypeValue: .reaction
+        default: nil
+        }
     }
 
     /// ID として使える文字列か（空でなく、`/` を含まない）
@@ -99,6 +147,8 @@ enum SoratomoSession: Equatable {
 ///   - 読めない知らせが来る前に、そらともの画面を閉じた・入口から開き直した・次の通知で開き直した → `opened`
 ///     （通知からグループの画面までは開けていて、読めない知らせは来ていないため）
 ///   - サインアウトの破棄（`clearOnSignOut`）→ 記録しない
+/// - 記録の `type` は、どの結果（`opened`・`not_member`・`flag_off`・`signed_out`）でも、そのタップの通知の種類にする
+///   （新着投稿は `post_created`・リアクションは `reaction`。行き先と結果の決まり方は、どちらの種類も同じ・soratomo-reactions 7.4）
 ///
 /// アプリ全体で 1 つの `shared` を使う。単体テストでは記録の関数を差し替えて作る。
 @MainActor
@@ -136,12 +186,14 @@ final class SoratomoRouter: ObservableObject {
     /// 計測の記録の関数（既定は `SoratomoAnalytics.log`。単体テストで差し替える）
     private let logEvent: (SoratomoEvent) -> Void
 
-    /// 結果待ちのグループ ID（通知から開いたタイムラインで、まだ結果が決まっていないもの）
+    /// 結果待ちのグループ ID と通知の種類の組（通知から開いたタイムラインで、まだ結果が決まっていないもの）
     ///
     /// 通知のタップ 1 回につき、結果（`opened` か `not_member`）を 1 回だけ記録するための覚え。
     /// 記録したら nil に戻す。nil の間は、`reportAccessible` と `reportNotAccessible` は記録しない。
     /// 入口の一覧から開いたグループの読み込みが、通知の計測に混ざらないのもこのため。
-    private var awaitingGroupId: String?
+    /// 種類も一緒に覚えるのは、結果が決まるのがタップより後（読めた・読めなかった・閉じた）で、
+    /// そのときには保留（`pending`）がもう空になっているため。記録の `type` は、ここに覚えた種類から決める（soratomo-reactions 7.4）。
+    private var awaiting: (groupId: String, kind: SoratomoNotificationKind)?
 
     /// この端末の、いまの利用者が抜けたグループか（leave-group 8.3・既定は常に偽）
     ///
@@ -191,7 +243,7 @@ final class SoratomoRouter: ObservableObject {
     /// `signed_out` を記録するのは、未ログインの状態で `resolvePending` を呼んだときだけ。
     func clearOnSignOut() {
         pending = nil
-        awaitingGroupId = nil
+        awaiting = nil
         dismiss()
     }
 
@@ -199,7 +251,8 @@ final class SoratomoRouter: ObservableObject {
 
     /// 通知のタップで渡されたデータを受け取る
     ///
-    /// そらともの通知（`type` が `soratomoPost` で `groupId`・`postId` が揃うもの）だけを保留にする。
+    /// そらともの通知（`type` が `soratomoPost` か `soratomoReaction` で `groupId`・`postId` が揃うもの）だけを保留にする。
+    /// 保留には通知の種類（`kind`）も入り、後で決まる結果の記録の `type` に使う。
     /// 既存の通知とゴールデンアワーは何もしない（保留も、すでにある保留も変えない）。
     /// ここでは表示も記録もしない。表示できるかが分かった時点で `resolvePending` を呼ぶこと。
     /// すでに保留があるときは、新しいタップの行き先に置き換える。
@@ -223,7 +276,7 @@ final class SoratomoRouter: ObservableObject {
     ///    前の通知の結果待ちが残っていれば、先に `opened` として確定してから置き換える
     ///
     /// `signed_out` と `flag_off` は、保留を空にするのと同時に 1 回だけ記録する（結果がここで確定するため）。
-    /// 続けて呼んでも、保留が無いので記録は増えない。
+    /// 続けて呼んでも、保留が無いので記録は増えない。記録の `type` は、どの道でも保留していた通知の種類にする。
     /// - Parameters:
     ///   - session: ログイン状態
     ///   - gate: そらともを使えるかの判定の状態
@@ -232,7 +285,7 @@ final class SoratomoRouter: ObservableObject {
         guard let payload = pending else { return }
 
         if session == .signedOut {
-            discardPending(as: .signedOut)
+            discardPending(payload, as: .signedOut)
             return
         }
 
@@ -241,19 +294,19 @@ final class SoratomoRouter: ObservableObject {
             // 判定前は、保留のまま待つ（判定が済む前に flag_off を記録しない）。判定が決まれば、もう一度ここが呼ばれる
             return
         case .disabled:
-            discardPending(as: .flagOff)
+            discardPending(payload, as: .flagOff)
         case .enabled:
             guard canPresent else { return }
             // 抜けたグループの通知は、タイムラインを開かない（leave-group 8.3・要件 5.7）。
             // 結果待ちにもしない（開いていないので、ここで結果が決まる）。結果待ちが残っていれば先に確定する。
-            // 計測は `not_member` を 1 回。保留を空にするので、続けて呼んでも増えない
+            // 計測は `not_member` を 1 回（`type` はこのタップの通知の種類）。保留を空にするので、続けて呼んでも増えない
             if isLeftGroup(payload.groupId) {
                 settleAwaitingAsOpened()
                 pending = nil
                 path = []
                 notice = SoratomoError.notMember.userMessage
                 isPresented = true
-                logEvent(.notificationOpened(.notMember))
+                logEvent(.notificationOpened(.notMember, type: payload.kind.analyticsType))
                 return
             }
             // 前の通知のタイムラインの結果が決まっていなければ、先に opened として確定する
@@ -265,7 +318,8 @@ final class SoratomoRouter: ObservableObject {
             // 通知のグループのタイムラインへ置き換える
             path = [.timeline(groupId: payload.groupId)]
             // まだ記録しない。タイムラインがグループを読めるか分からないので、結果待ちとして覚える
-            awaitingGroupId = payload.groupId
+            // （結果が決まったときの記録の `type` に使うので、通知の種類も一緒に覚える）
+            awaiting = (groupId: payload.groupId, kind: payload.kind)
             isPresented = true
         }
     }
@@ -274,19 +328,20 @@ final class SoratomoRouter: ObservableObject {
     ///
     /// ⚠️ 13.5 のタイムラインが、グループを最初に読めたときに呼ぶこと。
     ///
-    /// 結果待ちのグループと一致するときだけ、`opened` を 1 回記録して結果待ちを消す。
+    /// 結果待ちのグループと一致するときだけ、`opened` を 1 回記録して結果待ちを消す（`type` は結果待ちに覚えた通知の種類）。
     /// 一致しないとき（入口の一覧から開いた・すでに結果が決まっている・別のグループ）は何もしない。
     /// - Parameter groupId: 読めたグループの ID
     func reportAccessible(groupId: String) {
-        guard awaitingGroupId == groupId else { return }
+        guard let awaiting, awaiting.groupId == groupId else { return }
 
-        awaitingGroupId = nil
-        logEvent(.notificationOpened(.opened))
+        self.awaiting = nil
+        logEvent(.notificationOpened(.opened, type: awaiting.kind.analyticsType))
     }
 
     /// タイムラインがグループを読めなかったときに呼ぶ（一覧へ戻し、一時表示を出す）
     ///
-    /// 結果待ちのグループと一致するときだけ、通知の結果として `not_member` を 1 回記録して結果待ちを消す。
+    /// 結果待ちのグループと一致するときだけ、通知の結果として `not_member` を 1 回記録して結果待ちを消す
+    /// （`type` は結果待ちに覚えた通知の種類）。
     /// 結果待ちを消すので、そのタップは、続けて閉じても `opened` が増えない（1 回のタップで記録は 1 件）。
     /// 一致しないとき（入口の一覧から開いた・すでに結果が決まっている・別のグループ）は記録しない。
     ///
@@ -299,9 +354,9 @@ final class SoratomoRouter: ObservableObject {
             notice = SoratomoError.notMember.userMessage
         }
 
-        if awaitingGroupId == groupId {
-            awaitingGroupId = nil
-            logEvent(.notificationOpened(.notMember))
+        if let awaiting, awaiting.groupId == groupId {
+            self.awaiting = nil
+            logEvent(.notificationOpened(.notMember, type: awaiting.kind.analyticsType))
         }
     }
 
@@ -325,21 +380,25 @@ final class SoratomoRouter: ObservableObject {
 
     // MARK: - Private
 
-    /// 結果待ちが残っていれば、`opened` を 1 回記録して結果待ちを消す
+    /// 結果待ちが残っていれば、`opened` を 1 回記録して結果待ちを消す（`type` は結果待ちに覚えた通知の種類）
     ///
     /// 結果待ちが無ければ何もしない（続けて呼んでも記録は増えない）。
     /// 読めない知らせが来ないまま画面を閉じた・開き直した・次の通知で置き換えたときに使う。
+    /// 次の通知で置き換えるときも、記録するのは前のタップの種類（新しいタップの種類ではない）。
     private func settleAwaitingAsOpened() {
-        guard awaitingGroupId != nil else { return }
+        guard let awaiting else { return }
 
-        awaitingGroupId = nil
-        logEvent(.notificationOpened(.opened))
+        self.awaiting = nil
+        logEvent(.notificationOpened(.opened, type: awaiting.kind.analyticsType))
     }
 
     /// 保留の行き先を破棄して、結果を記録する（そらともの画面は出さず、通常どおりアプリを開く）
-    private func discardPending(as result: SoratomoNotificationOpenResult) {
+    /// - Parameters:
+    ///   - payload: 破棄する保留の行き先（記録の `type` に、その通知の種類を使う）
+    ///   - result: 記録する結果（`signed_out` か `flag_off`）
+    private func discardPending(_ payload: SoratomoNotificationPayload, as result: SoratomoNotificationOpenResult) {
         pending = nil
-        logEvent(.notificationOpened(result))
+        logEvent(.notificationOpened(result, type: payload.kind.analyticsType))
     }
 }
 
@@ -349,10 +408,10 @@ private extension SoratomoDestination {
     /// この行き先が、指定のグループの画面か（どの行き先もグループ ID を持つ）
     func belongsTo(groupId target: String) -> Bool {
         switch self {
-        case .timeline(let groupId), .invite(let groupId), .members(let groupId):
-            return groupId == target
-        case .skyDetail(let groupId, _):
-            return groupId == target
+        case let .timeline(groupId), let .invite(groupId), let .members(groupId):
+            groupId == target
+        case let .skyDetail(groupId, _):
+            groupId == target
         }
     }
 }

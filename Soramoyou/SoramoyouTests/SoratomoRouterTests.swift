@@ -13,6 +13,8 @@
 //  - 抜けた後（`finishLeaving`）は、そのグループの画面があるときだけ一覧へ戻して渡された文言を出し、
 //    抜けたグループの通知はタイムラインを開かずに `not_member` を 1 回だけ記録すること
 //    （leave-group 8.3・design.md の SoratomoRouter（変更）・要件 5.1・5.2・5.7）
+//  - リアクションの通知（`type` が `soratomoReaction`）も、新着投稿の通知と同じ行き先と結果の扱いで、
+//    記録の `type` だけが `reaction` になること（soratomo-reactions 7.3・7.4・要件 7.1〜7.5・15.5・陽性対照 C6）
 //
 
 @testable import Soramoyou
@@ -84,6 +86,8 @@ final class SoratomoRouterTests: XCTestCase {
         let payload = SoratomoNotificationPayload.parse(userInfo)
 
         XCTAssertEqual(payload, SoratomoNotificationPayload(groupId: "group-1", postId: "sky-1"))
+        // 新着投稿の通知の種類は post（soratomo-reactions 7.4。記録の type は post_created のまま）
+        XCTAssertEqual(payload?.kind, .post)
     }
 
     /// 既存の通知とゴールデンアワーは読まない
@@ -806,6 +810,163 @@ final class SoratomoRouterTests: XCTestCase {
         XCTAssertTrue(router.isPresented)
         XCTAssertNil(router.notice)
         XCTAssertEqual(eventLog.events, [], "結果待ち（記録しない）")
+    }
+
+    // MARK: - リアクションの通知（soratomo-reactions 7.3・陽性対照 C6）
+
+    // ⚠️ ここのテストは、リアクションの通知（`type` が `soratomoReaction`）を受ける前のルーター（1.15.0 と同じ）でも
+    //    コンパイルできる形だけで書く（`receive(userInfo:)`・`resolvePending`・`reportAccessible` と、
+    //    記録したイベントの名前とパラメータの文字列）。そのルーターでは「パスが空・記録が 0 件」で赤になる。
+    //    これは、1.15.0 のアプリがリアクションの通知をタップされても、遷移せず、新着投稿として記録しないことの
+    //    証拠でもある（soratomo-reactions 要件 11.4・11.5）。リアクションの通知を受けるルーター（7.4）で緑にする。
+    //    行き先はどちらの通知も「一覧の上にタイムライン」で、記録は `type` だけが `reaction` になる（要件 7.1〜7.4・15.5）。
+
+    /// リアクションの通知の `userInfo`（送信側 functions/soratomo.js の `notifyReaction` の data と同じ形）
+    private func reactionUserInfo(groupId: String = "group-1", postId: String = "sky-1") -> [AnyHashable: Any] {
+        ["type": "soratomoReaction", "groupId": groupId, "postId": postId]
+    }
+
+    /// 記録したイベントを、計測に送る名前とパラメータの組にしたもの
+    ///
+    /// イベントの値（`SoratomoEvent`）でなく、送る文字列で比べる（通知の種類の値は 7.4 で足すので、ここでは書けない）。
+    private struct SentEvent: Equatable {
+        let name: String
+        let parameters: [String: SoratomoAnalyticsValue]
+    }
+
+    /// 記録したイベントを、送る名前とパラメータの組に直す
+    private func sentEvents(_ events: [SoratomoEvent]) -> [SentEvent] {
+        events.map { SentEvent(name: $0.name, parameters: $0.parameters) }
+    }
+
+    /// `soratomo_notification_opened` を、通知の種類（`type`）と結果（`result`）の文字列で作る
+    private func notificationOpened(type: String, result: String) -> SentEvent {
+        SentEvent(name: "soratomo_notification_opened", parameters: ["type": .value(type), "result": .value(result)])
+    }
+
+    /// リアクションの通知は、type・groupId・postId を読める（ほかのキーが付いていても読める）
+    ///
+    /// 行き先の種類（7.4 で足した `kind`）が `.reaction` になることと、グループと投稿の ID を見る。
+    func testParse_readsReactionPayload() {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": "リアクション"],
+            "gcm.message_id": "id-1",
+            "type": "soratomoReaction",
+            "groupId": "group-1",
+            "postId": "sky-1",
+        ]
+
+        let payload = SoratomoNotificationPayload.parse(userInfo)
+
+        XCTAssertNotNil(payload, "リアクションの通知が読まれていない")
+        XCTAssertEqual(payload?.groupId, "group-1")
+        XCTAssertEqual(payload?.postId, "sky-1")
+        XCTAssertEqual(payload?.kind, .reaction)
+    }
+
+    /// リアクションの通知のタップ: 一覧の上にそのグループのタイムラインを開き、読めたら
+    /// `soratomo_notification_opened`（`type` = `reaction`・`result` = `opened`）を 1 回だけ記録する（要件 7.1・15.5）
+    func testReactionTap_opensTimelineAndLogsReactionOpenedOnce() {
+        router.receive(userInfo: reactionUserInfo(groupId: "group-7"))
+
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
+
+        XCTAssertTrue(router.isPresented)
+        XCTAssertEqual(router.path, [.timeline(groupId: "group-7")], "一覧の上にタイムライン")
+        XCTAssertNil(router.notice)
+        XCTAssertEqual(eventLog.events, [], "タイムラインが読めるか決まるまで、記録しない")
+
+        router.reportAccessible(groupId: "group-7")
+        router.reportAccessible(groupId: "group-7")
+
+        XCTAssertEqual(sentEvents(eventLog.events), [notificationOpened(type: "reaction", result: "opened")])
+    }
+
+    /// 起動していない状態からのリアクションの通知のタップ: 判定の前とほかの全画面の間は保留のまま待ち、
+    /// 表示できたら一覧の上にタイムラインを開き、読めたら `type` = `reaction` の `opened` を 1 回記録する（要件 7.2）
+    func testReactionTap_fromColdStartWaitsThenOpensTimelineAndLogsOnce() {
+        // 冷えた起動では、ログイン状態と判定が決まる前に通知のタップが届く
+        router.receive(userInfo: reactionUserInfo(groupId: "group-1"))
+
+        router.resolvePending(session: .signedIn, gate: .unknown, canPresent: false)
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: false)
+
+        XCTAssertNotNil(router.pending, "判定の前と What's New の間は保留のまま")
+        XCTAssertFalse(router.isPresented)
+        XCTAssertEqual(router.path, [])
+        XCTAssertEqual(eventLog.events, [])
+
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
+
+        XCTAssertNil(router.pending)
+        XCTAssertTrue(router.isPresented)
+        XCTAssertEqual(router.path, [.timeline(groupId: "group-1")])
+
+        router.reportAccessible(groupId: "group-1")
+
+        XCTAssertEqual(sentEvents(eventLog.events), [notificationOpened(type: "reaction", result: "opened")])
+    }
+
+    /// 抜けたグループのリアクションの通知: `soratomoPost` と同じく、タイムラインを開かずに一覧に「開けませんでした」を出し、
+    /// `type` = `reaction` の `not_member` を 1 回だけ記録する（要件 7.3）
+    func testReactionTap_leftGroupDoesNotOpenTimelineAndLogsReactionNotMember() {
+        router = makeRouter(leftGroupIds: ["group-1"])
+        router.receive(userInfo: reactionUserInfo(groupId: "group-1"))
+
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
+
+        XCTAssertNil(router.pending)
+        XCTAssertEqual(router.path, [], "タイムラインを開かない")
+        XCTAssertTrue(router.isPresented)
+        XCTAssertEqual(router.notice, SoratomoError.notMember.userMessage)
+        XCTAssertEqual(sentEvents(eventLog.events), [notificationOpened(type: "reaction", result: "not_member")])
+
+        // 続けて呼んでも・閉じても、記録は増えない（結果待ちにしない）
+        router.resolvePending(session: .signedIn, gate: .enabled, canPresent: true)
+        router.dismiss()
+
+        XCTAssertEqual(sentEvents(eventLog.events), [notificationOpened(type: "reaction", result: "not_member")])
+    }
+
+    /// 未ログインでのリアクションの通知のタップ: `soratomoPost` と同じく、そらともの画面を出さずに破棄し、
+    /// `type` = `reaction` の `signed_out` を 1 回だけ記録する（要件 7.4）
+    func testReactionTap_signedOutDiscardsAndLogsReactionSignedOut() {
+        router.receive(userInfo: reactionUserInfo())
+
+        router.resolvePending(session: .signedOut, gate: .disabled(.signedOut), canPresent: true)
+        router.resolvePending(session: .signedOut, gate: .disabled(.signedOut), canPresent: true)
+
+        XCTAssertNil(router.pending)
+        XCTAssertFalse(router.isPresented)
+        XCTAssertEqual(router.path, [])
+        XCTAssertEqual(sentEvents(eventLog.events), [notificationOpened(type: "reaction", result: "signed_out")])
+    }
+
+    /// 匿名アカウントでのリアクションの通知のタップ: `soratomoPost` と同じく、そらともの画面を出さずに破棄し、
+    /// `type` = `reaction` の `flag_off` を 1 回だけ記録する（要件 7.4）
+    func testReactionTap_anonymousDiscardsAndLogsReactionFlagOff() {
+        router.receive(userInfo: reactionUserInfo())
+
+        router.resolvePending(session: .signedIn, gate: .disabled(.anonymous), canPresent: true)
+        router.resolvePending(session: .signedIn, gate: .disabled(.anonymous), canPresent: true)
+
+        XCTAssertNil(router.pending)
+        XCTAssertFalse(router.isPresented)
+        XCTAssertEqual(router.path, [])
+        XCTAssertEqual(sentEvents(eventLog.events), [notificationOpened(type: "reaction", result: "flag_off")])
+    }
+
+    /// 対照: 新着投稿の通知のタップは、同じ比べ方（送る文字列）で `type` = `post_created` の `opened` になる
+    ///
+    /// 上のリアクションのテストの赤が「比べ方が壊れている」せいでないことを、今のルーターでも緑で確かめる。
+    /// リアクションの通知を受けるルーター（7.4）の後も、`soratomoPost` の記録は変わらない（要件 7.5・15.5）。
+    func testPostTap_logsPostCreatedOpenedWithSameComparison() {
+        receiveAndPresent(groupId: "group-1")
+
+        router.reportAccessible(groupId: "group-1")
+
+        XCTAssertEqual(router.path, [.timeline(groupId: "group-1")])
+        XCTAssertEqual(sentEvents(eventLog.events), [notificationOpened(type: "post_created", result: "opened")])
     }
 
     // MARK: - shared

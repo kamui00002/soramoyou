@@ -415,6 +415,7 @@ function isLeaveEpisodeCurrent(db: Firestore, p: { uid: string; groupId: string;
 - `deleteSkiesByQuery`（`:187`）と`deleteImagesByPrefix`（`:231`）に、省略できる引数`beforeDelete?: () => Promise<boolean>`を足す。消す前に呼び、`false`なら消さずに`{ done: true, deleted, stopped: true }`を返す。省略したとき（退会・利用停止・後始末・投稿1件の削除）は、今と同じ動き。
 - `deleteUserDataInGroup`・`deleteSoratomoUserData`・`removeMembershipCopyTx`・`finishUserTx`の中身と呼び方は変えない。退会が抜けるの途中のグループを処理したとき、退会の手順4は写しを消すが印は消さない。残った印は、仕事Cが`continued`か`stale_marker`で片づける（消すものが残っていないので件数は0）。
 - 確認: `soratomoDeletion.test.js`の既存のテスト（手順1・手順2〜4・時間の予算・要確認3・統合）が、変更の後もそのまま通ること。
+  - ⚠️2026-10-22 上書き（soratomo-reactions）: 用語「片づけ」に、本人がそのグループで付けたリアクション（ほかの人の投稿の`reactions`と`reactorIds`の中の本人、通知の印`reactionNotices`の中の本人、通知の間引き`reactionNotifyState/{uid}`）を足した。抜けるでは手順2bの後に消し、`stillCurrent`で途中の入り直しを確かめる。詳細は`.kiro/specs/soratomo-reactions/design.md`のSystem FlowsとMigration
 
 #### joinGroupTx（`soratomoStore.js`・変更）
 

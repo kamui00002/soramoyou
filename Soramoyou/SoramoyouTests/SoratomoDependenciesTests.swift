@@ -67,6 +67,7 @@ final class SoratomoDependenciesTests: XCTestCase {
             reportedSkies: SoratomoReportedSkies(defaults: defaults),
             leaveService: MockSoratomoLeaveService(),
             leftGroups: SoratomoLeftGroups(defaults: defaults),
+            reactionService: MockSoratomoReactionService(),
             currentUid: uid
         )
     }

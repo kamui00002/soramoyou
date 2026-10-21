@@ -900,3 +900,228 @@ test("buildReportForwardPayload: 文字列でない ID は「不明」・時刻�
   const withMs = core.buildReportForwardPayload(reportRecord({ createdAt: Date.UTC(2026, 0, 2, 3, 4, 5) }));
   assert.equal(withMs.embeds[0].timestamp, "2026-01-02T03:04:05.000Z");
 });
+
+// ============================================================
+// リアクション（soratomo-reactions 2.1）: 7種類の絵文字・通知文・間引きの判定
+// ============================================================
+
+/**
+ * 7種類の名前と絵文字（soratomo-reactions design.md「絵文字のセット」の表）。絵文字はコードポイントの数値で持つ。
+ * ⚠️ 絵文字を文字列で書くと、見えない U+FE0F が実装とテストの両方から落ちても緑のままになるため、数値で固定する。
+ *    iOS の SoratomoReactionKindTests と同じ値にすること（片方だけ変えない）。
+ */
+const EXPECTED_REACTION_KINDS = [
+  { name: "sunset", codePoints: [0x1f305], utf16: 2 },
+  { name: "cloud", codePoints: [0x2601, 0xfe0f], utf16: 2 },
+  { name: "rainbow", codePoints: [0x1f308], utf16: 2 },
+  { name: "sparkles", codePoints: [0x2728], utf16: 1 },
+  { name: "eyes", codePoints: [0x1f440], utf16: 2 },
+  { name: "red_heart", codePoints: [0x2764, 0xfe0f], utf16: 2 },
+  { name: "blue_heart", codePoints: [0x1f499], utf16: 2 },
+];
+
+/** 文字列を、コードポイントの数値の並びにする。 */
+function codePointsOf(s) {
+  return Array.from(s).map((c) => c.codePointAt(0));
+}
+
+/** 表の絵文字（FE0F 付きの形）を名前から作る。 */
+function emojiOf(name) {
+  return String.fromCodePoint(...EXPECTED_REACTION_KINDS.find((k) => k.name === name).codePoints);
+}
+
+const MINUTE_MS = 60 * 1000;
+
+test("REACTION_KINDS: 7行の並び・名前・絵文字のコードポイントが設計書の表と一致する（iOS の SoratomoReactionKind と同じ値）", () => {
+  assert.deepEqual(
+    core.REACTION_KINDS.map((def) => ({ name: def.name, codePoints: codePointsOf(def.emoji), utf16: def.emoji.length })),
+    EXPECTED_REACTION_KINDS
+  );
+  for (const def of core.REACTION_KINDS) {
+    assert.deepEqual(Object.keys(def).sort(), ["emoji", "name"], def.name);
+  }
+});
+
+test("REACTION_KINDS: 並びと各行は書き換えられない（凍結）", () => {
+  assert.ok(Object.isFrozen(core.REACTION_KINDS));
+  for (const def of core.REACTION_KINDS) {
+    assert.ok(Object.isFrozen(def), def.name);
+  }
+});
+
+test("isReactionKind: 7つの名前だけが真", () => {
+  for (const { name } of EXPECTED_REACTION_KINDS) {
+    assert.equal(core.isReactionKind(name), true, name);
+  }
+});
+
+test("isReactionKind: 絵文字そのもの（☁️）と FE0F の無い形は偽（送る値は名前）", () => {
+  // ☁️（U+2601 U+FE0F）と、FE0F の無い ☁（U+2601）を明示して確かめる。
+  assert.equal(core.isReactionKind(String.fromCodePoint(0x2601, 0xfe0f)), false, "U+2601 U+FE0F");
+  assert.equal(core.isReactionKind(String.fromCodePoint(0x2601)), false, "U+2601");
+  // 7種類すべての、表の形と FE0F を除いた形。
+  for (const { name, codePoints } of EXPECTED_REACTION_KINDS) {
+    assert.equal(core.isReactionKind(String.fromCodePoint(...codePoints)), false, `${name} の絵文字`);
+    const bare = codePoints.filter((cp) => cp !== 0xfe0f);
+    assert.equal(core.isReactionKind(String.fromCodePoint(...bare)), false, `${name} の FE0F の無い形`);
+  }
+});
+
+test("isReactionKind: 大文字・前後の空白・似た綴り・空文字・プロトタイプの名前は偽", () => {
+  const ideographicSpace = String.fromCodePoint(0x3000);
+  const newline = String.fromCodePoint(0x0a);
+  const values = [
+    "Sunset",
+    "SUNSET",
+    " sunset",
+    "sunset ",
+    `sunset${newline}`,
+    `${ideographicSpace}sunset`,
+    "redHeart",
+    "red-heart",
+    "red heart",
+    "",
+    "constructor",
+    "toString",
+    "__proto__",
+    "hasOwnProperty",
+  ];
+  for (const value of values) {
+    assert.equal(core.isReactionKind(value), false, JSON.stringify(value));
+  }
+});
+
+test("isReactionKind: 文字列でない値（null・undefined・数・真偽値・物・配列）は偽", () => {
+  const values = [null, undefined, 0, 1, true, {}, { name: "sunset" }, ["sunset"], core.REACTION_KINDS[0]];
+  for (const value of values) {
+    assert.equal(core.isReactionKind(value), false, `${typeof value}:${JSON.stringify(value)}`);
+  }
+});
+
+test("buildReactionNotification: 題はグループ名・本文は「{名前}さんがあなたの空に{絵文字}を付けました」", () => {
+  assert.deepEqual(core.buildReactionNotification({ groupName: "空の会", reactorName: "はると", kind: "sunset" }), {
+    title: "空の会",
+    body: `はるとさんがあなたの空に${emojiOf("sunset")}を付けました`,
+  });
+});
+
+test("buildReactionNotification: 7種類とも、表の絵文字（FE0F 付きの形）を本文に出す", () => {
+  for (const { name } of EXPECTED_REACTION_KINDS) {
+    const { body } = core.buildReactionNotification({ groupName: "g", reactorName: "n", kind: name });
+    assert.deepEqual(codePointsOf(body), codePointsOf(`nさんがあなたの空に${emojiOf(name)}を付けました`), name);
+  }
+});
+
+test("buildReactionNotification: 名前が空・空白だけ・文字列でないときは「だれか」", () => {
+  const whitespaceOnly = [" ", "  ", String.fromCodePoint(0x3000), String.fromCodePoint(0x09, 0x0a)];
+  for (const reactorName of ["", ...whitespaceOnly, null, undefined, 0, 123, true, {}, ["はると"]]) {
+    assert.equal(
+      core.buildReactionNotification({ groupName: "空の会", reactorName, kind: "cloud" }).body,
+      `だれかさんがあなたの空に${emojiOf("cloud")}を付けました`,
+      `${typeof reactorName}:${JSON.stringify(reactorName)}`
+    );
+  }
+});
+
+test("buildReactionNotification: キャプションを本文に入れない（渡されても読まない）", () => {
+  const notification = core.buildReactionNotification({
+    groupName: "空の会",
+    reactorName: "はると",
+    kind: "rainbow",
+    caption: "SECRET_CAPTION",
+  });
+  assert.deepEqual(Object.keys(notification).sort(), ["body", "title"]);
+  assert.equal(notification.body, `はるとさんがあなたの空に${emojiOf("rainbow")}を付けました`);
+  assert.ok(!JSON.stringify(notification).includes("SECRET_CAPTION"));
+});
+
+test("buildReactionNotification: 7つの名前でない kind は TypeError（絵文字の欠けた通知を作らない）", () => {
+  for (const kind of [String.fromCodePoint(0x2601, 0xfe0f), "Sunset", "", null, undefined, "constructor"]) {
+    assert.throws(
+      () => core.buildReactionNotification({ groupName: "g", reactorName: "n", kind }),
+      TypeError,
+      JSON.stringify(kind)
+    );
+  }
+});
+
+test("decideReactionNotify: 印に付けた人がいれば、時刻に関係なく duplicate（5分以内でも間引きより先に決める）", () => {
+  assert.equal(core.decideReactionNotify({ state: null, notifiedReactorIds: ["B"], reactorUid: "B", nowMs: T0 }), "duplicate");
+  assert.equal(
+    core.decideReactionNotify({ state: { lastSentAt: T0 }, notifiedReactorIds: ["A", "B"], reactorUid: "B", nowMs: T0 + 60 * MINUTE_MS }),
+    "duplicate"
+  );
+  assert.equal(
+    core.decideReactionNotify({ state: { lastSentAt: T0 }, notifiedReactorIds: ["B"], reactorUid: "B", nowMs: T0 + 1 }),
+    "duplicate"
+  );
+});
+
+test("decideReactionNotify: 最後に送ってから5分以内は throttled・5分ちょうども throttled・5分を1ミリ秒でも過ぎれば send", () => {
+  const base = { state: { lastSentAt: T0 }, notifiedReactorIds: ["A"], reactorUid: "B" };
+  assert.equal(core.decideReactionNotify({ ...base, nowMs: T0 }), "throttled");
+  assert.equal(core.decideReactionNotify({ ...base, nowMs: T0 + 299_999 }), "throttled");
+  assert.equal(core.decideReactionNotify({ ...base, nowMs: T0 + 300_000 }), "throttled");
+  assert.equal(core.decideReactionNotify({ ...base, nowMs: T0 + 300_001 }), "send");
+});
+
+test("decideReactionNotify: 記録が無い・時刻が読めないときは send", () => {
+  const states = [null, undefined, {}, { lastSentAt: null }, { lastSentAt: "昨日" }, { lastSentAt: Number.NaN }, { lastSentAt: {} }];
+  for (const state of states) {
+    assert.equal(
+      core.decideReactionNotify({ state, notifiedReactorIds: undefined, reactorUid: "B", nowMs: T0 }),
+      "send",
+      String(JSON.stringify(state))
+    );
+  }
+});
+
+test("decideReactionNotify: lastSentAt は Firestore の Timestamp（toMillis を持つ値）でも読める", () => {
+  const state = { lastSentAt: { toMillis: () => T0 } };
+  assert.equal(core.decideReactionNotify({ state, notifiedReactorIds: [], reactorUid: "B", nowMs: T0 + 300_000 }), "throttled");
+  assert.equal(core.decideReactionNotify({ state, notifiedReactorIds: [], reactorUid: "B", nowMs: T0 + 300_001 }), "send");
+});
+
+test("decideReactionNotify: 印が配列でない・別の人だけのときは重複とみなさない（文字列の部分一致も見ない）", () => {
+  for (const notifiedReactorIds of [undefined, null, "B", "AB", { B: true }, [], ["A"], ["b"], ["BB"]]) {
+    assert.equal(
+      core.decideReactionNotify({ state: null, notifiedReactorIds, reactorUid: "B", nowMs: T0 }),
+      "send",
+      String(JSON.stringify(notifiedReactorIds))
+    );
+  }
+});
+
+test("decideReactionNotify: Aが投稿Pに付けて送った10分後に、Bが同じPに付けたら send（陽性対照C5）", () => {
+  // lastSkyId と skyId は、新着投稿の decideThrottle を流用した形なら「同じ投稿＝重複」になる値（この関数は読まない）。
+  const decision = core.decideReactionNotify({
+    state: { lastSentAt: T0, lastSkyId: "P" },
+    notifiedReactorIds: ["A"],
+    reactorUid: "B",
+    skyId: "P",
+    nowMs: T0 + 10 * MINUTE_MS,
+  });
+  assert.equal(decision, "send");
+});
+
+test("decideReactionNotify: 投稿IDに左右されない（記録と時刻が同じなら、投稿IDを変えても判定は同じ）", () => {
+  const cases = [
+    { notifiedReactorIds: ["B"], nowMs: T0 + 10 * MINUTE_MS, expected: "duplicate" },
+    { notifiedReactorIds: ["A"], nowMs: T0 + 1 * MINUTE_MS, expected: "throttled" },
+    { notifiedReactorIds: ["A"], nowMs: T0 + 10 * MINUTE_MS, expected: "send" },
+  ];
+  const skyIdPairs = [
+    ["P", "P"],
+    ["P", "Q"],
+    [undefined, "P"],
+  ];
+  for (const { notifiedReactorIds, nowMs, expected } of cases) {
+    for (const [lastSkyId, skyId] of skyIdPairs) {
+      assert.equal(
+        core.decideReactionNotify({ state: { lastSentAt: T0, lastSkyId }, notifiedReactorIds, reactorUid: "B", skyId, nowMs }),
+        expected,
+        `${expected}: lastSkyId=${lastSkyId} skyId=${skyId}`
+      );
+    }
+  }
+});

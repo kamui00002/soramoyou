@@ -83,6 +83,7 @@ final class WhatsNewGateTests: XCTestCase {
             "2026-09-ranking-sky-ae",
             "2026-10-soratomo-beta",
             "2026-10-soratomo-public",
+            "2026-10-block-from-profile",
         ]
         for pastID in pastIDs {
             XCTAssertNotEqual(WhatsNewContent.currentID, pastID, "過去の値 \(pastID) と同じ")

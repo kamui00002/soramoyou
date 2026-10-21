@@ -572,6 +572,77 @@ function planMembershipRemoval({ uid, ownerId, members }) {
   };
 }
 
+// MARK: - リアクション（soratomo-reactions）
+
+/**
+ * リアクションの7種類（soratomo-reactions design.md「絵文字のセット」・要件4.4〜4.6）。
+ * 送る値・保存する値・計測の kind は name。emoji は表示と通知文に出す形（くも・赤いハートは U+FE0F を含む）。
+ * 並びはメニューの選択肢と数の表示の並び（数の多い順に並べ替えない）。
+ * ⚠️ iOS の SoratomoReactionKind（allCases の並び・rawValue・絵文字）と一致させること（両方の単体テストで
+ *    7行とも固定している）。片方だけ変えると、アプリが送った名前をサーバーが invalid_reaction で拒否する
+ *    （またはその逆）か、通知文の絵文字がアプリの表示と食い違う。
+ * ⚠️ 絵文字は、見えない U+FE0F が編集で落ちないよう、エスケープで書いている。4桁の形でなく波かっこの形
+ *    （u{...}）にしているのは、編集の道具が4桁の形を生の文字に戻すことがあるため（2026-10-18 に実際に起きた）。
+ */
+const REACTION_KINDS = Object.freeze([
+  Object.freeze({ name: "sunset", emoji: "\u{1F305}" }), // 夕焼け（Unicode の名前は SUNRISE・決定事項P1）
+  Object.freeze({ name: "cloud", emoji: "\u{2601}\u{FE0F}" }), // くも（U+2601 U+FE0F）
+  Object.freeze({ name: "rainbow", emoji: "\u{1F308}" }), // 虹
+  Object.freeze({ name: "sparkles", emoji: "\u{2728}" }), // きれい（UTF-16 で1単位）
+  Object.freeze({ name: "eyes", emoji: "\u{1F440}" }), // 見たよ
+  Object.freeze({ name: "red_heart", emoji: "\u{2764}\u{FE0F}" }), // 赤いハート（U+2764 U+FE0F）
+  Object.freeze({ name: "blue_heart", emoji: "\u{1F499}" }), // 青いハート
+]);
+
+/**
+ * 値がリアクションの7つの名前のどれかと完全に一致するか（要件4.4・4.6）。
+ * 正規化しない: 絵文字そのもの・FE0F の無い形・大文字・前後の空白・文字列でない値は偽。
+ * 名前の一覧と比べるだけなので、"constructor" などのプロトタイプの名前も偽になる。
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isReactionKind(value) {
+  return typeof value === "string" && REACTION_KINDS.some((def) => def.name === value);
+}
+
+/**
+ * 投稿者へのリアクションの通知文を組み立てる（要件6.9〜6.11）。
+ * 題はグループ名。本文は「{付けた人の表示名}さんがあなたの空に{絵文字}を付けました」。
+ * 表示名が空・空白だけ・文字列でないときは「だれか」（FALLBACK_NAME・6.10）。新着投稿の buildNotification と
+ * 違い、空白だけの表示名も「だれか」にする（tasks 2.1）。
+ * キャプションは入れず、引数にも取らない（ロック画面などアプリの外にキャプションを出す場面を増やさない・6.11）。
+ * @param {{ groupName: string, reactorName: unknown, kind: string }} args kind は isReactionKind を通った名前
+ * @returns {{ title: string, body: string }}
+ * @throws {TypeError} kind が7つの名前のどれでもないとき（絵文字の欠けた通知を作らない。呼び出し側は検査済みの名前を渡す）
+ */
+function buildReactionNotification({ groupName, reactorName, kind }) {
+  const def = REACTION_KINDS.find((d) => d.name === kind);
+  if (!def) throw new TypeError("buildReactionNotification: kind がリアクションの名前でない");
+  const name = typeof reactorName === "string" && reactorName.trim() !== "" ? reactorName : FALLBACK_NAME;
+  return { title: groupName, body: `${name}さんがあなたの空に${def.emoji}を付けました` };
+}
+
+/**
+ * 投稿者へのリアクションの通知を送るかを決める（要件6.5・6.8）。
+ * - 印（reactionNotices/{skyId}.notifiedReactorIds）に付けた人がいる: 重複（同じ人の同じ投稿で1通まで。時刻に関係なく、
+ *   間引きより先に決める）
+ * - 最後に送ってから5分以内（reactionNotifyState/{投稿者}.lastSentAt）: 間引き。「以内」なので5分ちょうども含める
+ * - それ以外（記録が無い・時刻が読めない・5分を過ぎた）: 送る
+ * 投稿IDは見ない。新着投稿の decideThrottle は「直前に送った投稿と同じ」を重複とするので、流用すると、Aが投稿Pに
+ * 付けて送った後にBが同じPに付けた通知を落とす（design.md F8・陽性対照C5）。
+ * @param {{ state: { lastSentAt?: unknown }|null|undefined, notifiedReactorIds: unknown, reactorUid: string,
+ *   nowMs: number }} args state は reactionNotifyState/{投稿者} の中身（文書が無ければ null）
+ * @returns {"send"|"throttled"|"duplicate"}
+ */
+function decideReactionNotify({ state, notifiedReactorIds, reactorUid, nowMs }) {
+  // 配列のときだけ見る（文字列の includes は部分一致になるため）。
+  if (Array.isArray(notifiedReactorIds) && notifiedReactorIds.includes(reactorUid)) return "duplicate";
+  if (!state) return "send";
+  const last = toMillisOrNull(state.lastSentAt);
+  if (last === null) return "send";
+  return nowMs - last <= THROTTLE_MS ? "throttled" : "send";
+}
+
 module.exports = {
   INVITE_ALPHABET,
   INVITE_CODE_LENGTH,
@@ -609,4 +680,9 @@ module.exports = {
   buildReportForwardPayload,
   pickNextOwner,
   planMembershipRemoval,
+  // リアクション（soratomo-reactions）
+  REACTION_KINDS,
+  isReactionKind,
+  buildReactionNotification,
+  decideReactionNotify,
 };

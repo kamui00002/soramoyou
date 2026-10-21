@@ -575,8 +575,9 @@ service cloud.firestore {
     // ============================================
     // そらとも（招待制の小さなグループで空を共有する）⭐️
     // spec: .kiro/specs/soratomo/ と .kiro/specs/soratomo-release-gate/（公開前ゲート）
-    // 書き手: グループ・メンバー・招待コード・通知の間引き・利用者ごとの所属・投稿の作成・通報の記録・語のリストは
-    //   Cloud Functions（Admin SDK）だけ。Admin SDK はルールを通らないので、ここではクライアントからの書き込みをすべて拒否する。
+    // 書き手: グループ・メンバー・招待コード・通知の間引き・利用者ごとの所属・投稿の作成・通報の記録・語のリスト・
+    //   リアクションと、リアクションの通知の記録（soratomo-reactions）は Cloud Functions（Admin SDK）だけ。
+    //   Admin SDK はルールを通らないので、ここではクライアントからの書き込みをすべて拒否する。
     //   アプリが書けるのは投稿（skies）の削除だけ（作成は release-gate で Callable の soratomoCreateSky へ移した）。
     // collectionGroup のクエリと {path=**} のルールは使わない（既存のインデックスとルールに干渉させない。要件 13.1）。
     // テスト: scripts/rules_test_soratomo.py（許可と拒否の両方・--mutants で陽性対照）。ルールを変えたら両方を流す。
@@ -618,6 +619,7 @@ service cloud.firestore {
       }
 
       // 投稿（アプリは読み取りと削除だけを行う。作成は Callable、更新はしない）
+      // リアクション（reactions・reactorIds）も投稿の項目。書き手は Callable（soratomoSetReaction）と片づけ（Admin SDK）だけ
       match /skies/{skyId} {
         // 読み取り（タイムラインの一覧を含む）はメンバーだけ（要件 11.1・11.2）
         allow read: if isSoratomoUser() && isSoratomoMember(groupId);
@@ -634,6 +636,16 @@ service cloud.firestore {
 
       // 通知の間引きの状態（文書 ID は受信者の uid）。Functions の内部の記録なので、誰にも読ませない
       match /notifyState/{uid} {
+        allow read, write: if false;
+      }
+
+      // リアクションの通知の間引き（文書 ID は投稿者の uid）。Functions の内部の記録なので、誰にも読ませない
+      match /reactionNotifyState/{uid} {
+        allow read, write: if false;
+      }
+
+      // リアクションの通知を送った印（文書 ID は投稿 ID）。Functions の内部の記録なので、誰にも読ませない
+      match /reactionNotices/{skyId} {
         allow read, write: if false;
       }
     }

@@ -171,8 +171,10 @@ struct SoratomoTimelineSnapshot: Equatable, Sendable {
 
 /// 投稿 1 件の監視の結果（release-gate 9.3・要件 1.7）
 enum SoratomoSkyPresence: Equatable, Sendable {
-    /// 投稿がある（端末のキャッシュの結果を含む）
-    case present
+    /// 投稿がある（端末のキャッシュの結果を含む）。いまのリアクションを持つ（soratomo-reactions 要件 2.5）
+    ///
+    /// 投稿詳細は、開いている間のリアクションの変化をこの値で受け取る（同じ文書へ 2 本目の監視は張らない）。
+    case present(SoratomoReactions)
     /// 投稿がもう無い（サーバーで確かめた不在だけ。キャッシュだけの不在では届けない）
     case gone
 }
@@ -404,4 +406,46 @@ protocol SoratomoLeaveDataSource: Sendable {
     /// Callable は呼ぶたびに、その時点の利用者のトークンで送られる。抜けるの繰り返しの途中で
     /// アカウントが替わっていないかを、回ごとに確かめるために使う（leave-group /review-full D1）。
     func currentUid() -> String?
+}
+
+// MARK: - 投稿へのリアクション（soratomo-reactions 7.5）
+
+/// サーバーが返したリアクションの結果（rawValue がサーバーの `outcome` の値）
+enum SoratomoReactionOutcome: String, Sendable {
+    /// 初めて付けた
+    case added
+    /// 別の絵文字に選び直した
+    case replaced
+    /// 外した
+    case removed
+    /// 変わらなかった（同じ絵文字をもう一度送った・付いていないのに外した、など。戻り値の形が違ったときの代わりにも使う）
+    case unchanged
+}
+
+/// リアクションを送った結果
+struct SoratomoReactionChange: Equatable, Sendable {
+    let outcome: SoratomoReactionOutcome
+    /// 書いた後の自分のリアクション（外れていれば nil）
+    let kind: SoratomoReactionKind?
+}
+
+/// リアクションのサービス
+///
+/// - 失敗はすべて `SoratomoError` に写して投げる。サーバーの文言は画面に出さない。
+protocol SoratomoReactionServiceProtocol: Sendable {
+    /// 自分のリアクションを kind にする（nil なら外す）。Callable `soratomoSetReaction`・20 秒
+    func setReaction(groupId: String, skyId: String, kind: SoratomoReactionKind?)
+        async throws(SoratomoError) -> SoratomoReactionChange
+}
+
+/// リアクションの Functions の窓口（テストで差し替える。形は `SoratomoLeaveDataSource` の Callable と同じ）
+///
+/// 窓口は元のエラーのまま投げる。写すのは `SoratomoReactionService` の役目。
+protocol SoratomoReactionDataSource: Sendable {
+    /// Callable を呼んで、戻り値（デコード済みの JSON）を返す
+    /// - Parameters:
+    ///   - name: Callable の名前
+    ///   - payload: 送る値
+    ///   - timeout: 制限時間（秒）
+    func callCallable(_ name: String, payload: [String: Any], timeout: TimeInterval) async throws -> Any
 }

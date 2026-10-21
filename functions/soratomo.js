@@ -1,5 +1,5 @@
 //
-// そらもよう Cloud Functions — 「そらとも」の配線（Callable 8本・トリガー2本・定期実行1本）⭐️☁️
+// そらもよう Cloud Functions — 「そらとも」の配線（Callable 9本・トリガー3本・定期実行1本）⭐️☁️
 //
 // - soratomoCreateGroup・soratomoJoinGroup・soratomoRegenerateInviteCode（tasks 8.1）:
 //   ログインと、登録済みのアカウント（匿名でない）かを確かめ、soratomoStore.js のトランザクションを呼び、
@@ -11,8 +11,12 @@
 //   共通の削除で消す。匿名も受け付ける（ログインは求める）。
 // - soratomoLeaveGroup（leave-group 3.1）: 本人が1つのグループだけを抜ける。soratomoDeletion.js の
 //   leaveSoratomoGroup（片づけ中の印つき）で、そのグループの本人のデータを消す。関門はほかの Callable と同じ（匿名は拒否）。
+// - soratomoSetReaction（soratomo-reactions 3.1）: 本人のリアクションを付ける・選び直す・外す（soratomoStore.js の
+//   setReactionTx）。新しく付いたときだけ、投稿者へ通知する（notifyReaction）。関門はほかの Callable と同じ（匿名は拒否）。
 // - onSoratomoSkyCreated（tasks 8.2）: グループの新しい投稿を、投稿者以外のメンバーへ知らせる。
 //   既存の onPostCreated とは名前も対象（soratomoGroups/{groupId}/skies/{skyId}）も別。
+// - onSoratomoSkyDeleted（soratomo-reactions 3.2）: 投稿が消えたら、その投稿の送った印（reactionNotices/{skyId}）を消し、
+//   投稿と一緒に消えたリアクションの数をログに残す。削除の経路（アプリ・抜ける・退会・運用）とアプリの版に依らない。
 // - onSoratomoReportCreated（release-gate 4.3）: 通報の記録を、開発者の Discord（フィードバックとは別の送り先）へ
 //   ID・理由・時刻だけで送る。失敗は記録の状態で追い、例外を投げない。
 // - soratomoHousekeeping（release-gate 4.4）: 6時間ごとの定期実行。仕事A＝Auth のアカウントが無い人のデータを
@@ -20,7 +24,7 @@
 //   抜けるを、片づけ中の印（soratomoPendingLeaves）から続けて終える。
 //
 // index.js の末尾の Object.assign(exports, require("./soratomo")) で公開する（tasks 8.3）。
-// ここで公開するのは Cloud Functions の 11 本だけにする（ほかの値を exports に混ぜない）。
+// ここで公開するのは Cloud Functions の 13 本だけにする（ほかの値を exports に混ぜない）。
 //
 // ⚠️ 関門（1.15.0 の一般公開・public-launch 3.2）: Callable はログインと「登録済みのアカウント（匿名でない）」を求め、
 //    先行公開のクレームは読まない。匿名を通すのは退会の削除だけ（allowAnonymous）。ルールの isSoratomoUser() と
@@ -34,7 +38,7 @@
 "use strict";
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
@@ -82,6 +86,9 @@ const REASON_TO_CODE = Object.freeze({
   outdated_guideline: "failed-precondition",
   // leave-group（抜けるか退会の片づけ中の参加）
   leave_pending: "failed-precondition",
+  // soratomo-reactions（自分の投稿へのリアクション・7種類にない絵文字）
+  self_reaction: "failed-precondition",
+  invalid_reaction: "invalid-argument",
 });
 
 /**
@@ -285,6 +292,7 @@ const soratomoDeleteMyData = soratomoCallable(
       groupsLeft: totals.groupsLeft,
       ownersTransferred: totals.ownersTransferred,
       groupsDeleted: totals.groupsDeleted,
+      reactionsDeleted: totals.reactionsDeleted, // 手順2bで外したリアクションの数（soratomo-reactions D4・14.5）
     }),
   }
 );
@@ -328,6 +336,100 @@ const soratomoLeaveGroup = soratomoCallable(
       groupDeleted: result.groupDeleted,
       skiesDeleted: result.skiesDeleted,
       imagesDeleted: result.imagesDeleted,
+      reactionsDeleted: result.reactionsDeleted, // 手順2bで外したリアクションの数（soratomo-reactions 4.3・14.5）
+    }),
+  }
+);
+
+// MARK: - リアクション（soratomo-reactions 3.1）
+
+/**
+ * 新しく付いたリアクションを、投稿者へ知らせる（soratomo-reactions 要件5.4・6.1〜6.18・11.3〜11.5・design の Event Contract）。
+ * 送ったかどうか・送らなかった理由を、成功のログの notify に出す文字列で返す（要件14.4・要件への差し戻しD2）。
+ * - 読む文書は、グループ・投稿者のメンバーの文書・投稿者と付けた人の users の4件（getAll）
+ * - 判定の順は新着投稿の通知と同じ: グループが無い（group_missing）・投稿者がもうメンバーでない（author_left）→
+ *   classifyRecipient（通知設定OFF→ブロック→トークン無し）→ claimReactionNotifySlot（投稿が消えた sky_gone・
+ *   同じ人の2通目 duplicate・5分以内 throttled）→ sendToTokenGrouped（sent・invalid_token・failed）
+ * - classifyRecipient の posterId には「付けた人」を渡す（投稿者が付けた人をブロックしていれば送らない・要件5.4）
+ * - 既存の3つの通知設定（notifyReactions など）と、宛先のアプリの版は見ない（要件12.4・6.18）
+ * - 通知文は枠の確保より前に作る。作る途中で失敗したとき、間引きの記録と送った印を使ったまま何も送らない形にしないため
+ * - 例外を投げない。失敗は "failed" にして、warn のログに内部IDと errorName・errorCode だけを出す（要件6.16。
+ *   リアクションは確定済みで、送信の失敗で取り消さない）
+ * @param {{ groupId: string, skyId: string, authorId: string, reactorUid: string, kind: string }} params
+ *   kind は setReactionTx が書いた後の本人のリアクション（7つの名前のどれか）
+ * @returns {Promise<"sent"|"invalid_token"|"failed"|"no_token"|"pref_off"|"blocked"|"throttled"|"duplicate"
+ *   |"sky_gone"|"author_left"|"group_missing">}
+ */
+async function notifyReaction({ groupId, skyId, authorId, reactorUid, kind }) {
+  try {
+    const groupRef = db.collection("soratomoGroups").doc(groupId);
+    const [groupSnap, authorMemberSnap, authorUserSnap, reactorUserSnap] = await db.getAll(
+      groupRef,
+      groupRef.collection("members").doc(authorId),
+      db.collection("users").doc(authorId),
+      db.collection("users").doc(reactorUid)
+    );
+    if (!groupSnap.exists) return "group_missing";
+    if (!authorMemberSnap.exists) return "author_left";
+
+    const authorData = authorUserSnap.exists ? authorUserSnap.data() : null;
+    const recipient = core.classifyRecipient({ userData: authorData, posterId: reactorUid });
+    if (recipient !== "eligible") return recipient;
+
+    const notification = core.buildReactionNotification({
+      groupName: groupSnap.get("name"),
+      reactorName: reactorUserSnap.exists ? reactorUserSnap.get("displayName") : null,
+      kind,
+    });
+    const slot = await store.claimReactionNotifySlot(db, { groupId, skyId, authorId, reactorUid, nowMs: Date.now() });
+    if (slot !== "send") return slot;
+
+    // FCM の data の値はすべて文字列。スレッドは新着投稿と同じグループごと、置き換えキーは新着投稿と別（U2 の A）
+    const data = { type: "soratomoReaction", groupId, postId: skyId };
+    const grouping = { threadId: `soratomo-${groupId}`, collapseId: `soratomo-reaction-${groupId}` };
+    return await sendToTokenGrouped(authorId, authorData.fcmToken, notification, data, grouping);
+  } catch (err) {
+    logger.warn("soratomoSetReaction: notify_failed", {
+      uid: reactorUid,
+      groupId,
+      skyId,
+      errorName: err && err.name,
+      errorCode: err && err.code,
+    });
+    return "failed";
+  }
+}
+
+/**
+ * 本人のリアクションを付ける・選び直す・外す。{ groupId, skyId, kind } → { outcome, kind }
+ * （kind は7つの名前か null。null は外す・soratomo-reactions design の API Contract）
+ * - 関門はほかの Callable と同じ（選択肢を渡さない＝登録済みを求め、匿名は拒否する・要件4.12）
+ * - 規則（利用停止・メンバー・投稿の有無・自分の投稿・7種類）と書き込みは soratomoStore.setReactionTx（要件4.1〜4.11）
+ * - 新しく付いた（added）ときだけ、応答の前に投稿者への通知を await する。選び直す・外す・同じもの（unchanged。
+ *   送り直しで unchanged になった要求も）では送らない（要件6.7）。送信の失敗でリアクションを取り消さない（6.16）
+ * - 応答は outcome と kind だけ。投稿者の uid（setReactionTx の authorId）は返さない
+ * - 成功のログ（soratomoSetReaction: ok）は uid・groupId・skyId・outcome・kind・notify だけ（要件14.1〜14.4）。
+ *   notify は送らなかったとき null、送ろうとしたとき notifyReaction の結果（要件への差し戻しD2）
+ */
+const soratomoSetReaction = soratomoCallable(
+  "soratomoSetReaction",
+  async (uid, data) => {
+    const result = await store.setReactionTx(db, { uid, input: data });
+    const notify =
+      result.outcome === "added"
+        ? await notifyReaction({ groupId: data.groupId, skyId: data.skyId, authorId: result.authorId, reactorUid: uid, kind: result.kind })
+        : null;
+    return { ...result, notify };
+  },
+  {
+    respond: (result) => ({ outcome: result.outcome, kind: result.kind }),
+    // groupId と skyId は setReactionTx が自動IDの形を確かめた値（形の違う値は invalid_input で、ここに来ない）
+    okLogFields: (result, data) => ({
+      groupId: data.groupId,
+      skyId: data.skyId,
+      outcome: result.outcome,
+      kind: result.kind,
+      notify: result.notify,
     }),
   }
 );
@@ -435,6 +537,38 @@ async function handleSoratomoSkyCreated(event) {
 const onSoratomoSkyCreated = onDocumentCreated(
   { document: "soratomoGroups/{groupId}/skies/{skyId}", region: REGION },
   handleSoratomoSkyCreated
+);
+
+// MARK: - 投稿の削除（soratomo-reactions 3.2）
+
+/**
+ * 消えた投稿の送った印（reactionNotices/{skyId}）を消し、投稿と一緒に消えたリアクションの数をログに残す
+ * （soratomo-reactions 要件8.1〜8.5・14.5・design の onSoratomoSkyDeleted）。
+ * - リアクションそのもの（reactions・reactorIds）は投稿の文書の項目なので、投稿と同時に消える。ここで消すのは
+ *   サーバー専用の印だけ（削除の経路とアプリの版に依らない。バッチと recursiveDelete でも1件ずつ発火する＝要確認Q1）
+ * - 数えるのは消えた文書（event.data）の reactions の鍵の数。地図でなければ0
+ * - 印の削除は何度でも同じ結果（無くても成功する）。再試行は付けない（既存のトリガーと同じ）
+ * - 失敗は sky_deleted_failed を error で出し、例外を投げない（印が残っても、その投稿への通知を送らない側にしか効かない）
+ * - ログは内部IDと件数だけ（要件14.2）
+ * ⚠️ 印のコレクションの名前は soratomoStore.js の REACTION_NOTICES と同じ（書き手は claimReactionNotifySlot）
+ * @param {{ params: { groupId: string, skyId: string }, data?: FirebaseFirestore.DocumentSnapshot }} event
+ */
+async function handleSoratomoSkyDeleted(event) {
+  const { groupId, skyId } = event.params;
+  try {
+    const reactions = event.data ? event.data.get("reactions") : undefined;
+    const reactionsDeleted =
+      reactions !== null && typeof reactions === "object" && !Array.isArray(reactions) ? Object.keys(reactions).length : 0;
+    await db.collection("soratomoGroups").doc(groupId).collection("reactionNotices").doc(skyId).delete();
+    logger.info("soratomoReaction: sky_deleted", { groupId, skyId, reactionsDeleted });
+  } catch (err) {
+    logger.error("soratomoReaction: sky_deleted_failed", { groupId, skyId, errorName: err && err.name, errorCode: err && err.code });
+  }
+}
+
+const onSoratomoSkyDeleted = onDocumentDeleted(
+  { document: "soratomoGroups/{groupId}/skies/{skyId}", region: REGION },
+  handleSoratomoSkyDeleted
 );
 
 // MARK: - 通報の転送（release-gate 4.3）
@@ -657,6 +791,7 @@ async function sweepPendingLeaves(startedMs) {
           groupDeleted: result.groupDeleted,
           skiesDeleted: result.skiesDeleted,
           imagesDeleted: result.imagesDeleted,
+          reactionsDeleted: result.reactionsDeleted, // soratomo-reactions 4.3・14.5
           ageMs: Date.now() - leftAtMs,
         });
         if (done) summary.completed += 1;
@@ -721,7 +856,9 @@ module.exports = {
   soratomoAgreeGuideline,
   soratomoDeleteMyData,
   soratomoLeaveGroup,
+  soratomoSetReaction,
   onSoratomoSkyCreated,
+  onSoratomoSkyDeleted,
   onSoratomoReportCreated,
   soratomoHousekeeping,
 };

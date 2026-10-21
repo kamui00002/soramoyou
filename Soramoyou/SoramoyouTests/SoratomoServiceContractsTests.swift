@@ -166,11 +166,11 @@ final class SoratomoServiceContractsTests: XCTestCase {
         var received: [Result<SoratomoSkyPresence, SoratomoError>] = []
         let token = service.observeSky(groupId: "g1", skyId: "s1") { received.append($0) }
 
-        mock.emitSky(.success(.present))
+        mock.emitSky(.success(.present(.empty)))
         token.cancel()
         mock.emitSky(.success(.gone))
 
-        XCTAssertEqual(received, [.success(.present)])
+        XCTAssertEqual(received, [.success(.present(.empty))])
         XCTAssertEqual(mock.observeSkyCalls.map(\.skyId), ["s1"])
         XCTAssertEqual(mock.cancelledSkyIndexes, [0])
     }

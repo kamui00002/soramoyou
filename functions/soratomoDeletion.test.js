@@ -482,6 +482,7 @@ test("手順2〜4: 残るメンバーがいれば、退会者の投稿・画像�
     groupDeleted: false,
     skiesDeleted: 3,
     imagesDeleted: 8,
+    reactionsDeleted: 0,
   });
   assert.deepEqual(await skyAuthors("g1"), ["amy2:b1", "owner:o1"], "ほかのメンバーの投稿は残す（1.5）");
   assert.deepEqual([...storage.files].sort(), keptImages, "ほかの人の画像（隣の amy2 を含む）と別のグループの画像は残す");
@@ -507,6 +508,7 @@ test("手順2〜4: 残るメンバーがいれば、退会者の投稿・画像�
     groupDeleted: false,
     skiesDeleted: 0,
     imagesDeleted: 0,
+    reactionsDeleted: 0,
   });
   assert.deepEqual(await skyAuthors("g1"), ["amy2:b1", "owner:o1"]);
   assert.deepEqual([...storage.files].sort(), keptImages);
@@ -537,6 +539,7 @@ test("手順2〜4: 最後の1人なら、グループの下のすべて（前の
     groupDeleted: true,
     skiesDeleted: 3,
     imagesDeleted: 8,
+    reactionsDeleted: 0,
   });
   const groupRef = db.collection(GROUPS).doc("g1");
   assert.equal(await groupData("g1"), null);
@@ -561,6 +564,7 @@ test("手順2〜4: 最後の1人なら、グループの下のすべて（前の
     groupDeleted: false,
     skiesDeleted: 0,
     imagesDeleted: 0,
+    reactionsDeleted: 0,
   });
 });
 
@@ -584,6 +588,7 @@ test("手順2〜4: グループの文書が無く、ほかのメンバーの文�
     groupDeleted: false,
     skiesDeleted: 2,
     imagesDeleted: 4,
+    reactionsDeleted: 0,
   });
   assert.deepEqual((await db.collection(GROUPS).doc("g1").listCollections()).map((c) => c.id), []);
   assert.equal(storage.files.size, 0);
@@ -611,6 +616,7 @@ test("手順2〜4: グループの文書が無くても、ほかのメンバー�
     groupDeleted: false,
     skiesDeleted: 1,
     imagesDeleted: 2,
+    reactionsDeleted: 0,
   });
   assert.deepEqual(await skyAuthors("g1"), ["bob:b1"]);
   assert.deepEqual(await notifyIds("g1"), ["bob"]);
@@ -652,6 +658,7 @@ test("時間の予算: グループの前に締め切りを過ぎていれば、
     groupDeleted: false,
     skiesDeleted: 0,
     imagesDeleted: 0,
+    reactionsDeleted: 0,
   });
   assert.deepEqual(await memberRoles("g1"), { amy: "member", owner: "owner" }, "メンバーの文書も外さない");
   assert.deepEqual(await skyAuthors("g1"), ["amy:a1"]);
@@ -691,6 +698,7 @@ test("時間の予算: 投稿300件を消した後に締め切りを過ぎてい
     groupDeleted: false,
     skiesDeleted: 1,
     imagesDeleted: 2,
+    reactionsDeleted: 0,
   });
   assert.deepEqual(await skyAuthors("g1"), []);
   assert.deepEqual(await notifyIds("g1"), []);
@@ -821,7 +829,7 @@ test("deleteUserDataInGroup: 引数の誤りは TypeError で、何も書かな�
 
 const JOIN_POLICY = Object.freeze({ guidelineVersion: core.GUIDELINE_VERSION });
 const CREATE_POLICY = Object.freeze({ guidelineVersion: core.GUIDELINE_VERSION, containsNgWord: () => false });
-const ZERO_TOTALS = Object.freeze({ skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0 });
+const ZERO_TOTALS = Object.freeze({ skiesDeleted: 0, imagesDeleted: 0, groupsLeft: 0, ownersTransferred: 0, groupsDeleted: 0, reactionsDeleted: 0 });
 
 test("利用者単位: 写しの全グループと、追加のグループIDの和について消し、最後に利用者の文書を消す。2回目は件数0", async () => {
   // g1: amy がオーナーで bob が残る（引き継ぎ）。g2: amy が最後の1人（グループごと）。g3: 写しの無いグループ（管理が足す）
@@ -861,6 +869,7 @@ test("利用者単位: 写しの全グループと、追加のグループIDの�
     groupsLeft: 2,
     ownersTransferred: 1,
     groupsDeleted: 1,
+    reactionsDeleted: 0,
   });
   assert.equal(await userData("amy"), null, "利用者の文書を消す（2.3）");
   assert.deepEqual(await copyIds("amy"), []);
@@ -977,6 +986,7 @@ test("利用者単位: 追加のグループIDで渡した、メンバーのい�
     groupsLeft: 0,
     ownersTransferred: 0,
     groupsDeleted: 1,
+    reactionsDeleted: 0,
   });
   assert.equal(await groupData("g9"), null);
   assert.deepEqual((await db.collection(GROUPS).doc("g9").listCollections()).map((c) => c.id), []);
@@ -1030,7 +1040,7 @@ test("利用停止: 停止の日時を先に書いてから消す。削除の途
 
   const result = await deletion.suspendSoratomoUser(deps, { uid: "amy", deadlineMs: DEADLINE });
   assert.deepEqual(attempts, ["suspended", "suspended"], "削除の途中でも、参加と作成は停止で拒否される（8.6）");
-  assert.deepEqual(result, { done: true, skiesDeleted: 1, imagesDeleted: 2, groupsLeft: 1, ownersTransferred: 0, groupsDeleted: 0 });
+  assert.deepEqual(result, { done: true, skiesDeleted: 1, imagesDeleted: 2, groupsLeft: 1, ownersTransferred: 0, groupsDeleted: 0, reactionsDeleted: 0 });
   const user = await userData("amy");
   assert.ok(user && user.suspendedAt, "停止の日時が残る");
   assert.equal(user.groupCount, 0);
@@ -1600,7 +1610,7 @@ test("抜ける手順1（陽性対照C4）: メンバーでない人（写しも
     const result = await deletion.leaveSoratomoGroup(leaveDeps(), leaveReq("stranger", "g1", origin));
     assert.deepEqual(result, {
       done: true, state: "nothing", kind: null, removed: false, ownerTransferred: false,
-      groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+      groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0, reactionsDeleted: 0,
     }, origin);
   }
   assert.deepEqual(await dumpAll(), before);
@@ -1683,7 +1693,7 @@ async function appUserData(uid) {
 }
 const NOTHING = Object.freeze({
   done: true, state: "nothing", kind: null, removed: false, ownerTransferred: false,
-  groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+  groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0, reactionsDeleted: 0,
 });
 
 test("抜ける手順2〜4: ただのメンバーは、本人の投稿・画像（取り残しも）・通知の間引き・写し・印を消し、ほかの人とほかのグループ・通報・利用者の文書の項目・users の設定は残す", async () => {
@@ -1731,7 +1741,7 @@ test("抜ける手順2〜4: ただのメンバーは、本人の投稿・画像�
   const result = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("amy", "g1"));
   assert.deepEqual(result, {
     done: true, state: "started", kind: "leave", removed: true, ownerTransferred: false,
-    groupDeleted: false, skiesDeleted: 2, imagesDeleted: 6,
+    groupDeleted: false, skiesDeleted: 2, imagesDeleted: 6, reactionsDeleted: 0,
   });
   assert.deepEqual(await skyAuthors("g1"), ["bob:b1", "owner:o1"], "ほかのメンバーの投稿は残す（2.5）");
   assert.deepEqual([...storage.files].sort(), keptImages, "ほかの人の画像・ほかのグループの画像は残す（2.5）");
@@ -1776,7 +1786,7 @@ test("抜ける手順2〜4: 最後の1人なら、グループ・招待コード
   const result = await deletion.leaveSoratomoGroup(leaveDeps(["e1"], { storage }), leaveReq("owner", "g1"));
   assert.deepEqual(result, {
     done: true, state: "started", kind: "delete_group", removed: true, ownerTransferred: false,
-    groupDeleted: true, skiesDeleted: 3, imagesDeleted: 8,
+    groupDeleted: true, skiesDeleted: 3, imagesDeleted: 8, reactionsDeleted: 0,
   });
   const groupRef = db.collection(GROUPS).doc("g1");
   assert.equal(await groupData("g1"), null);
@@ -1817,7 +1827,7 @@ test("抜ける時間の予算: 投稿300件を消した後に締め切りを過
   );
   assert.deepEqual(first, {
     done: false, state: "started", kind: "leave", removed: true, ownerTransferred: false,
-    groupDeleted: false, skiesDeleted: deletion.SKY_PAGE_SIZE, imagesDeleted: 0,
+    groupDeleted: false, skiesDeleted: deletion.SKY_PAGE_SIZE, imagesDeleted: 0, reactionsDeleted: 0,
   });
   assert.equal((await skyAuthors("g1")).length, 1);
   assert.equal(storage.calls, 0, "画像はまだ消していない");
@@ -1829,7 +1839,7 @@ test("抜ける時間の予算: 投稿300件を消した後に締め切りを過
   const second = await deletion.leaveSoratomoGroup(leaveDeps(["e2"], { storage }), leaveReq("amy", "g1"));
   assert.deepEqual(second, {
     done: true, state: "continued", kind: "leave", removed: false, ownerTransferred: false,
-    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2, reactionsDeleted: 0,
   });
   assert.deepEqual(await skyAuthors("g1"), []);
   assert.equal(storage.files.size, 0);
@@ -1977,11 +1987,11 @@ test("抜ける（陽性対照C3）: 実行Aを画像の一覧で止めている
   await assertGroupInvariants("g1");
   assert.deepEqual(b, {
     done: true, state: "continued", kind: "leave", removed: false, ownerTransferred: false,
-    groupDeleted: false, skiesDeleted: 0, imagesDeleted: 2,
+    groupDeleted: false, skiesDeleted: 0, imagesDeleted: 2, reactionsDeleted: 0,
   });
   assert.deepEqual(a, {
     done: true, state: "superseded", kind: "leave", removed: true, ownerTransferred: false,
-    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 0,
+    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 0, reactionsDeleted: 0,
   });
   assert.deepEqual(storage.prefixes, ["soratomo/g1/amy/", "soratomo/g1/amy/"]);
 });
@@ -2015,7 +2025,7 @@ test("抜ける: 抜けて、入り直して、また抜けると、1回目の�
   const a2 = await deletion.leaveSoratomoGroup(leaveDeps(["e3"], { storage }), leaveReq("amy", "g1"));
   assert.deepEqual(a2, {
     done: true, state: "continued", kind: "leave", removed: false, ownerTransferred: false,
-    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2,
+    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 2, reactionsDeleted: 0,
   });
   assert.deepEqual(await skyAuthors("g1"), []);
   assert.deepEqual(sortedPaths(storage, "soratomo/"), []);
@@ -2126,7 +2136,7 @@ test("抜ける: 抜けるが締め切りで止まった後に退会が終わる
   const swept = await deletion.leaveSoratomoGroup(leaveDeps(["e9"], { storage }), leaveReq("amy", "g1", "sweep"));
   assert.deepEqual(swept, {
     done: true, state: "continued", kind: "leave", removed: false, ownerTransferred: false,
-    groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0,
+    groupDeleted: false, skiesDeleted: 0, imagesDeleted: 0, reactionsDeleted: 0,
   });
   delete before[`${PENDING}/amy_g1`];
   assert.deepEqual(await dumpAll(), before, "印だけが消える（利用者の文書も作り直さない）");
@@ -2199,7 +2209,7 @@ async function assertLeaveSupersededAfterRejoin({ a, scene, storage }) {
 
   assert.deepEqual(a, {
     done: true, state: "superseded", kind: "leave", removed: true, ownerTransferred: false,
-    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 0,
+    groupDeleted: false, skiesDeleted: 1, imagesDeleted: 0, reactionsDeleted: 0,
   });
   assert.deepEqual(await dumpAll(), scene.before, "A は入り直した後に何も書かない（メンバー・投稿・写し・所属数・印）");
   assert.deepEqual(sortedPaths(storage, "soratomo/"), scene.files, "入り直した後の画像は残る");
@@ -2387,4 +2397,521 @@ test("同時実行（leave-group 2.2）: 抜けると、ほかの人の参加・
   t.diagnostic(`2.2 の分布 ${JSON.stringify(tally)}`);
   if (unexpected.length > 0) t.diagnostic(`想定外 ${JSON.stringify(unexpected)}`);
   assert.deepEqual(unexpected, [], "想定外の失敗が無い");
+});
+
+// MARK: - 手順2b: 本人が付けたリアクションの片づけ（soratomo-reactions 4.1〜4.3）
+//
+// 抜ける・退会・利用停止・アカウントの無い人の後始末で、本人がほかのメンバーの投稿に付けたリアクションと、送った印の中の
+// 本人と、本人あての間引きの記録（reactionNotifyState/{本人}）が消え、ほかの人の分は残る（要件9・design の「共通の削除」）。
+// - 種は Admin SDK で直接入れる（setReactionTx を通さない）。kind は名前の文字列だけにする
+// - 本人の投稿の印（reactionNotices/{本人の投稿}）は入れない。本人の投稿は手順2で消え、その印は削除のトリガー
+//   （soratomo.js の onSoratomoSkyDeleted）が消すが、このファイルのテストは関数を起こさないため
+// - 状態（reactionDump）を先に、戻り値の reactionsDeleted を最後に見る（今の現物で、赤の理由が「本人のリアクションが
+//   残る」になるように・tasks 4.1）
+
+/** リアクションの通知の記録のコレクション（soratomoStore.js の REACTION_NOTICES・REACTION_NOTIFY_STATE と同じ文字列）。 */
+const REACTION_NOTICES = "reactionNotices";
+const REACTION_NOTIFY_STATE = "reactionNotifyState";
+const REACTED_AT = Timestamp.fromMillis(T(30));
+
+/**
+ * リアクションの付いた投稿を入れる。reactions のキーと reactorIds を同じ集合で書く（I1）。
+ * @param {string} groupId
+ * @param {string} skyId
+ * @param {string} authorId
+ * @param {string[]} reactorUids 付けた人
+ */
+async function seedReactedSky(groupId, skyId, authorId, reactorUids) {
+  await db.collection(GROUPS).doc(groupId).collection("skies").doc(skyId).set({
+    authorId,
+    width: 1,
+    height: 1,
+    createdAt: Timestamp.now(),
+    reactions: Object.fromEntries(reactorUids.map((uid) => [uid, { kind: "sunset", at: REACTED_AT }])),
+    reactorIds: [...reactorUids],
+  });
+}
+/** 送った印（reactionNotices/{skyId}・投稿者へ通知を送った付けた人）を入れる。 */
+async function seedReactionNotice(groupId, skyId, notifiedReactorIds) {
+  await db.collection(GROUPS).doc(groupId).collection(REACTION_NOTICES).doc(skyId).set({ notifiedReactorIds });
+}
+/** 投稿者あての間引きの記録（reactionNotifyState/{投稿者}）を入れる。 */
+async function seedReactionNotifyState(groupId, authorUids) {
+  const batch = db.batch();
+  for (const uid of authorUids) {
+    batch.set(db.collection(GROUPS).doc(groupId).collection(REACTION_NOTIFY_STATE).doc(uid), { lastSentAt: REACTED_AT });
+  }
+  await batch.commit();
+}
+
+/**
+ * グループのリアクションまわりを丸ごと読む（投稿ごとの reactions のキーと reactorIds・印の中身・間引きの記録のID）。
+ * どれも並べ替える。reactions が地図でない投稿は、キーを0件とみなす。
+ */
+async function reactionDump(groupId) {
+  const groupRef = db.collection(GROUPS).doc(groupId);
+  const skies = {};
+  for (const doc of (await groupRef.collection("skies").get()).docs) {
+    const reactions = doc.get("reactions");
+    const map = reactions && typeof reactions === "object" && !Array.isArray(reactions) ? reactions : {};
+    skies[doc.id] = { keys: Object.keys(map).sort(), reactorIds: [...(doc.get("reactorIds") || [])].sort() };
+  }
+  const notices = {};
+  for (const doc of (await groupRef.collection(REACTION_NOTICES).get()).docs) {
+    notices[doc.id] = [...(doc.get("notifiedReactorIds") || [])].sort();
+  }
+  const notifyState = (await groupRef.collection(REACTION_NOTIFY_STATE).get()).docs.map((d) => d.id).sort();
+  return { skies, notices, notifyState };
+}
+
+/**
+ * 手順2bの種。amy は g1（owner がオーナー・bob がいる）と g2（carl がオーナー・dave がいる）のただのメンバー。
+ * - g1: owner の o1 に amy と bob、bob の b1 に amy と owner、owner の o2 に bob だけ、amy の a1 に bob が付けている
+ * - g2: carl の c1 に amy と dave が付けている
+ * - 印は、投稿者へ通知を送った付けた人。間引きの記録（投稿者あて）は、g1 が amy・owner・bob、g2 が amy・carl
+ */
+async function seedReactionScene() {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+      { uid: "bob", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedGroup({
+    groupId: "g2",
+    ownerId: "carl",
+    inviteCode: "SKYBBBBB",
+    members: [
+      { uid: "carl", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+      { uid: "dave", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedReactedSky("g1", "o1", "owner", ["amy", "bob"]);
+  await seedReactedSky("g1", "b1", "bob", ["amy", "owner"]);
+  await seedReactedSky("g1", "o2", "owner", ["bob"]);
+  await seedReactedSky("g1", "a1", "amy", ["bob"]);
+  await seedReactedSky("g2", "c1", "carl", ["amy", "dave"]);
+  await seedReactionNotice("g1", "o1", ["amy", "bob"]);
+  await seedReactionNotice("g1", "b1", ["amy"]);
+  await seedReactionNotice("g1", "o2", ["bob"]);
+  await seedReactionNotice("g2", "c1", ["amy", "dave"]);
+  await seedReactionNotifyState("g1", ["amy", "owner", "bob"]);
+  await seedReactionNotifyState("g2", ["amy", "carl"]);
+  await seedUser("amy", ["g1", "g2"]);
+}
+
+/** amy の分だけが消えた後の g1（amy の投稿 a1 は手順2で消える。b1 の印は amy を外した空の配列で残る）。 */
+const G1_AFTER_AMY = Object.freeze({
+  skies: {
+    o1: { keys: ["bob"], reactorIds: ["bob"] },
+    b1: { keys: ["owner"], reactorIds: ["owner"] },
+    o2: { keys: ["bob"], reactorIds: ["bob"] },
+  },
+  notices: { o1: ["bob"], b1: [], o2: ["bob"] },
+  notifyState: ["bob", "owner"],
+});
+/** amy の分だけが消えた後の g2。 */
+const G2_AFTER_AMY = Object.freeze({
+  skies: { c1: { keys: ["dave"], reactorIds: ["dave"] } },
+  notices: { c1: ["dave"] },
+  notifyState: ["carl"],
+});
+
+/** 1つのグループで amy の分だけが消えたことを、投稿・印・間引きの記録の順に見る（どこで落ちたかを読み分けるため）。 */
+async function assertReactionsAfter(groupId, expected, label) {
+  const dump = await reactionDump(groupId);
+  assert.deepEqual(dump.skies, expected.skies, `${label} ${groupId}: 本人のリアクションと reactorIds の本人が消え、ほかの人の分は残る（9.1・9.5・9.11・I1）`);
+  assert.deepEqual(dump.notices, expected.notices, `${label} ${groupId}: 印の中の本人が消え、ほかの人は残る（D1）`);
+  assert.deepEqual(dump.notifyState, expected.notifyState, `${label} ${groupId}: 本人あての間引きの記録だけが消える`);
+}
+
+for (const [label, run] of [
+  ["退会（self）", (deps) => deletion.deleteSoratomoUserData(deps, { uid: "amy", trigger: "self", deadlineMs: DEADLINE })],
+  ["利用停止", (deps) => deletion.suspendSoratomoUser(deps, { uid: "amy", deadlineMs: DEADLINE })],
+  [
+    "アカウントの無い人の後始末（account_deleted・仕事Aの部品）",
+    (deps) => deletion.deleteSoratomoUserData(deps, { uid: "amy", trigger: "account_deleted", deadlineMs: DEADLINE }),
+  ],
+]) {
+  test(`手順2b（soratomo-reactions 陽性対照C2）: ${label}は、所属するすべてのグループで、本人のリアクション・印の中の本人・本人あての間引きの記録を消してから done: true を返す`, async () => {
+    await seedReactionScene();
+    const result = await run({ db, storage: fakeStorage([]).gateway, nowMs: steadyClock() });
+    assert.equal(result.done, true, "done: true は消し終えた後に返る（9.6）");
+    await assertReactionsAfter("g1", G1_AFTER_AMY, label);
+    await assertReactionsAfter("g2", G2_AFTER_AMY, label);
+    assert.equal(result.reactionsDeleted, 3, "消したリアクションの数（g1 の o1・b1 と g2 の c1。D4）");
+  });
+}
+
+test("手順2b: 最後の1人の退会では手順2bを行わず、グループの下（リアクション・印・間引きの記録を含む）がすべて消える", async () => {
+  await seedGroup({ groupId: "g3", ownerId: "amy", inviteCode: "SKYCCCCC", members: [{ uid: "amy", role: "owner", joinedAtMs: T(1) }] });
+  await seedReactedSky("g3", "x1", "old", ["amy"]); // 前のメンバーの投稿に amy が付けた
+  await seedReactedSky("g3", "a1", "amy", ["old"]);
+  await seedReactionNotice("g3", "x1", ["amy"]);
+  await seedReactionNotifyState("g3", ["amy", "old"]);
+  await seedUser("amy", ["g3"]);
+  const result = await deletion.deleteUserDataInGroup(
+    { db, storage: fakeStorage([]).gateway, nowMs: steadyClock() },
+    { uid: "amy", groupId: "g3", deadlineMs: DEADLINE }
+  );
+  assert.equal(result.done, true);
+  assert.equal(result.kind, "delete_group");
+  assert.deepEqual((await db.collection(GROUPS).doc("g3").listCollections()).map((c) => c.id), [], "グループの下が空");
+  assert.equal(result.skiesDeleted, 2);
+  assert.equal(result.reactionsDeleted, 0, "手順2bを行わない（外したリアクションを数えない）");
+});
+
+test("手順2b: 300件を超えるリアクションは、1区切りの後に締め切りを過ぎたら写しと間引きの記録を残して done: false。続きで消し切り、その後は何度呼んでも件数0で同じ状態", async () => {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+    ],
+  });
+  // owner の投稿 301件に amy と bob が付けた（1区切りの300件を1件超える）
+  const skyIds = Array.from({ length: 301 }, (_, i) => `o${i}`);
+  const batch = db.batch();
+  for (const skyId of skyIds) {
+    batch.set(db.collection(GROUPS).doc("g1").collection("skies").doc(skyId), {
+      authorId: "owner",
+      width: 1,
+      height: 1,
+      createdAt: Timestamp.now(),
+      reactions: { amy: { kind: "sunset", at: REACTED_AT }, bob: { kind: "eyes", at: REACTED_AT } },
+      reactorIds: ["amy", "bob"],
+    });
+  }
+  await batch.commit();
+  await seedReactionNotice("g1", "o0", ["amy", "bob"]);
+  await seedReactionNotifyState("g1", ["amy", "owner"]);
+  await seedUser("amy", ["g1"]);
+  const amyLeft = async () => (await db.collection(GROUPS).doc("g1").collection("skies").where("reactorIds", "array-contains", "amy").get()).size;
+  const run = (nowMs) =>
+    deletion.deleteUserDataInGroup({ db, storage: fakeStorage([]).gateway, nowMs }, { uid: "amy", groupId: "g1", deadlineMs: DEADLINE });
+
+  // グループの前は間に合い、リアクションの1区切り（300件）の後で締め切りを過ぎる（amy の投稿は無いので、手順2は時計を見ない）
+  const first = await run(clockPastAfter(1));
+  assert.equal(first.done, false);
+  assert.equal(first.reactionsDeleted, 300);
+  assert.equal(await amyLeft(), 1, "1件残る");
+  assert.deepEqual(await copyIds("amy"), ["g1"], "写しが残るので続きから（9.3）");
+  assert.deepEqual((await reactionDump("g1")).notices, { o0: ["amy", "bob"] }, "印は投稿の後に外すので、まだ残る");
+  assert.deepEqual((await reactionDump("g1")).notifyState, ["amy", "owner"], "間引きの記録は手順3で消すので、まだ残る");
+
+  const second = await run(steadyClock());
+  assert.equal(second.done, true);
+  assert.equal(second.reactionsDeleted, 1, "続きは残りの1件だけを数える");
+  assert.equal(await amyLeft(), 0);
+  const after = await reactionDump("g1");
+  assert.equal(Object.keys(after.skies).length, 301, "投稿は消さない");
+  for (const [skyId, s] of Object.entries(after.skies)) {
+    assert.deepEqual(s, { keys: ["bob"], reactorIds: ["bob"] }, `${skyId}: bob の分は残る`);
+  }
+  assert.deepEqual(after.notices, { o0: ["bob"] });
+  assert.deepEqual(after.notifyState, ["owner"]);
+  assert.deepEqual(await copyIds("amy"), []);
+
+  // 何度呼んでも、1回で成功した場合と同じ（9.10）
+  for (let n = 0; n < 2; n += 1) {
+    const again = await run(steadyClock());
+    assert.equal(again.done, true);
+    assert.equal(again.reactionsDeleted, 0, `${n + 3}回目は件数0`);
+    assert.deepEqual(await reactionDump("g1"), after, `${n + 3}回目も状態が変わらない`);
+  }
+});
+
+test("手順2b: 読んだ後・書く前に投稿が消えたら（NOT_FOUND）、投げずに飛ばして数えず、消えた投稿を作り直さない", async () => {
+  await seedReactionScene();
+  let checks = 0;
+  const result = await deletion.removeUserReactionsInGroup(db, { uid: "amy", groupId: "g1" }, () => false, async () => {
+    checks += 1;
+    // 1区切り目（o1・b1）を読んだ後に、o1 を消す（投稿者の削除や、運用の deleteSoratomoSky が割り込んだ形）
+    if (checks === 1) await db.collection(GROUPS).doc("g1").collection("skies").doc("o1").delete();
+    return true;
+  });
+  assert.equal((await db.collection(GROUPS).doc("g1").collection("skies").doc("o1").get()).exists, false, "消えた投稿を作り直さない（set(merge) を使わない）");
+  assert.deepEqual(result, { done: true, deleted: 1 }, "消えた o1 は数えず、b1 だけを数える");
+  const dump = await reactionDump("g1");
+  assert.deepEqual(dump.skies.b1, { keys: ["owner"], reactorIds: ["owner"] });
+  assert.deepEqual(dump.notices, { o1: ["bob"], b1: [], o2: ["bob"] }, "印の中の本人は、投稿が消えても外す");
+});
+
+test("手順2b: 読んだ後・書く前に投稿が書き換わったら（FAILED_PRECONDITION）、投げずに飛ばし、次の区切りで読み直して本人の分だけを消す", async () => {
+  await seedReactionScene();
+  let checks = 0;
+  const result = await deletion.removeUserReactionsInGroup(db, { uid: "amy", groupId: "g1" }, () => false, async () => {
+    checks += 1;
+    // 1区切り目（o1・b1）を読んだ後に、bob が o1 のリアクションを選び直す（o1 の updateTime が変わる）
+    if (checks === 1) {
+      const r = await store.setReactionTx(db, { uid: "bob", input: { groupId: "g1", skyId: "o1", kind: "rainbow" } });
+      assert.equal(r.outcome, "replaced", "読みと書きの間に、ほかのメンバーが書いた（この場面を作れている）");
+    }
+    return true;
+  });
+  const o1 = await db.collection(GROUPS).doc("g1").collection("skies").doc("o1").get();
+  assert.deepEqual(Object.keys(o1.get("reactions")).sort(), ["bob"], "読み直した後に、本人の分を消す");
+  assert.equal(o1.get("reactions").bob.kind, "rainbow", "ほかのメンバーの選び直しは残る");
+  assert.deepEqual(o1.get("reactorIds"), ["bob"]);
+  assert.deepEqual(result, { done: true, deleted: 2 }, "o1 は読み直した後に消して数え、飛ばした1回は数えない");
+});
+
+test("手順2b: 締め切りで途中で止まっても、書いた投稿ごとに reactions のキーと reactorIds がそろう（I1）", async () => {
+  await seedReactionScene();
+  const result = await deletion.removeUserReactionsInGroup(db, { uid: "amy", groupId: "g1" }, () => true);
+  assert.deepEqual(result, { done: false, deleted: 2 }, "1区切り（o1・b1）を書いた後に、締め切りで止まる");
+  const dump = await reactionDump("g1");
+  for (const [skyId, s] of Object.entries(dump.skies)) {
+    assert.deepEqual(s.keys, s.reactorIds, `${skyId}: reactions のキーと reactorIds が等しい（I1）`);
+  }
+  assert.deepEqual(dump.skies.o1.keys, ["bob"]);
+  assert.deepEqual(dump.notices.o1, ["amy", "bob"], "印は投稿の後に外す（締め切りで止まったので、まだ残る）");
+});
+
+test("手順2b: 利用停止の解除で、消したリアクション・印・間引きの記録は戻らない（9.12）", async () => {
+  await seedReactionScene();
+  const deps = { db, storage: fakeStorage([]).gateway, nowMs: steadyClock() };
+  const suspended = await deletion.suspendSoratomoUser(deps, { uid: "amy", deadlineMs: DEADLINE });
+  assert.equal(suspended.done, true);
+  await deletion.unsuspendSoratomoUser(db, { uid: "amy" });
+  assert.equal((await userData("amy")).suspendedAt, undefined, "停止は解けた");
+  await assertReactionsAfter("g1", G1_AFTER_AMY, "解除の後");
+  await assertReactionsAfter("g2", G2_AFTER_AMY, "解除の後");
+});
+
+test("手順2b（soratomo-reactions 陽性対照C2）: 抜けると、本人がほかのメンバーの投稿に付けたリアクション・印の中の本人・本人あての間引きの記録が消え、ほかの人の分とほかのグループは残る", async () => {
+  await seedReactionScene();
+  const g2Before = await reactionDump("g2");
+  const result = await deletion.leaveSoratomoGroup(leaveDeps(["e1"]), leaveReq("amy", "g1"));
+  assert.equal(result.done, true, "done: true は消し終えた後に返る");
+  assert.equal(result.state, "started");
+  await assertReactionsAfter("g1", G1_AFTER_AMY, "抜ける");
+  assert.deepEqual(await reactionDump("g2"), g2Before, "抜けたグループの分だけを消す（ほかのグループには触れない・9.1）");
+  assert.equal(result.reactionsDeleted, 2, "消したリアクションの数（o1・b1。本人の投稿 a1 の分は投稿と一緒に消えるので数えない）");
+});
+
+// MARK: - 手順2bの1区切りの書き込み（updateDocChunk・/review-full F3）
+//
+// エミュレーターは、読んだ後に消えた文書への前提条件つきの update も FAILED_PRECONDITION(9) で返すので、上の
+// 「（NOT_FOUND）」のテストは NOT_FOUND(5) の枝を通らない。ここは偽の write で、5・9 を飛ばす枝と、ほかのコードを
+// 投げ直す枝を直接通す。
+// - Firestore には触れない（実行がエミュレーターの中なのは、このファイルの柵のため）
+// - 陽性対照（2026-10-22）: SKIPPED_WRITE_CODES を [9] にすると 5 のテストが赤、throw err を握りつぶすと 7 のテストが赤、
+//   allSettled を Promise.all にすると 7 のテストが赤（投げた時点で書けていたのは 11 件でなく 1 件）。ほかの 2 本はどれでも緑
+
+/** 偽の文書を n 件作る（updateDocChunk が読むのは ref と updateTime だけ）。ID は d0, d1, … */
+function fakeChunkDocs(n) {
+  return Array.from({ length: n }, (_, i) => ({ ref: { id: `d${i}` }, updateTime: { fakeUpdateTime: i } }));
+}
+
+/**
+ * 偽の write。failures にある ID は、そのコードの失敗で reject し、ほかは書けたとして記録する。
+ * 1 tick 待ってから返す（同時に書く形にし、失敗が先に返っても残りが走っている場面を作るため）。
+ * @param {Record<string, number>} failures 文書ID → gRPC のコード（数値。SKIPPED_WRITE_CODES は数値で比べる）
+ */
+function fakeChunkWrite(failures = {}) {
+  const calls = [];
+  const written = [];
+  const write = async (ref, precondition) => {
+    calls.push({ id: ref.id, precondition });
+    await new Promise((resolve) => setImmediate(resolve));
+    if (Object.hasOwn(failures, ref.id)) {
+      throw Object.assign(new Error(`偽の書き込みの失敗 ${ref.id}`), { code: failures[ref.id] });
+    }
+    written.push(ref.id);
+  };
+  return { write, calls, written };
+}
+
+for (const [code, name] of [[5, "NOT_FOUND"], [9, "FAILED_PRECONDITION"]]) {
+  test(`手順2b（updateDocChunk）: 書き込みが ${name}(${code}) で失敗した文書は、投げずに飛ばして数えず、ほかの文書は前提条件つきで書く`, async () => {
+    const docs = fakeChunkDocs(3);
+    const fake = fakeChunkWrite({ d1: code });
+    const written = await deletion.updateDocChunk(docs, fake.write);
+    assert.equal(written, 2, "飛ばした d1 は数えない");
+    assert.deepEqual(fake.written.sort(), ["d0", "d2"]);
+    assert.deepEqual(fake.calls.map((c) => c.id).sort(), ["d0", "d1", "d2"], "全部に書きにいく");
+    for (const c of fake.calls) {
+      const doc = docs.find((d) => d.ref.id === c.id);
+      assert.deepEqual(Object.keys(c.precondition), ["lastUpdateTime"], `${c.id}: 前提条件は lastUpdateTime だけ`);
+      assert.equal(c.precondition.lastUpdateTime, doc.updateTime, `${c.id}: 読んだ文書の updateTime を渡す`);
+    }
+  });
+}
+
+test("手順2b（updateDocChunk）: ほかのコード（PERMISSION_DENIED(7)）の失敗は、残りの文書（同時に書く数10を超えた分も）を書き終えてから、その失敗で投げる", async () => {
+  const docs = fakeChunkDocs(12);
+  const fake = fakeChunkWrite({ d1: 7 });
+  await assert.rejects(deletion.updateDocChunk(docs, fake.write), (err) => {
+    assert.equal(err.code, 7, "飛ばさずに、その失敗を投げる");
+    assert.equal(fake.written.length, 11, "投げるのは、走っている書き込みと残りの文書を書き終えた後");
+    return true;
+  });
+  assert.equal(fake.calls.length, 12, "失敗の後も、残りの文書に書きにいく");
+  assert.ok(fake.written.includes("d10") && fake.written.includes("d11"), "同時に書く数を超えた d10・d11 も書く");
+});
+
+// MARK: - 手順2bと抜ける・入り直しの競合（soratomo-reactions 4.3・陽性対照C3・C10）
+
+/**
+ * 抜けるの手順2bに渡す照合を包む口（leaveSoratomoGroup の deps.wrapReactionCheck）を作る。最初の照合の前（"before"）か、
+ * 本物の照合が答えを出した後・返す前（"after"）に、一度だけ between を走らせる。2回目からは本物の照合をそのまま返す。
+ * @param {"before"|"after"} at
+ * @param {() => Promise<void>} between
+ */
+function pauseReactionCheck(at, between) {
+  let fired = false;
+  return (check) => async () => {
+    if (fired) return check();
+    fired = true;
+    if (at === "before") {
+      await between();
+      return check();
+    }
+    const ok = await check();
+    await between();
+    return ok;
+  };
+}
+
+/** 競合の種: amy は g1（owner がオーナー・bob がいる）のただのメンバー。owner の o1 に amy と bob が付け、印に amy がいる。 */
+async function seedReactionRace() {
+  await seedGroup({
+    groupId: "g1",
+    ownerId: "owner",
+    inviteCode: "SKYAAAAA",
+    members: [
+      { uid: "owner", role: "owner", joinedAtMs: T(1) },
+      { uid: "amy", role: "member", joinedAtMs: T(2) },
+      { uid: "bob", role: "member", joinedAtMs: T(3) },
+    ],
+  });
+  await seedReactedSky("g1", "o1", "owner", ["amy", "bob"]);
+  await seedReactionNotice("g1", "o1", ["amy"]);
+  await seedUser("amy", ["g1"]);
+}
+
+/** 実行Bが最後まで終え、本人が入り直し、react なら同じ投稿 o1 に付け直す（入り直した後のリアクション）。 */
+async function finishRejoinAndReact({ react }) {
+  const b = await deletion.leaveSoratomoGroup(leaveDeps(["e2"]), leaveReq("amy", "g1"));
+  const joined = await store.joinGroupTx(db, { uid: "amy", code: "SKYAAAAA", policy: JOIN_POLICY });
+  const reacted = react ? await store.setReactionTx(db, { uid: "amy", input: { groupId: "g1", skyId: "o1", kind: "rainbow" } }) : null;
+  return { b, joined, reacted };
+}
+
+/** o1 のリアクション（キー・amy の kind・reactorIds）。 */
+async function o1Reactions() {
+  const snap = await db.collection(GROUPS).doc("g1").collection("skies").doc("o1").get();
+  const reactions = snap.get("reactions") || {};
+  return {
+    keys: Object.keys(reactions).sort(),
+    amyKind: reactions.amy ? reactions.amy.kind : null,
+    reactorIds: [...(snap.get("reactorIds") || [])].sort(),
+  };
+}
+
+test("抜ける（soratomo-reactions 陽性対照C3）: 実行Aを手順2bの照合の前で止めている間に、実行Bが最後まで終え、本人が入り直して同じ投稿に付け直しても、Aは照合で止まり、新しいリアクションが残る", async () => {
+  await seedReactionRace();
+  let scene = null;
+  const deps = {
+    ...leaveDeps(["e1"]),
+    wrapReactionCheck: pauseReactionCheck("before", async () => {
+      scene = await finishRejoinAndReact({ react: true });
+    }),
+  };
+  const a = await deletion.leaveSoratomoGroup(deps, leaveReq("amy", "g1"));
+  assert.equal(scene && scene.b.done, true, "B が A より先に最後まで終えた");
+  assert.deepEqual(scene.joined, { groupId: "g1", alreadyMember: false }, "A の途中で入り直しが通った（この場面を作れている）");
+  assert.equal(scene.reacted.outcome, "added", "入り直した後に、同じ投稿に付け直した");
+  assert.deepEqual(await o1Reactions(), { keys: ["amy", "bob"], amyKind: "rainbow", reactorIds: ["amy", "bob"] }, "入り直した後の新しいリアクションは残る（9.4）");
+  assert.equal(a.state, "superseded", "A は照合で止まる");
+  assert.equal(a.done, true);
+  assert.equal(a.reactionsDeleted, 0, "A は何も消さない");
+  assert.equal(scene.b.reactionsDeleted, 1, "抜ける前のリアクションは B が消した");
+  assert.deepEqual(await memberRoles("g1"), { owner: "owner", amy: "member", bob: "member" });
+});
+
+for (const react of [true, false]) {
+  const title = react
+    ? "同じ投稿に付け直すと、Aの書き込みは前提条件で失敗し、次の区切りの照合で止まり、新しいリアクションが残る"
+    : "付け直していなければ、抜ける前のリアクションは消えたままで、Aは手順4の照合で止まる";
+  test(`抜ける（soratomo-reactions 陽性対照C10）: 実行Aの手順2bで照合が通った直後・書く前に、実行Bが最後まで終え、本人が入り直して${title}`, async () => {
+    await seedReactionRace();
+    let scene = null;
+    const deps = {
+      ...leaveDeps(["e1"]),
+      wrapReactionCheck: pauseReactionCheck("after", async () => {
+        scene = await finishRejoinAndReact({ react });
+      }),
+    };
+    const a = await deletion.leaveSoratomoGroup(deps, leaveReq("amy", "g1"));
+    assert.equal(scene && scene.b.done, true, "B が A より先に最後まで終えた");
+    assert.deepEqual(scene.joined, { groupId: "g1", alreadyMember: false }, "A の照合の後に入り直しが通った（この場面を作れている）");
+    if (react) {
+      assert.equal(scene.reacted.outcome, "added", "入り直した後に、同じ投稿に付け直した");
+      assert.deepEqual(await o1Reactions(), { keys: ["amy", "bob"], amyKind: "rainbow", reactorIds: ["amy", "bob"] }, "入り直した後の新しいリアクションは残る（9.4）");
+    } else {
+      assert.deepEqual(await o1Reactions(), { keys: ["bob"], amyKind: null, reactorIds: ["bob"] }, "抜ける前のリアクションは消えたまま");
+    }
+    assert.equal(a.state, "superseded", "A は照合で止まる");
+    assert.equal(a.done, true);
+    assert.equal(a.reactionsDeleted, 0, "A の書き込みは前提条件で失敗し、数えない");
+    assert.deepEqual(await memberRoles("g1"), { owner: "owner", amy: "member", bob: "member" });
+  });
+}
+
+test("抜ける（soratomo-reactions）: 手順2bの照合の後・書く前に、ほかのメンバーが同じ投稿のリアクションを選び直しても、次の区切りで読み直して本人の分だけを消して終える", async () => {
+  await seedReactionRace();
+  const deps = {
+    ...leaveDeps(["e1"]),
+    wrapReactionCheck: pauseReactionCheck("after", async () => {
+      const r = await store.setReactionTx(db, { uid: "bob", input: { groupId: "g1", skyId: "o1", kind: "rainbow" } });
+      assert.equal(r.outcome, "replaced", "読みと書きの間に、ほかのメンバーが書いた（この場面を作れている）");
+    }),
+  };
+  const a = await deletion.leaveSoratomoGroup(deps, leaveReq("amy", "g1"));
+  assert.equal(a.state, "started");
+  assert.equal(a.done, true);
+  const o1 = await db.collection(GROUPS).doc("g1").collection("skies").doc("o1").get();
+  assert.deepEqual(Object.keys(o1.get("reactions")).sort(), ["bob"], "読み直した後に、本人の分を消す");
+  assert.equal(o1.get("reactions").bob.kind, "rainbow", "ほかのメンバーの選び直しは残る");
+  assert.deepEqual(o1.get("reactorIds"), ["bob"]);
+  assert.deepEqual((await reactionDump("g1")).notices, { o1: [] }, "印の中の本人も外す");
+  assert.equal(a.reactionsDeleted, 1, "飛ばした1回は数えず、読み直して消した1件を数える");
+});
+
+test("抜ける（soratomo-reactions）: 最後の1人が抜けると、手順2bを行わず、グループの下（リアクション・印・間引きの記録を含む）がすべて消える", async () => {
+  await seedGroup({ groupId: "g3", ownerId: "amy", inviteCode: "SKYCCCCC", members: [{ uid: "amy", role: "owner", joinedAtMs: T(1) }] });
+  await seedReactedSky("g3", "x1", "old", ["amy"]); // 前のメンバーの投稿に amy が付けた
+  await seedReactionNotice("g3", "x1", ["amy"]);
+  await seedReactionNotifyState("g3", ["amy", "old"]);
+  await seedUser("amy", ["g3"]);
+  let checks = 0;
+  const deps = {
+    ...leaveDeps(["e1"]),
+    wrapReactionCheck: (check) => async () => {
+      checks += 1;
+      return check();
+    },
+  };
+  const result = await deletion.leaveSoratomoGroup(deps, leaveReq("amy", "g3"));
+  assert.equal(result.done, true);
+  assert.equal(result.kind, "delete_group");
+  assert.deepEqual((await db.collection(GROUPS).doc("g3").listCollections()).map((c) => c.id), [], "グループの下が空");
+  assert.equal(checks, 0, "手順2bの照合を呼ばない（手順2bを行わない）");
+  assert.equal(result.reactionsDeleted, 0);
+});
+
+test("抜ける（soratomo-reactions）: テスト用の口 wrapReactionCheck が関数でなければ TypeError で、何も書かない", async () => {
+  await seedReactionRace();
+  const before = await dumpAll();
+  await assert.rejects(deletion.leaveSoratomoGroup({ ...leaveDeps(), wrapReactionCheck: "x" }, leaveReq("amy", "g1")), TypeError);
+  assert.deepEqual(await dumpAll(), before);
 });
