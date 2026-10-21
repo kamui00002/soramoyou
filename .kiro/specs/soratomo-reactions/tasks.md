@@ -710,12 +710,15 @@
     - この結果は、記録の枝 `ドキュメント-そらともリアクションの反映の記録` に戻って書いた
     - 12.5（ルール）が終わるまで、mainからアプリの版を作らない。次は 12.4（公開呼び出しの許可）と 12.5
 
-- [ ] 12.4 新しいCallableの公開呼び出しの許可を確かめる（ユーザーのGOを取ってから実行）
+- [x] 12.4 新しいCallableの公開呼び出しの許可を確かめる（ユーザーのGOを取ってから実行）
   - 前提: 12.3
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - leave-group 11.4（release-gate specの要確認4）と同じ手順で行う。認証の無い `POST https://asia-northeast1-soramoyou-ios.cloudfunctions.net/soratomoSetReaction`（本文 `{"data":{}}`）を1回送り、HTTP 401・`UNAUTHENTICATED`・「ログインが必要です」が返ること（この文言は関数のコードだけが返す。許可が無ければCloud Runが403で止める）。関数のログに `soratomoSetReaction: rejected`（reason unauthenticated）が出ること
   - 失敗したら、呼び出し元の設定を見直す（変える前に利用者に相談する）
   - _Requirements: 4.12_
+  - 結果（2026-10-22 07:50・要件4.12は検証済み）: 利用者のGO（12.5と並べて進める・GOは2つまとめて1回で取った）で、認証の無い `POST https://asia-northeast1-soramoyou-ios.cloudfunctions.net/soratomoSetReaction`（本文 `{"data":{}}`）を 2026-10-21T22:50:10Z に1回送った（サンドボックスの中・`curl`）。HTTP 401・`{"error":{"message":"ログインが必要です","status":"UNAUTHENTICATED"}}`（関数のコードだけが返す文言なので、Cloud Run の入口は通っている＝公開呼び出しの許可がある）
+    - 関数のログ（`firebase functions:log --only soratomoSetReaction`・サンドボックスの外）: 22:50:12.993Z の `soratomoSetReaction: rejected`（`reason: unauthenticated`・`uid: null`）が1行。その直前に `Callable request verification passed`（app・auth とも `MISSING`）。この関数のログはほかに、12.3 の作成の記録と最初の起動の行だけ
+    - ⚠️ `functions:log` には作成の監査ログの行（操作したアカウントのメールと接続元のIP）が混ざる。今回はファイルに保存した後に全体を読んでしまった（この記録には書いていない）。次からは `rejected` の行だけを grep で出す
 
 - [ ] 12.5 Firestoreのルールを本番へ出す（ユーザーのGOを取ってから実行）
   - 前提: 12.2（12.3との順は問わない。新しい `match` は、既定で拒否されていたパスの明示なので、どの順でも挙動は変わらない）
