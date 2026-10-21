@@ -644,7 +644,7 @@
 
 - [ ] 12. 本番へ反映する（すべてユーザーのGOを取ってから）
 
-- [ ] 12.1 出す前の確認と、pushとPRの作成（ユーザーのGOを取ってから実行）
+- [x] 12.1 出す前の確認と、pushとPRの作成（ユーザーのGOを取ってから実行）
   - 前提: 6, 9.2, 10, 11
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - `git fetch -q origin` の後、mainが進んでいれば取り込み、`npm run lint`・`npm test`・`npm run test:emulator`・ルールのテスト（通常と `--mutants`）・iOSのビルドとテストを、もう一度通す
@@ -668,6 +668,7 @@
       - 棄却だが利用者に伝えたF1（codex と general が独立に出した）: `claimReactionNotifySlot`（`soratomoStore.js:623`）が、付けた人がまだメンバーかを読まない。付けた直後に別の端末で本人が抜けると、去った人の名前の通知1通と、投稿が消えるまで残る印の uid がありうる。抜けるの11往復以上が通知の2〜3往復の間に終わる必要があり、データは失わない。利用者の決定（2026-10-22）で、issue にせず PR の本文の「既知の制限」に書く
       - 棄却の主なもの: F2（押した人の一覧が上書きの解除に追従しない＝9.1で利用者が「このまま」を選んだ場面）・F4（decode の1人分の壊れた値をログ無しで飛ばす＝design.md:686 の承認済みの設計）・F13（`belongsTo` の整形＝7.4で利用者が受け入れ済み）
     - `/security-review`（03:35〜03:50・`/review-full` の後に直列）: 洗い出しの係が、サーバー（`soratomoSetReaction`・`setReactionTx`・`notifyReaction`・`claimReactionNotifySlot`・`onSoratomoSkyDeleted`・手順2b・`firestore.rules`）と iOS（Service・Router・Models・SkyService の読み取り）をたどり、確信度0.8以上の候補は0件（High・Medium とも0）。候補が無いので偽陽性の判定の段は無し。たどった5点: (a) 自分の `reactions.{uid}` 以外は書けない（`groupId`・`skyId` は `isAutoId` の英数字1〜64・kind は null か7つの名前と完全一致・uid は `request.auth.uid`・FieldPath） (b) 未ログイン・匿名・利用停止・非メンバー・投稿者本人は関門で止まる（非メンバーの判定は投稿の有無より先） (c) 通知の data は `{type, groupId, postId}` だけ・本文にキャプションなし・宛先はメンバーの投稿者だけ (d) 新しい2つのコレクションは `read, write: if false`・skies の update は拒否のまま・手順2bは本人のキーだけを前提条件つきの update で消す (e) ログは内部ID・件数・列挙だけ。補足（指摘ではない）: ブロックした人のリアクションを隠すのはクライアントだけ（既存のタイムラインと同じ作り・要件4.14・5.5の決定）
+  - 結果（2026-10-22 04:10・pushとPR）: 上の結果をコミット（`3a96ea2`）した後、利用者のGOを1手ずつ取った。サンドボックスの外で `git push -u origin 機能-そらともいいね`（新しい枝・`origin/機能-そらともいいね` の先頭は `3a96ea23`）。PR #193（`main` ← `機能-そらともいいね`）を `gh pr create --body-file` で作った。本文は要件・設計・tasks.mdの場所、出す順番（マージ→Functions 13本を名前で・ルール→TestFlightと審査・マージからデプロイまでmainからアプリの版を作らない）、テストとレビューの結果、既知の制限（F1）、PRの後に回すnit（F11・F14・F15）。渡す前の本文の `@` は0、作った後に読み返した本文も5,055字・`@` は0。作った直後の確認は GitGuardian が合格・security-tests は実行中。このコミットを足すので、security-tests は新しい先頭でもう一度走る
 
 - [ ] 12.2 mainへマージする（ユーザーのGOを取ってから実行）
   - 前提: 12.1
