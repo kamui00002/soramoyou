@@ -701,8 +701,9 @@ struct PostGridItem: View {
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             Group {
-                if let firstImage = post.images.first, let url = URL(string: firstImage.url) {
-                    KFImage(url)
+                // 1 枚目の本体を表示（公開は URL、公開以外は Storage のパスで読む。判定は PostImageSource）
+                if let firstImage = post.images.first, let image = KFImage.post(PostImageSource.resolve(firstImage, prefersThumbnail: false)) {
+                    image
                         .placeholder {
                             Rectangle()
                                 .fill(DesignTokens.Colors.glassTertiary)
