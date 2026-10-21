@@ -670,12 +670,24 @@
     - `/security-review`（03:35〜03:50・`/review-full` の後に直列）: 洗い出しの係が、サーバー（`soratomoSetReaction`・`setReactionTx`・`notifyReaction`・`claimReactionNotifySlot`・`onSoratomoSkyDeleted`・手順2b・`firestore.rules`）と iOS（Service・Router・Models・SkyService の読み取り）をたどり、確信度0.8以上の候補は0件（High・Medium とも0）。候補が無いので偽陽性の判定の段は無し。たどった5点: (a) 自分の `reactions.{uid}` 以外は書けない（`groupId`・`skyId` は `isAutoId` の英数字1〜64・kind は null か7つの名前と完全一致・uid は `request.auth.uid`・FieldPath） (b) 未ログイン・匿名・利用停止・非メンバー・投稿者本人は関門で止まる（非メンバーの判定は投稿の有無より先） (c) 通知の data は `{type, groupId, postId}` だけ・本文にキャプションなし・宛先はメンバーの投稿者だけ (d) 新しい2つのコレクションは `read, write: if false`・skies の update は拒否のまま・手順2bは本人のキーだけを前提条件つきの update で消す (e) ログは内部ID・件数・列挙だけ。補足（指摘ではない）: ブロックした人のリアクションを隠すのはクライアントだけ（既存のタイムラインと同じ作り・要件4.14・5.5の決定）
   - 結果（2026-10-22 04:10・pushとPR）: 上の結果をコミット（`3a96ea2`）した後、利用者のGOを1手ずつ取った。サンドボックスの外で `git push -u origin 機能-そらともいいね`（新しい枝・`origin/機能-そらともいいね` の先頭は `3a96ea23`）。PR #193（`main` ← `機能-そらともいいね`）を `gh pr create --body-file` で作った。本文は要件・設計・tasks.mdの場所、出す順番（マージ→Functions 13本を名前で・ルール→TestFlightと審査・マージからデプロイまでmainからアプリの版を作らない）、テストとレビューの結果、既知の制限（F1）、PRの後に回すnit（F11・F14・F15）。渡す前の本文の `@` は0、作った後に読み返した本文も5,055字・`@` は0。作った直後の確認は GitGuardian が合格・security-tests は実行中。このコミットを足すので、security-tests は新しい先頭でもう一度走る
 
-- [ ] 12.2 mainへマージする（ユーザーのGOを取ってから実行）
+- [x] 12.2 mainへマージする（ユーザーのGOを取ってから実行）
   - 前提: 12.1
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - マージの前に、PRの差分で、既存のCallableの受け付けの条件・`isSoratomoUser()`・`requireSoratomoUser` の中身・`storage.rules`・`firestore.indexes.json`・退会の確認と手順（設定画面）が変わっていないことを、もう一度見る。mainの保護（Ruleset）で必要なチェック（security-tests）が緑であることを見る。マージの方式は前例（squash）に合わせる
   - マージから12.3・12.5のデプロイまでの間に、mainからアプリの版を作らない（操作があるのにCallableが無い状態になるため）
   - _Requirements: 12.8, 12.13, 16.8_
+  - 結果（2026-10-22 04:35・マージ）: `HEAD` `83f00a30`・作業ツリーはclean から始めた。`git fetch -q origin` の後、`origin/main` は `2cbc5645`（分かれ目と同じ＝mainは進んでいない・取り込みとテストのやり直しなし）
+    - 差分（`git diff origin/main...HEAD`・51ファイル）で、変わっていないことを見た6つ:
+      - 既存のCallableの受け付けの条件と `requireSoratomoUser` の中身: `functions/soratomo.js` のハンクは、mainの2・13・15・23・37・84・287・330・439・659・723行への挿入だけ（`git diff -U0`）。関門の88〜190行（`requireSoratomoUser`・`soratomoCallable`・`allowAnonymous`）にかかるハンクは0。84行の後は理由の表に2行（`self_reaction`・`invalid_reaction`）、287行の後は退会の応答に `reactionsDeleted` を1項目（`allowAnonymous: true` の278行は変わらず）。関門が使う `core.isRegisteredToken` も変わらず（`soratomoCore.js` は追加76・削除0。足した4つの名前は main に無かった）
+      - `isSoratomoUser()`: `firestore.rules` の差分は、コメント2か所と新しい `match` 2つ（`reactionNotifyState`・`reactionNotices`、どちらも `read, write: if false`）だけ
+      - `storage.rules`・`firestore.indexes.json`: 差分のファイルは0件
+      - 退会の確認と手順（設定画面）: `SettingsView.swift` は「そらとも通知」の説明の文字列1行だけ。iOSの差分で退会に関わる語はコメント1行だけ
+      - 補足: `soratomoDeletion.js` で消えた処理の行は1行だけで、`if (kind === "leave") tx.delete(…NOTIFY_STATE…)` を波かっこに広げ、元の削除を残したまま `REACTION_NOTIFY_STATE` の削除を1行足した形。`soratomoStore.js` の消えた2行は import（`FieldPath` を足した）と JSDoc の理由の型
+    - チェック（サンドボックスの外の `gh`）: `security-tests` が pass（4分6秒・回 39660142378・対象のコミットは `83f00a30`＝PRの先頭）・GitGuardian が pass。`mergeStateStatus` は BLOCKED だったが、Ruleset ②（承認1）によるもので、必須のチェック（Ruleset ①）は緑
+    - マージ: 利用者のGOを取り、サンドボックスの外で `gh pr merge 193 --squash --admin --match-head-commit 83f00a30acd261358ffd5fedc96a0b43a8b56156`（緑を確かめた先頭以外ならGitHubが断る形）。PR #193 は MERGED（2026-10-22 04:33:51）・マージのコミットは `9738c774`（親は `2cbc5645` で、mainは1コミットだけ進んだ）。`origin/main` と `83f00a30` の木のハッシュが一致（`402fb700`）＝枝の中身がそのまま入った
+    - 枝 `機能-そらともいいね` は手元・リモートとも消していない
+    - この結果は、マージ後の `origin/main`（`9738c774`）から切った枝 `ドキュメント-そらともリアクションの反映の記録` に書いた（利用者の決定・squashなので元の枝の35コミットはmainの祖先にならず、元の枝に書いてPRにすると機能の差分がもう一度出るため）。12.3・12.5の結果も、この枝に書く
+    - 12.3（Functions 13本）と12.5（ルール）が終わるまで、mainからアプリの版を作らない
 
 - [ ] 12.3 Functionsをデプロイする（ユーザーのGOを取ってから実行）
   - 前提: 12.2
