@@ -441,6 +441,7 @@ flowchart TD
 - 呼び手は4つ: `soratomoDeleteMyData`（`self`）・`soratomoHousekeeping`（`account_deleted`）・`soratomo-admin.js delete-user`（`admin`）・`soratomo-admin.js suspend`（`suspension`）。どの呼び手も同じ手順を通り、`suspension`だけが最後の手順を変える（8.5）。
 - グループの一覧は`soratomoUsers/{uid}/groups`の写し（文書の無い親でも子を読める）と、管理スクリプトが渡す`extraGroupIds`の和。
 - 手順はSystem Flows「共通の削除の手順」のとおり。手順1と手順4はトランザクション。読みを全部終えてから書く（既存の決まり）。
+  - ⚠️2026-10-22 上書き（soratomo-reactions）: 用語「そらともデータ」に、本人が付けたリアクション（ほかの人の投稿の`reactions`と`reactorIds`の中の本人、通知の印`reactionNotices`の中の本人、通知の間引き`reactionNotifyState/{uid}`）を足した。手順2bで消し、手順3で間引きを消す。詳細は`.kiro/specs/soratomo-reactions/design.md`のSystem FlowsとMigration
 - 手順1のトランザクションで読むもの: グループの文書・メンバーの全文書（最大20件のクエリ）・招待コードの文書。書く数は最大で、グループ1・メンバーの削除1・役割の更新19・招待コード1。500件の上限から遠い。
 - 手順2の投稿は、`authorId == uid`のクエリで300件ずつ読み、`WriteBatch`で1ページずつ消す（500件の上限の内。失敗はページごとに投げる。`authorId`の単一項目のインデックスで足りる）。グループごと消すときは`recursiveDelete(groupRef)`。
 - 手順2の画像は、ゲートウェイで接頭辞を一覧し、同時に10件まで消す。無かったもの（404）は消した数に数えない。
@@ -636,6 +637,7 @@ function createNgWordProvider({ db, ttlMs, nowMs }) {}
 | `soratomoAgreeGuideline` | `{ version: number }` | `{ version: number }` | `unauthenticated`／`permission-denied`・`flag_off`／`invalid-argument`・`invalid_input`／`failed-precondition`・`outdated_guideline`（`currentVersion`）／`internal` |
 | `soratomoDeleteMyData` | `{}` | `{ done: boolean }` | `unauthenticated`／`internal` |
 | `soratomoLeaveGroup`（leave-group spec） | `{ groupId: string }` | `{ done: boolean, groupDeleted: boolean }` | `unauthenticated`／`invalid-argument`・`invalid_input`／`internal`（フラグ・利用停止・同意は見ない。メンバーでない人にも `{ done: true, groupDeleted: false }`） |
+| `soratomoSetReaction`（soratomo-reactions spec） | `{ groupId: string, skyId: string, kind: ReactionKindName \| null }`（`null` は外す） | `{ outcome: "added" \| "replaced" \| "removed" \| "unchanged", kind: ReactionKindName \| null }` | `unauthenticated`／`permission-denied`・`registration_required`／`invalid-argument`・`invalid_input`／`invalid-argument`・`invalid_reaction`／`permission-denied`・`suspended`／`permission-denied`・`not_member`／`not-found`・`sky_not_found`／`failed-precondition`・`self_reaction`／`internal`（詳細は `.kiro/specs/soratomo-reactions/design.md` の API Contract） |
 
 - `SoratomoDomainError`に任意の`details`（`currentVersion`だけ）を持てるようにし、`toHttpsError`が`{ reason, ...details }`を返す。gRPCのcodeは持たせない（既存の決まり）。
 - `REASON_TO_CODE`に、上の表の理由を足す。

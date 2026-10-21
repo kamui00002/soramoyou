@@ -585,20 +585,29 @@
 
 - [ ] 11. ドキュメントを実装に合わせる
 
-- [ ] 11.1 (P) データの置き場の記録と、release-gateの契約の表を直す
+- [x] 11.1 (P) データの置き場の記録と、release-gateの契約の表を直す
   - 前提: 6（実装が設計どおりであること）
   - `docs/firestore-schema.md` のそらともの表の `skies` の行に `reactions`・`reactorIds`（書き手はFunctionsだけ・アプリは知らない項目を読み捨てる前提）を足し、`reactionNotifyState`・`reactionNotices` の行を足す。「一致させる値」に、名前と絵文字の対応表（iOS `SoratomoReactionKind` ⇔ Functions `REACTION_KINDS`）を足す。抜ける・退会・利用停止で消すものに「本人が付けたリアクションと、印の中の本人」を足す
   - release-gate specのdesign.mdの「API Contract（そらとものCallableのまとめ）」の表に、`soratomoSetReaction` の行を足す（または、このspecのdesign.mdを指す1行を足す）
   - 書き終えたら、変えた識別子（`reactions`・`reactorIds`・`reactionNotifyState`・`reactionNotices`・`soratomoSetReaction`・`onSoratomoSkyDeleted`）で docs と soratomo の spec を検索し、実装と食い違う記述が残っていないことを確かめる
   - _Requirements: 8.1, 9.1, 9.5, 12.8_
+  - 結果（2026-10-22 02:00）: 9.1と並行で、サブエージェント（sonnet・Markdownだけを Edit で書く約束）が書き、メインが差分を数え直した。`HEAD` は `b48b277f`
+    - `docs/firestore-schema.md`（追加5行・削除0）: そらともの表に、`skies` に足した項目（`reactions`＝付けた人の uid→`{ kind, at }`・`reactorIds`＝同じ uid の配列で片づけの array-contains のためだけ・書き手は Functions だけ・アプリは知らない項目を読み捨てる）の行と、`reactionNotifyState`（キーは投稿者の uid・`lastSentAt`）・`reactionNotices`（キーは skyId・`notifiedReactorIds` は最大20）の行を足した。抜ける・退会・利用停止で消すもの（手順2bで本人のリアクションと印の中の本人・手順3で間引き）と、投稿の削除で `onSoratomoSkyDeleted` が印を消すことを足した。「一致させる値」に、名前と絵文字の対応表（iOS `SoratomoReactionKind` ⇔ Functions `REACTION_KINDS`）を足した。絵文字は Edit が U+FE0F を落とすことがあるので、字でなくコードポイント（`cloud` = U+2601 U+FE0F・`red_heart` = U+2764 U+FE0F など）で書いた
+    - `.kiro/specs/soratomo-release-gate/design.md` 640行: API Contract の表に `soratomoSetReaction` の行（要求・応答・失敗は soratomo-reactions の design.md の API Contract から写し、そこを指す）を足した。`flag_off` は書いていない（共通の Callable の包み `functions/soratomo.js:158` と本人の確かめは返さず、1.15.0 からは返さない・`soratomoCore.js:274`。メインが現物で確かめた）
+    - 識別子（`reactions`・`reactorIds`・`reactionNotifyState`・`reactionNotices`・`soratomoSetReaction`・`onSoratomoSkyDeleted`）で docs と soratomo の spec を検索し、実装と食い違う記述は残っていなかった（当たったのは足した行と、10/18 の上書きの注記だけ）
 
-- [ ] 11.2 (P) 既存のspecに、リアクションを足したことの上書きの注記を足す
+- [x] 11.2 (P) 既存のspecに、リアクションを足したことの上書きの注記を足す
   - 前提: 3.1
   - 既存の「⚠️2026-10-xx 上書き（spec名）: …」の書き方にそろえ、本文は書き換えずに1行を足す。行番号は書く前に現物で確かめる（ずれていれば文で探す）
   - design.mdのMigrationの「実装と同時に直す文書」: release-gate specとleave-group specのdesign.mdの削除の範囲に、用語「そらともデータ」と「片づけ」に本人が付けたリアクションを足した旨（このspecを指す）
   - 前例（leave-group 10.2）に合わせて足すもの（要らなければ利用者の判断で外す）: requirements.mdのIntroductionが挙げた、「対象外」を覆す4か所（soratomo specのrequirements.md 6行・372行・432行、design.md 19行。覆すのはリアクションだけ）と、消す範囲と規則を広げる箇所（release-gate specのrequirements.md 31行の用語「そらともデータ」・要件8の6・要件14の4、leave-group specのrequirements.md 38行の用語「片づけ」・要件11の4、soratomo specの要件14の表の `soratomo_notification_opened`）
   - `git diff -U0` で、どの箇所も追加の1行だけであることを確かめる
   - _Requirements: 4.11, 9.1, 9.5, 14.5, 15.5_
+  - 結果（2026-10-22 02:00）: 11.1と同じサブエージェントが書き、メインが `git diff --numstat` と `git diff -U0` で数え直した（6ファイルで追加14行・削除0行。11.1の分を含む）。注記の書き方は既存の「⚠️2026-10-xx 上書き（soratomo-reactions）: …」にそろえ、日付は2026-10-22
+    - 必須の2か所: release-gate の design.md 444行（共通の削除の手順に、用語「そらともデータ」へ本人が付けたリアクションを足した旨）、leave-group の design.md 418行（共通の削除の部品に、用語「片づけ」へ本人がそのグループで付けたリアクションを足した旨）
+    - 前例に合わせた6か所（利用者が「残す」を選んだ・2026-10-22）: release-gate の requirements.md 32行（用語）・226行（要件8の6・利用停止中はリアクションの操作も受け付けない）・322行（要件14の4・削除したリアクションの数を件数に加える）、leave-group の requirements.md 40行（用語「片づけ」）・246行（要件11の4）、soratomo の requirements.md 299行（要件14の表の `soratomo_notification_opened` の `type` に `reaction`）
+    - 足さなかった4か所: soratomo spec の requirements.md の8・375・435行と design.md の21行（tasks.md が挙げた6・372・432・19行が、ずれていた）には、「2026-10-18 上書き（soratomo-reactions）」の注記がもう入っていたので、重ねていない
+    - 表の中の用語の行は、既存の行を書き換えずに「（上書き）」付きの行を1行ずつ足した。textlint が既存の行で指摘を出したが、`--fix` は使っていない
 
 ## (l) 本番への反映
 

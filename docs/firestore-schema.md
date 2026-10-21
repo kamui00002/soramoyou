@@ -325,6 +325,9 @@
 | `soratomoGroups` | 自動ID | `name`・`ownerId`・`inviteCode`・`memberCount`・`createdAt`・`lastActivityAt` | Functions |
 | `soratomoGroups/{groupId}/members` | uid | `uid`・`role`（`owner` / `member`）・`joinedAt` | Functions |
 | `soratomoGroups/{groupId}/skies` | 自動ID（アプリが決める） | `authorId`・`caption`（任意）・`width`・`height`・`createdAt`（サーバー時刻） | 作成は Functions（Callable の `soratomoCreateSky`）・削除はアプリ（投稿者本人だけ） |
+| `soratomoGroups/{groupId}/skies` に足した項目（リアクション・soratomo-reactions spec） | 上と同じ文書 | `reactions`（map・キーは付けた人の uid・値は `{ kind, at }`。`kind` は 7 つの名前のどれか・`at` はサーバー時刻。無ければ 0 件）・`reactorIds`（string の配列・`reactions` のキーと同じ uid の集合・片づけの array-contains のためだけに持つ） | Functions だけ（Callable の `soratomoSetReaction` と、抜ける・退会・利用停止の片づけ）。`firestore.rules` の `update: false` は変えない。アプリは `reactorIds` を読まず、知らない項目（1.15.0 の端末では両方）は読み捨てる前提 |
+| `soratomoGroups/{groupId}/reactionNotifyState` | 投稿者の uid | `lastSentAt`（その投稿者へ、このグループのリアクションの通知を最後に送った時刻） | Functions だけ。ルールで誰にも読み書きさせない。新着投稿の `notifyState` とは別の枠 |
+| `soratomoGroups/{groupId}/reactionNotices` | skyId | `notifiedReactorIds`（その投稿について、投稿者へ通知を送った付けた人の uid の配列・最大 20） | Functions だけ。ルールで誰にも読み書きさせない。同じ人の同じ投稿で通知は 1 通まで |
 | `soratomoGroups/{groupId}/notifyState` | 受信者の uid | `lastSentAt`・`lastSkyId` | Functions |
 | `soratomoInviteCodes` | 招待コード | `groupId`・`createdAt` | Functions |
 | `soratomoUsers` | uid | `groupCount`・`lastCreateRequestId`・`lastCreatedGroupId`・`updatedAt`・`guidelineVersion`（同意したガイドラインの版）・`guidelineAgreedAt`（同意の日時・サーバー時刻）・`suspendedAt`（利用停止の日時・停止中だけ持つ） | Functions（同意は Callable の `soratomoAgreeGuideline`・停止と解除は運用スクリプト） |
@@ -335,6 +338,7 @@
 
 - 画像は Storage の `soratomo/{groupId}/{authorId}/{skyId}/display.jpg` と `thumb.jpg`。パスは iOS の `SoratomoImagePaths` だけが作る。`skies` には画像のパスや URL の項目を持たない（`soratomoCreateSky` の入力検査が書かせない）。公開前ゲートでも Storage のパスの形と `storage.rules` は変えていない。退会と利用停止では、その人の画像を共通の削除（`functions/soratomoDeletion.js`）が消す。
 - 抜ける（Callable の `soratomoLeaveGroup`・leave-group spec）では、抜けた人のそのグループの投稿と画像・通知の間引き（`notifyState`）・所属の写し（`soratomoUsers/{uid}/groups/{groupId}`）を共通の削除（`functions/soratomoDeletion.js` の `leaveSoratomoGroup`）が消す。最後の 1 人が抜けるときはグループごと消える。ほかのグループと通報の記録（`soratomoReports`）には触れない。片づけが終わるまで `soratomoPendingLeaves` の印が残り、その間の同じグループへの参加は `leave_pending` で断る。
+- 抜ける・退会・利用停止では、本人が付けたリアクション（ほかの人の投稿の `reactions.{uid}` と `reactorIds` から本人）と、通知の印 `reactionNotices` の中の本人も消す（共通の削除の手順 2b）。リアクションの通知の間引き `reactionNotifyState/{uid}` は手順 3 で消す。投稿の削除では、削除トリガー `onSoratomoSkyDeleted` が `reactionNotices/{skyId}` を消す。リアクションの付いた投稿は、`authorId` だけを見る既存のルールのまま投稿者が削除できる（soratomo-reactions spec）。
 - 投稿の作成は `firestore.rules` で閉じた（`allow create: if false`）。項目・キャプション・幅と高さの検査は `functions/soratomoCore.js` の `validateSkyInput`、利用停止・メンバー・NG ワードの検査は `soratomoStore.js` の `createSkyTx` が行う。アプリから直接書けると、利用停止と NG ワードの検査を飛ばせるため（release-gate 要件 11.5）。
 - 利用者の記録（`soratomoUsers/{uid}`）は本人だけが読める（同意と利用停止の項目を含む）。書き込みはルールで拒否（release-gate 要件 8.9・10.14）。
 - 通報の記録（`soratomoReports`）と語のリスト（`soratomoConfig`）は、ルールで誰にも読み書きさせない（通報者本人も読めない・release-gate 要件 6.10・11.10）。語のリストのファイルはリポジトリに置かない（投入スクリプトがリポジトリと Git の作業ツリーの中のファイルを拒否する）。Functions は 5 分キャッシュして読む。
@@ -348,6 +352,7 @@
   - グループ名の上限 30: iOS `SoratomoTextRules.groupNameMax` ⇔ Functions `GROUP_NAME_MAX`
   - キャプションの上限 100 と改行の禁止: iOS `SoratomoTextRules`（`captionMax`・`sanitizeCaption`）⇔ Functions `soratomoCore.js` の `validateSkyInput`（`CAPTION_MAX`・`CAPTION_LINE_BREAKS`）。旧ルールの `isValidSoratomoCaption` は公開前ゲートで消した
   - 画像の幅・高さの上限 2048: iOS の表示用の画像の縮小（長辺 2048px）⇔ Functions `SKY_DIMENSION_MAX`
+  - リアクションの名前と絵文字（7 つ。名前は Firestore の `reactions` の `kind` に保存する値）: iOS `SoratomoReactionKind`（`Models/SoratomoReactions.swift`）⇔ Functions `soratomoCore.js` の `REACTION_KINDS`。`sunset` = U+1F305（Unicode の名前は SUNRISE・アプリでは「夕焼け」）／`cloud` = U+2601 U+FE0F／`rainbow` = U+1F308／`sparkles` = U+2728／`eyes` = U+1F440／`red_heart` = U+2764 U+FE0F／`blue_heart` = U+1F499。保存する値は名前だけで、絵文字は通知の本文と画面にだけ出る。絵文字は正規化せず、異体字セレクタ U+FE0F の有無まで一致させる
   - ガイドラインの版 1: iOS の版の定数（release-gate tasks 9.5 で置く）⇔ Functions `GUIDELINE_VERSION`。版を上げると、同意し直すまで作成と参加が止まる
 
 ---

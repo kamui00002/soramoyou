@@ -296,6 +296,7 @@
 | `soratomo_post_failed` | 投稿に失敗した | `stage`（`precheck`/`image`/`upload`/`save`）、`reason`（`offline`/`daily_limit`/`network`/`unreadable`/`too_large`/`permission`/`timeout`/`background`/`unknown`） |
 | `soratomo_notification_prompt_result` | 通知の事前説明で操作を選んだ | `choice`（`allow`/`later`）、`granted` |
 | `soratomo_notification_opened` | そらともの通知をタップした | `type`（`post_created`）、`result`（`opened`/`not_member`/`flag_off`/`signed_out`） |
+| `soratomo_notification_opened`（上書き） | ⚠️2026-10-22 上書き（soratomo-reactions）: リアクションの通知をタップしたときも同じイベントで記録する | `type`に値`reaction`を加える（既存の値は変えない）。`.kiro/specs/soratomo-reactions/requirements.md`の要件15の5 |
 | `soratomo_invite_code_regenerated` | 招待コードの再発行に成功した | なし |
 | `soratomo_invite_regenerate_failed` | 招待コードの再発行に失敗した | `reason`（`not_owner`/`network`/`unknown`） |
 | `soratomo_post_deleted` | 自分の投稿の削除に成功した | `image_cleanup`（`deleted`/`failed`） |
