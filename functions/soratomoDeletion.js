@@ -1000,6 +1000,7 @@ module.exports = {
   deleteSoratomoSky,
   // soratomo-reactions
   removeUserReactionsInGroup, // テストで、読んだ後・書く前に投稿を消す・書き換える場面を照合の口から作るため
+  updateDocChunk, // テストで、偽の write から NOT_FOUND(5) を飛ばす枝と 5・9 以外を投げ直す枝を通すため（エミュレーターは消えた文書にも 9 を返す）
   // leave-group
   PENDING_LEAVES,
   LEAVE_ORIGINS,

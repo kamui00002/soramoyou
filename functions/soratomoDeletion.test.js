@@ -2697,6 +2697,67 @@ test("手順2b（soratomo-reactions 陽性対照C2）: 抜けると、本人が�
   assert.equal(result.reactionsDeleted, 2, "消したリアクションの数（o1・b1。本人の投稿 a1 の分は投稿と一緒に消えるので数えない）");
 });
 
+// MARK: - 手順2bの1区切りの書き込み（updateDocChunk・/review-full F3）
+//
+// エミュレーターは、読んだ後に消えた文書への前提条件つきの update も FAILED_PRECONDITION(9) で返すので、上の
+// 「（NOT_FOUND）」のテストは NOT_FOUND(5) の枝を通らない。ここは偽の write で、5・9 を飛ばす枝と、ほかのコードを
+// 投げ直す枝を直接通す。
+// - Firestore には触れない（実行がエミュレーターの中なのは、このファイルの柵のため）
+// - 陽性対照（2026-10-22）: SKIPPED_WRITE_CODES を [9] にすると 5 のテストが赤、throw err を握りつぶすと 7 のテストが赤、
+//   allSettled を Promise.all にすると 7 のテストが赤（投げた時点で書けていたのは 11 件でなく 1 件）。ほかの 2 本はどれでも緑
+
+/** 偽の文書を n 件作る（updateDocChunk が読むのは ref と updateTime だけ）。ID は d0, d1, … */
+function fakeChunkDocs(n) {
+  return Array.from({ length: n }, (_, i) => ({ ref: { id: `d${i}` }, updateTime: { fakeUpdateTime: i } }));
+}
+
+/**
+ * 偽の write。failures にある ID は、そのコードの失敗で reject し、ほかは書けたとして記録する。
+ * 1 tick 待ってから返す（同時に書く形にし、失敗が先に返っても残りが走っている場面を作るため）。
+ * @param {Record<string, number>} failures 文書ID → gRPC のコード（数値。SKIPPED_WRITE_CODES は数値で比べる）
+ */
+function fakeChunkWrite(failures = {}) {
+  const calls = [];
+  const written = [];
+  const write = async (ref, precondition) => {
+    calls.push({ id: ref.id, precondition });
+    await new Promise((resolve) => setImmediate(resolve));
+    if (Object.hasOwn(failures, ref.id)) {
+      throw Object.assign(new Error(`偽の書き込みの失敗 ${ref.id}`), { code: failures[ref.id] });
+    }
+    written.push(ref.id);
+  };
+  return { write, calls, written };
+}
+
+for (const [code, name] of [[5, "NOT_FOUND"], [9, "FAILED_PRECONDITION"]]) {
+  test(`手順2b（updateDocChunk）: 書き込みが ${name}(${code}) で失敗した文書は、投げずに飛ばして数えず、ほかの文書は前提条件つきで書く`, async () => {
+    const docs = fakeChunkDocs(3);
+    const fake = fakeChunkWrite({ d1: code });
+    const written = await deletion.updateDocChunk(docs, fake.write);
+    assert.equal(written, 2, "飛ばした d1 は数えない");
+    assert.deepEqual(fake.written.sort(), ["d0", "d2"]);
+    assert.deepEqual(fake.calls.map((c) => c.id).sort(), ["d0", "d1", "d2"], "全部に書きにいく");
+    for (const c of fake.calls) {
+      const doc = docs.find((d) => d.ref.id === c.id);
+      assert.deepEqual(Object.keys(c.precondition), ["lastUpdateTime"], `${c.id}: 前提条件は lastUpdateTime だけ`);
+      assert.equal(c.precondition.lastUpdateTime, doc.updateTime, `${c.id}: 読んだ文書の updateTime を渡す`);
+    }
+  });
+}
+
+test("手順2b（updateDocChunk）: ほかのコード（PERMISSION_DENIED(7)）の失敗は、残りの文書（同時に書く数10を超えた分も）を書き終えてから、その失敗で投げる", async () => {
+  const docs = fakeChunkDocs(12);
+  const fake = fakeChunkWrite({ d1: 7 });
+  await assert.rejects(deletion.updateDocChunk(docs, fake.write), (err) => {
+    assert.equal(err.code, 7, "飛ばさずに、その失敗を投げる");
+    assert.equal(fake.written.length, 11, "投げるのは、走っている書き込みと残りの文書を書き終えた後");
+    return true;
+  });
+  assert.equal(fake.calls.length, 12, "失敗の後も、残りの文書に書きにいく");
+  assert.ok(fake.written.includes("d10") && fake.written.includes("d11"), "同時に書く数を超えた d10・d11 も書く");
+});
+
 // MARK: - 手順2bと抜ける・入り直しの競合（soratomo-reactions 4.3・陽性対照C3・C10）
 
 /**

@@ -651,6 +651,23 @@
   - PRを出す前に `/review-full` でレビューし、新しいCallableが外からの入力を受けるので、続けて直列で `/security-review` を通す。指摘の直しを済ませてから出す
   - 初回のpushは、サンドボックスの外で `git push -u origin 機能-そらともいいね`。PRの本文に、要件・設計・tasks.mdの場所と、順番（マージ→Functionsとルールのデプロイ→リアクションを含む版のTestFlightと審査。デプロイの前にmainからアプリの版を作らない）を書く。本文に半角の `@名前` を書かない（渡す前に `grep -c '@'` で数える）
   - _Requirements: 12.14, 12.15, 16.8_
+  - 結果（2026-10-22 04:00・pushとPRの前まで）: `HEAD` `738113f6`・作業ツリーはclean から始めた。pushとPRは、この結果をコミットした後に利用者のGOを1手ずつ取って行う
+    - 着手の確かめ（02:45・03:50にもう一度）: `git fetch -q origin` の後、`origin/main` は `2cbc5645`（#192）で分かれ目と同じ＝mainは進んでいない（取り込みなし）。`origin/main..HEAD` はこのspecのコミットとmainの取り込み2本（`f3c3fc03` #191・`df32776b` #192）だけ
+    - `npm run lint`: 緑（F3の後にもう一度・緑）
+    - `npm test`: 417本・0失敗（基準417）。サンドボックスの中では `skyMotionCore.test.js` の1本が `listen EPERM`（サンドボックスがポートを開かせない・このspecと無関係）で落ちたので、外で流し直した
+    - `test:emulator`: 357本・0失敗・0中断（02:49〜02:54・基準357）。F3のテスト3本を足した後に、もう一度360本・0失敗・0中断（03:56〜04:00）。8080・9199・4400・4500・9150が別のセッションのエミュレーターに使われていたので、ポートを替えた設定（firestore 8186・websocket 9166・storage 9196・hub 4426・logging 4526・規則は作業ツリーの絶対パス）を `--config` で渡した。サンドボックスの外・空の `XDG_CONFIG_HOME`・Android Studio の JBR を `JAVA_HOME` と `PATH`・Storage の一時置き場は専用の `TMPDIR`・`nice -n 10`。終わった後、そのポートで待ち受けるプロセスは無かった
+    - `rules_test_soratomo.py`: 169件・すべて期待どおり（基準169）。1回目は firebase CLI のトークンが古く401 → 更新の後に流し直した（サンドボックスの外・トークンは画面に出していない）
+    - `--mutants`: 壊し方25個がどれも1件以上を期待外れにし、どの壊し方でも期待外れにならないケースは0件（基準25個・0件）
+    - iOS: mainを取り込んでいないので全体は流し直していない（9.2の全体1,655本と、10の `WhatsNewGateTests` 7本のまま。その後に Swift の変更なし）
+    - `/review-full`（03:00〜03:30）: 4人（simplifier・general・codex・project-rules）の指摘を同根でまとめて15件 → 妥当性フィルタで通過4・棄却11（存在しない端の場面1・許容範囲10・でっち上げ0・権威バイアス0）・保留0。PRを止めるものは0。通過4件のうち、利用者の決定（2026-10-22）でF3だけをPRの前に直し、nitの3件（F11・F14・F15）はPRの後に回す
+      - F3（直した）: `functions/soratomoDeletion.js` の `updateDocChunk` の「NOT_FOUND(5) を飛ばす枝」と「5・9以外を投げ直す枝」を通るテストが無かった（エミュレーターは消えた文書にも9を返すので、既存の「（NOT_FOUND）」のテストは5の枝を通らない）。`module.exports` に `updateDocChunk` を1行足し、`soratomoDeletion.test.js` に偽の write のテストを3本足した（5と9は飛ばして数えず、ほかの文書は前提条件 `{ lastUpdateTime }` つきで書く・7は12件のうち残りの11件を書き終えてから、その失敗で投げる）。Firestore には触れないが、ファイルの柵のためエミュレーターの中で流した
+      - F3の陽性対照（03:54〜03:56・Editで壊してEditで戻した）: `SKIPPED_WRITE_CODES` を `[9]` にすると5のテストだけが赤（`code: 5` で投げた）、`throw err` を握りつぶすと7のテストだけが赤（`Missing expected rejection`）、`allSettled` を `Promise.all` にすると7のテストだけが赤（投げた時点で書けていたのは11件でなく1件）。3回とも、ほかの2本は緑。戻した後の `soratomoDeletion.js` の shasum の頭 `6ec484e8` は緑の回と同じで、差分は export の1行だけ
+      - F11（PRの後）: 44pt が `SoratomoReactionViews.swift:103`（private の `minTapSize`）と `SoratomoTimelineView.swift:538-539`（予約領域）の2か所。片方だけ変えると重なる
+      - F14（PRの後）: `GoldenHourNotificationManager.swift:250` のコメントが「soratomoPost だけ保留」のまま（7.4・9.1で宿題として記録済み・差分の外）
+      - F15（PRの後）: `SoratomoSkyDetailView.swift:112-113` の「開いている間に変わるのは削除だけ」が古い（表示は `liveReactions` を使うので不具合ではない）。このファイルは Edit が無関係の行を巻き込んだ実績がある＝直したら `git diff` で2行だけか確かめる
+      - 棄却だが利用者に伝えたF1（codex と general が独立に出した）: `claimReactionNotifySlot`（`soratomoStore.js:623`）が、付けた人がまだメンバーかを読まない。付けた直後に別の端末で本人が抜けると、去った人の名前の通知1通と、投稿が消えるまで残る印の uid がありうる。抜けるの11往復以上が通知の2〜3往復の間に終わる必要があり、データは失わない。利用者の決定（2026-10-22）で、issue にせず PR の本文の「既知の制限」に書く
+      - 棄却の主なもの: F2（押した人の一覧が上書きの解除に追従しない＝9.1で利用者が「このまま」を選んだ場面）・F4（decode の1人分の壊れた値をログ無しで飛ばす＝design.md:686 の承認済みの設計）・F13（`belongsTo` の整形＝7.4で利用者が受け入れ済み）
+    - `/security-review`（03:35〜03:50・`/review-full` の後に直列）: 洗い出しの係が、サーバー（`soratomoSetReaction`・`setReactionTx`・`notifyReaction`・`claimReactionNotifySlot`・`onSoratomoSkyDeleted`・手順2b・`firestore.rules`）と iOS（Service・Router・Models・SkyService の読み取り）をたどり、確信度0.8以上の候補は0件（High・Medium とも0）。候補が無いので偽陽性の判定の段は無し。たどった5点: (a) 自分の `reactions.{uid}` 以外は書けない（`groupId`・`skyId` は `isAutoId` の英数字1〜64・kind は null か7つの名前と完全一致・uid は `request.auth.uid`・FieldPath） (b) 未ログイン・匿名・利用停止・非メンバー・投稿者本人は関門で止まる（非メンバーの判定は投稿の有無より先） (c) 通知の data は `{type, groupId, postId}` だけ・本文にキャプションなし・宛先はメンバーの投稿者だけ (d) 新しい2つのコレクションは `read, write: if false`・skies の update は拒否のまま・手順2bは本人のキーだけを前提条件つきの update で消す (e) ログは内部ID・件数・列挙だけ。補足（指摘ではない）: ブロックした人のリアクションを隠すのはクライアントだけ（既存のタイムラインと同じ作り・要件4.14・5.5の決定）
 
 - [ ] 12.2 mainへマージする（ユーザーのGOを取ってから実行）
   - 前提: 12.1
