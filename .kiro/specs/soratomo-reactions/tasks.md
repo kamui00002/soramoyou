@@ -720,13 +720,22 @@
     - 関数のログ（`firebase functions:log --only soratomoSetReaction`・サンドボックスの外）: 22:50:12.993Z の `soratomoSetReaction: rejected`（`reason: unauthenticated`・`uid: null`）が1行。その直前に `Callable request verification passed`（app・auth とも `MISSING`）。この関数のログはほかに、12.3 の作成の記録と最初の起動の行だけ
     - ⚠️ `functions:log` には作成の監査ログの行（操作したアカウントのメールと接続元のIP）が混ざる。今回はファイルに保存した後に全体を読んでしまった（この記録には書いていない）。次からは `rejected` の行だけを grep で出す
 
-- [ ] 12.5 Firestoreのルールを本番へ出す（ユーザーのGOを取ってから実行）
+- [x] 12.5 Firestoreのルールを本番へ出す（ユーザーのGOを取ってから実行）
   - 前提: 12.2（12.3との順は問わない。新しい `match` は、既定で拒否されていたパスの明示なので、どの順でも挙動は変わらない）
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 出す前: `scripts/read-deployed-rules.py` で本番のルールを読み、このspecのマージの前の origin/main の `firestore.rules` とハッシュの頭が一致することを確かめる（ルールはファイル全体を出すので、ほかのブランチの未反映の変更を一緒に出さないため。一致しなければ止めて相談する）。差がこのspecの `match` とコメントだけであることを差分で見る
   - コマンド: `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive`
   - 出した後: 読み返しの道具で、ruleset・更新の時刻・ハッシュの頭が手元の `firestore.rules` と一致すること。保存した本番の本文に `rules_test_soratomo.py`（通常）を流して全件が期待どおりであること
   - _Requirements: 4.13, 12.8, 16.8_
+  - 結果（2026-10-22 07:50・ルールを出した）: 記録の枝 `714f27bc`（12.3 の記録の後）・作業ツリーはclean から始めた（12.4 と並べて進め、この結果は 12.4 の記録のコミット `d7618f7` の後に書いた）。`origin/main` は `9738c774` のまま
+    - マージの前の origin/main は `2cbc5645`（#192）。その `firestore.rules` を最後に変えたのは `abaa3bdb`（#190・2026-10-16 に本番へ出た）
+    - 出す前（利用者が「12.4 と 12.5 を並べて進める」を選んだ後・サンドボックスの外）: `read-deployed-rules.py` に `--firestore`（`2cbc5645` の `firestore.rules` の写し）を渡して読んだ。本番の Firestore は ruleset `ba0efb78`（2026-10-16 06:43:59 JST）・sha256 の頭 `dc5b2432a05a` で、写しと**一致**（終了コード 0）。Storage は ruleset `babb4db3`（2026-10-16 04:51:18 JST）・`2028a531ab5e` で手元の `storage.rules` と一致。陽性対照: 同じ本番の本文の sha256 は、今の `firestore.rules`（`f4d825ed6e60`）とは違う
+    - 差（`git diff 2cbc5645 origin/main -- firestore.rules`）: そらともの節の説明のコメント2か所と、`soratomoGroups/{groupId}` の下の新しい `match` 2つ（`reactionNotifyState/{uid}`・`reactionNotices/{skyId}`。どちらも `allow read, write: if false`）だけ。記録の枝と `origin/main` の差は tasks.md だけ
+    - 出し元: `git switch --detach origin/main` で `9738c774` へ移り、clean と `firestore.rules` の sha256 の頭 `f4d825ed6e60` を見てから出した
+    - 利用者のGO（12.4 と2つまとめて1回）で、サンドボックスの外で `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive`（07:50:13〜07:50:20 JST・12.4 の POST と同時に流した）→ 終了コード0・`compiled successfully`・`released rules firestore.rules to cloud.firestore`・`Deploy complete!`。Storage のルールと索引は出していない
+    - 出した後の読み返し: 本番の Firestore は ruleset **`498ee618`**（2026-10-22 07:50:20 JST）・sha256 の頭 **`f4d825ed6e60`** で手元の `firestore.rules` と**一致**。Storage は `babb4db3` のまま一致（終了コード 0）
+    - 保存した本番の本文に `rules_test_soratomo.py`（通常・1つ目の引数のパスを読む）: **169件・すべて期待どおり・期待外れ0件**（基準169）
+    - これで 12.3 と 12.5 がそろった＝main からアプリの版を作ってよい。次は 13.1（開発版での受け入れ・始める前に今さわれる端末を聞く）
 
 ## (m) 受け入れの確認（開発版と本番）
 
