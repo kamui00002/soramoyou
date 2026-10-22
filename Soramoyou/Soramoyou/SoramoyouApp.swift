@@ -103,6 +103,8 @@ struct SoramoyouApp: App {
                 .environmentObject(likeManager)
                 .environmentObject(favoriteManager)
                 .environmentObject(soratomoGate)
+                // 端末の文字サイズ・太字の設定を PostHog に記録する（編集画面の「次へ」が押せない不具合の確認用）
+                .modifier(TextSizeAnalyticsModifier())
             #if DEBUG
                 // ⭐️ 接続先の目印（見えない）。UI テストが「Emulator に切り替わったか」を読む（FirebaseEmulatorSwitch.swift）
                 .overlay(alignment: .topLeading) { FirebaseConnectionMarker() }
@@ -120,6 +122,68 @@ struct SoramoyouApp: App {
                     await GoldenHourNotificationManager.shared.rescheduleIfEnabled()
                 }
             }
+        }
+    }
+}
+
+// MARK: - 文字サイズの計測 ⭐️
+
+/// 端末の文字サイズ・太字の設定を PostHog の super property として記録する（`LoggingService.registerTextSizeProperties`）。
+///
+/// 2026-10-22 のお問い合わせ「編集を完了させるボタンがなく投稿できない」の見立て
+/// （文字サイズが大きい端末で、右上の「次へ」が iOS 26 の「•••」メニューに折りたたまれる）を確かめるために足した。
+/// 起動時に 1 回送り、アプリを開いたまま「設定」で文字サイズや太字を変えたときにも送り直す。
+private struct TextSizeAnalyticsModifier: ViewModifier {
+    // MARK: - Properties
+
+    /// 端末の文字サイズ（「設定 > 画面表示と明るさ > テキストサイズ」と「さらに大きな文字」）
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// 「文字を太くする」の設定（オンのとき `.bold`）
+    @Environment(\.legibilityWeight) private var legibilityWeight
+
+    // MARK: - Body
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                register(size: dynamicTypeSize, weight: legibilityWeight)
+            }
+            // 変わった後の値を引数で受け取って送る（クロージャの中で環境値を読み直さない）
+            .onChange(of: dynamicTypeSize) { newSize in
+                register(size: newSize, weight: legibilityWeight)
+            }
+            .onChange(of: legibilityWeight) { newWeight in
+                register(size: dynamicTypeSize, weight: newWeight)
+            }
+    }
+
+    // MARK: - Private Methods
+
+    /// 今の設定を PostHog に登録する
+    private func register(size: DynamicTypeSize, weight: LegibilityWeight?) {
+        LoggingService.shared.registerTextSizeProperties(
+            textSize: Self.name(of: size),
+            isAccessibilitySize: size.isAccessibilitySize,
+            isBoldText: weight == .bold
+        )
+    }
+
+    /// PostHog の画面で読みやすい名前にする（標準は `large`）
+    private static func name(of size: DynamicTypeSize) -> String {
+        switch size {
+        case .xSmall: return "xSmall"
+        case .small: return "small"
+        case .medium: return "medium"
+        case .large: return "large"
+        case .xLarge: return "xLarge"
+        case .xxLarge: return "xxLarge"
+        case .xxxLarge: return "xxxLarge"
+        case .accessibility1: return "accessibility1"
+        case .accessibility2: return "accessibility2"
+        case .accessibility3: return "accessibility3"
+        case .accessibility4: return "accessibility4"
+        case .accessibility5: return "accessibility5"
+        @unknown default: return "unknown"
         }
     }
 }
