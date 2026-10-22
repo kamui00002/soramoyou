@@ -285,12 +285,13 @@ struct ProfileView: View {
         defer { isSaving = false }
 
         do {
-            guard let urlString = post.images.first?.url else {
+            guard let imageInfo = post.images.first else {
                 saveResultMessage = "保存する画像がありません"
                 showingSaveResult = true
                 return
             }
-            let image = try await downloadService.downloadImage(from: urlString)
+            // 公開以外は Storage のパスで読む（URL 側の C-2）
+            let image = try await downloadService.downloadImage(from: PostImageSource.resolve(imageInfo, prefersThumbnail: false))
             try await downloadService.saveToPhotoLibrary(image)
             saveResultMessage = "画像を保存しました"
             showingSaveResult = true
