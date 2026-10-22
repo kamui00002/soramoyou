@@ -794,12 +794,16 @@
 
 - [ ] 14. リアクションを含む版を TestFlight で確かめ、審査に出す
 
-- [ ] 14.1 版数を利用者に聞き、build番号を決めて main の値を直す（ユーザーの入力が要る・GOを取ってから実行）
+- [x] 14.1 版数を利用者に聞き、build番号を決めて main の値を直す（ユーザーの入力が要る・GOを取ってから実行）
   - 前提: 13.1
   - 版数は、このspecでは決めていない。1.15.0は公開済みなので、新しい版は1.15.0より上にする（承認済みのトレインと同じ版数は拒否される＝ITMS-90062の前例）。候補（例: 1.15.1・1.16.0）とそれぞれの意味を添えて、AskUserQuestionで聞く
   - App Store Connectの最大のbuildを実測で読み（GO）、それより大きく、まだ使っていない番号に決める
   - `project.pbxproj` の `MARKETING_VERSION` と `CURRENT_PROJECT_VERSION` を、アプリとウィジェットの4か所ずつ直す（テスト用のターゲットは変えない）。コマンドの上書きで上げず、値をコミットし、小さなPRでmainへ入れる（push・PR・マージは、それぞれGO）
   - _Requirements: 16.8_
+  - 結果（2026-10-22）: 利用者の決定で版数は **1.16.0**（リアクションと「プロフィールからブロック」の機能を足す版なので真ん中を上げる）。App Store Connect を読む（利用者のGO・鍵は `asc_ensure_build.py` の credential と同じ取り方で画面に出さない）と、最大の build は **113**・1.15.0 は `READY_FOR_SALE` で build 113・1.16.0 の版はまだ無い→ build は **114**
+    - 13.2 の別セッションと作業ツリーの枝の切り替えがぶつからないよう、別の worktree（`.claude/worktrees/soratomo-version`・枝 `改善-版数を1.16.0のbuild114へ`・`--no-track`）を origin/main `f75b2ad3` から作って直した
+    - `project.pbxproj` の `MARKETING_VERSION = 1.15.0` と `CURRENT_PROJECT_VERSION = 113` を、アプリ（Debug・Release）とウィジェット（Debug・Release）の4か所ずつ 1.16.0 と 114 に直した（差分は8行）。テスト用のターゲットの 1.0・1 の4か所ずつは変えていない（直した後の値を数えて確かめた）
+    - アプリのコードに `1.15.0` が値として残っていないこと（出てくるのはコメントだけ）を grep で確かめた。ビルドはしていない（版数の値だけの変更のため・14.2 の archive で IPA の Info.plist の版と build を見る）
 
 - [ ] 14.2 archive して、内部の TestFlight へ出す（ユーザーのGOを取ってから実行）
   - 前提: 12.3, 12.5, 13.2, 14.1（サーバーを出し終えてから、リアクションを含む版を人の手へ渡す。1.15.0の端末の確かめは、TestFlightの自動更新の前に済ませる）
