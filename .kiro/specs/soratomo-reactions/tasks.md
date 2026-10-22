@@ -836,6 +836,12 @@
   - 審査メモ: いまの公開版の審査メモ（日本語＋英語）を読み（GO）、審査用のグループ（S3がオーナーで投稿がある）で、参加の後にS3の投稿へリアクションを付けられる・押した人を見られる手順を足す案を作る。招待コードは文案に書かず、App Store Connectにだけ入れる。操作の名前は10で確定した画面の名前にする
   - 3つの案を利用者に見せ、1回で承認を取る（AskUserQuestion）。承認の日時を記録する。App Store Connectへの入力は14.6で、版を作った後にGOを取ってから行う
   - _Requirements: 16.9_
+  - 途中経過（2026-10-22・hosting への deploy と読み返しが残る）: 3つの案はサブエージェントが下書き（`.claude/handoffs/14-5-drafts.md`・git の外）し、メインが現物を読んで利用者に見せ、**2026-10-22 15:42 に1回の AskUserQuestion で承認**を取った
+    - プライバシーラベル＝変えない（リアクションで扱うのは内部ID・7種類から選んだ名前と時刻・表示名・計測で、どれも申告済み。本体の「いいね」も別の種類として申告していない前例と同じ）。`PrivacyInfo.xcprivacy` は変えず、`docs/app-privacy-label.md` の根拠2・3・5・8・注記・最終確認日だけ直した
+    - プライバシーポリシー＝4か所と最終更新日（2026年10月22日）を `SettingsView.privacyPolicyText` に当て、`scripts/build-privacy-policy-html.py` で `hosting/privacy/index.html` を作り直した（任意 A の利用停止の一文は入れない）。任意 B として `hosting/delete-account/index.html` の「削除されるデータ」（日本語・英語の要約）と最終更新日にもリアクションを足した
+    - 当てたのはサブエージェント（Edit だけ・生成はスクリプト）。メインが差分を読み、文案と一字一句同じ・整形のフックの巻き込み無し・足した行の絵文字類0を確かめた。`docs/app-privacy-label.md` の `notifiedReactorIds` は `functions/soratomoStore.js` に実在。`SettingsView.swift` は `swiftc -parse` で構文が通る（陽性対照: 閉じていない文字列のファイルは終了コード1）。ビルドは14.2の archive で行う
+    - 審査メモ＝案どおり（日本語＋英語・(6) 付ける・(7) 押した人を見る・承認済みの文からの3点の直し込み）。招待コードは文案に書かず、14.6 で S3 の画面から今のコードを読んで App Store Connect にだけ入れる（10/15 に再発行したので ASC のコードは古い）
+    - 順番: アプリの中のポリシーはビルドに焼き込まれるので、このPRを14.2の archive より前に main へ入れる。hosting への deploy はマージの後に別にGOを取る
 
 - [ ] 14.6 版を作り、リリースノートと審査メモを入れる（ユーザーのGOを取ってから実行）
   - 前提: 14.3, 14.5
