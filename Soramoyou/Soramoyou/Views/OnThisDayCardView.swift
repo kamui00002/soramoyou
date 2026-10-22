@@ -6,8 +6,8 @@
 //  メモリーが無い時は何も表示しない（EmptyView）。タップで自己完結の簡易詳細を開く。
 //
 
-import SwiftUI
 import Kingfisher
+import SwiftUI
 
 struct OnThisDayCardView: View {
     /// ホーム（HomeView）が所有する VM を共有する。
@@ -76,8 +76,9 @@ struct OnThisDayCardView: View {
     @ViewBuilder
     private func thumbnail(_ post: Post) -> some View {
         let first = post.images.first
-        if let urlString = first?.thumbnail ?? first?.url, let url = URL(string: urlString) {
-            KFImage(url)
+        // 1 枚目のサムネイルを表示（公開は URL、公開以外は Storage のパスで読む。判定は PostImageSource）
+        if let first, let image = KFImage.post(PostImageSource.resolve(first, prefersThumbnail: true)) {
+            image
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 64, height: 64)
@@ -102,8 +103,9 @@ struct OnThisDayMemoryDetailView: View {
             ScrollView {
                 VStack(spacing: DesignTokens.Spacing.md) {
                     ForEach(Array(memory.post.images.enumerated()), id: \.offset) { _, info in
-                        if let url = URL(string: info.url) {
-                            KFImage(url)
+                        // 本体を表示（公開は URL、公開以外は Storage のパスで読む。判定は PostImageSource）。読めない画像は今までどおり何も出さない
+                        if let image = KFImage.post(PostImageSource.resolve(info, prefersThumbnail: false)) {
+                            image
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
                                 .frame(maxWidth: .infinity)

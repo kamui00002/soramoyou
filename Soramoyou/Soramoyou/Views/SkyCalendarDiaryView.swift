@@ -10,8 +10,8 @@
 //  ストリークカレンダー（SkyStreakCalendarView）と重複実装しない ⭐️。
 //
 
-import SwiftUI
 import Kingfisher
+import SwiftUI
 
 /// 背景グラデーション（アプリ本体・空図鑑と同じ空の配色）。
 /// SkyCalendarDiaryView と DayPostsListView の両方から使う（重複定義しない ⭐️）。
@@ -19,7 +19,7 @@ private let skyGradient = LinearGradient(
     colors: [
         Color(red: 0.68, green: 0.85, blue: 0.90),
         Color(red: 0.53, green: 0.81, blue: 0.98),
-        Color(red: 0.39, green: 0.58, blue: 0.93)
+        Color(red: 0.39, green: 0.58, blue: 0.93),
     ],
     startPoint: .top,
     endPoint: .bottom
@@ -70,7 +70,7 @@ struct SkyCalendarDiaryView: View {
 
     /// ガラスカードの共通スタイル（SkyZukanView と同じ .ultraThinMaterial）
     @ViewBuilder
-    private func glassCard<V: View>(@ViewBuilder _ content: () -> V) -> some View {
+    private func glassCard(@ViewBuilder _ content: () -> some View) -> some View {
         content()
             .padding(DesignTokens.Spacing.md)
             .frame(maxWidth: .infinity)
@@ -182,21 +182,21 @@ struct SkyCalendarDiaryView: View {
 
     /// 日セルの見た目（投稿があればサムネイル、無ければ薄い枠＋日付のみ）
     private func dayCellBody(day: Int, postsForDay: [Post], today: Bool) -> some View {
-        let thumbnailURL = postsForDay.first.flatMap { post -> URL? in
-            guard let urlString = post.images.first?.thumbnail ?? post.images.first?.url else { return nil }
-            return URL(string: urlString)
-        }
+        // 1 件目の投稿の 1 枚目のサムネイルの読み方（公開は URL、公開以外は Storage のパス。判定は PostImageSource）
+        // 読めないとき（.unavailable）は、今までの「URL が無い」ときと同じく薄い枠＋日付だけを出す
+        let thumbnailSource: PostImageSource = postsForDay.first?.images.first
+            .map { PostImageSource.resolve($0, prefersThumbnail: true) } ?? .unavailable
 
         return ZStack {
             RoundedRectangle(cornerRadius: DesignTokens.Radius.sm)
-                .fill(Color.white.opacity(thumbnailURL == nil ? 0.10 : 0.0))
+                .fill(Color.white.opacity(thumbnailSource == .unavailable ? 0.10 : 0.0))
                 .overlay(
                     RoundedRectangle(cornerRadius: DesignTokens.Radius.sm)
-                        .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: thumbnailURL == nil ? 1 : 0)
+                        .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: thumbnailSource == .unavailable ? 1 : 0)
                 )
 
-            if let url = thumbnailURL {
-                KFImage(url)
+            if let image = KFImage.post(thumbnailSource) {
+                image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -210,7 +210,7 @@ struct SkyCalendarDiaryView: View {
         .frame(height: cellHeight)
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.sm))
         .overlay(alignment: .topLeading) {
-            if thumbnailURL != nil {
+            if thumbnailSource != .unavailable {
                 Text("\(day)")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(.white)
@@ -287,9 +287,9 @@ private struct DayPostsListView: View {
     private func postRow(_ post: Post) -> some View {
         HStack(spacing: DesignTokens.Spacing.sm) {
             Group {
-                if let urlString = post.images.first?.thumbnail ?? post.images.first?.url,
-                   let url = URL(string: urlString) {
-                    KFImage(url)
+                // 1 枚目のサムネイルを表示（公開は URL、公開以外は Storage のパスで読む。判定は PostImageSource）
+                if let first = post.images.first, let image = KFImage.post(PostImageSource.resolve(first, prefersThumbnail: true)) {
+                    image
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                 } else {

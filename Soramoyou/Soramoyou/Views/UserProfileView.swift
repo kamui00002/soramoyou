@@ -7,6 +7,7 @@
 //  投稿カードから著者名/アバターをタップして遷移し、フォロー操作を行える。
 //
 
+import Kingfisher
 import SwiftUI
 
 struct UserProfileView: View {
@@ -275,20 +276,19 @@ struct UserProfileView: View {
                     spacing: 4
                 ) {
                     ForEach(viewModel.posts) { post in
+                        // 1 枚目のサムネイルを表示（公開は URL、公開以外は Storage のパスで読む。判定は PostImageSource）
+                        // 読めない投稿は今までどおりセルごと出さない
                         if let firstImage = post.images.first,
-                           let url = URL(string: firstImage.thumbnail ?? firstImage.url)
+                           let image = KFImage.post(PostImageSource.resolve(firstImage, prefersThumbnail: true))
                         {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case let .success(image):
-                                    image.resizable().scaledToFill()
-                                default:
-                                    Color.gray.opacity(0.3)
-                                }
-                            }
-                            .frame(height: 120)
-                            .clipped()
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            image
+                                // 読み込み中・読めなかったときは灰色（AsyncImage の頃と同じ見た目）
+                                .placeholder { Color.gray.opacity(0.3) }
+                                .resizable()
+                                .scaledToFill()
+                                .frame(height: 120)
+                                .clipped()
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
                     }
                 }
