@@ -22,6 +22,7 @@ final class WidgetCacheManager {
     private let writer: WidgetCacheWriter
     private let firestoreService: FirestoreServiceProtocol
     private let session: URLSession
+    private let downloadService: ImageDownloadServiceProtocol
 
     /// バックフィル件数（Decision 2 = 直近50件）。
     private let backfillLimit = 50
@@ -32,11 +33,13 @@ final class WidgetCacheManager {
     init(
         writer: WidgetCacheWriter = WidgetCacheWriter(),
         firestoreService: FirestoreServiceProtocol = FirestoreService(),
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
     ) {
         self.writer = writer
         self.firestoreService = firestoreService
         self.session = session
+        self.downloadService = downloadService
     }
 
     // MARK: - 投稿成功時
@@ -77,10 +80,9 @@ final class WidgetCacheManager {
 
         for post in posts {
             if alreadyCached.contains(post.id) { continue }
-            // 軽いサムネイル URL を優先（無ければ本体 URL）。リモート URL はキャッシュには保存しない。
-            guard let urlString = post.images.first?.thumbnail ?? post.images.first?.url,
-                  let url = URL(string: urlString),
-                  let image = await downloadImage(from: url)
+            // 軽いサムネイルを優先（無ければ本体）。公開以外は Storage のパスで読む（URL 側の C-2）。リモート URL はキャッシュには保存しない。
+            guard let imageInfo = post.images.first,
+                  let image = await downloadImage(from: PostImageSource.resolve(imageInfo, prefersThumbnail: true))
             else {
                 continue
             }
@@ -152,6 +154,16 @@ final class WidgetCacheManager {
         } catch {
             return nil
         }
+    }
+
+    /// 投稿の画像を読み方（PostImageSource）から取る（URL 側の C-2）
+    private func downloadImage(from source: PostImageSource) async -> UIImage? {
+        if case let .remote(url) = source {
+            // 公開は今までどおり URLSession で取る
+            return await downloadImage(from: url)
+        }
+        // 公開以外は Storage のパスで取る。読めない（.unavailable）・権限の拒否・通信の失敗は nil（今と同じく、その投稿を飛ばす）
+        return try? await downloadService.downloadImage(from: source)
     }
 
     #if DEBUG
