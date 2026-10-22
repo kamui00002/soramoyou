@@ -670,14 +670,26 @@
     - `/security-review`（03:35〜03:50・`/review-full` の後に直列）: 洗い出しの係が、サーバー（`soratomoSetReaction`・`setReactionTx`・`notifyReaction`・`claimReactionNotifySlot`・`onSoratomoSkyDeleted`・手順2b・`firestore.rules`）と iOS（Service・Router・Models・SkyService の読み取り）をたどり、確信度0.8以上の候補は0件（High・Medium とも0）。候補が無いので偽陽性の判定の段は無し。たどった5点: (a) 自分の `reactions.{uid}` 以外は書けない（`groupId`・`skyId` は `isAutoId` の英数字1〜64・kind は null か7つの名前と完全一致・uid は `request.auth.uid`・FieldPath） (b) 未ログイン・匿名・利用停止・非メンバー・投稿者本人は関門で止まる（非メンバーの判定は投稿の有無より先） (c) 通知の data は `{type, groupId, postId}` だけ・本文にキャプションなし・宛先はメンバーの投稿者だけ (d) 新しい2つのコレクションは `read, write: if false`・skies の update は拒否のまま・手順2bは本人のキーだけを前提条件つきの update で消す (e) ログは内部ID・件数・列挙だけ。補足（指摘ではない）: ブロックした人のリアクションを隠すのはクライアントだけ（既存のタイムラインと同じ作り・要件4.14・5.5の決定）
   - 結果（2026-10-22 04:10・pushとPR）: 上の結果をコミット（`3a96ea2`）した後、利用者のGOを1手ずつ取った。サンドボックスの外で `git push -u origin 機能-そらともいいね`（新しい枝・`origin/機能-そらともいいね` の先頭は `3a96ea23`）。PR #193（`main` ← `機能-そらともいいね`）を `gh pr create --body-file` で作った。本文は要件・設計・tasks.mdの場所、出す順番（マージ→Functions 13本を名前で・ルール→TestFlightと審査・マージからデプロイまでmainからアプリの版を作らない）、テストとレビューの結果、既知の制限（F1）、PRの後に回すnit（F11・F14・F15）。渡す前の本文の `@` は0、作った後に読み返した本文も5,055字・`@` は0。作った直後の確認は GitGuardian が合格・security-tests は実行中。このコミットを足すので、security-tests は新しい先頭でもう一度走る
 
-- [ ] 12.2 mainへマージする（ユーザーのGOを取ってから実行）
+- [x] 12.2 mainへマージする（ユーザーのGOを取ってから実行）
   - 前提: 12.1
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - マージの前に、PRの差分で、既存のCallableの受け付けの条件・`isSoratomoUser()`・`requireSoratomoUser` の中身・`storage.rules`・`firestore.indexes.json`・退会の確認と手順（設定画面）が変わっていないことを、もう一度見る。mainの保護（Ruleset）で必要なチェック（security-tests）が緑であることを見る。マージの方式は前例（squash）に合わせる
   - マージから12.3・12.5のデプロイまでの間に、mainからアプリの版を作らない（操作があるのにCallableが無い状態になるため）
   - _Requirements: 12.8, 12.13, 16.8_
+  - 結果（2026-10-22 04:35・マージ）: `HEAD` `83f00a30`・作業ツリーはclean から始めた。`git fetch -q origin` の後、`origin/main` は `2cbc5645`（分かれ目と同じ＝mainは進んでいない・取り込みとテストのやり直しなし）
+    - 差分（`git diff origin/main...HEAD`・51ファイル）で、変わっていないことを見た6つ:
+      - 既存のCallableの受け付けの条件と `requireSoratomoUser` の中身: `functions/soratomo.js` のハンクは、mainの2・13・15・23・37・84・287・330・439・659・723行への挿入だけ（`git diff -U0`）。関門の88〜190行（`requireSoratomoUser`・`soratomoCallable`・`allowAnonymous`）にかかるハンクは0。84行の後は理由の表に2行（`self_reaction`・`invalid_reaction`）、287行の後は退会の応答に `reactionsDeleted` を1項目（`allowAnonymous: true` の278行は変わらず）。関門が使う `core.isRegisteredToken` も変わらず（`soratomoCore.js` は追加76・削除0。足した4つの名前は main に無かった）
+      - `isSoratomoUser()`: `firestore.rules` の差分は、コメント2か所と新しい `match` 2つ（`reactionNotifyState`・`reactionNotices`、どちらも `read, write: if false`）だけ
+      - `storage.rules`・`firestore.indexes.json`: 差分のファイルは0件
+      - 退会の確認と手順（設定画面）: `SettingsView.swift` は「そらとも通知」の説明の文字列1行だけ。iOSの差分で退会に関わる語はコメント1行だけ
+      - 補足: `soratomoDeletion.js` で消えた処理の行は1行だけで、`if (kind === "leave") tx.delete(…NOTIFY_STATE…)` を波かっこに広げ、元の削除を残したまま `REACTION_NOTIFY_STATE` の削除を1行足した形。`soratomoStore.js` の消えた2行は import（`FieldPath` を足した）と JSDoc の理由の型
+    - チェック（サンドボックスの外の `gh`）: `security-tests` が pass（4分6秒・回 39660142378・対象のコミットは `83f00a30`＝PRの先頭）・GitGuardian が pass。`mergeStateStatus` は BLOCKED だったが、Ruleset ②（承認1）によるもので、必須のチェック（Ruleset ①）は緑
+    - マージ: 利用者のGOを取り、サンドボックスの外で `gh pr merge 193 --squash --admin --match-head-commit 83f00a30acd261358ffd5fedc96a0b43a8b56156`（緑を確かめた先頭以外ならGitHubが断る形）。PR #193 は MERGED（2026-10-22 04:33:51）・マージのコミットは `9738c774`（親は `2cbc5645` で、mainは1コミットだけ進んだ）。`origin/main` と `83f00a30` の木のハッシュが一致（`402fb700`）＝枝の中身がそのまま入った
+    - 枝 `機能-そらともいいね` は手元・リモートとも消していない
+    - この結果は、マージ後の `origin/main`（`9738c774`）から切った枝 `ドキュメント-そらともリアクションの反映の記録` に書いた（利用者の決定・squashなので元の枝の35コミットはmainの祖先にならず、元の枝に書いてPRにすると機能の差分がもう一度出るため）。12.3・12.5の結果も、この枝に書く
+    - 12.3（Functions 13本）と12.5（ルール）が終わるまで、mainからアプリの版を作らない
 
-- [ ] 12.3 Functionsをデプロイする（ユーザーのGOを取ってから実行）
+- [x] 12.3 Functionsをデプロイする（ユーザーのGOを取ってから実行）
   - 前提: 12.2
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 出し元: `git fetch` の後、作業ツリーがcleanで `HEAD == origin/main` のところから出す。出し元のコミットを記録する
@@ -685,21 +697,45 @@
   - コマンド: そらともの関数だけを名前で指定して出す。名前は `functions/soratomo.js` の `module.exports` の13本から機械で作る（手で打たない）。`firebase deploy --only functions:<名前>,…（13本） --project soramoyou-ios --non-interactive`。変わった関数だけにしないのは、共通の部品（`soratomoCore.js`・`soratomoStore.js`・`soratomoDeletion.js`）を、そらともの関数がみな読むため。本番にあってソースに無い関数の削除は行わない
   - 出した後: 出力で、作成2本（`soratomoSetReaction`・`onSoratomoSkyDeleted`）と更新11本がすべて成功。`firebase functions:list` で、追加2行・削除0行・合計24本・リージョンとランタイムが既存と同じ。初めての削除トリガーで権限の伝播の待ちが出たら、出力の指示どおり時間をおいて同じコマンドをもう一度（GO）
   - _Requirements: 8.2, 8.3, 9.6, 11.1, 16.8_
+  - 結果（2026-10-22 07:34・デプロイ）: 記録の枝 `ecc93949`・作業ツリーはclean から始めた。`git fetch -q origin` の後、`origin/main` は `9738c774`（12.2 のマージのまま＝mainは進んでいない）
+    - 前回のそらともの関数の出し元: `cdc7c3e3`（public-launch 11.2 の出し元で、11.5 で 2026-10-13 18:27 に 11 本を更新）。その後にそらともの関数を出した記録は無い
+    - `git log --stat cdc7c3e3..origin/main -- functions/` は5件: `9738c774`（#193・このspec）・`abaa3bdb`（#190・`onUserBlockListChanged` と `followBlock.js`。2026-10-16 06:43 JST に本番へ出た記録が監査①の D-1 の引き継ぎメモにあり、本番の一覧でも ACTIVE）・`f0623b52`（#185）・`30a90230`（#189）・`ca372cdb`（#191）。後の3件は `package.json` の `scripts` の行とテストのファイルだけで、`dependencies`・`engines`・`package-lock.json` は変わっていない（動くコードに効かない）。この内訳をGOの質問に書いた
+    - 出す前の本番の `firebase functions:list`（07:23・サンドボックスの外・`--json` をファイルに保存し、名前・リージョン・ランタイム・種類・メモリ・状態だけを出した。環境変数の値は画面に出していない）: **23本**・すべて asia-northeast1・nodejs22・ACTIVE。見込みの22本より1本多いのは #190 の `onUserBlockListChanged`。そらとも系は11本。ソースの公開（`index.js` 10・`skyMotion.js` 2・`soratomo.js` 13 の計25本）のうち、本番に無いのは `soratomoSetReaction`・`onSoratomoSkyDeleted` だけ。出した後の期待値を24本でなく25本に直すことをGOの質問に書いた
+    - 名前: `functions/soratomo.js` の `module.exports` から台本（scratchpad の `build_deploy_names.py`。13本・重複なし・新しい2本を含むことを assert）で組み立て、手で打っていない。陽性対照: `cdc7c3e3` の `soratomo.js` を渡すと「11 本」で落ちた。13本のうち本番にあった11本は、本番のそらとも系11本と同じ
+    - `functions/` に `.env` 系のファイルは無い（本番の環境変数もシステムの値だけ・秘密は `DISCORD_REPORT_WEBHOOK_URL` を2本が名前で参照）。`firebase.json` の `ignore` に入っていない `firestore-debug.log`（エミュレーターのログ）は一緒に上がった（前回の出し元の作業フォルダにもあった＝前例どおり）
+    - 出し元: `git switch --detach origin/main` で `9738c774` へ移り、`git rev-parse HEAD` が `9738c774`・作業ツリーがclean なことを見てから出した
+    - 利用者のGO（25本で確かめる）で、サンドボックスの外で `firebase deploy --only functions:<13本> --project soramoyou-ios --non-interactive`（07:30:59〜07:33:36 JST）→ 終了コード0・**作成2（`soratomoSetReaction`・`onSoratomoSkyDeleted`）・更新11・すべて `Successful`・`Deploy complete!`**。上げたソースは 401.04 KB。ログに警告・失敗・公開呼び出しの許可（IAM）の行は0。ほかの12本は出していない
+    - 出した後の `functions:list`（07:34）: **25本**。出す前と比べて追加2行（`onSoratomoSkyDeleted`＝Firestore の削除のトリガー・`soratomoSetReaction`＝callable。どちらも asia-northeast1・256MB・nodejs22・ACTIVE）・削除0行・ほかの行の変化0（リージョン・ランタイム・種類・メモリ・状態）
+    - 補足（ソースの指紋 `hash`）: 指紋が変わったのは更新した11本だけで、作成の2本を含むそらともの13本はすべて新しい指紋（秘密を使う2本と使わない11本の2組。出す前も同じ分かれ方）。ほかの12本の指紋は変わっていない。指紋は秘密の使い方でも分かれるので、出した時刻の証拠にはしていない
+    - この結果は、記録の枝 `ドキュメント-そらともリアクションの反映の記録` に戻って書いた
+    - 12.5（ルール）が終わるまで、mainからアプリの版を作らない。次は 12.4（公開呼び出しの許可）と 12.5
 
-- [ ] 12.4 新しいCallableの公開呼び出しの許可を確かめる（ユーザーのGOを取ってから実行）
+- [x] 12.4 新しいCallableの公開呼び出しの許可を確かめる（ユーザーのGOを取ってから実行）
   - 前提: 12.3
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - leave-group 11.4（release-gate specの要確認4）と同じ手順で行う。認証の無い `POST https://asia-northeast1-soramoyou-ios.cloudfunctions.net/soratomoSetReaction`（本文 `{"data":{}}`）を1回送り、HTTP 401・`UNAUTHENTICATED`・「ログインが必要です」が返ること（この文言は関数のコードだけが返す。許可が無ければCloud Runが403で止める）。関数のログに `soratomoSetReaction: rejected`（reason unauthenticated）が出ること
   - 失敗したら、呼び出し元の設定を見直す（変える前に利用者に相談する）
   - _Requirements: 4.12_
+  - 結果（2026-10-22 07:50・要件4.12は検証済み）: 利用者のGO（12.5と並べて進める・GOは2つまとめて1回で取った）で、認証の無い `POST https://asia-northeast1-soramoyou-ios.cloudfunctions.net/soratomoSetReaction`（本文 `{"data":{}}`）を 2026-10-21T22:50:10Z に1回送った（サンドボックスの中・`curl`）。HTTP 401・`{"error":{"message":"ログインが必要です","status":"UNAUTHENTICATED"}}`（関数のコードだけが返す文言なので、Cloud Run の入口は通っている＝公開呼び出しの許可がある）
+    - 関数のログ（`firebase functions:log --only soratomoSetReaction`・サンドボックスの外）: 22:50:12.993Z の `soratomoSetReaction: rejected`（`reason: unauthenticated`・`uid: null`）が1行。その直前に `Callable request verification passed`（app・auth とも `MISSING`）。この関数のログはほかに、12.3 の作成の記録と最初の起動の行だけ
+    - ⚠️ `functions:log` には作成の監査ログの行（操作したアカウントのメールと接続元のIP）が混ざる。今回はファイルに保存した後に全体を読んでしまった（この記録には書いていない）。次からは `rejected` の行だけを grep で出す
 
-- [ ] 12.5 Firestoreのルールを本番へ出す（ユーザーのGOを取ってから実行）
+- [x] 12.5 Firestoreのルールを本番へ出す（ユーザーのGOを取ってから実行）
   - 前提: 12.2（12.3との順は問わない。新しい `match` は、既定で拒否されていたパスの明示なので、どの順でも挙動は変わらない）
   - ユーザーのGOを取ってから実行する。AIは単独で実行しない
   - 出す前: `scripts/read-deployed-rules.py` で本番のルールを読み、このspecのマージの前の origin/main の `firestore.rules` とハッシュの頭が一致することを確かめる（ルールはファイル全体を出すので、ほかのブランチの未反映の変更を一緒に出さないため。一致しなければ止めて相談する）。差がこのspecの `match` とコメントだけであることを差分で見る
   - コマンド: `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive`
   - 出した後: 読み返しの道具で、ruleset・更新の時刻・ハッシュの頭が手元の `firestore.rules` と一致すること。保存した本番の本文に `rules_test_soratomo.py`（通常）を流して全件が期待どおりであること
   - _Requirements: 4.13, 12.8, 16.8_
+  - 結果（2026-10-22 07:50・ルールを出した）: 記録の枝 `714f27bc`（12.3 の記録の後）・作業ツリーはclean から始めた（12.4 と並べて進め、この結果は 12.4 の記録のコミット `d7618f7` の後に書いた）。`origin/main` は `9738c774` のまま
+    - マージの前の origin/main は `2cbc5645`（#192）。その `firestore.rules` を最後に変えたのは `abaa3bdb`（#190・2026-10-16 に本番へ出た）
+    - 出す前（利用者が「12.4 と 12.5 を並べて進める」を選んだ後・サンドボックスの外）: `read-deployed-rules.py` に `--firestore`（`2cbc5645` の `firestore.rules` の写し）を渡して読んだ。本番の Firestore は ruleset `ba0efb78`（2026-10-16 06:43:59 JST）・sha256 の頭 `dc5b2432a05a` で、写しと**一致**（終了コード 0）。Storage は ruleset `babb4db3`（2026-10-16 04:51:18 JST）・`2028a531ab5e` で手元の `storage.rules` と一致。陽性対照: 同じ本番の本文の sha256 は、今の `firestore.rules`（`f4d825ed6e60`）とは違う
+    - 差（`git diff 2cbc5645 origin/main -- firestore.rules`）: そらともの節の説明のコメント2か所と、`soratomoGroups/{groupId}` の下の新しい `match` 2つ（`reactionNotifyState/{uid}`・`reactionNotices/{skyId}`。どちらも `allow read, write: if false`）だけ。記録の枝と `origin/main` の差は tasks.md だけ
+    - 出し元: `git switch --detach origin/main` で `9738c774` へ移り、clean と `firestore.rules` の sha256 の頭 `f4d825ed6e60` を見てから出した
+    - 利用者のGO（12.4 と2つまとめて1回）で、サンドボックスの外で `firebase deploy --only firestore:rules --project soramoyou-ios --non-interactive`（07:50:13〜07:50:20 JST・12.4 の POST と同時に流した）→ 終了コード0・`compiled successfully`・`released rules firestore.rules to cloud.firestore`・`Deploy complete!`。Storage のルールと索引は出していない
+    - 出した後の読み返し: 本番の Firestore は ruleset **`498ee618`**（2026-10-22 07:50:20 JST）・sha256 の頭 **`f4d825ed6e60`** で手元の `firestore.rules` と**一致**。Storage は `babb4db3` のまま一致（終了コード 0）
+    - 保存した本番の本文に `rules_test_soratomo.py`（通常・1つ目の引数のパスを読む）: **169件・すべて期待どおり・期待外れ0件**（基準169）
+    - これで 12.3 と 12.5 がそろった＝main からアプリの版を作ってよい。次は 13.1（開発版での受け入れ・始める前に今さわれる端末を聞く）
 
 ## (m) 受け入れの確認（開発版と本番）
 
