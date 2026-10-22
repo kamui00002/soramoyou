@@ -853,11 +853,26 @@
     - 13.1 の持ち越し: ① 重ねた操作は上の Q7 のとおり。② ブロックされた側（B）の画面に B のリアクションが残る: ブロックの後、シミュレーターの B の画面を引っぱって更新しても P1〜P3 に「夕焼け1人。あなたは夕焼けを付けています」が出る（本番の文書にも残る）。③ 開いたままの画面から消える: B に端末をフォローさせ（03:28:47）、利用者がグループのタイムラインを開いたままプロフィール→フォロワー→TestB→「…」→ブロック→ホームのタブへ戻ると、手動の更新なしで P1〜P3 の夕焼け1と TestB の投稿が消えた。ブロックされた B が P2 を外して付け直すと拒否されず（03:31:50・`added`）、**`notify: blocked`** で通知は来ない
     - 後片づけ（利用者のGO）: 03:32:20 に端末の `blockedUserIds` から B だけを外した（1→0件・ほかの値は同じ）。ブロックで自動で消えた B→端末のフォローは戻さない。B は 14.4 が済むまでグループに残す
 
-- [ ] 14.4 計測の着弾を、除外の条件あり・なしで数える（要件15.7）
+- [x] 14.4 計測の着弾を、除外の条件あり・なしで数える（要件15.7）
   - 前提: 14.3
   - 14.3の通しの時間帯で、`soratomo_reaction_added`（`replaced` が真と偽の両方）・`soratomo_reaction_removed`・`soratomo_reaction_failed`・`soratomo_reactions_viewed` と、`soratomo_notification_opened` の `type` = `reaction` の件数を、除外の条件をかけない場合とかける場合で出す（クエリの型と除外の条件は public-launch specの `research.md` のもの）。期待: 除外なしで各1件以上・除外ありで0件。パラメータの値（`kind` が名前・`source`・`reason`・`reaction_count`）が要件15の表と一致し、uid・グループID・名前が入っていない
   - `soratomo_reaction_failed` は、機内モードの `offline` で起こす。届かなければ、public-launch 12.3の `soratomo_leave_failed` の未着と同じ根かを、端末のログ（Console.appで `com.soramoyou` の `LoggingService` に `Analytics event:` の行が出るか）で切り分け、別の理由（例: 投稿者が消した直後の詳細から付けて `not_found`）でも1回起こす。`offline` の経路が届かなかったら「検証済み」と書かず、完了にするかを利用者に聞く
   - _Requirements: 15.1, 15.3, 15.4, 15.5, 15.7_
+  - 結果（2026-10-23 04:04 に完了）: 利用者のGO（04:00）で、PostHog MCP の `execute-sql`（読むだけ・プロジェクト 430627）で数えた。窓は14.3の通しの 02:48:00〜03:33:00（JST）で、public-launch 12.3 の教訓どおり JST の文字列どうしで比べた（`formatDateTime(toTimeZone(timestamp,'Asia/Tokyo'), …) BETWEEN …`）。除外の条件は research.md のもの（開発者2件は `nzvqlZ%`・`bOigAs%`）。⚠️ MCP の接続先が別のプロジェクト（567500）になっていたので、`switch-project` で 430627 に切り替えてから読んだ
+    - | イベント | 値 | 除外なし | 除外あり | 内訳 |
+      |---|---|---|---|---|
+      | `soratomo_reaction_added` | `replaced` 偽 | 2 | 0 | 端末 2 |
+      | `soratomo_reaction_added` | `replaced` 真 | 4 | 0 | 端末 4 |
+      | `soratomo_reaction_removed` | — | 1 | 0 | 端末 1 |
+      | `soratomo_reaction_failed` | `action` add・`reason` offline | 1 | 0 | 端末 1 |
+      | `soratomo_reactions_viewed` | — | 1 | 0 | 端末 1 |
+      | `soratomo_notification_opened` | `type` reaction | 2 | 0 | 端末 2 |
+    - 期待どおり、すべて除外なしで1件以上・除外ありで0件。この5つの窓の中の分は、すべて端末（`nzvqlZ…`）からで、B（`nhYcDQ…`）とほかの人は0件（B の付ける・外すは `b_client.py` の REST なので計測は出ない）。`soratomo_notification_opened` の `type` が `post_created` の行は0件（リアクションの通知のタップが新着投稿として数えられていない）。端末のイベントはすべて `$is_testflight` が真・`$app_version` `1.16.0`・`$app_build` 114
+    - 除外の陽性対照: 同じ窓・同じ条件で `Application Opened` は除外なし11・除外あり1（テスト用でない人の分が残る）＝条件がすべてを落としているのではない
+    - 1件ずつ（JST・端末で記録した時刻）: 03:06:10 と 03:07:48 に `soratomo_notification_opened`（`type` reaction・`result` opened。14.3 の前面からのタップと、起動していない状態からのタップ）。03:10:37 blue_heart（`replaced` 偽）→39 red_heart→41 eyes→42 sunset（3つとも真）→57 `soratomo_reaction_removed`→58 sunset（偽）で、`source` はすべて timeline（14.3 の関数のログの6回と、順も絵文字も一致）。03:16:13 `soratomo_reactions_viewed`（`reaction_count` 1）。03:20:41 cloud（真・`source` detail）。03:25:54 `soratomo_reaction_failed`（`action` add・`reason` offline）
+    - 14.3 の持ち越し: 機内モードで押した時刻は **03:25:54**（`soratomo_reaction_failed` の記録の時刻）。public-launch 12.3 の `soratomo_leave_failed` の未着と違い、こちらは届いた（記録は送る前の通信の確認の枝 `SoratomoReactionViewModel.swift` 242〜246 行で、要求を始める前に呼ぶ）。`offline` の経路が届いたので、別の理由（`not_found`）での2回目は行っていない
+    - パラメータ: `kind` は名前（blue_heart・red_heart・eyes・sunset・cloud）で、絵文字そのものではない。`source` は timeline と detail、`reason` は offline、`reaction_count` は数。アプリが付けたキー（`$` で始まらないもの）は、added が `kind`・`replaced`・`source`、removed が `source`、failed が `action`・`reason`、viewed が `reaction_count`、通知のタップが既存の `result`・`type` だけで、要件15の表と一致。プロパティ全体の文字列に、端末と B の uid の頭・グループID の頭・投稿ID（`Bo5uv8`・`6Pyy0W`・`dzrWWO`・`afIacb`）の頭・B の表示名（TestB）は0件（検査の式の陽性対照: 入っているはずの `timeline`・`1.16.0`・`reaction` は、該当する行で1になった）
+    - 参考（合否に関係しない）: 03:10:59 に端末の `$rageclick` が1件（14.3 の、選んだ直後の連打と同じ時刻）
 
 - [x] 14.5 プライバシーラベル・ポリシー・審査メモへの影響を確かめ、文案の承認を取る（ユーザーの入力が要る）
   - 前提: 10
