@@ -4,9 +4,9 @@
 //
 //  画像ダウンロード・写真ライブラリ保存サービス
 
-import UIKit
-import Photos
 import Kingfisher
+import Photos
+import UIKit
 
 // MARK: - エラー定義
 
@@ -21,17 +21,17 @@ enum ImageDownloadError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL:
-            return "画像のURLが無効です"
+            "画像のURLが無効です"
         case .unsafeURL:
-            return "許可されていないURLスキームです"
+            "許可されていないURLスキームです"
         case .downloadFailed:
-            return "画像のダウンロードに失敗しました"
+            "画像のダウンロードに失敗しました"
         case .noImages:
-            return "保存する画像がありません"
+            "保存する画像がありません"
         case .photoLibraryDenied:
-            return "写真ライブラリへのアクセスが許可されていません。設定アプリから許可してください。"
-        case .saveFailed(let error):
-            return "画像の保存に失敗しました: \(error.localizedDescription)"
+            "写真ライブラリへのアクセスが許可されていません。設定アプリから許可してください。"
+        case let .saveFailed(error):
+            "画像の保存に失敗しました: \(error.localizedDescription)"
         }
     }
 }
@@ -50,7 +50,6 @@ protocol ImageDownloadServiceProtocol: Sendable {
 // MARK: - 実装
 
 final class ImageDownloadService: ImageDownloadServiceProtocol, @unchecked Sendable {
-
     static let shared = ImageDownloadService()
 
     private init() {}
@@ -65,7 +64,8 @@ final class ImageDownloadService: ImageDownloadServiceProtocol, @unchecked Senda
 
         // セキュリティ: https/http のみ許可（file:// や data: を防止）
         guard let scheme = url.scheme?.lowercased(),
-              Self.allowedSchemes.contains(scheme) else {
+              Self.allowedSchemes.contains(scheme)
+        else {
             throw ImageDownloadError.unsafeURL
         }
 
@@ -73,7 +73,7 @@ final class ImageDownloadService: ImageDownloadServiceProtocol, @unchecked Senda
         return try await withCheckedThrowingContinuation { continuation in
             KingfisherManager.shared.retrieveImage(with: url) { result in
                 switch result {
-                case .success(let imageResult):
+                case let .success(imageResult):
                     continuation.resume(returning: imageResult.image)
                 case .failure:
                     continuation.resume(throwing: ImageDownloadError.downloadFailed)
