@@ -1155,15 +1155,17 @@ struct PostDetailView: View {
         defer { isSaving = false }
 
         do {
-            let urlStrings: [String]
+            let infos: [ImageInfo]
             if edited {
-                urlStrings = all ? post.images.map(\.url) : [post.images.first?.url].compactMap { $0 }
+                infos = all ? post.images : [post.images.first].compactMap { $0 }
             } else {
                 let originals = post.originalImages ?? []
-                urlStrings = all ? originals.map(\.url) : [originals.first?.url].compactMap { $0 }
+                infos = all ? originals : [originals.first].compactMap { $0 }
             }
+            // 公開以外は Storage のパスで読む（URL 側の C-2）。「すべて」は読めない 1 枚があればそこで失敗する（今と同じ）
+            let sources = infos.map { PostImageSource.resolve($0, prefersThumbnail: false) }
 
-            let savedCount = try await downloadService.downloadAndSaveImages(from: urlStrings)
+            let savedCount = try await downloadService.downloadAndSaveImages(from: sources)
             saveResultMessage = savedCount == 1 ? "画像を保存しました" : "\(savedCount)枚の画像を保存しました"
             showingSaveResult = true
         } catch {
@@ -1177,12 +1179,13 @@ struct PostDetailView: View {
         defer { isSaving = false }
 
         do {
-            guard let urlString = post.images.first?.url else {
+            guard let imageInfo = post.images.first else {
                 saveResultMessage = "共有する画像がありません"
                 showingSaveResult = true
                 return
             }
-            let image = try await downloadService.downloadImage(from: urlString)
+            // 公開以外は Storage のパスで読む（URL 側の C-2）
+            let image = try await downloadService.downloadImage(from: PostImageSource.resolve(imageInfo, prefersThumbnail: false))
             shareImages = [image]
             showingShareSheet = true
         } catch {
@@ -1201,12 +1204,13 @@ struct PostDetailView: View {
         defer { isPreparingShareCard = false }
 
         do {
-            guard let urlString = post.images.first?.url else {
+            guard let imageInfo = post.images.first else {
                 saveResultMessage = "共有する画像がありません"
                 showingSaveResult = true
                 return
             }
-            let image = try await downloadService.downloadImage(from: urlString)
+            // 公開以外は Storage のパスで読む（URL 側の C-2）
+            let image = try await downloadService.downloadImage(from: PostImageSource.resolve(imageInfo, prefersThumbnail: false))
             shareCardExportPayload = ShareCardExportPayload(image: image)
         } catch {
             saveResultMessage = error.userFriendlyMessage
@@ -1224,14 +1228,15 @@ struct PostDetailView: View {
         defer { isPreparingReEdit = false }
 
         let infos = (post.originalImages ?? []).sorted { $0.order < $1.order }
-        let urls = infos.map(\.url).filter { !$0.isEmpty }
-        guard !urls.isEmpty else {
+        // 公開以外は Storage のパスで読む（URL 側の C-2）。読めない元画像は今までどおり落とす
+        let sources = infos.map { PostImageSource.resolve($0, prefersThumbnail: false) }.filter { $0 != .unavailable }
+        guard !sources.isEmpty else {
             saveResultMessage = "元画像が見つかりませんでした"
             showingSaveResult = true
             return
         }
         do {
-            let images = try await downloadService.downloadImages(from: urls)
+            let images = try await downloadService.downloadImages(from: sources)
             guard !images.isEmpty else {
                 saveResultMessage = "元画像の読み込みに失敗しました"
                 showingSaveResult = true

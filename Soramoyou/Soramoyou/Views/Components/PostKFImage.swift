@@ -37,6 +37,7 @@ extension KFImage {
         switch source {
         case .storage:
             // 必ず専用のキャッシュに入れる（付け忘れると標準のキャッシュに入り、サインアウトで消えない。画面では見分けがつかない）
+            // ⚠️ 同じ決まりが `ImageDownloadService.storageRequest`（保存・共有・再編集）にもある。片方を変えるときは両方を直す
             return image.targetCache(PostStorageImageCache.shared)
         case .remote, .unavailable:
             // 標準のキャッシュのまま（今までと同じ置き場・同じ鍵）
