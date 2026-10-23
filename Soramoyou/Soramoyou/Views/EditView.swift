@@ -146,6 +146,9 @@ struct EditView: View {
 
                     // 編集コントロール（3タブ構成）
                     editControlsView
+
+                    // 画面下の「次へ」（右上の「次へ」が見えない・押せない端末でも投稿へ進めるようにする）
+                    nextBottomBar
                 }
             }
             // 「次へ」を押してから投稿用の画像ができるまでの表示（理由は `finalImageProgressOverlay` 参照）
@@ -203,60 +206,9 @@ struct EditView: View {
                         .disabled(isGeneratingFinal)
                         .foregroundColor(isGeneratingFinal ? .gray : .white)
 
-                        // 次へボタン
+                        // 次へボタン（画面下の `nextBottomBar` と同じ処理を呼ぶ）
                         Button {
-                            // 押せない間（生成中・プレビュー読み込み中・空マスク生成中）は進まない。
-                            // 生成中の連打を防ぐ意味もある。generateFinalImages は isLoading を立てないため、
-                            // 専用フラグでガードしないと重い画像生成が多重起動し、postInfoPayload が
-                            // 複数回差し替わって PostInfoView が再構築される恐れがある。
-                            // ⚠️ `.disabled` は使わない。`.disabled` だと押せない間はこのクロージャ自体が
-                            //    呼ばれず、「押したのに進まない」を計測できない（2026-09-22 iPhone 11 Pro で
-                            //    記録ゼロのまま投稿できない報告があった）。見た目は下の foregroundColor で示す。
-                            if let reason = nextBlockReason {
-                                logNextBlocked(reason: reason)
-                                return
-                            }
-                            isGeneratingFinal = true
-                            // 端末ごとの書き出し時間を測る（遅い端末で待ちきれずに離脱していないかの判断材料）
-                            let startedAt = Date()
-                            let imageCount = originalImages.count
-                            LoggingService.shared.logEvent("edit_next_started", parameters: [
-                                "image_count": imageCount,
-                            ])
-                            Task { @MainActor in
-                                defer { isGeneratingFinal = false }
-                                do {
-                                    let finalImages = try await viewModel.generateFinalImages()
-                                    LoggingService.shared.logEvent("edit_next_finished", parameters: [
-                                        "result": "success",
-                                        "duration_ms": Int(Date().timeIntervalSince(startedAt) * 1000),
-                                        "image_count": imageCount,
-                                    ])
-                                    // generateFinalImages() 完了後に呼ぶ（＝ imageStates が最新化済み）。
-                                    // currentEditRecipes() は内部で saveCurrentImageState() を呼ぶ
-                                    // 冪等な関数なので、ここで呼んでも既存状態を壊さない。
-                                    // これにより「複数枚投稿で最後の1枚のレシピしか学習コーパスに
-                                    // 記録されない」既知バグを修正し、全画像分のレシピを渡す。
-                                    let finalRecipes = viewModel.currentEditRecipes()
-                                    // 画像生成完了後にペイロードをセット。これが nil でなくなった
-                                    // ときだけ fullScreenCover が PostInfoView を構築する。
-                                    postInfoPayload = PostInfoPayload(
-                                        editedImages: finalImages,
-                                        editSettings: viewModel.editSettings,
-                                        editRecipe: viewModel.editRecipe,
-                                        editRecipes: finalRecipes
-                                    )
-                                } catch {
-                                    // 失敗は画面に出すだけでなく記録する（以前は記録が無く、原因を追えなかった）
-                                    ErrorHandler.logError(error, context: "EditView.next.generateFinalImages", userId: userId)
-                                    LoggingService.shared.logEvent("edit_next_finished", parameters: [
-                                        "result": "failure",
-                                        "duration_ms": Int(Date().timeIntervalSince(startedAt) * 1000),
-                                        "image_count": imageCount,
-                                    ])
-                                    viewModel.errorMessage = error.userFriendlyMessage
-                                }
-                            }
+                            startNext(source: "toolbar")
                         } label: {
                             if isGeneratingFinal {
                                 ProgressView()
@@ -587,6 +539,65 @@ struct EditView: View {
         return nil
     }
 
+    /// 「次へ」を押したときの処理（右上のツールバーと画面下の `nextBottomBar` の両方から呼ぶ）。
+    ///
+    /// 押せない間（生成中・プレビュー読み込み中・空マスク生成中）は進まない。
+    /// 生成中の連打を防ぐ意味もある。generateFinalImages は isLoading を立てないため、
+    /// 専用フラグでガードしないと重い画像生成が多重起動し、postInfoPayload が
+    /// 複数回差し替わって PostInfoView が再構築される恐れがある。
+    /// ⚠️ ボタンに `.disabled` は使わない。`.disabled` だと押せない間はこの関数自体が
+    ///    呼ばれず、「押したのに進まない」を計測できない（2026-09-22 iPhone 11 Pro で
+    ///    記録ゼロのまま投稿できない報告があった）。見た目は各ボタンの色で示す。
+    /// - Parameter source: どちらのボタンから押されたか（`toolbar` / `bottom_bar`）。計測にだけ使う。
+    private func startNext(source: String) {
+        if let reason = nextBlockReason {
+            logNextBlocked(reason: reason, source: source)
+            return
+        }
+        isGeneratingFinal = true
+        // 端末ごとの書き出し時間を測る（遅い端末で待ちきれずに離脱していないかの判断材料）
+        let startedAt = Date()
+        let imageCount = originalImages.count
+        LoggingService.shared.logEvent("edit_next_started", parameters: [
+            "image_count": imageCount,
+            "source": source,
+        ])
+        Task { @MainActor in
+            defer { isGeneratingFinal = false }
+            do {
+                let finalImages = try await viewModel.generateFinalImages()
+                LoggingService.shared.logEvent("edit_next_finished", parameters: [
+                    "result": "success",
+                    "duration_ms": Int(Date().timeIntervalSince(startedAt) * 1000),
+                    "image_count": imageCount,
+                ])
+                // generateFinalImages() 完了後に呼ぶ（＝ imageStates が最新化済み）。
+                // currentEditRecipes() は内部で saveCurrentImageState() を呼ぶ
+                // 冪等な関数なので、ここで呼んでも既存状態を壊さない。
+                // これにより「複数枚投稿で最後の1枚のレシピしか学習コーパスに
+                // 記録されない」既知バグを修正し、全画像分のレシピを渡す。
+                let finalRecipes = viewModel.currentEditRecipes()
+                // 画像生成完了後にペイロードをセット。これが nil でなくなった
+                // ときだけ fullScreenCover が PostInfoView を構築する。
+                postInfoPayload = PostInfoPayload(
+                    editedImages: finalImages,
+                    editSettings: viewModel.editSettings,
+                    editRecipe: viewModel.editRecipe,
+                    editRecipes: finalRecipes
+                )
+            } catch {
+                // 失敗は画面に出すだけでなく記録する（以前は記録が無く、原因を追えなかった）
+                ErrorHandler.logError(error, context: "EditView.next.generateFinalImages", userId: userId)
+                LoggingService.shared.logEvent("edit_next_finished", parameters: [
+                    "result": "failure",
+                    "duration_ms": Int(Date().timeIntervalSince(startedAt) * 1000),
+                    "image_count": imageCount,
+                ])
+                viewModel.errorMessage = error.userFriendlyMessage
+            }
+        }
+    }
+
     /// 押せない状態で「次へ」が押されたことを記録する（理由ごとに画面につき 1 回まで）。
     ///
     /// `seconds_since_open` は「画面を開いてから、押せない『次へ』を初めて押すまでの秒数」で、
@@ -595,14 +606,50 @@ struct EditView: View {
     /// 組で見分ける（started だけで finished が無ければ、終わらずに離脱している）。
     /// ⚠️ キャンセルで画面を閉じても書き出しの Task は続くので、`edit_next_finished` は画面を離れたあとにも届く。
     ///    「投稿情報画面に進めた」の意味では読まないこと（そちらは `post_completed` で数える）。
-    private func logNextBlocked(reason: String) {
+    /// ⚠️ 1 回に絞るのは理由ごと。同じ理由で右上と画面下の両方が押されても、記録は最初の 1 回（`source` もその 1 回分）だけ。
+    private func logNextBlocked(reason: String, source: String) {
         guard !loggedNextBlockReasons.contains(reason) else { return }
         loggedNextBlockReasons.insert(reason)
         LoggingService.shared.logEvent("edit_next_blocked", parameters: [
             "reason": reason,
             "seconds_since_open": Int(Date().timeIntervalSince(screenOpenedAt)),
             "preview_ready": viewModel.previewImage != nil,
+            "source": source,
         ])
+    }
+
+    /// 画面下の「次へ」ボタン（右上の「次へ」と同じ処理）。
+    ///
+    /// ⚠️ 右上だけに頼らない理由（2026-10-22 のお問い合わせ「編集を完了させるボタンがなく投稿できない」）:
+    ///    iOS 26 の一部の端末で、右上の「次へ」まで一度もタップが届かないまま投稿できない利用者が複数いた
+    ///    （PostHog で `edit_next_started` も `edit_next_blocked` も 0 件のまま、右上の同じ場所を連打）。
+    ///    右上は「元に戻す・やり直す・ツール設定・次へ」を 1 つの枠に詰めており、iOS 26 がナビバーに
+    ///    収まらない項目を「•••」メニューへ折りたたむと「次へ」が押せなくなると見ている（文字サイズが大きい
+    ///    端末などで起きる見立て。`text_size` の計測で確かめる）。ナビバーの挙動に左右されない場所にも置く。
+    /// 文字を大きくしている人にも読めるよう、文字サイズの上限は付けない（1 行に収まらなければ縮めて表示する）。
+    private var nextBottomBar: some View {
+        Button {
+            startNext(source: "bottom_bar")
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                Text("編集を完了して次へ")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .font(.headline)
+            .foregroundColor(.black)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            // 押せない間はグレーにする（右上の「次へ」と同じ合図）
+            .background(Capsule().fill(nextBlockReason == nil ? Color.white : Color.white.opacity(0.4)))
+        }
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.vertical, DesignTokens.Spacing.sm)
+        .background(Color.black)
+        // UI テストの `app.buttons["次へ"]`（右上）と取り違えないよう、見出しは画面の文言そのままにする
+        .accessibilityLabel("編集を完了して次へ")
+        .accessibilityHint(nextBlockReason == nil ? "" : "準備中のため、まだ進めません")
     }
 
     /// 「次へ」を押してから投稿用の画像ができるまでの表示。

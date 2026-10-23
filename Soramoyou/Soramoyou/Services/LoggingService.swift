@@ -196,6 +196,26 @@ class LoggingService {
         logger.info("User property set: \(name) = \(sanitizedValue ?? "nil")")
     }
 
+    /// 端末の文字サイズ・太字の設定を、以降の全イベントに付く属性（super property）として PostHog に登録する。
+    ///
+    /// 2026-10-22 のお問い合わせ「編集を完了させるボタンがなく投稿できない」で、右上の「次へ」が押せないのは
+    /// 文字サイズを大きくしている端末だけ、という見立てを確かめるために足した
+    /// （PostHog の iOS SDK は文字サイズを自動では記録しない）。
+    /// Firebase Analytics のユーザープロパティ（上限 25 個）には入れず、PostHog だけに送る。
+    /// アプリの一番外側の画面（`SoramoyouApp` の `TextSizeAnalyticsModifier`）から、起動時と設定が変わったときに呼ぶ。
+    /// - Parameters:
+    ///   - textSize: 文字サイズの名前（標準は `large`。`accessibility1`〜`5` は「さらに大きな文字」）
+    ///   - isAccessibilitySize: 「さらに大きな文字」の範囲か
+    ///   - isBoldText: 「文字を太くする」がオンか
+    func registerTextSizeProperties(textSize: String, isAccessibilitySize: Bool, isBoldText: Bool) {
+        PostHogSDK.shared.register([
+            "text_size": textSize,
+            "text_size_is_accessibility": isAccessibilitySize,
+            "bold_text": isBoldText,
+        ])
+        logger.info("Text size registered: \(textSize), bold=\(isBoldText)")
+    }
+
     /// ユーザーIDを設定
     func setUserID(_ userID: String?) {
         // ユーザーIDは機密情報ではないが、念のため検証
