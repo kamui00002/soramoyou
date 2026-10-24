@@ -12,64 +12,64 @@ import UIKit
 /// Empty Stateのタイプ
 /// 各画面に応じた適切なアイコンとメッセージを提供する
 enum EmptyStateType {
-    case posts           // 投稿がない
-    case drafts          // 下書きがない
-    case searchResults   // 検索結果がない
-    case notifications   // 通知がない
-    case followers       // フォロワーがいない
-    case following       // フォロー中のユーザーがいない
-    case userPosts       // ユーザーの投稿がない
+    case posts // 投稿がない
+    case drafts // 下書きがない
+    case searchResults // 検索結果がない
+    case notifications // 通知がない
+    case followers // フォロワーがいない
+    case following // フォロー中のユーザーがいない
+    case userPosts // ユーザーの投稿がない
     case custom(icon: String, title: String, description: String, actionTitle: String?)
 
     var icon: String {
         switch self {
-        case .posts: return "photo.on.rectangle.angled"
-        case .drafts: return "doc.text"
-        case .searchResults: return "magnifyingglass"
-        case .notifications: return "bell.badge"
-        case .followers: return "person.2"
-        case .following: return "heart"
-        case .userPosts: return "camera"
-        case .custom(let icon, _, _, _): return icon
+        case .posts: "photo.on.rectangle.angled"
+        case .drafts: "doc.text"
+        case .searchResults: "magnifyingglass"
+        case .notifications: "bell.badge"
+        case .followers: "person.2"
+        case .following: "heart"
+        case .userPosts: "camera"
+        case let .custom(icon, _, _, _): icon
         }
     }
 
     var title: String {
         switch self {
-        case .posts: return "投稿がありません"
-        case .drafts: return "下書きがありません"
-        case .searchResults: return "検索結果がありません"
-        case .notifications: return "通知はありません"
-        case .followers: return "まだフォロワーがいません"
-        case .following: return "フォロー中のユーザーはいません"
-        case .userPosts: return "まだ投稿がありません"
-        case .custom(_, let title, _, _): return title
+        case .posts: "投稿がありません"
+        case .drafts: "下書きがありません"
+        case .searchResults: "検索結果がありません"
+        case .notifications: "通知はありません"
+        case .followers: "まだフォロワーがいません"
+        case .following: "フォロー中のユーザーはいません"
+        case .userPosts: "まだ投稿がありません"
+        case let .custom(_, title, _, _): title
         }
     }
 
     var description: String {
         switch self {
-        case .posts: return "素敵な空の写真を投稿してみましょう"
-        case .drafts: return "編集中の投稿を下書きとして保存できます"
-        case .searchResults: return "検索条件を変更してみてください"
-        case .notifications: return "新しい通知があるとここに表示されます"
-        case .followers: return "投稿を続けると見つけてもらえます"
-        case .following: return "気になるユーザーをフォローしましょう"
-        case .userPosts: return "空の写真を投稿してみましょう"
-        case .custom(_, _, let description, _): return description
+        case .posts: "素敵な空の写真を投稿してみましょう"
+        case .drafts: "編集中の投稿を下書きとして保存できます"
+        case .searchResults: "検索条件を変更してみてください"
+        case .notifications: "新しい通知があるとここに表示されます"
+        case .followers: "投稿を続けると見つけてもらえます"
+        case .following: "気になるユーザーをフォローしましょう"
+        case .userPosts: "空の写真を投稿してみましょう"
+        case let .custom(_, _, description, _): description
         }
     }
 
     var actionTitle: String? {
         switch self {
-        case .posts: return "投稿する"
-        case .drafts: return nil
-        case .searchResults: return "条件をクリア"
-        case .notifications: return nil
-        case .followers: return nil
-        case .following: return "検索する"
-        case .userPosts: return "投稿する"
-        case .custom(_, _, _, let actionTitle): return actionTitle
+        case .posts: "投稿する"
+        case .drafts: nil
+        case .searchResults: "条件をクリア"
+        case .notifications: nil
+        case .followers: nil
+        case .following: "検索する"
+        case .userPosts: "投稿する"
+        case let .custom(_, _, _, actionTitle): actionTitle
         }
     }
 }
@@ -78,8 +78,10 @@ enum EmptyStateType {
 /// 統一されたデザインで空の状態を表示する
 struct EmptyStateView: View {
     let type: EmptyStateType
-    var action: (() -> Void)? = nil
+    var action: (() -> Void)?
     @State private var isAnimating = false
+    /// 端末の「視差効果を減らす」。ON のときはアイコンと光をふわふわさせない（始点で止めた絵にする）
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: DesignTokens.Spacing.lg) {
@@ -91,7 +93,7 @@ struct EmptyStateView: View {
                         RadialGradient(
                             colors: [
                                 DesignTokens.Colors.skyBlue.opacity(0.3),
-                                Color.clear
+                                Color.clear,
                             ],
                             center: .center,
                             startRadius: 20,
@@ -109,7 +111,7 @@ struct EmptyStateView: View {
                         LinearGradient(
                             colors: [
                                 DesignTokens.Colors.textSecondary,
-                                DesignTokens.Colors.textTertiary
+                                DesignTokens.Colors.textTertiary,
                             ],
                             startPoint: .top,
                             endPoint: .bottom
@@ -118,9 +120,16 @@ struct EmptyStateView: View {
                     .scaleEffect(isAnimating ? 1.05 : 1.0)
             }
             .animation(
-                Animation.easeInOut(duration: 2.0).repeatForever(autoreverses: true),
+                // 「視差効果を減らす」ON のときは nil（動きを付けない）。OFF のときは今までと同じ動き
+                Motion.animation(
+                    Animation.easeInOut(duration: 2.0).repeatForever(autoreverses: true),
+                    reduceMotion: reduceMotion
+                ),
                 value: isAnimating
             )
+            // 「視差効果を減らす」を途中で切り替えたらアイコンまわりを作り直し、走っている繰り返しの動きを確実に捨てる
+            // （SwiftUI は値を始点へ戻しただけでは repeatForever の動きを捨てないことがあるため）
+            .id(reduceMotion)
 
             // タイトル
             Text(type.title)
@@ -137,7 +146,7 @@ struct EmptyStateView: View {
                 .padding(.horizontal, DesignTokens.Spacing.xl)
 
             // アクションボタン
-            if let actionTitle = type.actionTitle, let action = action {
+            if let actionTitle = type.actionTitle, let action {
                 Button(action: {
                     let impact = UIImpactFeedbackGenerator(style: .medium)
                     impact.impactOccurred()
@@ -158,7 +167,7 @@ struct EmptyStateView: View {
                                 LinearGradient(
                                     colors: [
                                         DesignTokens.Colors.skyBlue,
-                                        DesignTokens.Colors.selectionAccent
+                                        DesignTokens.Colors.selectionAccent,
                                     ],
                                     startPoint: .leading,
                                     endPoint: .trailing
@@ -172,7 +181,16 @@ struct EmptyStateView: View {
         }
         .padding(DesignTokens.Spacing.xl)
         .onAppear {
-            isAnimating = true
+            // 「視差効果を減らす」ON のときは動かさない（isAnimating = false のまま＝始点で止めた絵。
+            // アイコンが本来の大きさで、画面に出た最初の絵と同じ）
+            if !reduceMotion {
+                isAnimating = true
+            }
+        }
+        .onChange(of: reduceMotion) { reduce in
+            // 画面を出している途中で設定が変わったとき: ON → 始点に戻して止める（上の animation が nil なので一瞬で戻る）
+            // ／OFF → 動かし始める
+            isAnimating = !reduce
         }
     }
 }

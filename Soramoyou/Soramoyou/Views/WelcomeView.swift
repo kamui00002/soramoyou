@@ -17,6 +17,8 @@ struct WelcomeView: View {
     @State private var titleOffset: CGFloat = 30
     @State private var buttonsOffset: CGFloat = 50
     @State private var buttonsOpacity: Double = 0
+    /// 端末の「視差効果を減らす」。ON のときは雲を流さない（ずっと動くものを止めた絵にする）
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -30,6 +32,9 @@ struct WelcomeView: View {
 
             // 装飾的な雲
             cloudsLayer
+                // 「視差効果を減らす」を途中で切り替えたら雲を作り直し、走っている繰り返しの動きを確実に捨てる
+                // （SwiftUI は値を始点へ戻しただけでは repeatForever の動きを捨てないことがあるため）
+                .id(reduceMotion)
 
             // 光の効果
             lightEffects
@@ -48,7 +53,7 @@ struct WelcomeView: View {
                                 RadialGradient(
                                     colors: [
                                         Color.white.opacity(0.5),
-                                        Color.white.opacity(0)
+                                        Color.white.opacity(0),
                                     ],
                                     center: .center,
                                     startRadius: 40,
@@ -155,7 +160,7 @@ struct WelcomeView: View {
                                             LinearGradient(
                                                 colors: [
                                                     DesignTokens.Colors.glassBorderAccentStart,
-                                                    DesignTokens.Colors.glassBorderAccentEnd
+                                                    DesignTokens.Colors.glassBorderAccentEnd,
                                                 ],
                                                 startPoint: .topLeading,
                                                 endPoint: .bottomTrailing
@@ -192,6 +197,15 @@ struct WelcomeView: View {
         .onAppear {
             startAnimations()
         }
+        .onChange(of: reduceMotion) { reduce in
+            // 画面を出している途中で設定が変わったとき: ON → 雲を初めの位置に戻して止める／OFF → 雲を流し始める
+            // （ロゴとボタンの登場の動きは 1 回きりなので、ここでは扱わない）
+            if reduce {
+                cloudOffset = 0
+            } else {
+                startCloudAnimation()
+            }
+        }
         .sheet(isPresented: $showLogin) {
             LoginView()
         }
@@ -210,7 +224,7 @@ struct WelcomeView: View {
                     RadialGradient(
                         colors: [
                             Color.white.opacity(0.2),
-                            Color.clear
+                            Color.clear,
                         ],
                         center: .center,
                         startRadius: 0,
@@ -263,12 +277,9 @@ struct WelcomeView: View {
     // MARK: - アニメーション ☀️
 
     private func startAnimations() {
-        // 雲のアニメーション
-        withAnimation(
-            Animation.easeInOut(duration: DesignTokens.Animation.cloudDuration)
-                .repeatForever(autoreverses: true)
-        ) {
-            cloudOffset = 35
+        // 雲のアニメーション（「視差効果を減らす」ON のときは流さない＝cloudOffset 0 の初めの位置で止めた絵）
+        if !reduceMotion {
+            startCloudAnimation()
         }
 
         // ロゴの登場アニメーション
@@ -282,6 +293,17 @@ struct WelcomeView: View {
         withAnimation(DesignTokens.Animation.smoothSpring.delay(0.5)) {
             buttonsOffset = 0
             buttonsOpacity = 1.0
+        }
+    }
+
+    /// 雲をゆっくり左右に流し続ける（ずっと動く）
+    /// 「視差効果を減らす」ON のときは呼ばない。止めた絵は cloudOffset = 0（画面に出た最初の位置）
+    private func startCloudAnimation() {
+        withAnimation(
+            Animation.easeInOut(duration: DesignTokens.Animation.cloudDuration)
+                .repeatForever(autoreverses: true)
+        ) {
+            cloudOffset = 35
         }
     }
 }

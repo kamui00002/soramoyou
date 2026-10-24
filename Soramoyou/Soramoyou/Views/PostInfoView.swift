@@ -190,14 +190,8 @@ struct PostInfoView: View {
                     Text(errorMessage)
                 }
             }
-            .alert(viewModel.editingPostId != nil ? "更新完了" : "投稿完了", isPresented: $viewModel.isPostSaved) {
-                Button("OK") {
-                    // 完了後、画面を閉じる
-                    dismiss()
-                }
-            } message: {
-                Text(viewModel.editingPostId != nil ? "投稿を更新しました" : "投稿が完了しました")
-            }
+            // 投稿完了は、以前ここにあった alert（OK で閉じる）をやめ、
+            // NavigationView の外側に重ねる PostCompletionOverlay に替えた（body の末尾）
             .onAppear {
                 // 編集済み画像がない場合（下書き経路など）は editSettings から再生成する。
                 // onAppear は複数回発火しうるため hasGeneratedFallback で一度だけに限定する
@@ -223,6 +217,20 @@ struct PostInfoView: View {
             }
         }
         .navigationViewStyle(.stack)
+        // 投稿完了の演出（チェックマークが描かれる重ね表示 → 約 1.2 秒で自動で閉じる）
+        // ⚠️ NavigationView の「外側」に重ねる。内側だとナビゲーションバーの「キャンセル」が幕の外に残り、表示中に押せてしまう
+        .overlay {
+            if viewModel.isPostSaved {
+                PostCompletionOverlay(
+                    // 文言は以前の alert の message と同じ（新規＝投稿が完了しました／再編集＝投稿を更新しました）
+                    message: viewModel.editingPostId != nil ? "投稿を更新しました" : "投稿が完了しました",
+                    onFinish: {
+                        // 完了後、画面を閉じる（以前の alert の OK と同じ）
+                        dismiss()
+                    }
+                )
+            }
+        }
     }
 
     // MARK: - Photo Preview Section
@@ -389,6 +397,9 @@ struct PostInfoView: View {
                             )
                     )
                 }
+                // 投稿中は押せない（投稿・下書き保存のボタンと同じ）。完了の重ね表示は約 1.2 秒で画面ごと閉じるので、
+                // 投稿中に開いた地図や位置情報のエラーの下に隠れたまま閉じるのを防ぐ
+                .disabled(viewModel.isUploading)
             }
 
             Button(action: {
@@ -411,6 +422,8 @@ struct PostInfoView: View {
                         )
                 )
             }
+            // 投稿中は押せない（上の「位置情報を追加」と同じ理由）
+            .disabled(viewModel.isUploading)
         }
     }
 
@@ -1109,8 +1122,8 @@ struct SkyTypeButton: View {
 
     var body: some View {
         Button(action: {
-            let impact = UIImpactFeedbackGenerator(style: .light)
-            impact.impactOccurred()
+            // 軽いタップの触覚（今までの直書きと同じ impact light）
+            Haptics.play(.tap)
             action()
         }) {
             VStack(spacing: 6) {
