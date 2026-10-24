@@ -72,6 +72,10 @@ protocol FirestoreServiceProtocol {
     /// 公開プロフィールの更新経路はこのメソッドに限定する。
     func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws
     func createPublicProfile(from user: User) async throws
+    /// プロフィールの見せる/見せない を、渡した欄だけ書く ⭐️
+    /// - `publicProfiles/{userId}` に「渡した欄の項目＋updatedAt」だけを updateData する（他の項目には触らない）
+    /// - 文書が無いときは `FirestoreServiceError.notFound`（`updatePublicProfileFields` と同じ判定のしかた）
+    func updateProfileSectionVisibility(userId: String, sections: [ProfileSection: Bool]) async throws
 
     // Recommended Skies（私のおすすめの空）⭐️
     /// おすすめの空に投稿を追加する（トランザクションで上限と重複を守る）
@@ -1339,6 +1343,44 @@ class FirestoreService: FirestoreServiceProtocol {
             }
             // 存在する場合、および存在確認そのものが失敗した場合（snapshot が nil）は
             // 「不在」と断定できないので、元のエラーを updateFailed として伝える。
+            throw FirestoreServiceError.updateFailed(error)
+        }
+    }
+
+    /// プロフィールの見せる/見せない を、渡した欄だけ書く ⭐️
+    ///
+    /// なぜ専用メソッドか（計画書「データ」）:
+    /// - `PublicProfile.toFirestoreData()`（丸ごと）に入れると、丸ごと上書きの道（`createPublicProfile` の setData）が
+    ///   手元の古い値で本人の選んだ値を巻き戻しうる。ここでは渡した欄の項目と updatedAt だけを updateData する
+    ///   （followersCount など他の項目には触らない＝`updatePublicProfileFields` と同じ理由・同じ形）。
+    /// - 渡す値は Bool だけ（ルール `isValidProfileVisibility` が「無い or bool」しか通さない）。
+    ///
+    /// - Parameters:
+    ///   - userId: 書く人（本人）の uid
+    ///   - sections: 書く欄と値（変わった欄だけを渡す。空なら何も書かない）
+    /// - Throws: 文書が無ければ `FirestoreServiceError.notFound`（呼び出し側が `createPublicProfileIfMissing` してから
+    ///   書き直せるように）、在るのに書けなければ `FirestoreServiceError.updateFailed`。
+    ///   判定は `updatePublicProfileFields` と同じく、updateData のエラーコードでなく get で文書の有無を確かめて決める
+    ///   （update のルールは `resource.data.id` を見るので、文書が無いと NOT_FOUND でなく PERMISSION_DENIED になりうる）。
+    func updateProfileSectionVisibility(userId: String, sections: [ProfileSection: Bool]) async throws {
+        // 変わった欄が無ければ書かない（updatedAt だけ進めて無駄な更新トリガーを起こさない）
+        guard !sections.isEmpty else { return }
+
+        var data: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+        for (section, isShown) in sections {
+            data[section.firestoreField] = isShown
+        }
+
+        do {
+            try await publicProfilesCollection.document(userId).updateData(data)
+        } catch {
+            // 失敗の種類は updatePublicProfileFields と同じく「文書が実在するか」を get で確かめてから決める
+            let snapshot = try? await publicProfilesCollection.document(userId).getDocument()
+            if let snapshot, !snapshot.exists {
+                // 公開プロフィール未作成（移行未実施の旧アカウント）→ 呼び出し側で作ってから書き直す
+                throw FirestoreServiceError.notFound
+            }
+            // 在る場合と、存在確認そのものが失敗した場合（snapshot が nil）は「不在」と断定できない
             throw FirestoreServiceError.updateFailed(error)
         }
     }

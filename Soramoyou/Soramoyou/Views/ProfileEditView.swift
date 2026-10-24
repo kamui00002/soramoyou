@@ -86,6 +86,19 @@ struct ProfileEditView: View {
                                         .fill(.white.opacity(0.9))
                                 )
                         }
+
+                        // プロフィールに表示するもの（見せる/見せない）⭐️
+                        // 保存は右上の「保存」でほかの項目と一緒に行う（変わった欄だけ書く・ProfileViewModel.updateProfile）
+                        ProfileSectionVisibilityEditor(
+                            visibility: $viewModel.editingSectionVisibility,
+                            isEditable: viewModel.canEditSectionVisibility,
+                            loadFailed: viewModel.sectionVisibilityLoadFailed
+                        )
+                        // 保存中はスイッチも押せなくする（右上の「保存」と同じ isLoading）⭐️ 1.18.0 PR-B
+                        // ⚠️ 保存で書く値は updateProfile の最後に取るので、書き込みを待つ間に戻した操作は
+                        //    保存されずに画面が閉じる（OFF に戻したつもりが ON のまま＝フォロワーに見える）。
+                        // ⚠️ Editor の isEditable に混ぜない。混ぜると保存中に「読み込んでいます」の文が出る。
+                        .disabled(viewModel.isLoading)
                     }
                     .padding()
                 }
@@ -138,6 +151,11 @@ struct ProfileEditView: View {
             }
             .onAppear {
                 // 編集用の値を初期化（既にProfileViewModelで設定済み）
+            }
+            .task {
+                // 見せる/見せない の今の値は、編集画面を開くたびに自分の publicProfiles から読む ⭐️
+                // （表示名などと違い ProfileViewModel.loadProfile では読んでいない。読めるまでスイッチは押せない）
+                await viewModel.loadSectionVisibilityForEdit()
             }
         }
         .navigationViewStyle(.stack)

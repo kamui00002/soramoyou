@@ -267,6 +267,7 @@
 
 - **`followersCount` / `followingCount` はクライアント書き込み対象外**。正典はCloud Functions（`onFollowCreated` / `onFollowDeleted`）が `follows` を `count()` した結果を代入する値。
 - クライアントからプロフィールを更新するときは `updatePublicProfileFields`（`displayName` / `photoURL` / `bio` のみを `updateData`）を使う。`PublicProfile` 全体を書くとクライアントが持つ古いカウンタでサーバーの真値を潰す。
+- プロフィールに見せる欄の 3 項目（`showsRecommendedSkies` / `showsSkyCalendar` / `showsFavorites`）は `updatePublicProfileFields` ではなく `updateProfileSectionVisibility` で書く（下の「publicProfiles の見せる/見せない」節）。
 - 更新失敗時は `publicProfiles/{userId}` の存在を `get` で確認して分岐する（不在＝新規作成、存在＝更新失敗）。`update` ルールが `resource.data.id` を参照するため、ドキュメント不在でも `NOT_FOUND` ではなく `PERMISSION_DENIED` が返りうるので、**エラーコードで不在判定してはいけない**。
 
 ### publicProfiles.recommendedPostIds（私のおすすめの空）⭐️（2026-09-24）
@@ -291,6 +292,28 @@
   公開（`public`）以外・削除済みは出さず、持ち主には「表示できない空が N 枚」と整理を促す。
 - アプリは公開投稿しか追加させないが、rules は配列の中身（postId が実在・公開か）までは検査できない。
   読む側（アプリの表示・Functions の通知）で必ず visibility を確認すること。
+
+### publicProfiles の見せる/見せない（プロフィールに表示するもの）⭐️（2026-10-25・1.18.0）
+
+```json
+{
+  "showsRecommendedSkies": true,   // おすすめの空を見せる（見せる相手＝プロフィールを開ける全員）
+  "showsSkyCalendar": false,       // 空カレンダーを見せる（見せる相手＝フォロワーだけ）
+  "showsFavorites": false          // お気に入りの空を見せる（見せる相手＝フォロワーだけ・公開の投稿だけ）
+}
+```
+
+- **項目が無いときの既定値**: おすすめ＝見せる・空カレンダー＝見せない・お気に入り＝見せない（今いる人の見え方を変えない）。
+  型違い（文字列の `"true"` など）も既定値として読む（iOS `PublicProfile.init(from documentData:)`・`ProfileSectionVisibility.default`）。
+- 書き込みは `updateProfileSectionVisibility` だけ（変わった欄の項目＋`updatedAt` を `updateData`）。
+  文書が無いときは `notFound` → `createPublicProfileIfMissing` の後にもう一度書く（`ProfileViewModel.saveSectionVisibilityIfChanged`）。
+- **`PublicProfile.toFirestoreData()` には入れない**。丸ごと上書きの道（`createPublicProfile`）で値が消えても、
+  既定値＝閉じる側に戻るだけにするため（入れると、手元の古い値でサーバーの最新値を巻き戻しうる）。
+- rules: 3 項目は「フィールド無し」または「bool」のみ許可。
+  `users/{uid}/favorites` の get は「持ち主」か「フォロワー かつ `showsFavorites == true`」、list は加えて `limit <= 30`
+  （⚠️ iOS `FavoritesViewModel` の `pageSize` 30 と一致させること）。
+- ⚠️ 空カレンダーの「フォロワーだけ」は**見せ方の制限で壁ではない**（公開投稿はもともと誰でも読める・rules は投稿の visibility だけを見る）。
+  アプリの文言でも「フォロワー以外には見えません」と約束しない。
 
 ## recommendationNotices コレクション（「おすすめの空に選ばれました」通知の既読マーカー）⭐️（2026-09-24）
 

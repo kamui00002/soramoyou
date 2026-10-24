@@ -146,6 +146,10 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.createPublicProfile は未実装です")
     }
 
+    func updateProfileSectionVisibility(userId _: String, sections _: [ProfileSection: Bool]) async throws {
+        fatalError("MockFirestoreService.updateProfileSectionVisibility は未実装です")
+    }
+
     // MARK: - Account
 
     func deleteUserData(userId _: String) async throws {

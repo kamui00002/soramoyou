@@ -35,6 +35,19 @@ class ProfileViewModel: ObservableObject {
     @Published var editingProfileImage: UIImage?
     @Published var shouldDeleteProfileImage: Bool = false // プロフィール画像を削除するかどうか
 
+    // プロフィールに表示するもの（見せる/見せない）⭐️
+    /// 編集画面のスイッチの値（「保存」を押すまでサーバーには書かない）
+    @Published var editingSectionVisibility: ProfileSectionVisibility = .default
+    /// 編集画面を開いたときに自分の `publicProfiles` から読んだ値の状態
+    ///
+    /// `.loaded(値)` の値が「保存のときに比べる元」（ここから変わった欄だけを書く）。
+    /// `.idle` / `.loading` / `.error` の間は比べる元が無い＝スイッチを押せなくし、保存しても書かない
+    /// （読めていない値で上書きしないため）。
+    @Published private(set) var sectionVisibilityLoadState: LoadableState<ProfileSectionVisibility> = .idle
+    /// 見せる/見せない の読み込みの世代。読み込みのたびに進め、await 中に世代が変わった古い結果は捨てる
+    /// （編集画面を閉じてすぐ開き直したとき、前の読み込みの結果で新しい状態を上書きしないため）
+    private var sectionVisibilityLoadGeneration = 0
+
     // 編集装備システムの管理（全27ツールの並び替え）
     @Published var availableTools: [EditTool] = EditTool.allCases
     @Published var selectedTools: [EditTool] = EditTool.allCases // 全ツールを常に選択状態
@@ -593,6 +606,18 @@ class ProfileViewModel: ObservableObject {
             // 編集用の値をリセット
             editingProfileImage = nil
             shouldDeleteProfileImage = false
+
+            // プロフィールに表示するもの（見せる/見せない）を、変わった欄だけ書く ⭐️
+            // ⚠️ この位置（いちばん最後）に置く理由:
+            //    1. 公開プロフィールの書き込み（上の updatePublicProfileFields と、その notFound のときの
+            //       createPublicProfile）より後にする。createPublicProfile は setData の丸ごと上書きで、
+            //       先に見せる/見せないを書くとここで消える。
+            //    2. `.profileUpdated` の通知より後にする。表示名とアイコンはもう保存できているので、
+            //       見せる/見せないの書き込みが失敗しても、そらともへの通知を止める理由が無い。
+            //    3. 画像の指定のリセットより後にする。ここで失敗すると errorMessage が出て編集画面は閉じない
+            //       （ProfileEditView.saveProfile）。もう一度「保存」を押したとき、画像を送り直さずに済む。
+            //    失敗は下の catch で既存の errorMessage に出る（比べる元は変えないので、もう一度押せば書き直す）。
+            try await saveSectionVisibilityIfChanged(savedUser: savedUser)
         } catch {
             // エラーをログに記録
             ErrorHandler.logError(error, context: "ProfileViewModel.updateProfile", userId: userId)
@@ -766,6 +791,110 @@ class ProfileViewModel: ObservableObject {
         editingBio = user?.bio ?? ""
         editingProfileImage = nil
         shouldDeleteProfileImage = false
+        // 見せる/見せない のスイッチも、読み込んだ値（保存できたらその値）に戻す ⭐️
+        // （読めていないときは比べる元が無いので触らない。次に開いたとき読み直す）
+        if let loaded = sectionVisibilityLoadState.data {
+            editingSectionVisibility = loaded
+        }
+    }
+
+    // MARK: - プロフィールに表示するもの（見せる/見せない）⭐️
+
+    /// スイッチを押せるか（自分の公開プロフィールから値を読めたとき＝文書が無くて既定値にしたときも含む）
+    var canEditSectionVisibility: Bool {
+        sectionVisibilityLoadState.isLoaded
+    }
+
+    /// 読み込みに失敗したか（編集画面の節を押せなくして「読み込めませんでした」を出す）
+    var sectionVisibilityLoadFailed: Bool {
+        sectionVisibilityLoadState.isError
+    }
+
+    /// 編集画面を開いたときに、今の見せる/見せない を自分の `publicProfiles` から読む ⭐️
+    ///
+    /// - 読めた → その値（項目が無い欄は既定値・`PublicProfile.init(from:)`）でスイッチを押せる状態にする
+    /// - `FirestoreServiceError.notFound`（公開プロフィールの文書がまだ無い旧アカウント）→ 既定値で押せる状態にする。
+    ///   ⚠️ ここを押せなくすると、その人は永久に ON にできない。保存のときに `updateProfile` の公開プロフィールの
+    ///   書き込み（無ければ作る）の後に書くので、文書はそこでできる。
+    /// - それ以外の失敗 → 押せない状態にする（読めていない値で上書きしないため）。
+    ///   `errorMessage` には入れない（入れると編集画面の alert が出る。節の中の「読み込めませんでした」で知らせる）。
+    ///   `isLoading` も立てない（立てると「保存」ボタンまで押せなくなる。表示名などの保存は妨げない）。
+    /// - 再試行（RetryableOperation）で包むのは loadProfile の公開プロフィールの読み込みと同じ。
+    ///   一時的な通信の失敗で節が押せないままになるのを減らすため（notFound は再試行しない分類なので 1 回で抜ける）。
+    func loadSectionVisibilityForEdit() async {
+        sectionVisibilityLoadGeneration += 1
+        let generation = sectionVisibilityLoadGeneration
+
+        guard let userId else {
+            // 未ログイン（Auth の復元前など）は読めない＝押せない状態にする
+            sectionVisibilityLoadState = .error(FirestoreServiceError.unauthorized)
+            return
+        }
+
+        sectionVisibilityLoadState = .loading
+
+        do {
+            let profile = try await RetryableOperation.executeIfRetryable { [self] in
+                try await firestoreService.fetchPublicProfile(userId: userId)
+            }
+            guard generation == sectionVisibilityLoadGeneration else { return }
+            editingSectionVisibility = profile.sectionVisibility
+            sectionVisibilityLoadState = .loaded(profile.sectionVisibility)
+        } catch FirestoreServiceError.notFound {
+            guard generation == sectionVisibilityLoadGeneration else { return }
+            // 文書がまだ無い人は、項目が無い人と同じ既定値（おすすめ＝見せる・カレンダーとお気に入り＝見せない）
+            editingSectionVisibility = .default
+            sectionVisibilityLoadState = .loaded(.default)
+        } catch {
+            guard generation == sectionVisibilityLoadGeneration else { return }
+            ErrorHandler.logError(error, context: "ProfileViewModel.loadSectionVisibilityForEdit", userId: userId)
+            sectionVisibilityLoadState = .error(error)
+        }
+    }
+
+    /// 見せる/見せない を、読み込んだ値から変わった欄だけ書く（`updateProfile` の最後から呼ぶ）⭐️
+    ///
+    /// - 読めていない（比べる元が無い）なら書かない＝読めていない値で上書きしない
+    /// - 変わった欄が無ければ呼ばない
+    /// - 公開プロフィールの文書が無い（notFound）なら、無いときだけ作って（`createPublicProfileIfMissing`）から書き直す。
+    ///   丸ごと上書きの `createPublicProfile` を使わないのは、別の端末が同時に作った値を消さないため
+    ///   （`RecommendationManager.addWithProfileFallback` と同じ形。ここは保存した `savedUser` が手元にあるので読み直さない）。
+    /// - 書けたら、比べる元を今の値にし、欄ごとに `profile_visibility_changed` を送る（UID は送らない）
+    /// - Throws: 書き込みの失敗（呼び出し側の `updateProfile` が errorMessage に出す）
+    private func saveSectionVisibilityIfChanged(savedUser: User) async throws {
+        guard let loaded = sectionVisibilityLoadState.data else { return }
+
+        let edited = editingSectionVisibility
+        let changedSections = edited.changedSections(from: loaded)
+        guard !changedSections.isEmpty else { return }
+
+        // 再試行の閉包に渡すので let で作る（可変の値を閉包に捕まえさせない）
+        let sections = Dictionary(uniqueKeysWithValues: changedSections.map { section in
+            (section, edited.isShown(section))
+        })
+
+        do {
+            try await RetryableOperation.executeIfRetryable { [self] in
+                try await firestoreService.updateProfileSectionVisibility(userId: savedUser.id, sections: sections)
+            }
+        } catch FirestoreServiceError.notFound {
+            try await RetryableOperation.executeIfRetryable { [self] in
+                try await firestoreService.createPublicProfileIfMissing(from: savedUser)
+            }
+            try await RetryableOperation.executeIfRetryable { [self] in
+                try await firestoreService.updateProfileSectionVisibility(userId: savedUser.id, sections: sections)
+            }
+        }
+
+        // 書けた値を、次に比べる元にする（同じ画面でもう一度「保存」しても同じ欄を書き直さない）
+        sectionVisibilityLoadState = .loaded(edited)
+
+        for section in changedSections {
+            LoggingService.shared.logEvent("profile_visibility_changed", parameters: [
+                "section": section.rawValue,
+                "enabled": edited.isShown(section),
+            ])
+        }
     }
 
     // MARK: - Validation
