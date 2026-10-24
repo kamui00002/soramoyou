@@ -316,6 +316,94 @@
   `gcloud firestore fields ttls update expireAt --collection-group=recommendationNotices --enable-ttl --project=soramoyou-ios`
   期限後は同じ組でも再び通知されうる（1 年に 1 回までなら連打にはならない）。
 
+## dailyPicks / dailyPickLog / dailyPickConfig コレクション（今日のおすすめのそらもよう）⭐️（2026-10-24）
+
+毎朝 7:00（日本時間）に Cloud Functions の `publishDailyPick`（`functions/dailyPick.js`・純関数と定数は `functions/dailyPickCore.js`）が、
+公開投稿から「今日の候補」を最大 5 件選んで書く。全員に同じ 1 日分が出る（1 件目が主役）。
+
+> ⚠️ **「私のおすすめの空」（`publicProfiles.recommendedPostIds`・`recommendationNotices`・`onPublicProfileUpdated`）とは別物。**
+> あちらは利用者が自分のプロフィールに飾る最大 3 件。こちらはサーバーが毎朝ランダムに選ぶ「今日の 1 枚」。名前は `dailyPick` 系で分けている。
+
+### 日付の鍵（dateKey）と時刻
+
+- 鍵は `yyyy-MM-dd`。**日本時間で「今 − 7 時間」の日付**（6:59:59 までは前日の鍵、7:00 から当日の鍵）。
+- 定期実行は毎朝 7:00 JST（`0 7 * * *`・`Asia/Tokyo`・`maxInstances: 1`・`retryCount: 2`）。
+- 通知を送ってよいのは **07:00 以上 21:00 未満（JST）** の間だけ。選び終えた時刻でなく、通知の直前に時刻を取り直して判定する。
+- 通知の配信プレフは いいね・コメント と同じ `notifyReactions` に相乗り（新しい設定項目は無い）。
+
+### dailyPicks/{dateKey}（アプリが読む「今日の候補」）
+
+```json
+{
+  "dateKey": "string (ドキュメントID と同じ・yyyy-MM-dd)",
+  "postIds": ["string"],      // 候補の投稿 ID（最大 5 件・先頭が主役）。投稿者の uid・名前は入れない
+  "createdAt": "timestamp"    // 選んだ時刻
+}
+```
+
+- **`publishDailyPick`（Admin SDK）だけが書く**。`dailyPickLog` と同じ batch の `create` で書くので、両方が一緒に現れる（片方だけ見えることが無い）。
+- ルール: **未ログイン（ゲスト）も含め、鍵を指定した `get` だけ許可**。`list` と書き込みはすべて拒否。
+
+### dailyPickLog/{dateKey}（選んだ記録・誰も読めない）
+
+```json
+{
+  "dateKey": "string",
+  "candidates": [{ "postId": "string", "userId": "string" }],  // 候補と投稿者。先頭が主役（通知の宛先）
+  "relaxedCount": "number",     // 「最近主役になった投稿者を避ける」を緩めて足した件数
+  "scanned": "number",          // 走査した公開投稿の件数
+  "total": "number",            // 公開投稿の総数（count クエリ）
+  "truncated": "boolean",       // 走査が上限（50000 件）に届いたか
+  "reportedCount": "number",    // 通報された投稿の数（postId の重複を除く）
+  "createdAt": "timestamp",
+  "expireAt": "timestamp",      // TTL ポリシー用の期限（作成から 90 日）
+  "notifyClaimedAt": "timestamp", // 通知を送る権利の印。通知の段で、送る前に書く（選んだ時点では無い）
+  "notifyResult": "string"        // 通知の結果。通知の段で、送った後に書く（下記）
+}
+```
+
+- **`publishDailyPick`（Admin SDK）だけが読み書きする**。ルールは読み書きとも拒否。
+- `notifyClaimedAt` はトランザクションで先に書く＝何回起き直しても・同時に 2 本走っても、通知は多くて 1 回。
+- `notifyResult` が取りうる値（`functions/index.js` の `notifyDailyPickOwner` の戻り値と、`dailyPick.js` が通知関数の例外時に書く値）:
+  - `attempted`: 送信を**試みた**（届いたかは分からない。送信関数が失敗を握りつぶすため "sent" とは書かない）
+  - `no_user`: 宛先の `users` 文書が無い
+  - `no_token`: FCM トークンが無い
+  - `pref_off`: 宛先の `notifyReactions` がオフ
+  - `error`: 通知関数が例外を投げた
+  - 通知をオフ・時間帯外で送らなかった回、権利を取れなかった回は `notifyResult` を書かない（関数の戻り値には `skipped_disabled` / `skipped_window` / `already_claimed` などが出るがログ文書には残らない）。
+- 過去 30 日分の `candidates[0].userId` を読んで「最近主役になった投稿者」を避ける（足りなければ主役になった日が古い順に緩める）。
+- TTL: `expireAt` に **TTL ポリシー**を設定して自動削除する（未設定だと消えない。**本番ではまだ有効化していない**）:
+  `gcloud firestore fields ttls update expireAt --collection-group=dailyPickLog --enable-ttl --project=soramoyou-ios`
+  ⚠️ 有効化するまでは、90 日を過ぎた記録も消えない。選び方には影響しない（「過去 30 日」は日付の鍵で 30 件を直接引くため、古い記録は読まれない）が、候補の投稿者 uid を持つ記録が溜まり続ける。
+
+### dailyPickConfig/settings（設定・誰も読めない）
+
+```json
+{
+  "excludedUserIds": ["string"],  // 運営・テスト用アカウントの UID。リポジトリには書かない
+  "notifyEnabled": "boolean"      // 通知のオン/オフ。1.17.0 の公開日までは false
+}
+```
+
+- 文書 ID は `settings` 固定。**手で作る**（コンソール）。`publishDailyPick` は読むだけ。ルールは読み書きとも拒否。
+- **文書が無い・`excludedUserIds` が文字列の配列でない（空文字が混じる場合も含む）ときは、何も選ばない**（安全側）。空配列はOK（除外なし）。
+- `notifyEnabled` は `true` のときだけ通知する（それ以外・欠けは通知なし）。
+
+### インデックス
+
+- 公開投稿の読み出しは `posts` の `visibility == public` の等式だけ（`orderBy` なし）なので、**複合インデックスは要らない**。
+  ⚠️ `orderBy` を足すと複合インデックスが要るようになる。
+
+### いざというとき: ふさわしくない投稿が選ばれたら
+
+Firebase コンソールで `dailyPicks/{その日の鍵}` の `postIds` から、その postId を消す。コードの事実として:
+
+- **その日のうちに関数が選び直すことは無い**（`dailyPickLog/{その日の鍵}` があれば選ぶのを飛ばす）。
+- **すでに送った通知は取り消せない**。
+- 将来の日に再び選ばれないのは、`reports` に postId がある投稿と、`visibility` が `public` でない投稿と、`excludedUserIds` の人の投稿（その人の投稿がすべて外れる）だけ。
+  `postIds` から消しただけでは、将来また選ばれうる（外したい投稿は通報の記録を作るか、非公開にする必要がある）。
+- アプリ側の動き（前日の候補へのフォールバック・次の候補へ進む）は**まだ実装されていない**（PR-2 で予定）。
+
 ## そらとも（友達グループで空を共有）のコレクション ⭐️（2026-10-04・spec: `.kiro/specs/soratomo/`）
 
 公開前ゲート（2026-10-08・spec: `.kiro/specs/soratomo-release-gate/`）で、投稿の書き手・利用者の記録の項目・通報の記録・語のリストを足した。
