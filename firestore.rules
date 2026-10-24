@@ -179,11 +179,25 @@ service cloud.firestore {
 
       // ============================================
       // favorites サブコレクション（私のお気に入りの空）⭐️
-      // ドキュメントID: {postId}。所有者だけが読める＝「自分だけのお気に入り」を構造で保証。
+      // ドキュメントID: {postId}。既定は持ち主だけが読む。
+      // 持ち主が publicProfiles.showsFavorites を true にしたときだけ、フォロワーも読める（1.18.0〜）。
+      // ⚠️ 文書 ID は投稿 ID なので、ON にした人のフォロワーには、フォロワー限定・非公開の投稿の ID と、
+      //    お気に入りにした日時も読める（投稿の中身は posts のルールで守られる）。
       // 一覧は order(by: createdAt) 1本なので複合インデックス不要。
+      // テスト: functions/profileVisibilityRules.emulator.test.js
       // ============================================
       match /favorites/{postId} {
-        allow read: if isOwner(userId);
+        // お気に入りを見せてよい相手か（閲覧者がフォロワーで、持ち主が ON にしている）
+        // - フォローの確認を先に置く（フォロワーでない要求では publicProfiles を読まない）
+        // - publicProfiles が無い人は get() が失敗して拒否される（閉じる側に倒れる）
+        // - ブロックされた人は、onUserBlockListChanged が follows を消した後に読めなくなる（非同期・失敗しても再試行しない）。作り直しは isNotBlockedByFollowee が止める。取りこぼしは scripts/follows-cleanup.js で後から数える（2026-10-24 時点で消せるのは deploy 前からの組だけ）
+        function canReadFavoritesOf(userId) {
+          return isFollowing(userId)
+                 && get(/databases/$(database)/documents/publicProfiles/$(userId)).data.get('showsFavorites', false) == true;
+        }
+        allow get: if isOwner(userId) || canReadFavoritesOf(userId);
+        // ⚠️ 上限は FavoritesViewModel の pageSize（30）と一致させる。変えるなら両方同時に（pageSize だけ上げるとフォロワーの一覧だけが拒否される。持ち主は上限を通らないので気づけない）
+        allow list: if isOwner(userId) || (request.query.limit <= 30 && canReadFavoritesOf(userId));
         // create/update とも許可: クライアントは set(冪等) で書くため、
         // ローカル状態が古く「既にある文書に set」しても update として通す必要がある
         allow create, update: if isOwner(userId)
@@ -211,6 +225,16 @@ service cloud.firestore {
                || (data.recommendedPostIds is list && data.recommendedPostIds.size() <= 3);
       }
 
+      // プロフィールに表示するもの ⭐️（showsRecommendedSkies・showsSkyCalendar・showsFavorites。3 つとも Bool）
+      // ⚠️ フィールド無し（旧データ・まだ選んでいない）は許可する。無いときはアプリが既定値で読む
+      //    （おすすめの空＝表示・空カレンダー＝非表示・お気に入り＝非表示）。
+      //    showsFavorites は users/{userId}/favorites の読み取り（canReadFavoritesOf）の判定に使うので、型違いを書かせない。
+      function isValidProfileVisibility(data) {
+        return (!('showsRecommendedSkies' in data) || data.showsRecommendedSkies is bool)
+               && (!('showsSkyCalendar' in data) || data.showsSkyCalendar is bool)
+               && (!('showsFavorites' in data) || data.showsFavorites is bool);
+      }
+
       // 所有者のみ作成・更新・削除可能
       // ⭐️ 中の id はドキュメント ID（＝持ち主の uid）と一致させる（issue #133）。
       //    アプリは取得した profile.id をキーに投稿者名を引くので、他人の uid を書けると
@@ -219,11 +243,13 @@ service cloud.firestore {
       allow create: if isOwner(userId)
                     && request.resource.data.keys().hasAll(['id', 'createdAt'])
                     && request.resource.data.id == userId
-                    && isValidRecommendedPostIds(request.resource.data);
+                    && isValidRecommendedPostIds(request.resource.data)
+                    && isValidProfileVisibility(request.resource.data);
 
       allow update: if isOwner(userId)
                     && request.resource.data.id == resource.data.id
-                    && isValidRecommendedPostIds(request.resource.data);
+                    && isValidRecommendedPostIds(request.resource.data)
+                    && isValidProfileVisibility(request.resource.data);
 
       allow delete: if isOwner(userId);
     }
