@@ -16,12 +16,15 @@
 //     （＝選んだ直後に落ちて、通知の段に届かなかった回の再試行と同じ状態から 1 回だけ送る）
 //   - 時間帯の外（22:00・翌朝 06:59）: 印を取らず、知らせない
 //   - notifyOwner が投げる: runDailyPick は投げず、印は残り、もう一度呼んでも知らせない
+//   - 送る権利のトランザクションが落ちる（権利を取る前）: runDailyPick は投げ（＝再試行に任せる）、印も結果も残さず、
+//     次の回で 1 回だけ知らせ、その次の回は知らせない
 //   - 除外: 30 日以内に主役になった投稿者（足りなければ古い順に緩める）・通報された投稿・運営の投稿者
 //   - 走査の上限（truncated）
 //
 // ■ 書き方の約束（followBlock.emulator.test.js と同じ型）
 //   - Functions のエミュレーターは使わない。runDailyPick を本物の Firestore（エミュレーター）で直接呼ぶ
 //     （定期実行が本当に 7 時に起きること・retryCount で起き直すことは、このテストでは見えない。見たと書かない）
+//     送る権利の失敗のテストだけ、db をくるんで runTransaction を偽物にする（collection・batch・getAll は本物）
 //   - 依存は偽物: notifyOwner は呼ばれた引数を積んで "attempted" を返す・logger は水準と msg を積む・
 //     now は固定の瞬間（2026-10-25T07:00:05+09:00 → 鍵 2026-10-25）・rng は常に 0
 //   - 期待値は postId・件数・回数を直に書く（何もしない実装で「空と空が一致」して緑にならないように）
@@ -33,15 +36,21 @@
 //   ⚠️ 本番の競合挙動は確かめていない。エミュレーターは、競合したトランザクションを ABORTED（SDK が再試行する）でなく
 //   INVALID_ARGUMENT（code 3）「Transaction is invalid or closed」で返すことがあり、SDK は再試行しない
 //   （2026-10-08 soratomoDeletion.test.js の要確認3で実測）。そのため送る権利の取り合いで負けた側は、
-//   "already_claimed"（勝った側の印を読んだ）か "error"（code 3 か 10 の競合で落ちた）のどちらでもよいとする。
+//   "already_claimed" を返す（勝った側の印を読んだ）か、code 3 か 10 の競合でトランザクションが落ちて
+//   runDailyPick が投げる（本番では定期実行の再試行に任せる道）かのどちらでもよいとする。
+//   投げてよいのは負けた側だけ（2 本とも投げたら赤）。投げた側は戻り値を見られないので、status と notify は
+//   投げなかった側だけで確かめる（2 本とも返せば picked と already_picked が 1 本ずつ、1 本ならその status は
+//   picked か already_picked で notify は attempted）。
 //   1 本目の deps.now()（runDailyPick の最初）を合図に、2 本目を回ごとに 0〜15ms ずらして発火し、6 回並べる。
-//   選ぶ段の衝突（ALREADY_EXISTS）が何回起きたかと notify の内訳は t.diagnostic に出す（片寄りを見る）
+//   選ぶ段の衝突（ALREADY_EXISTS）が何回起きたかと、負けた側の内訳（already_claimed の回数・投げた回数）は
+//   t.diagnostic に出す（片寄りを見る）
 //
 // ⚠️ 本番へ書く事故の柵: 宛先がエミュレーター（127.0.0.1・localhost・[::1]）でない、またはプロジェクト ID が
 //    demo- で始まらないときは、firebase-admin を読む前に終了コード 1 で止める。skip にはしない
 //    （skip は「何も確かめていない緑」に化けるため）。followBlock.emulator.test.js の柵と同じ型。
 //
-// ⚠️ 陽性対照（実施日を書く）: 先に dailyPick.js をわざと壊して赤になるのを確かめてから通す。壊し方は 3 つ:
+// ⚠️ 陽性対照（実施日を書く）: 先に dailyPick.js をわざと壊して赤になるのを確かめてから通す。壊し方は 4 つ
+//    （④ は 2026-10-24 に送る権利のトランザクションの失敗を投げるように直したときに足した）:
 //    ① 送る権利のトランザクションを外す（印を見ずに毎回 notifyOwner を呼ぶ）
 //       （赤になるはず:「二重実行: notifyOwner は 2 回の合計で 1 回」「二重実行: 2 回目の戻り値は …」
 //        「同時実行: …」「通知オフ→オン: 3 回目は送らない …」「notifyOwner が投げる: もう一度呼んでも …」）→ 結果を書く
@@ -57,12 +66,26 @@
 //        「30 日除外: 候補はちょうど Z・A・B・C・D の 5 人」「30 日除外: 10 日前に主役だった X は候補に入らない」
 //        「30 日除外: 過去のログで candidates[1] だっただけの A は除外されない」も赤になるはず。ただしこの 3 件は、
 //        クエリが文書 ID 順に返し（post-a1 が先頭）、rng 0 の混ぜ方で先頭の 1 件が落ちる前提に依る）→ 結果を書く
-//    【結果 2026-10-24】リポジトリの本体は触らず、一時フォルダの写しを壊してエミュレーターで流した（番号は node --test の番号）
+//    ④ claimAndNotify の送る権利のトランザクションの catch を `return "error"` に戻す（投げ直さない＝修正前の形）
+//       （必ず赤になるはず:「送る権利のトランザクションが落ちる（権利を取る前）: …」の 1 件（末尾に置いたので番号 54）。
+//        「同時実行: …」は、負けた側が競合（code 3 か 10）で落ちる回が出たときだけ赤になる（修正前の実測では 6 回中 0 回
+//        だったので、緑のままのことがある）＝赤は 1〜2 件）→ 結果を書く
+//    【結果 2026-10-24・修正前】送る権利の失敗を "error" で返していた本体・テスト 53 件の時点（④ とテスト 54 はまだ無い）。
+//      リポジトリの本体は触らず、一時フォルダの写しを壊してエミュレーターで流した（番号は node --test の番号）
 //      ① 赤 5 件（9・11・12・27・37）＝予言の 5 件どおり
 //      ② 赤 6 件（9・12・24・26・27・37）＝必ず赤の 3 件・前提つきの 2 件に加え、同時実行も赤
 //      ③ 赤 6 件（38・39・40・42・43・44）＝予言の 5 件に加え「30 日除外を緩める: 1〜3 番目は A・B・C」も赤
 //      壊さない本体では 53/53 緑。同時実行の分布は selectCollided 5・loserAlreadyClaimed 6・loserError 0
-//      （衝突の道を実際に通った。ただしエミュレーターでの話で、本番の競合挙動は確かめていない）
+//      （この数値は修正前の実測。loserError は当時「負けた側が error を返した回数」。衝突の道を実際に通った。
+//       ただしエミュレーターでの話で、本番の競合挙動は確かめていない）
+//    【結果 2026-10-24・修正後】送る権利の失敗を投げ直す本体・テスト 54 件の時点。写しを壊して流したのは ④ だけ
+//      ④ 赤 1 件（54）＝必ず赤の 1 件どおり。食い違いは 1 回目の threwThatError だけ（false＝投げずに "error" を返した）。
+//         同時実行は緑のまま（その回の分布 selectCollided 6・loserAlreadyClaimed 6・loserError 0）
+//      壊さない本体では 54/54 緑（ルールのテスト 28 件と合わせて 82/82）。同時実行の分布は selectCollided 4・
+//      loserAlreadyClaimed 6・loserError 0（loserError は投げた回数）。全エミュレーターテストも 442/442 緑（既存込み）
+//      ⚠️ 投げる道（負けた側が code 3 か 10 で投げる）は、ここまでの 3 回の実行で 1 度も通っていない（loserError 0）。
+//         同時実行テストの「投げた側」の確かめは書いてあるが、エミュレーターでは確かめられていない
+//      テスト 54 は ①・② でも赤になるはず（① は 1 回目が投げずに送る・② は 2 回目が送らずに返る）。未実測
 //
 
 "use strict";
@@ -364,6 +387,7 @@ test("二重実行: notifyOwner は 2 回の合計で 1 回", async () => {
 // MARK: - 3. 同時実行
 
 test("同時実行: 2 本を並べても dailyPicks は 1 件・notifyOwner は合計 1 回（6 回並べる・本番の競合挙動は確かめていない）", async (t) => {
+  // loserError は「負けた側が投げた回数」（送る権利のトランザクションが競合で落ちた回）
   const tally = { selectCollided: 0, loserAlreadyClaimed: 0, loserError: 0 };
   const settle = (p) => p.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }));
   const later = (ms, fn) => new Promise((resolve) => setTimeout(resolve, ms)).then(fn);
@@ -390,27 +414,45 @@ test("同時実行: 2 本を並べても dailyPicks は 1 件・notifyOwner は�
     assert.ok(racerB, `回 ${i}: 1 本目の最初で 2 本目を発火できた`);
     const b = await racerB;
 
-    for (const [name, r] of [["A", a], ["B", b]]) {
-      assert.ok(r.ok, `回 ${i} ${name}: runDailyPick が投げた code=${r.ok ? "" : r.error.code} ${r.ok ? "" : r.error.message}`);
+    // 投げてよいのは負けた側だけ＝多くて 1 本。理由は送る権利のトランザクションの競合（code 3 か 10）だけを認める
+    // （その catch は投げる前に同じ code の warn を出すので、warn にも同じ code があることを見る）
+    const runs = [["A", a, logA], ["B", b, logB]];
+    const okRuns = runs.filter(([, r]) => r.ok);
+    const thrownRuns = runs.filter(([, r]) => !r.ok);
+    assert.ok(
+      thrownRuns.length <= 1,
+      `回 ${i}: 投げたのは多くて 1 本: ${JSON.stringify(thrownRuns.map(([name, r]) => [name, r.error.code, r.error.message]))}`
+    );
+    for (const [name, r, log] of thrownRuns) {
+      const warnCodes = log.entries.filter((e) => e.level === "warn").map((e) => e.obj && e.obj.code);
+      assert.ok(
+        (r.error.code === 3 || r.error.code === 10) && warnCodes.includes(r.error.code),
+        `回 ${i} ${name}: 投げてよいのは送る権利の取り合いの競合（code 3 か 10）だけ: ` +
+          `code=${r.error.code} ${r.error.message} warn=${JSON.stringify(warnCodes)}`
+      );
+      tally.loserError += 1;
     }
-    assert.deepEqual(sorted([a.value.status, b.value.status]), ["already_picked", "picked"], `回 ${i}: picked はちょうど 1 本`);
+
+    // status と notify は投げなかった側だけで見る（投げた側は戻り値を見られない）
+    const statuses = sorted(okRuns.map(([, r]) => r.value.status));
+    if (okRuns.length === 2) {
+      assert.deepEqual(statuses, ["already_picked", "picked"], `回 ${i}: picked はちょうど 1 本`);
+    } else {
+      assert.ok(
+        statuses[0] === "picked" || statuses[0] === "already_picked",
+        `回 ${i}: 投げなかった 1 本の status は picked か already_picked: ${statuses[0]}`
+      );
+    }
     assert.equal(await countDocs("dailyPicks"), 1, `回 ${i}: dailyPicks は 1 件`);
     assert.equal(notifier.calls.length, 1, `回 ${i}: notifyOwner は合計 1 回`);
 
-    // 送る権利: 勝った側は attempted。負けた側は already_claimed か、競合（code 3 か 10）で落ちた error だけを認める
-    const outcomes = [[a.value.notify, logA], [b.value.notify, logB]];
-    assert.equal(outcomes.filter(([n]) => n === "attempted").length, 1, `回 ${i}: attempted はちょうど 1 本`);
-    const [loserNotify, loserLog] = outcomes.find(([n]) => n !== "attempted");
-    if (loserNotify === "already_claimed") {
+    // 送る権利: 勝った側は attempted（投げた側は負けた側なので、勝った側は必ず投げなかった側にいる）。
+    // 2 本とも返したときの負けた側は already_claimed だけ（"error" は notifyOwner が投げたときにしか出ず、偽物は投げない）
+    const notifies = okRuns.map(([, r]) => r.value.notify);
+    assert.equal(notifies.filter((n) => n === "attempted").length, 1, `回 ${i}: attempted はちょうど 1 本`);
+    if (okRuns.length === 2) {
+      assert.equal(notifies.find((n) => n !== "attempted"), "already_claimed", `回 ${i}: 負けた側の notify は already_claimed`);
       tally.loserAlreadyClaimed += 1;
-    } else {
-      assert.equal(loserNotify, "error", `回 ${i}: 負けた側の notify は already_claimed か error`);
-      const codes = loserLog.entries.filter((e) => e.level === "warn").map((e) => e.obj && e.obj.code);
-      assert.ok(
-        codes.some((c) => c === 3 || c === 10),
-        `回 ${i}: error は送る権利の取り合いの競合（code 3 か 10）だけ: ${JSON.stringify(codes)}`
-      );
-      tally.loserError += 1;
     }
     // 選ぶ段で衝突した（2 本とも「ログが無い」を見て書きに行き、片方が ALREADY_EXISTS になった）回数
     tally.selectCollided += [...logA.entries, ...logB.entries].filter(
@@ -844,4 +886,68 @@ test("logger に uid・postId を出さない（truncated の warn と notifyOwn
   const text = JSON.stringify(log.entries);
   const ids = ["user-a", "user-b", "user-c", "user-d", "user-e", "user-staff", "post-a", "post-b", "post-c"];
   assert.deepEqual(ids.filter((id) => text.includes(id)), []);
+});
+
+// MARK: - 13. 送る権利のトランザクションが落ちる（権利を取る前）
+// ⚠️ 既存のテストの node --test の番号（陽性対照の記録）を変えないよう、末尾に置く
+
+/**
+ * 本物の db をくるみ、runTransaction だけ error で落ちる偽物（1 回目の runDailyPick にだけ渡す）。
+ * dailyPick.js が使うほかのもの（collection・batch・getAll）は本物に bind して渡す
+ */
+function dbWithFailingTransaction(error) {
+  return {
+    collection: db.collection.bind(db),
+    batch: db.batch.bind(db),
+    getAll: db.getAll.bind(db),
+    runTransaction: async () => {
+      throw error;
+    },
+  };
+}
+
+test("送る権利のトランザクションが落ちる（権利を取る前）: 投げる→印も結果も無い→次の回で 1 回だけ送る→その次の回は送らない", async () => {
+  await seedThreePublicPosts();
+  await putConfig(CONFIG_ON);
+  const notifier = fakeNotifier();
+  const log = fakeLogger();
+  const unavailable = Object.assign(new Error("わざと失敗（UNAVAILABLE 相当）"), { code: 14 });
+
+  // 1 回目: トランザクションだけ落ちる db で流す（選ぶ段は本物で書く）
+  let thrown = null;
+  try {
+    await dailyPick.runDailyPick(dbWithFailingTransaction(unavailable), makeDeps({ notifier, log }));
+  } catch (err) {
+    thrown = err;
+  }
+  const logAfterFirst = await logDoc();
+  const first = {
+    threwThatError: thrown === unavailable,
+    logExists: logAfterFirst !== null,
+    claimedAt: logAfterFirst ? logAfterFirst.notifyClaimedAt : null,
+    notifyResult: logAfterFirst ? logAfterFirst.notifyResult : null,
+    calls: notifier.calls.length,
+    warnCodes: log.entries.filter((e) => e.level === "warn").map((e) => e.obj && e.obj.code),
+  };
+
+  // 2 回目（定期実行の再試行に当たる回）: 本物の db。ログがあるので「選ぶ」を飛ばし、印が無いので取って送る
+  const second = await dailyPick.runDailyPick(db, makeDeps({ notifier }));
+  const callsAfterSecond = notifier.calls.length;
+
+  // 3 回目: 印があるので送らない
+  const third = await dailyPick.runDailyPick(db, makeDeps({ notifier }));
+
+  // 3 回分を集めてから 1 回で比べる（途中の回で止まって、後ろの回が見えなくならないように）
+  assert.deepEqual(
+    {
+      first,
+      second: { status: second.status, notify: second.notify, calls: callsAfterSecond },
+      third: { status: third.status, notify: third.notify, calls: notifier.calls.length },
+    },
+    {
+      first: { threwThatError: true, logExists: true, claimedAt: undefined, notifyResult: undefined, calls: 0, warnCodes: [14] },
+      second: { status: "already_picked", notify: "attempted", calls: 1 },
+      third: { status: "already_picked", notify: "already_claimed", calls: 1 },
+    }
+  );
 });

@@ -11,6 +11,7 @@
 //   4. 通知: notifyEnabled がオフ・時間帯の外なら送らない。dailyPickLog をトランザクションで読み、
 //      notifyClaimedAt（送る権利の印）を先に書いてから送る（index.js の recommendationNotices と同じ「印を先に作る型」）
 //      ＝何回起き直しても、同時に 2 本走っても、送るのは多くて 1 回
+//      印を取る前（トランザクション）に落ちたら投げる＝再試行に任せる。印を取った後の失敗は投げない
 // ここには firebase-admin / firebase-functions を require しない（db と依存は呼び出し側から渡す。followBlock.js と同じ型）。
 // ⚠️ 「私のおすすめの空」（recommendationCore.js の通知）とは別物。名前は必ず dailyPick 系にする。
 // ⚠️ logger には uid・postId・名前を出さない（件数・dateKey・status だけ）。
@@ -189,8 +190,10 @@ async function pickAndWrite(db, { now, dateKey, config, logRef, rng, maxScan, lo
 /**
  * 送る権利（notifyClaimedAt）をトランザクションで取ってから、主役（candidates[0]）の投稿者へ 1 回知らせる。
  * 主役は「トランザクションで読んだログ」から取る（already_picked の回は手元に候補が無いため）。
- * どこで失敗しても投げない（権利を先に取っているので、再試行しても送らないため）。
- * @returns {Promise<string>} notify の値
+ * 権利を取る前（トランザクション）の失敗は投げる＝定期実行の再試行に任せる
+ * （再試行の回もトランザクションで印を見るので、送るのは多くて 1 回）。
+ * 権利を取った後（notifyOwner・notifyResult の書き込み）の失敗は投げない（再試行しても送らないため）。
+ * @returns {Promise<string>} notify の値。権利を取る前（トランザクション）に失敗したら投げる
  */
 async function claimAndNotify(db, logRef, dateKey, deps) {
   const { logger } = deps;
@@ -210,12 +213,14 @@ async function claimAndNotify(db, logRef, dateKey, deps) {
     });
   } catch (err) {
     // 読んで書く文書は dailyPickLog/{dateKey} だけなので、メッセージに uid は入らない
-    logger.warn("dailyPick: 送る権利のトランザクションが失敗した（送らない）", {
+    logger.warn("dailyPick: 送る権利のトランザクションが失敗した（投げ直す＝再試行に任せる）", {
       dateKey,
       code: err && err.code,
       error: String(err && err.message),
     });
-    return "error";
+    // ⚠️ "error" を返さない。返すと定期実行が成功扱いになって再試行されず、権利を取れないままその日の通知が消える。
+    //    再試行の回もトランザクションで印を見る（取れていれば already_claimed）ので、送るのは多くて 1 回のまま
+    throw err;
   }
   if (claim.outcome !== "claimed") return claim.outcome;
 
@@ -249,6 +254,8 @@ async function claimAndNotify(db, logRef, dateKey, deps) {
  * @returns {Promise<{dateKey: string, status: string, candidatesCount: number, relaxedCount: number,
  *   scanned: number, total: number, truncated: boolean, reportedCount: number, notify: string}>}
  *   uid・postId は入れない（index.js がそのまま logger.info に渡す）
+ * @throws Firestore の失敗（設定・ログの読み込みと選ぶ段。ALREADY_EXISTS を除く）と、送る権利を取る前のトランザクションの失敗
+ *   ＝index.js の retryCount に任せる。権利を取った後（notifyOwner・notifyResult の書き込み）の失敗は投げない
  */
 async function runDailyPick(db, deps) {
   if (!deps || typeof deps.now !== "function" || typeof deps.notifyOwner !== "function" || !deps.logger) {
