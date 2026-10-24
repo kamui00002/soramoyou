@@ -8,6 +8,9 @@
 
 "use strict";
 
+// 通知の文で人を呼ぶ形（notificationName.js に 1 か所・index.js の通知と同じ）
+const { callName } = require("./notificationName");
+
 /**
  * 1 回の更新で通知を試みる最大件数。
  * ⚠️ iOS の RecommendedSkies.maxCount / firestore.rules の size() <= 3 と一致させること。
@@ -60,11 +63,12 @@ function noticeId(recommenderId, postId) {
 
 /**
  * 通知本文。
- * @param {string} recommenderName おすすめした人の表示名
+ * 呼び方は callName（名前があれば「○○さん」・無ければ「さん」なしの「空が好きなだれか」）。
+ * @param {string} recommenderName おすすめした人の表示名（無ければ空文字）
  * @returns {string}
  */
 function noticeBody(recommenderName) {
-  return `${recommenderName}さんがあなたの空を「おすすめの空」に選びました`;
+  return `${callName(recommenderName)}があなたの空を「おすすめの空」に選びました`;
 }
 
 /** 通知済みマーカーを残しておく日数（これを過ぎたら同じ組でも再び通知しうる）。 */

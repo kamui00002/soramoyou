@@ -71,6 +71,10 @@ test("noticeBody: 表示名を入れた本文", () => {
   assert.equal(core.noticeBody("そら"), "そらさんがあなたの空を「おすすめの空」に選びました");
 });
 
+test("noticeBody: 表示名が無ければ「さん」を付けずに「空が好きなだれか」", () => {
+  assert.equal(core.noticeBody(""), "空が好きなだれかがあなたの空を「おすすめの空」に選びました");
+});
+
 test("noticeExpireAt: 保持日数ぶん先の日時", () => {
   const now = new Date("2026-09-24T00:00:00Z");
   assert.equal(core.NOTICE_RETENTION_DAYS, 365);

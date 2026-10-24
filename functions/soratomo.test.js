@@ -996,10 +996,10 @@ test("トリガー: 通知の準備で失敗しても、グループの最新の
   }
 });
 
-test("トリガー: 表示名が空なら「だれか」、キャプションが無ければ「」を付けない", async () => {
+test("トリガー: 表示名が空なら「さん」なしの「空が好きなだれか」、キャプションが無ければ「」を付けない", async () => {
   await seedScene({ posterName: "" });
   await postSky("s1", { caption: null });
-  assert.equal(record.sends[0].notification.body, "だれかさんが空を投稿しました");
+  assert.equal(record.sends[0].notification.body, "空が好きなだれかが空を投稿しました");
 });
 
 test("トリガー: グループが無ければ、例外を投げずに何もしない（メンバーの文書だけが残っていても送らない）", async () => {
@@ -1790,7 +1790,7 @@ test("リアクション（6.1〜6.4・6.9〜6.14・11.3・12.4）: 新しく付
   }
 });
 
-test("リアクション（6.10）: 付けた人の表示名が空・空白だけ・文字列でない・users が無いときは「だれか」。絵文字は U+FE0F まで載る", async () => {
+test("リアクション（6.10）: 付けた人の表示名が空・空白だけ・文字列でない・users が無いときは「さん」なしの「空が好きなだれか」。絵文字は U+FE0F まで載る", async () => {
   await seedReactionScene();
   const reactorRef = db.collection("users").doc("a");
   const cases = [
@@ -1807,7 +1807,7 @@ test("リアクション（6.10）: 付けた人の表示名が空・空白だ�
     assert.deepEqual(await react("a", "cloud"), { outcome: "added", kind: "cloud" }, name);
     assert.deepEqual(
       record.sends.map((s) => s.notification.body),
-      [`だれかさんがあなたの空に${CLOUD}を付けました`],
+      [`空が好きなだれかがあなたの空に${CLOUD}を付けました`],
       name
     );
     await react("a", null);
