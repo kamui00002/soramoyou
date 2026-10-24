@@ -238,6 +238,38 @@ service cloud.firestore {
     }
 
     // ============================================
+    // dailyPicks（今日のおすすめのそらもよう）⭐️
+    // ⚠️ 「私のおすすめの空」（publicProfiles.recommendedPostIds・recommendationNotices）とは別物。
+    // ドキュメントID: {yyyy-MM-dd}（その日の鍵）。中身は公開投稿の ID だけ（投稿者の uid・名前は入れない）。
+    // 毎朝 7:00 に Cloud Functions（Admin SDK）が公開投稿から選んで書く。Admin SDK はルールを通らない。
+    // アプリ（ログイン中もゲスト＝未ログインも）はその日の鍵で 1 件 get するだけ。
+    // テスト: functions/dailyPickRules.emulator.test.js（下の dailyPickLog・dailyPickConfig も）
+    // ============================================
+    match /dailyPicks/{dateKey} {
+      // ゲスト（未ログイン）も読む。中身は公開投稿の ID だけ
+      allow get: if true;
+      // 一覧は拒否する（アプリは鍵で get するだけ）
+      allow list: if false;
+      // 書くのは Functions（Admin SDK）だけ
+      allow write: if false;
+    }
+
+    // 次の 2 つは、ルールが無くても既定で拒否される。意図を残し、テストの陽性対照で
+    // パスの書き間違いを見分けられるように、拒否を明示する。
+
+    // 今日のおすすめの選定の記録（文書 ID は {yyyy-MM-dd}）⭐️
+    // 候補の投稿者 uid・通知の結果を持つので非公開。Functions（Admin SDK）だけが読み書きする
+    match /dailyPickLog/{dateKey} {
+      allow read, write: if false;
+    }
+
+    // 今日のおすすめの設定 ⭐️
+    // 運営・テスト用 UID の除外一覧などを持つので非公開。Functions（Admin SDK）だけが読む
+    match /dailyPickConfig/{docId} {
+      allow read, write: if false;
+    }
+
+    // ============================================
     // Follows collection (フォロー関係)
     // ドキュメントID: {followerId}_{followeeId}
     // ============================================
