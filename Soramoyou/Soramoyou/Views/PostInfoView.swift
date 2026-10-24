@@ -397,6 +397,9 @@ struct PostInfoView: View {
                             )
                     )
                 }
+                // 投稿中は押せない（投稿・下書き保存のボタンと同じ）。完了の重ね表示は約 1.2 秒で画面ごと閉じるので、
+                // 投稿中に開いた地図や位置情報のエラーの下に隠れたまま閉じるのを防ぐ
+                .disabled(viewModel.isUploading)
             }
 
             Button(action: {
@@ -419,6 +422,8 @@ struct PostInfoView: View {
                         )
                 )
             }
+            // 投稿中は押せない（上の「位置情報を追加」と同じ理由）
+            .disabled(viewModel.isUploading)
         }
     }
 
