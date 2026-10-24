@@ -67,9 +67,12 @@ async function getUser(uid) {
   return snap.exists ? snap.data() : null;
 }
 
-/** 通知本文に使う表示名（無ければ「だれか」）。email など PII は使わない。 */
+// 通知の文で人を呼ぶ形（「○○さん」／名前が無い人は「さん」なしの「空が好きなだれか」）は notificationName.js に 1 か所。
+const { callName } = require("./notificationName");
+
+/** 通知本文に使う表示名（無ければ空文字＝呼び方は callName が決める）。email など PII は使わない。 */
 function displayNameOf(userData) {
-  return userData && userData.displayName ? userData.displayName : "だれか";
+  return userData && userData.displayName ? userData.displayName : "";
 }
 
 /** userData が otherId をブロックしているか（ブロック相手の通知をプッシュで再浮上させない）。 */
@@ -126,7 +129,7 @@ exports.onLikeCreated = onDocumentCreated("likes/{likeId}", async (event) => {
   await sendToUser(
     ownerId,
     owner,
-    { title: "そらもよう", body: `${displayNameOf(liker)}さんがあなたの空にいいねしました` },
+    { title: "そらもよう", body: `${callName(displayNameOf(liker))}があなたの空にいいねしました` },
     { type: "like", postId }
   );
 });
@@ -151,12 +154,12 @@ exports.onCommentCreated = onDocumentCreated("comments/{commentId}", async (even
   if (isBlocked(owner, commenterId)) return;
 
   // 表示名はコメントに非正規化保存された authorName を優先（無ければ users から）。
-  const name = comment.authorName || displayNameOf(await getUser(commenterId));
+  const name = callName(comment.authorName || displayNameOf(await getUser(commenterId)));
   const snippet = String(comment.content || "").slice(0, 40);
   await sendToUser(
     ownerId,
     owner,
-    { title: "そらもよう", body: `${name}さんがコメントしました${snippet ? `: ${snippet}` : ""}` },
+    { title: "そらもよう", body: `${name}がコメントしました${snippet ? `: ${snippet}` : ""}` },
     { type: "comment", postId }
   );
 });
@@ -178,7 +181,7 @@ exports.onPostCreated = onDocumentCreated("posts/{postId}", async (event) => {
   const allowEveryone = visibility === "public";
 
   const poster = await getUser(posterId);
-  const name = displayNameOf(poster);
+  const name = callName(displayNameOf(poster));
 
   // 受信者の uid -> token（本人除外・重複排除）。
   const tokenByUid = new Map();
@@ -221,7 +224,7 @@ exports.onPostCreated = onDocumentCreated("posts/{postId}", async (event) => {
     tokenToUid[tokenByUid.get(uid)] = uid;
   });
 
-  const notification = { title: "そらもよう", body: `${name}さんが新しい空を投稿しました` };
+  const notification = { title: "そらもよう", body: `${name}が新しい空を投稿しました` };
   const data = { type: "newPost", postId };
 
   // 500 件ずつ multicast（FCM の上限）。
@@ -338,7 +341,7 @@ async function notifyNewFollower(followerId, followeeId) {
   await sendToUser(
     followeeId,
     followee,
-    { title: "そらもよう", body: `${displayNameOf(follower)}さんがあなたをフォローしました` },
+    { title: "そらもよう", body: `${callName(displayNameOf(follower))}があなたをフォローしました` },
     // data の値は文字列必須（FCM の制約）。この通知に postId は無い。
     // rules で followerId は uid 文字列に固定されているが、万一の型崩れで送信全体が
     // 失敗しないよう String() で通す。

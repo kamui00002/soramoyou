@@ -28,7 +28,7 @@ test("定数: 設計書（design.md soratomoCore）の値と一致する", () =>
   assert.equal(core.CAPTION_HEAD, 30);
   assert.equal(core.THROTTLE_MS, 5 * 60 * 1000);
   assert.equal(core.SORATOMO_PREF_KEY, "notifySoratomo");
-  assert.equal(core.FALLBACK_NAME, "だれか");
+  assert.equal(core.FALLBACK_NAME, "空が好きなだれか");
 });
 
 test("SORATOMO_PREF_DEFAULT は true（iOS の User.notifySoratomoDefault と一致させる規則）", () => {
@@ -206,11 +206,11 @@ test("buildNotification: キャプションは先頭30文字（コードポイ�
   );
 });
 
-test("buildNotification: 表示名が空・無いときは「だれか」", () => {
+test("buildNotification: 表示名が空・無いときは「さん」を付けずに「空が好きなだれか」", () => {
   for (const posterName of ["", null, undefined]) {
     assert.equal(
       core.buildNotification({ groupName: "空の会", posterName, caption: undefined }).body,
-      "だれかさんが空を投稿しました"
+      "空が好きなだれかが空を投稿しました"
     );
   }
 });
@@ -1012,12 +1012,12 @@ test("buildReactionNotification: 7種類とも、表の絵文字（FE0F 付き�
   }
 });
 
-test("buildReactionNotification: 名前が空・空白だけ・文字列でないときは「だれか」", () => {
+test("buildReactionNotification: 名前が空・空白だけ・文字列でないときは「さん」を付けずに「空が好きなだれか」", () => {
   const whitespaceOnly = [" ", "  ", String.fromCodePoint(0x3000), String.fromCodePoint(0x09, 0x0a)];
   for (const reactorName of ["", ...whitespaceOnly, null, undefined, 0, 123, true, {}, ["はると"]]) {
     assert.equal(
       core.buildReactionNotification({ groupName: "空の会", reactorName, kind: "cloud" }).body,
-      `だれかさんがあなたの空に${emojiOf("cloud")}を付けました`,
+      `空が好きなだれかがあなたの空に${emojiOf("cloud")}を付けました`,
       `${typeof reactorName}:${JSON.stringify(reactorName)}`
     );
   }
