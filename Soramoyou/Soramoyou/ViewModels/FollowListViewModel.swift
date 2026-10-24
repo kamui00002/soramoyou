@@ -322,9 +322,14 @@ final class FollowListViewModel: ObservableObject {
             if wasFollowing {
                 try await followRepository.unfollow(targetId, by: ownUserId)
                 followingUserIds.remove(targetId)
+                // 解除できた手ごたえ（軽いタップ）⭐️ 1.18.0 PR-B
+                // ⚠️ 成功が分かるのはここ（行のボタンは押したことしか知らない）なので、触覚は ViewModel で鳴らす
+                Haptics.play(.tap)
             } else {
                 try await followRepository.follow(targetId, by: ownUserId)
                 followingUserIds.insert(targetId)
+                // フォロー（フォローバック）できた手ごたえ ⭐️ 1.18.0 PR-B
+                Haptics.play(.success)
             }
             // ⚠️ 相手の uid はパラメータに載せない（removeFollower と同じ方針。
             //    他ユーザーの内部 ID を外部 SaaS へ送らない）。
@@ -347,6 +352,8 @@ final class FollowListViewModel: ObservableObject {
                 category: ErrorHandler.categorize(error)
             )
             errorMessage = error.userFriendlyMessage
+            // フォロー/解除が通らなかった手ごたえ ⭐️ 1.18.0 PR-B（「お知らせ」の知らせと一緒に鳴る）
+            Haptics.play(.error)
         }
     }
 

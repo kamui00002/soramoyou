@@ -98,7 +98,9 @@ struct TagDetailView: View {
                 NavigationView {
                     UserProfileView(
                         targetUserId: wrapper.id,
-                        ownUserId: viewModel.currentUserId
+                        ownUserId: viewModel.currentUserId,
+                        likeManager: likeManager,
+                        favoriteManager: favoriteManager
                     )
                     .toolbar {
                         ToolbarItem(placement: .navigationBarLeading) {

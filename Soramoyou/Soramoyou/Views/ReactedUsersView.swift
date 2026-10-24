@@ -19,9 +19,19 @@ struct ReactedUsersView: View {
 
     @StateObject private var viewModel: ReactedUsersViewModel
 
+    /// いいね・お気に入り（🔖）状態の共有ストア ⭐️ 1.18.0 PR-B
+    ///
+    /// この画面では読まず、行から開く UserProfileView に渡すためだけに持つ
+    /// （UserProfileView は環境でなく init 引数で受け取る。理由は UserProfileView の likeManager のコメント）。
+    /// 値で何も描かないので @ObservedObject にしない（変わるたびに一覧を描き直さないため）。
+    private let likeManager: LikeManager
+    private let favoriteManager: FavoriteManager
+
     // MARK: - Initializer
 
-    init(ownUserId: String?) {
+    init(ownUserId: String?, likeManager: LikeManager, favoriteManager: FavoriteManager) {
+        self.likeManager = likeManager
+        self.favoriteManager = favoriteManager
         _viewModel = StateObject(wrappedValue: ReactedUsersViewModel(ownUserId: ownUserId))
     }
 
@@ -118,7 +128,12 @@ struct ReactedUsersView: View {
                 rowContent(user: user, profile: profile)
             } else {
                 NavigationLink {
-                    UserProfileView(targetUserId: user.id, ownUserId: viewModel.ownUserId)
+                    UserProfileView(
+                        targetUserId: user.id,
+                        ownUserId: viewModel.ownUserId,
+                        likeManager: likeManager,
+                        favoriteManager: favoriteManager
+                    )
                 } label: {
                     // 行の余白・カード背景までタップ可能領域を広げる
                     rowContent(user: user, profile: profile)

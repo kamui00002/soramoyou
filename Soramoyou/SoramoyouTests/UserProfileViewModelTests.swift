@@ -253,7 +253,406 @@ final class UserProfileViewModelTests: XCTestCase {
         XCTAssertFalse(blocked)
     }
 
+    // MARK: - 入口の出し方（空カレンダー・お気に入りの空）⭐️ 1.18.0 PR-B
+
+    /// フォロー中で、持ち主が ON → 入口のボタン
+    func testEntryIsOpenWhenFollowingAndOwnerTurnedOn() async {
+        // Arrange: 持ち主が 3 つとも ON・フォロー中
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: true)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .open)
+        XCTAssertEqual(viewModel.favoritesEntryState, .open)
+    }
+
+    /// ログイン中・フォローしていない・持ち主が ON →「フォローすると〜が見られます」の 1 行
+    func testEntryIsFollowToSeeWhenNotFollowingAndOwnerTurnedOn() async {
+        // Arrange
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert: フォロワーでない人に中身への入口は出さない（ルールでも読めない）
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .followToSee)
+        XCTAssertEqual(viewModel.favoritesEntryState, .followToSee)
+    }
+
+    /// 持ち主が OFF → フォロー中でも出さない
+    func testEntryIsHiddenWhenOwnerTurnedOffEvenIfFollowing() async {
+        // Arrange
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOff
+        let follows = MockFollowRepository(isFollowingResult: true)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .hidden)
+        XCTAssertEqual(viewModel.favoritesEntryState, .hidden)
+    }
+
+    /// 持ち主が OFF → フォローしていなくても「フォローすると〜」は出さない（フォローしても見られないため）
+    func testEntryIsHiddenWhenOwnerTurnedOffAndNotFollowing() async {
+        // Arrange
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOff
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .hidden)
+        XCTAssertEqual(viewModel.favoritesEntryState, .hidden)
+    }
+
+    /// 欄ごとに別々に決まる: フォロー中で、カレンダーだけ ON → カレンダーは入口・お気に入りは出さない
+    func testEntryOnlySkyCalendarTurnedOnWhileFollowing() async {
+        // Arrange
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = ProfileSectionVisibility(
+            showsRecommendedSkies: true,
+            showsSkyCalendar: true,
+            showsFavorites: false
+        )
+        let follows = MockFollowRepository(isFollowingResult: true)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .open)
+        XCTAssertEqual(viewModel.favoritesEntryState, .hidden)
+    }
+
+    /// 欄ごとに別々に決まる: フォローしていなくて、お気に入りだけ ON → カレンダーは出さない・お気に入りは「フォローすると〜」
+    func testEntryOnlyFavoritesTurnedOnWhileNotFollowing() async {
+        // Arrange
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = ProfileSectionVisibility(
+            showsRecommendedSkies: true,
+            showsSkyCalendar: false,
+            showsFavorites: true
+        )
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .hidden)
+        XCTAssertEqual(viewModel.favoritesEntryState, .followToSee)
+    }
+
+    /// 項目が無い人（今いる人全員）の既定値: カレンダーとお気に入りは出さない・おすすめの空は出す
+    func testEntryIsHiddenAndRecommendedShownWithDefaultVisibility() async {
+        // Arrange: 項目なし（既定値）・フォロー中
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = .default
+        let follows = MockFollowRepository(isFollowingResult: true)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert: 今いる人の見え方は変わらない（おすすめの空だけが出る）
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .hidden)
+        XCTAssertEqual(viewModel.favoritesEntryState, .hidden)
+        XCTAssertTrue(viewModel.showsRecommendedSkies)
+    }
+
+    /// ゲスト（ログインしていない）・持ち主が ON →「フォローすると〜が見られます」の 1 行 ⭐️ 1.18.0 PR-B
+    /// （2026-10-24 利用者の決定でゲストにも出す。押しても何も起きない 1 行で、ログインのきっかけにする）
+    func testEntryIsFollowToSeeForGuestWhenOwnerTurnedOn() async {
+        // Arrange: ログインしていない・持ち主が 3 つとも ON
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows, ownUserId: nil)
+
+        // Act
+        await viewModel.load()
+
+        // Assert: 入口のボタン（.open）は出さず、「フォローすると〜」の 1 行だけ
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .followToSee)
+        XCTAssertEqual(viewModel.favoritesEntryState, .followToSee)
+    }
+
+    /// ゲストは `isFollowing` が true になっても入口のボタン（.open）にならない ⭐️ 1.18.0 PR-B
+    ///
+    /// 上のテストはゲストの `isFollowing` が false のままなので、`entryState(for:)` のゲストの判定を
+    /// 消しても（下の `isFollowing ? .open : .followToSee` に流れても）同じ `.followToSee` で緑のまま。
+    /// ゲストの判定が `isFollowing` を見ずに決めていることを、ここで固定する。
+    func testEntryIsFollowToSeeForGuestEvenIfIsFollowingBecomesTrue() async {
+        // Arrange: ログインしていない・持ち主が 3 つとも ON
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows, ownUserId: nil)
+        await viewModel.load()
+
+        // Act: どんな道であれ、ゲストの isFollowing が true になった
+        viewModel.isFollowing = true
+
+        // Assert: それでも入口のボタンは出さない（フォロワーでないので中身はルールでも読めない）
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .followToSee)
+        XCTAssertEqual(viewModel.favoritesEntryState, .followToSee)
+    }
+
+    /// ゲスト・持ち主が OFF → 出さない（フォローしても見られないので「フォローすると〜」も出さない）⭐️ 1.18.0 PR-B
+    func testEntryIsHiddenForGuestWhenOwnerTurnedOff() async {
+        // Arrange: ログインしていない・持ち主が 3 つとも OFF
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOff
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows, ownUserId: nil)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .hidden)
+        XCTAssertEqual(viewModel.favoritesEntryState, .hidden)
+    }
+
+    /// ゲスト・プロフィールが取れなかった → 出さない（持ち主が ON か分からないため。ゲストの判定より先に見る）⭐️ 1.18.0 PR-B
+    func testEntryIsHiddenForGuestWhenProfileFailedToLoad() async {
+        // Arrange: ログインしていない・プロフィールの取得が失敗する
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        firestore.stubbedPublicProfileError = NSError(
+            domain: "test", code: 14,
+            userInfo: [NSLocalizedDescriptionKey: "unavailable"]
+        )
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows, ownUserId: nil)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertNil(viewModel.publicProfile)
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .hidden)
+        XCTAssertEqual(viewModel.favoritesEntryState, .hidden)
+    }
+
+    /// 自分のプロフィール → 持ち主（自分）が ON でも出さない（自分の分はプロフィールタブの入口から見る）
+    func testEntryIsHiddenOnOwnProfile() async {
+        // Arrange: 見ているのが自分のプロフィール
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: true)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows, ownUserId: "target")
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .hidden)
+        XCTAssertEqual(viewModel.favoritesEntryState, .hidden)
+    }
+
+    /// プロフィールが取れなかった → 出さない・おすすめの空も読まない（持ち主が ON か分からないため）
+    func testEntryIsHiddenWhenProfileFailedToLoad() async {
+        // Arrange: プロフィールの取得が失敗する（フォロー中）
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        firestore.stubbedPublicProfileError = NSError(
+            domain: "test", code: 14,
+            userInfo: [NSLocalizedDescriptionKey: "unavailable"]
+        )
+        let follows = MockFollowRepository(isFollowingResult: true)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertNil(viewModel.publicProfile)
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .hidden)
+        XCTAssertEqual(viewModel.favoritesEntryState, .hidden)
+        XCTAssertFalse(viewModel.showsRecommendedSkies)
+    }
+
+    /// 読み込む前（プロフィール未取得）→ 出さない・おすすめの空も出さない
+    func testEntryIsHiddenBeforeLoad() {
+        // Arrange: load を呼ばない
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: true)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Assert
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .hidden)
+        XCTAssertEqual(viewModel.favoritesEntryState, .hidden)
+        XCTAssertFalse(viewModel.showsRecommendedSkies)
+    }
+
+    /// フォロー状態が読めなかった → 安全側（フォローしていない扱い）で「フォローすると〜」。入口は開かない
+    func testEntryIsFollowToSeeWhenIsFollowingFailed() async {
+        // Arrange: フォロー中の相手だが、フォロー状態の取得に失敗する
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: true)
+        follows.isFollowingError = NSError(
+            domain: "test", code: 14,
+            userInfo: [NSLocalizedDescriptionKey: "unavailable"]
+        )
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .followToSee)
+        XCTAssertEqual(viewModel.favoritesEntryState, .followToSee)
+    }
+
+    /// フォロー解除の後は、入口のボタン →「フォローすると〜」に変わる
+    func testEntryChangesFromOpenToFollowToSeeAfterUnfollow() async {
+        // Arrange: 持ち主が ON・フォロー中でロード済み
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: true)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+        await viewModel.load()
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .open)
+        XCTAssertEqual(viewModel.favoritesEntryState, .open)
+
+        // Act: フォロー解除
+        await viewModel.toggleFollow()
+
+        // Assert
+        XCTAssertFalse(viewModel.isFollowing)
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .followToSee)
+        XCTAssertEqual(viewModel.favoritesEntryState, .followToSee)
+    }
+
+    /// フォローした後は、「フォローすると〜」→ 入口のボタンに変わる
+    func testEntryChangesFromFollowToSeeToOpenAfterFollow() async {
+        // Arrange: 持ち主が ON・フォローしていない状態でロード済み
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+        await viewModel.load()
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .followToSee)
+        XCTAssertEqual(viewModel.favoritesEntryState, .followToSee)
+
+        // Act: フォローする
+        await viewModel.toggleFollow()
+
+        // Assert
+        XCTAssertTrue(viewModel.isFollowing)
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .open)
+        XCTAssertEqual(viewModel.favoritesEntryState, .open)
+    }
+
+    /// フォローが断られたら入口は開かない（「フォローすると〜」のまま）
+    func testEntryStaysFollowToSeeWhenFollowIsNotAllowed() async {
+        // Arrange: 持ち主が ON・フォローしていない。フォローはサーバーに断られる
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: false)
+        follows.followError = FollowRepositoryError.followNotAllowed
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+        await viewModel.load()
+
+        // Act
+        await viewModel.toggleFollow()
+
+        // Assert
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .followToSee)
+        XCTAssertEqual(viewModel.favoritesEntryState, .followToSee)
+    }
+
+    // MARK: - おすすめの空の見せる/見せない ⭐️ 1.18.0 PR-B
+
+    /// 持ち主がおすすめの空を OFF → 欄を出さない（View はこれを見て読み込みもしない）
+    func testRecommendedSkiesHiddenWhenOwnerTurnedOff() async {
+        // Arrange: おすすめの空だけ OFF（ほかの 2 つは ON）
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = ProfileSectionVisibility(
+            showsRecommendedSkies: false,
+            showsSkyCalendar: true,
+            showsFavorites: true
+        )
+        let follows = MockFollowRepository(isFollowingResult: true)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert: おすすめの空だけが消え、ほかの 2 つの入口には影響しない
+        XCTAssertFalse(viewModel.showsRecommendedSkies)
+        XCTAssertEqual(viewModel.skyCalendarEntryState, .open)
+        XCTAssertEqual(viewModel.favoritesEntryState, .open)
+    }
+
+    /// 持ち主がおすすめの空を ON → 欄を出す（フォローしていなくても出す＝見せる相手はプロフィールを開ける全員）
+    func testRecommendedSkiesShownWhenOwnerTurnedOnEvenIfNotFollowing() async {
+        // Arrange: おすすめの空だけ ON・フォローしていない
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = ProfileSectionVisibility(
+            showsRecommendedSkies: true,
+            showsSkyCalendar: false,
+            showsFavorites: false
+        )
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertTrue(viewModel.showsRecommendedSkies)
+    }
+
+    /// ゲストにもおすすめの空は出す（見せる相手はプロフィールを開ける全員・今と同じ）
+    func testRecommendedSkiesShownForGuest() async {
+        // Arrange: ログインしていない・おすすめの空は ON
+        let firestore = MockFirestoreServiceForUserProfile()
+        firestore.stubbedSectionVisibility = Self.allOn
+        let follows = MockFollowRepository(isFollowingResult: false)
+        let viewModel = makeViewModel(firestore: firestore, follows: follows, ownUserId: nil)
+
+        // Act
+        await viewModel.load()
+
+        // Assert
+        XCTAssertTrue(viewModel.showsRecommendedSkies)
+    }
+
     // MARK: - Helpers
+
+    /// 3 つとも ON（見せる）
+    private static let allOn = ProfileSectionVisibility(
+        showsRecommendedSkies: true,
+        showsSkyCalendar: true,
+        showsFavorites: true
+    )
+
+    /// 3 つとも OFF（見せない）
+    private static let allOff = ProfileSectionVisibility(
+        showsRecommendedSkies: false,
+        showsSkyCalendar: false,
+        showsFavorites: false
+    )
 
     private func makeViewModel(
         firestore: MockFirestoreServiceForUserProfile,
@@ -294,8 +693,16 @@ final class MockFirestoreServiceForUserProfile: FirestoreServiceProtocol {
         return stubbedPosts
     }
 
+    // MARK: 見せる/見せない（1.18.0・PR-B）⭐️
+
+    /// fetchPublicProfile が返すプロフィールの見せる/見せない（既定は項目なし＝`.default` と同じ値）
+    var stubbedSectionVisibility: ProfileSectionVisibility = .default
+    /// fetchPublicProfile を失敗させたいときに設定する（プロフィールが取れなかったときを再現する）
+    var stubbedPublicProfileError: Error?
+
     func fetchPublicProfile(userId: String) async throws -> PublicProfile {
-        PublicProfile(id: userId, displayName: "テストユーザー")
+        if let stubbedPublicProfileError { throw stubbedPublicProfileError }
+        return PublicProfile(id: userId, displayName: "テストユーザー", sectionVisibility: stubbedSectionVisibility)
     }
 
     // MARK: ブロック（C 項目 3）⭐️

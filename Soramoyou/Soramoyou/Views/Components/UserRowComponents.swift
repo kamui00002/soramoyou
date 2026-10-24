@@ -76,6 +76,9 @@ struct FollowActionButton: View {
     /// タップ時の処理
     let action: () -> Void
 
+    /// 端末の「視差効果を減らす」が ON か（ON なら形の変化を動かさず一瞬で切り替える）⭐️ 1.18.0 PR-B
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         Button(action: action) {
             Text(title)
@@ -104,6 +107,15 @@ struct FollowActionButton: View {
                 )
                 // 処理中は押せないことが見た目でも分かるようにする
                 .opacity(isToggling ? 0.5 : 1)
+                // 「フォロー」⇄「フォロー中」の形（背景・文字の色・縁）をなめらかに変える ⭐️ 1.18.0 PR-B
+                // ⚠️ フォローの結果は ViewModel が通信の後に書き換えるので、押した所で withAnimation では包めない。
+                //    そのため isFollowing の変化に動きを付ける。一覧を開いた直後に自分のフォロー中が読めて
+                //    「フォローバック」→「フォロー中」に変わるときも同じ動きになる（パッと変わるより自然なので許容）。
+                //    「視差効果を減らす」が ON なら Motion.animation が nil を返し、一瞬で切り替わる。
+                .animation(
+                    Motion.animation(.easeInOut(duration: 0.25), reduceMotion: reduceMotion),
+                    value: isFollowing
+                )
         }
         .buttonStyle(.plain)
         .disabled(isToggling)
