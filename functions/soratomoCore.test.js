@@ -28,6 +28,7 @@ test("定数: 設計書（design.md soratomoCore）の値と一致する", () =>
   assert.equal(core.CAPTION_HEAD, 30);
   assert.equal(core.THROTTLE_MS, 5 * 60 * 1000);
   assert.equal(core.SORATOMO_PREF_KEY, "notifySoratomo");
+  // 2026-10-25 利用者の決定で design.md（当時の記録「だれか」）から変更。出典は notificationName.js
   assert.equal(core.FALLBACK_NAME, "空が好きなだれか");
 });
 
@@ -213,6 +214,26 @@ test("buildNotification: 表示名が空・無いときは「さん」を付け�
       "空が好きなだれかが空を投稿しました"
     );
   }
+});
+
+test("buildNotification: 表示名が文字列でないときも「さん」を付けずに「空が好きなだれか」", () => {
+  // 投稿者の users の displayName は生のまま渡ってくる（soratomo.js）ので、文字列でない値の守りはここだけ
+  for (const posterName of [42, true, {}]) {
+    assert.equal(
+      core.buildNotification({ groupName: "空の会", posterName, caption: undefined }).body,
+      "空が好きなだれかが空を投稿しました",
+      `${typeof posterName}:${JSON.stringify(posterName)}`
+    );
+  }
+});
+
+test("buildNotification: 空白だけの表示名は名前として通す（リアクションとはわざと分けている）", () => {
+  // tasks 2.1: 新着投稿の buildNotification は空白だけの名前を変えずに通し、
+  // リアクションの buildReactionNotification だけが空白だけも「名前が無い」とみなす。その差をここで固定する
+  assert.equal(
+    core.buildNotification({ groupName: "空の会", posterName: " ", caption: undefined }).body,
+    " さんが空を投稿しました"
+  );
 });
 
 // ============================================================
