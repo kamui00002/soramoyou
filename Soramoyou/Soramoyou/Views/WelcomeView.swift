@@ -48,7 +48,7 @@ struct WelcomeView: View {
                                 RadialGradient(
                                     colors: [
                                         Color.white.opacity(0.5),
-                                        Color.white.opacity(0)
+                                        Color.white.opacity(0),
                                     ],
                                     center: .center,
                                     startRadius: 40,
@@ -155,7 +155,7 @@ struct WelcomeView: View {
                                             LinearGradient(
                                                 colors: [
                                                     DesignTokens.Colors.glassBorderAccentStart,
-                                                    DesignTokens.Colors.glassBorderAccentEnd
+                                                    DesignTokens.Colors.glassBorderAccentEnd,
                                                 ],
                                                 startPoint: .topLeading,
                                                 endPoint: .bottomTrailing
@@ -210,7 +210,7 @@ struct WelcomeView: View {
                     RadialGradient(
                         colors: [
                             Color.white.opacity(0.2),
-                            Color.clear
+                            Color.clear,
                         ],
                         center: .center,
                         startRadius: 0,

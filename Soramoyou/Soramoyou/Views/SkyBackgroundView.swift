@@ -144,7 +144,7 @@ struct GlassPostCardStyle: ViewModifier {
                                 LinearGradient(
                                     colors: [
                                         Color.white.opacity(0.5),
-                                        Color.white.opacity(0.2)
+                                        Color.white.opacity(0.2),
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
@@ -193,7 +193,7 @@ struct GlassButtonStyle: ButtonStyle {
                             LinearGradient(
                                 colors: [
                                     DesignTokens.Colors.glassBorderAccentStart,
-                                    DesignTokens.Colors.glassBorderAccentEnd
+                                    DesignTokens.Colors.glassBorderAccentEnd,
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -268,15 +268,14 @@ struct CloudShape: Shape {
     }
 }
 
-
 // MARK: - Modern Glass Input Field ☀️
 
 struct GlassInputField: View {
     let placeholder: String
     @Binding var text: String
-    var icon: String? = nil
+    var icon: String?
     var isSecure: Bool = false
-    var onSubmit: (() -> Void)? = nil
+    var onSubmit: (() -> Void)?
 
     @FocusState private var isFocused: Bool
     @State private var showPassword = false
@@ -284,7 +283,7 @@ struct GlassInputField: View {
     var body: some View {
         HStack(spacing: DesignTokens.Spacing.sm) {
             // アイコン
-            if let icon = icon {
+            if let icon {
                 Image(systemName: icon)
                     .font(.system(size: 18, weight: .medium))
                     .foregroundColor(isFocused ? DesignTokens.Colors.textPrimary : DesignTokens.Colors.textSecondary)
@@ -294,7 +293,7 @@ struct GlassInputField: View {
 
             // 入力フィールド
             Group {
-                if isSecure && !showPassword {
+                if isSecure, !showPassword {
                     SecureField(placeholder, text: $text)
                         .onSubmit { onSubmit?() }
                 } else {
@@ -317,7 +316,7 @@ struct GlassInputField: View {
             }
 
             // クリアボタン
-            if !text.isEmpty && !isSecure {
+            if !text.isEmpty, !isSecure {
                 Button(action: { text = "" }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 16))
@@ -355,13 +354,13 @@ struct GlassInputField: View {
 struct ModernChip: View {
     let title: String
     let isSelected: Bool
-    var icon: String? = nil
+    var icon: String?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: DesignTokens.Spacing.xs) {
-                if let icon = icon {
+                if let icon {
                     Image(systemName: icon)
                         .font(.system(size: 12, weight: .semibold))
                 }
@@ -477,7 +476,7 @@ struct AnimatedCard<Content: View>: View {
                             LinearGradient(
                                 colors: [
                                     DesignTokens.Colors.glassBorderAccentStart,
-                                    DesignTokens.Colors.glassBorderAccentEnd
+                                    DesignTokens.Colors.glassBorderAccentEnd,
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -520,7 +519,7 @@ struct ShimmerEffect: ViewModifier {
                         colors: [
                             Color.white.opacity(0),
                             Color.white.opacity(0.3),
-                            Color.white.opacity(0)
+                            Color.white.opacity(0),
                         ],
                         startPoint: .leading,
                         endPoint: .trailing
@@ -578,7 +577,7 @@ extension View {
 // MARK: - Skeleton Loading View ☀️
 
 struct SkeletonView: View {
-    var width: CGFloat? = nil
+    var width: CGFloat?
     var height: CGFloat = 20
     var cornerRadius: CGFloat = DesignTokens.Radius.sm
 
@@ -594,7 +593,7 @@ struct SkeletonView: View {
 
 struct IconBadge: View {
     let icon: String
-    var count: Int? = nil
+    var count: Int?
     var color: Color = DesignTokens.Colors.selectionAccent
     var size: CGFloat = 44
 
@@ -615,7 +614,7 @@ struct IconBadge: View {
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
             // バッジ（カウントがある場合）
-            if let count = count, count > 0 {
+            if let count, count > 0 {
                 Text(count > 99 ? "99+" : "\(count)")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.white)
