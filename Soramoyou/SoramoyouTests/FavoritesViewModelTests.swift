@@ -9,13 +9,12 @@
 //  そのため失敗の分類（削除済み・非公開化 → 表示しない ／ ネットワーク → エラー表示）を重点的に見る。
 //
 
-import XCTest
-@testable import Soramoyou
 import FirebaseFirestore
+@testable import Soramoyou
+import XCTest
 
 @MainActor
 final class FavoritesViewModelTests: XCTestCase {
-
     // MARK: - Helpers
 
     private func makeFavorites(_ ids: [String]) -> [Favorite] {
@@ -174,10 +173,10 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.allFavorites = makeFavorites(["p1", "p2", "p3", "p4"])
         mock.postsById = [
             "p1": makePost("p1"), "p2": makePost("p2"),
-            "p3": makePost("p3"), "p4": makePost("p4")
+            "p3": makePost("p3"), "p4": makePost("p4"),
         ]
         mock.failingPostIds = [
-            "p2": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
+            "p2": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009)),
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 3)
 
@@ -214,7 +213,7 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.postsById = ["p3": makePost("p3")]
         mock.failingPostIds = [
             "gone1": FirestoreServiceError.notFound,
-            "gone2": FirestoreServiceError.notFound
+            "gone2": FirestoreServiceError.notFound,
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
 
@@ -234,7 +233,7 @@ final class FavoritesViewModelTests: XCTestCase {
         let mock = MockFirestoreServiceForFavoritesList()
         // 予算より多いページを用意し、全ページとも全件が削除済み
         // pageSize(2) × 予算(5) を超える16件。全件が削除済み
-        mock.allFavorites = makeFavorites((1...16).map { "g\($0)" })
+        mock.allFavorites = makeFavorites((1 ... 16).map { "g\($0)" })
         for favorite in mock.allFavorites {
             mock.failingPostIds[favorite.postId] = FirestoreServiceError.notFound
         }
@@ -261,10 +260,10 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.allFavorites = makeFavorites(["p1", "p2", "p3", "p4"])
         mock.postsById = [
             "p1": makePost("p1"), "p2": makePost("p2"),
-            "p3": makePost("p3"), "p4": makePost("p4")
+            "p3": makePost("p3"), "p4": makePost("p4"),
         ]
         mock.failingPostIds = [
-            "p4": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
+            "p4": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009)),
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
 
@@ -291,8 +290,8 @@ final class FavoritesViewModelTests: XCTestCase {
         )
         let expectedCursors: [Date?] = [
             nil,
-            mock.allFavorites[1].createdAt,  // 2回目 = 1ページ目末尾の p2
-            mock.allFavorites[2].createdAt   // 3回目 = loadMore が切り詰めた位置の p3
+            mock.allFavorites[1].createdAt, // 2回目 = 1ページ目末尾の p2
+            mock.allFavorites[2].createdAt, // 3回目 = loadMore が切り詰めた位置の p3
         ]
         XCTAssertEqual(
             mock.receivedAfterValues, expectedCursors,
@@ -312,11 +311,11 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.allFavorites = makeFavorites(["p1", "p2", "p3", "p4"])
         mock.postsById = [
             "p1": makePost("p1"), "p2": makePost("p2"),
-            "p3": makePost("p3"), "p4": makePost("p4")
+            "p3": makePost("p3"), "p4": makePost("p4"),
         ]
         // 2ページ目の **先頭** p3 でつまずかせる（＝ consumed == 0）
         mock.failingPostIds = [
-            "p3": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
+            "p3": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009)),
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
 
@@ -338,8 +337,8 @@ final class FavoritesViewModelTests: XCTestCase {
         )
         let expectedCursors: [Date?] = [
             nil,
-            mock.allFavorites[1].createdAt,  // 2回目 = p2
-            mock.allFavorites[1].createdAt   // ⭐️ 3回目も p2 のまま。進めると p3 が消える
+            mock.allFavorites[1].createdAt, // 2回目 = p2
+            mock.allFavorites[1].createdAt, // ⭐️ 3回目も p2 のまま。進めると p3 が消える
         ]
         XCTAssertEqual(mock.receivedAfterValues, expectedCursors, "失敗した回はカーソルを進めない")
     }
@@ -356,9 +355,9 @@ final class FavoritesViewModelTests: XCTestCase {
     func testNonEmptyListStallsAtPageBudgetAndRecovers() async {
         let mock = MockFirestoreServiceForFavoritesList()
         // [p1, g0...g10, p2] = 13件。先頭で1件だけ出せて、そのあと11件が削除済み
-        mock.allFavorites = makeFavorites(["p1"] + (0...10).map { "g\($0)" } + ["p2"])
+        mock.allFavorites = makeFavorites(["p1"] + (0 ... 10).map { "g\($0)" } + ["p2"])
         mock.postsById = ["p1": makePost("p1"), "p2": makePost("p2")]
-        for index in 0...10 {
+        for index in 0 ... 10 {
             mock.failingPostIds["g\(index)"] = FirestoreServiceError.notFound
         }
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
@@ -402,7 +401,7 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.failingPostIds = [
             "gone1": FirestoreServiceError.notFound,
             "gone2": FirestoreServiceError.notFound,
-            "p2": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
+            "p2": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009)),
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 4)
 
@@ -460,13 +459,14 @@ final class FavoritesViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.loadMoreError, "回復したらエラー表示は消える")
         let expectedCursors: [Date?] = [
             nil,
-            mock.allFavorites[1].createdAt,  // 2回目 = p2（ここで throw）
-            mock.allFavorites[1].createdAt   // ⭐️ 3回目も p2。失敗した回はカーソルを進めない
+            mock.allFavorites[1].createdAt, // 2回目 = p2（ここで throw）
+            mock.allFavorites[1].createdAt, // ⭐️ 3回目も p2。失敗した回はカーソルを進めない
         ]
         XCTAssertEqual(mock.receivedAfterValues, expectedCursors, "同じカーソルから読み直す")
     }
 
     // MARK: - 壊れたお気に入りドキュメントを飛ばしたページ ⭐️
+
     //
     // 本番の `fetchFavorites` は、変換に失敗したドキュメントを 1 件ずつ飛ばす（一覧全体は生かす）。
     // そのため満杯（limit 件）に読んだページでも、返る件数は limit を割る。
@@ -480,7 +480,7 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.brokenFavoriteIds = ["broken"]
         mock.postsById = [
             "p1": makePost("p1"), "p2": makePost("p2"),
-            "p3": makePost("p3"), "p4": makePost("p4")
+            "p3": makePost("p3"), "p4": makePost("p4"),
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 3)
 
@@ -541,8 +541,8 @@ final class FavoritesViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.stalledWithMore)
         let expectedCursors: [Date?] = [
             nil,
-            mock.allFavorites[1].createdAt,  // 2回目 = 1ページ目末尾の p2
-            mock.allFavorites[3].createdAt   // ⭐️ 3回目 = 壊れた broken2。p2 に据え置くと同じページを読み直す
+            mock.allFavorites[1].createdAt, // 2回目 = 1ページ目末尾の p2
+            mock.allFavorites[3].createdAt, // ⭐️ 3回目 = 壊れた broken2。p2 に据え置くと同じページを読み直す
         ]
         XCTAssertEqual(mock.receivedAfterValues, expectedCursors, "壊れたドキュメントも読んだ位置として進める")
     }
@@ -554,7 +554,7 @@ final class FavoritesViewModelTests: XCTestCase {
     func testAllBrokenPagesStopAtPageBudgetAndResumeFromWhereStopped() async {
         let mock = MockFirestoreServiceForFavoritesList()
         // pageSize(2) × 8ページ = 16件、全件が壊れている。9回目の読み込みで0件＝終端
-        mock.allFavorites = makeFavorites((1...16).map { "broken\($0)" })
+        mock.allFavorites = makeFavorites((1 ... 16).map { "broken\($0)" })
         mock.brokenFavoriteIds = Set(mock.allFavorites.map(\.postId))
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
 

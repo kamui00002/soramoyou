@@ -10,7 +10,6 @@ import Foundation
 
 @MainActor
 final class CalendarDiaryViewModel: ObservableObject {
-
     /// 暦日（年/月/日）ごとにグルーピングした投稿
     @Published private(set) var postsByDay: [SkyStreakDay: [Post]] = [:]
     @Published private(set) var isLoading = false
@@ -71,9 +70,9 @@ final class CalendarDiaryViewModel: ObservableObject {
             postsByDay = CalendarDiaryService.groupByDay(posts: posts, calendar: .soramoyouGregorian)
 
             #if DEBUG
-            if posts.count >= fetchLimit {
-                print("⚠️ CalendarDiary: 取得が上限(\(fetchLimit))に達しました。古い投稿が欠落する可能性があります。")
-            }
+                if posts.count >= fetchLimit {
+                    print("⚠️ CalendarDiary: 取得が上限(\(fetchLimit))に達しました。古い投稿が欠落する可能性があります。")
+                }
             #endif
         } catch {
             ErrorHandler.logError(error, context: "CalendarDiaryViewModel.load", userId: userId)

@@ -40,7 +40,7 @@ protocol FirestoreServiceProtocol {
         limit: Int,
         lastDocument: DocumentSnapshot?
     ) async throws -> [Post]
-    
+
     // Drafts
     func saveDraft(_ draft: Draft) async throws -> Draft
     func fetchDrafts(userId: String) async throws -> [Draft]
@@ -433,7 +433,7 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-    
+
     /// 指定ユーザーの投稿のうち、指定した公開範囲のものだけを取得する ⭐️
     ///
     /// Firestore Security Rules は「フィルタ」ではなく「静的な証明」であり、
@@ -463,11 +463,11 @@ class FirestoreService: FirestoreServiceProtocol {
         // 空配列を渡された場合、Firestore の `in` は空配列を受け付けずクラッシュするため
         // クエリを投げずに空を返す（「読めるものが何も無い」＝正しい結果）。
         guard !visibilities.isEmpty else { return [] }
-        
+
         do {
-            let rawValues = visibilities.map { $0.rawValue }
+            let rawValues = visibilities.map(\.rawValue)
             var query: Query = postsCollection
-            
+
             // ⚠️ 1 件だけなら `in` ではなく `isEqualTo` を使う。
             //    `in` は要素数 1 でも「論理和クエリ」として扱われ、rules の評価経路が
             //    既存の公開一覧（`visibility == 'public'`）と変わってしまう。
@@ -479,19 +479,19 @@ class FirestoreService: FirestoreServiceProtocol {
             } else {
                 query = query.whereField("visibility", in: rawValues)
             }
-            
+
             query = query
                 .whereField("userId", isEqualTo: userId)
                 .order(by: "createdAt", descending: true)
                 .limit(to: limit)
-            
+
             // ページネーション
-            if let lastDocument = lastDocument {
+            if let lastDocument {
                 query = query.start(afterDocument: lastDocument)
             }
-            
+
             let snapshot = try await query.getDocuments()
-            
+
             // ⚠️ 壊れたドキュメント 1 件でクエリ全体を落とさない。
             //    ここで throw すると「rules 拒否 / インデックス欠落 / 不正データ」が
             //    すべて同じ fetchFailed に潰れ、失敗原因の切り分け（followers 枝が
@@ -510,7 +510,7 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-    
+
     // MARK: - Drafts
 
     func saveDraft(_ draft: Draft) async throws -> Draft {
@@ -1313,13 +1313,13 @@ class FirestoreService: FirestoreServiceProtocol {
         // updatedAt は常に更新し、値がある項目だけを追加する
         var data: [String: Any] = ["updatedAt": Timestamp(date: Date())]
 
-        if let displayName = displayName {
+        if let displayName {
             data["displayName"] = displayName
         }
-        if let photoURL = photoURL {
+        if let photoURL {
             data["photoURL"] = photoURL
         }
-        if let bio = bio {
+        if let bio {
             data["bio"] = bio
         }
 
@@ -1332,7 +1332,7 @@ class FirestoreService: FirestoreServiceProtocol {
             // update 側の rules（`resource.data.id` を参照する＝不在時に
             // NOT_FOUND ではなく PERMISSION_DENIED になりうる）の評価順序に左右されない。
             let snapshot = try? await publicProfilesCollection.document(userId).getDocument()
-            if let snapshot = snapshot, !snapshot.exists {
+            if let snapshot, !snapshot.exists {
                 // ドキュメント未作成（マイグレーション未実施）のユーザー。
                 // 呼び出し側が createPublicProfile へ切り替えられるよう notFound で伝える。
                 throw FirestoreServiceError.notFound
@@ -1383,7 +1383,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 if case let .added(postIds) = addResult {
                     transaction.updateData([
                         "recommendedPostIds": postIds,
-                        "updatedAt": Timestamp(date: Date())
+                        "updatedAt": Timestamp(date: Date()),
                     ], forDocument: profileRef)
                 }
                 return addResult
@@ -1449,7 +1449,7 @@ class FirestoreService: FirestoreServiceProtocol {
                 if updated != current {
                     transaction.updateData([
                         "recommendedPostIds": updated,
-                        "updatedAt": Timestamp(date: Date())
+                        "updatedAt": Timestamp(date: Date()),
                     ], forDocument: profileRef)
                 }
                 return updated
@@ -1689,7 +1689,6 @@ class FirestoreService: FirestoreServiceProtocol {
             throw FirestoreServiceError.fetchFailed(error)
         }
     }
-
 
     // MARK: - Comments
 

@@ -6,8 +6,8 @@
 //  セキュリティ: email, blockedUserIds等の機密情報はUserモデルで管理
 //
 
-import Foundation
 import FirebaseFirestore
+import Foundation
 
 /// 公開プロフィール情報（他のユーザーから閲覧可能）
 struct PublicProfile: Identifiable, Codable {
@@ -59,19 +59,19 @@ struct PublicProfile: Identifiable, Codable {
 
     /// Userモデルから公開プロフィールを生成
     init(from user: User) {
-        self.id = user.id
-        self.displayName = user.displayName
-        self.photoURL = user.photoURL
-        self.bio = user.bio
-        self.customEditTools = user.customEditTools
-        self.customEditToolsOrder = user.customEditToolsOrder
-        self.followersCount = user.followersCount
-        self.followingCount = user.followingCount
-        self.postsCount = user.postsCount
+        id = user.id
+        displayName = user.displayName
+        photoURL = user.photoURL
+        bio = user.bio
+        customEditTools = user.customEditTools
+        customEditToolsOrder = user.customEditToolsOrder
+        followersCount = user.followersCount
+        followingCount = user.followingCount
+        postsCount = user.postsCount
         // おすすめの空は publicProfiles にしか無い（users には持たない）
-        self.recommendedPostIds = []
-        self.createdAt = user.createdAt
-        self.updatedAt = user.updatedAt
+        recommendedPostIds = []
+        createdAt = user.createdAt
+        updatedAt = user.updatedAt
     }
 
     // MARK: - Firestore Mapping
@@ -81,26 +81,26 @@ struct PublicProfile: Identifiable, Codable {
         var data: [String: Any] = [
             "id": id,
             "createdAt": Timestamp(date: createdAt),
-            "updatedAt": Timestamp(date: updatedAt)
+            "updatedAt": Timestamp(date: updatedAt),
         ]
 
-        if let displayName = displayName {
+        if let displayName {
             data["displayName"] = displayName
         }
 
-        if let photoURL = photoURL {
+        if let photoURL {
             data["photoURL"] = photoURL
         }
 
-        if let bio = bio {
+        if let bio {
             data["bio"] = bio
         }
 
-        if let customEditTools = customEditTools {
+        if let customEditTools {
             data["customEditTools"] = customEditTools
         }
 
-        if let customEditToolsOrder = customEditToolsOrder {
+        if let customEditToolsOrder {
             data["customEditToolsOrder"] = customEditToolsOrder
         }
 
@@ -122,29 +122,29 @@ struct PublicProfile: Identifiable, Codable {
             throw PublicProfileError.missingUserId
         }
 
-        self.id = userId
-        self.displayName = documentData["displayName"] as? String
-        self.photoURL = documentData["photoURL"] as? String
-        self.bio = documentData["bio"] as? String
-        self.customEditTools = documentData["customEditTools"] as? [String]
-        self.customEditToolsOrder = documentData["customEditToolsOrder"] as? [String]
-        self.followersCount = documentData["followersCount"] as? Int ?? 0
-        self.followingCount = documentData["followingCount"] as? Int ?? 0
-        self.postsCount = documentData["postsCount"] as? Int ?? 0
+        id = userId
+        displayName = documentData["displayName"] as? String
+        photoURL = documentData["photoURL"] as? String
+        bio = documentData["bio"] as? String
+        customEditTools = documentData["customEditTools"] as? [String]
+        customEditToolsOrder = documentData["customEditToolsOrder"] as? [String]
+        followersCount = documentData["followersCount"] as? Int ?? 0
+        followingCount = documentData["followingCount"] as? Int ?? 0
+        postsCount = documentData["postsCount"] as? Int ?? 0
         // 旧データ（フィールド無し）・型違いは空配列として扱う
-        self.recommendedPostIds = RecommendedSkies.normalized(documentData["recommendedPostIds"] as? [String] ?? [])
+        recommendedPostIds = RecommendedSkies.normalized(documentData["recommendedPostIds"] as? [String] ?? [])
 
         // TimestampからDateに変換
         if let createdAtTimestamp = documentData["createdAt"] as? Timestamp {
-            self.createdAt = createdAtTimestamp.dateValue()
+            createdAt = createdAtTimestamp.dateValue()
         } else {
-            self.createdAt = Date()
+            createdAt = Date()
         }
 
         if let updatedAtTimestamp = documentData["updatedAt"] as? Timestamp {
-            self.updatedAt = updatedAtTimestamp.dateValue()
+            updatedAt = updatedAtTimestamp.dateValue()
         } else {
-            self.updatedAt = Date()
+            updatedAt = Date()
         }
     }
 

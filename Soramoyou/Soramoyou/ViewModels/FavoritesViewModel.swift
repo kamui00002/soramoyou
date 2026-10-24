@@ -25,8 +25,8 @@
 //    次ページはその先から始まる＝その投稿は二度と取りに行かれず静かに消える。
 //
 
-import Foundation
 import FirebaseFirestore
+import Foundation
 
 @MainActor
 final class FavoritesViewModel: ObservableObject {
@@ -99,7 +99,8 @@ final class FavoritesViewModel: ObservableObject {
     init(ownUserId: String?,
          firestoreService: FirestoreServiceProtocol = FirestoreService(),
          pageSize: Int = 30,
-         maxPagesPerRequest: Int = 5) {
+         maxPagesPerRequest: Int = 5)
+    {
         self.ownUserId = ownUserId
         self.firestoreService = firestoreService
         self.pageSize = pageSize
@@ -168,8 +169,8 @@ final class FavoritesViewModel: ObservableObject {
                 "count": posts.count,
                 "unavailable_count": unavailableCount,
                 // 予算を使い切っても1件も出せなかったか
-                //（＝削除済みのお気に入りが溜まっている兆候。自己修復を入れるかの判断材料）
-                "stalled_with_more": stalledWithMore
+                // （＝削除済みのお気に入りが溜まっている兆候。自己修復を入れるかの判断材料）
+                "stalled_with_more": stalledWithMore,
             ])
         } catch {
             guard generation == fetchGeneration else { return }
@@ -260,7 +261,7 @@ final class FavoritesViewModel: ObservableObject {
     private func fetchVisiblePages(userId: String, after startCursor: Date?) async throws -> PageBatch {
         var batch = PageBatch(cursor: startCursor)
 
-        for _ in 0..<maxPagesPerRequest {
+        for _ in 0 ..< maxPagesPerRequest {
             let page = try await firestoreService.fetchFavorites(
                 userId: userId,
                 limit: pageSize,
