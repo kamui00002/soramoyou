@@ -14,6 +14,8 @@ struct SkyBackgroundView<Content: View>: View {
     let showClouds: Bool
 
     @State private var cloudOffset: CGFloat = 0
+    /// 端末の「視差効果を減らす」。ON のときは雲を流さない（初めの位置で止めた絵にする）
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(showClouds: Bool = true, @ViewBuilder content: () -> Content) {
         self.showClouds = showClouds
@@ -33,13 +35,26 @@ struct SkyBackgroundView<Content: View>: View {
             // 装飾的な雲（オプション）
             if showClouds {
                 cloudsLayer
+                    // 「視差効果を減らす」を途中で切り替えたら雲を作り直し、走っている繰り返しの動きを確実に捨てる
+                    // （SwiftUI は値を始点へ戻しただけでは repeatForever の動きを捨てないことがあるため）
+                    // ⚠️ 作り直すのは雲だけ。content に付けると中の画面の状態まで消える
+                    .id(reduceMotion)
             }
 
             // コンテンツ
             content
         }
         .onAppear {
-            if showClouds {
+            // 「視差効果を減らす」ON のときは雲を流さない（cloudOffset = 0 ＝ 画面に出た最初の位置で止めた絵）
+            if showClouds, !reduceMotion {
+                startCloudAnimation()
+            }
+        }
+        .onChange(of: reduceMotion) { reduce in
+            // 画面を出している途中で設定が変わったとき: ON → 初めの位置に戻して止める／OFF → 流し始める
+            if reduce {
+                cloudOffset = 0
+            } else if showClouds {
                 startCloudAnimation()
             }
         }
@@ -510,6 +525,8 @@ struct AnimatedCard<Content: View>: View {
 
 struct ShimmerEffect: ViewModifier {
     @State private var phase: CGFloat = 0
+    /// 端末の「視差効果を減らす」。ON のときは光の帯を出さない（ずっと流れる帯をやめ、下地だけの止めた絵にする）
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
@@ -528,15 +545,38 @@ struct ShimmerEffect: ViewModifier {
                     .offset(x: -geometry.size.width * 0.3 + phase * geometry.size.width * 1.6)
                     .mask(content)
                 }
+                // 「視差効果を減らす」ON のときは帯を見せない。phase 0 の帯は左端に半分だけ光る中途半端な絵になるため、
+                // 帯そのものを消して下地（骨組みの形）だけにする
+                .opacity(reduceMotion ? 0 : 1)
+                // 途中で切り替えたら帯だけを作り直し、走っている繰り返しの動きを確実に捨てる（content は作り直さない）
+                .id(reduceMotion)
             )
             .onAppear {
-                withAnimation(
-                    Animation.linear(duration: 1.5)
-                        .repeatForever(autoreverses: false)
-                ) {
-                    phase = 1
+                // 「視差効果を減らす」ON のときは帯を流さない
+                if !reduceMotion {
+                    startSweep()
                 }
             }
+            .onChange(of: reduceMotion) { reduce in
+                // 画面を出している途中で設定が変わったとき: ON → 帯を初めの位置に戻す（帯は上の opacity で見えない）
+                // ／OFF → 流し始める
+                if reduce {
+                    phase = 0
+                } else {
+                    startSweep()
+                }
+            }
+    }
+
+    /// 光の帯を左から右へ流し続ける（ずっと動く）
+    /// 「視差効果を減らす」ON のときは呼ばない
+    private func startSweep() {
+        withAnimation(
+            Animation.linear(duration: 1.5)
+                .repeatForever(autoreverses: false)
+        ) {
+            phase = 1
+        }
     }
 }
 
@@ -551,12 +591,18 @@ extension View {
 
 struct PulseEffect: ViewModifier {
     @State private var isPulsing = false
+    /// 端末の「視差効果を減らす」。ON のときは脈打たせない（不透明・等倍で止めた絵にする）
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
             .scaleEffect(isPulsing ? 1.05 : 1.0)
             .opacity(isPulsing ? 0.8 : 1.0)
             .onAppear {
+                // 「視差効果を減らす」ON のときは脈打たせない（isPulsing = false のまま＝不透明・等倍）
+                // ⚠️ 画面を出している途中で設定が変わっても追わない。走っている繰り返しの動きを確実に止めるには
+                //    中身（content）ごと作り直すしかなく、中身の状態（@State など）まで消えてしまうため
+                guard !reduceMotion else { return }
                 withAnimation(
                     Animation.easeInOut(duration: DesignTokens.Animation.pulseDuration)
                         .repeatForever(autoreverses: true)

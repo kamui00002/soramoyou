@@ -80,6 +80,8 @@ struct EmptyStateView: View {
     let type: EmptyStateType
     var action: (() -> Void)?
     @State private var isAnimating = false
+    /// 端末の「視差効果を減らす」。ON のときはアイコンと光をふわふわさせない（始点で止めた絵にする）
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: DesignTokens.Spacing.lg) {
@@ -118,9 +120,16 @@ struct EmptyStateView: View {
                     .scaleEffect(isAnimating ? 1.05 : 1.0)
             }
             .animation(
-                Animation.easeInOut(duration: 2.0).repeatForever(autoreverses: true),
+                // 「視差効果を減らす」ON のときは nil（動きを付けない）。OFF のときは今までと同じ動き
+                Motion.animation(
+                    Animation.easeInOut(duration: 2.0).repeatForever(autoreverses: true),
+                    reduceMotion: reduceMotion
+                ),
                 value: isAnimating
             )
+            // 「視差効果を減らす」を途中で切り替えたらアイコンまわりを作り直し、走っている繰り返しの動きを確実に捨てる
+            // （SwiftUI は値を始点へ戻しただけでは repeatForever の動きを捨てないことがあるため）
+            .id(reduceMotion)
 
             // タイトル
             Text(type.title)
@@ -172,7 +181,16 @@ struct EmptyStateView: View {
         }
         .padding(DesignTokens.Spacing.xl)
         .onAppear {
-            isAnimating = true
+            // 「視差効果を減らす」ON のときは動かさない（isAnimating = false のまま＝始点で止めた絵。
+            // アイコンが本来の大きさで、画面に出た最初の絵と同じ）
+            if !reduceMotion {
+                isAnimating = true
+            }
+        }
+        .onChange(of: reduceMotion) { reduce in
+            // 画面を出している途中で設定が変わったとき: ON → 始点に戻して止める（上の animation が nil なので一瞬で戻る）
+            // ／OFF → 動かし始める
+            isAnimating = !reduce
         }
     }
 }
