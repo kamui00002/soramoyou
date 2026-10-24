@@ -1,7 +1,7 @@
 //
 // そらもよう Cloud Functions（プッシュ通知の送信側）
 //
-// トリガー（Firestore ドキュメント作成 / 削除）:
+// トリガー（Firestore ドキュメント作成 / 削除・定期実行）:
 //   - onLikeCreated           likes/{likeId}      → 投稿者へ「いいねされました」
 //   - onCommentCreated        comments/{commentId}→ 投稿者へ「コメントされました」
 //   - onPostCreated           posts/{postId}      → フォロワー / 全員（オプトイン）へ「新しい空」
@@ -9,6 +9,7 @@
 //   - onFollowDeleted         follows/{followId}  → フォローカウンタを整合（通知はしない）
 //   - onUserBlockListChanged  users/{userId}      → ブロック一覧に新しく入った相手との両方向のフォローを消す
 //   - onPublicProfileUpdated  publicProfiles/{uid}→ 「おすすめの空」に新しく入った投稿の投稿者へ「選ばれました」
+//   - publishDailyPick        毎朝 7:00（JST）    → 公開投稿から「今日のおすすめのそらもよう」を選び、選ばれた投稿者へ通知
 //   - notifyFeedbackToDiscord feedback/{id}       → 開発者の Discord へ「ご意見・ご要望が届いた」（Webhook）
 //
 // 設計メモ:
@@ -31,6 +32,7 @@
 
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onDocumentCreated, onDocumentDeleted, onDocumentUpdated, onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
@@ -474,6 +476,55 @@ exports.onPublicProfileUpdated = onDocumentUpdated("publicProfiles/{userId}", as
       // 1件の失敗で残りの通知を止めない。
       logger.warn("おすすめの空の通知に失敗", { recommenderId, postId, error: String(err && err.message) });
     }
+  }
+});
+
+// MARK: - 今日のおすすめのそらもよう（毎朝 7:00）⭐️
+//
+// 毎朝 7:00（JST）に公開投稿から候補を選び、dailyPicks/{yyyy-MM-dd} に書く。選ばれた投稿者へは通知する。
+//   - 配信プレフは いいね / コメント と同じ notifyReactions に相乗りする（新しい設定項目は増やさない）。
+//   - ⚠️ 「私のおすすめの空」（上の onPublicProfileUpdated・利用者が自分のプロフィールに飾る最大3件）とは別物。
+//     こちらはサーバーが毎朝、公開投稿からランダムに選ぶ「今日の1枚」（全員に同じ・運営とテスト用アカウントの投稿は除く）。
+//   - 通知は dailyPickConfig/settings の notifyEnabled が true のときだけ送る。
+//     1.17.0 の公開日まで止めておくため（アプリ側が未配信の間に通知だけ届かないようにする）。
+//   - 選び方・書き込み・ログの中身は dailyPick.js（純関数と定数は dailyPickCore.js）。ここは配線だけ。
+
+const dailyPickCore = require("./dailyPickCore");
+const dailyPick = require("./dailyPick");
+
+/**
+ * 選ばれた投稿者へ通知を試みる。戻り値は dailyPickLog.notifyResult にそのまま書かれる。
+ * ⚠️ 成功を意味する "sent" は返さない。sendToToken は失敗を握りつぶして何も返さない（pushHelpers.js）ため、
+ *    実際に届いたかどうかはここでは分からない。"attempted"（送信を試みた）が正直な表現。
+ */
+async function notifyDailyPickOwner({ ownerId, postId, dateKey }) {
+  const owner = await getUser(ownerId);
+  if (!owner) return "no_user";
+  if (!owner.fcmToken) return "no_token";
+  if (!prefEnabled(owner, "notifyReactions")) return "pref_off";
+
+  await sendToUser(
+    ownerId,
+    owner,
+    { title: dailyPickCore.NOTICE_TITLE, body: dailyPickCore.noticeBody() },
+    { type: "dailyPick", postId, dateKey }
+  );
+  return "attempted";
+}
+
+exports.publishDailyPick = onSchedule(dailyPickCore.SCHEDULE_OPTIONS, async () => {
+  try {
+    const summary = await dailyPick.runDailyPick(db, {
+      now: () => new Date(),
+      rng: Math.random,
+      logger,
+      notifyOwner: notifyDailyPickOwner,
+    });
+    logger.info("publishDailyPick: done", summary);
+  } catch (err) {
+    logger.error("publishDailyPick: failed", { error: String(err && err.message) });
+    // 投げ直す＝SCHEDULE_OPTIONS の retryCount: 2 による再試行に任せる。
+    throw err;
   }
 });
 
