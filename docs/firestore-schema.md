@@ -320,6 +320,7 @@
 
 毎朝 7:00（日本時間）に Cloud Functions の `publishDailyPick`（`functions/dailyPick.js`・純関数と定数は `functions/dailyPickCore.js`）が、
 公開投稿から「今日の候補」を最大 5 件選んで書く。全員に同じ 1 日分が出る（1 件目が主役）。
+候補は公開投稿を 1 件ずつ同じ重みで混ぜて選ぶので、公開投稿が多い人ほど主役になりやすい（過去 30 日に主役になった人は避けるので、続けて選ばれにくい）。
 
 > ⚠️ **「私のおすすめの空」（`publicProfiles.recommendedPostIds`・`recommendationNotices`・`onPublicProfileUpdated`）とは別物。**
 > あちらは利用者が自分のプロフィールに飾る最大 3 件。こちらはサーバーが毎朝ランダムに選ぶ「今日の 1 枚」。名前は `dailyPick` 系で分けている。
@@ -371,6 +372,8 @@
   - `pref_off`: 宛先の `notifyReactions` がオフ
   - `error`: 通知関数が例外を投げた
   - 通知をオフ・時間帯外で送らなかった回、権利を取れなかった回は `notifyResult` を書かない（関数の戻り値には `skipped_disabled` / `skipped_window` / `already_claimed` などが出るがログ文書には残らない）。
+  - `notifyClaimedAt` はあるのに `notifyResult` が無い＝送る権利を取った後に落ちた回。通知は届いたかもしれないし、送れていないかもしれない（再試行しても送らない＝多くて 1 回を優先した取りこぼし）。
+  - 送る権利を取るトランザクションそのものが失敗した回は、関数が例外を投げ、定期実行の再試行（2 回）でやり直す（再試行の回も印を見るので、送るのは多くて 1 回）。
 - 過去 30 日分の `candidates[0].userId` を読んで「最近主役になった投稿者」を避ける（足りなければ主役になった日が古い順に緩める）。
 - TTL: `expireAt` に **TTL ポリシー**を設定して自動削除する（未設定だと消えない。**本番ではまだ有効化していない**）:
   `gcloud firestore fields ttls update expireAt --collection-group=dailyPickLog --enable-ttl --project=soramoyou-ios`
@@ -393,6 +396,8 @@
 
 - 公開投稿の読み出しは `posts` の `visibility == public` の等式だけ（`orderBy` なし）なので、**複合インデックスは要らない**。
   ⚠️ `orderBy` を足すと複合インデックスが要るようになる。
+- 公開投稿が 50000 件を超えると、`orderBy` が無いので文書 ID 順の先頭 50000 件だけを読む＝毎日同じ一部から選ぶ（ID が後ろの投稿は候補にならない）。そうなったら `truncated` が true になり警告ログが出る。
+- 通報（`reports`）は上限なしで全部読む（通報された投稿を確実に外すため。`limit` を付けると通報済みの投稿がすり抜ける）。通報の作成には件数の制限が無いので、件数は `dailyPickLog.reportedCount` で見張る（急に増えたら、毎朝の読み取りの量とメモリが増える）。
 
 ### いざというとき: ふさわしくない投稿が選ばれたら
 

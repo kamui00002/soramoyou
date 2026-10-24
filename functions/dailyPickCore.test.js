@@ -45,7 +45,7 @@ test("定数: 仕様どおりの値", () => {
   assert.equal(core.NOTICE_TITLE, "そらもよう");
 });
 
-test("SCHEDULE_OPTIONS: 毎朝 7:00 JST・東京リージョン・多重実行しない", () => {
+test("SCHEDULE_OPTIONS: 毎朝 7:00 JST・東京リージョン・インスタンスは 1 台まで（同時実行はありうる）", () => {
   assert.deepEqual(core.SCHEDULE_OPTIONS, {
     schedule: "0 7 * * *",
     timeZone: "Asia/Tokyo",
@@ -294,7 +294,7 @@ test("pickCandidates: count を超えない・既定は 5 件", () => {
   assert.equal(core.pickCandidates({ posts, count: 2 }).candidates.length, 2);
 });
 
-test("pickCandidates: 1 件目は投稿ごとに等確率（rng を全域に振って各投稿が先頭に来る）", () => {
+test("pickCandidates: どの投稿も 1 件目になりうる（rng を全域に振って各投稿が先頭に来る）", () => {
   const posts = mk([["p1", "a"], ["p2", "b"], ["p3", "c"]]);
   const heads = new Set();
   for (let i = 0; i < 30; i++) {
