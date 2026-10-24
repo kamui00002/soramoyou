@@ -3,7 +3,7 @@
 // Firestore のエミュレーターで本物の要求として評価するテスト ⭐️☁️
 // ⚠️ 「私のおすすめの空」（publicProfiles.recommendedPostIds・recommendationNotices）とは別物。
 //
-// 実行（リポジトリの根で。functions/ の npm run test:emulator への登録は dailyPick.emulator.test.js と同じ変更で行う）:
+// 実行（functions/ の npm run test:emulator に登録済み。--project demo-soramoyou-security で起きる。単体ならリポジトリの根で）:
 //   firebase emulators:exec --only firestore --project demo-soramoyou-security \
 //     "node --test functions/dailyPickRules.emulator.test.js"
 //
@@ -40,6 +40,12 @@
 //    dailyPickLog・dailyPickConfig はルールが無くても既定で拒否されるので、③ で赤にならなければ、
 //    match のパスの書き間違いで「何も確かめていない 403」に化けている。
 //    ① ではログイン済みの get が緑のまま残ることで、ログイン済みのトークンが効いていることも分かる。
+//    【結果 2026-10-24】リポジトリの firestore.rules は触らず、一時フォルダの写しを壊して読ませた（番号は node --test の番号）
+//      ① 赤 2 件（1・3）＝予言どおり。ログイン済みの get（2・4）は緑のまま
+//      ② 赤 6 件（8〜13）＝予言どおり
+//      ③ 赤 4 件（17〜20）＝予言どおり
+//      ④（追加）dailyPickConfig に ③ と同じ壊し方 → 赤 4 件（23〜26）＝get・list × ログインの有無
+//      壊さないルールでは 28/28 緑
 //
 
 "use strict";
