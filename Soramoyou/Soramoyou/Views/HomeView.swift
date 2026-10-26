@@ -14,6 +14,8 @@ struct HomeView: View {
     @StateObject private var forYouViewModel = ForYouFeedViewModel()
     /// On This Day とストリークチップの共有 VM（1回の投稿取得から両方を導出）⭐️
     @StateObject private var onThisDayViewModel = OnThisDayViewModel()
+    /// 今日のおすすめのそらもよう用 VM（読み込みはこの HomeView が担う）⭐️
+    @StateObject private var dailyPickViewModel = DailyPickViewModel()
     @EnvironmentObject private var likeManager: LikeManager
     @EnvironmentObject private var favoriteManager: FavoriteManager
     @State private var selectedPost: Post?
@@ -116,9 +118,15 @@ struct HomeView: View {
                 // await 中にセグメントが切り替わっても、更新対象といいね照合対象を
                 // 同じ VM に固定する（activeViewModel は computed のため再評価されうる。レビュー D6）
                 let targetViewModel = activeViewModel
+                // 今日のおすすめは「すべて」のときだけ引っ張って更新する
+                // （セグメントも最初の await の前に定数に取る＝上と同じ理由）⭐️
+                let refreshedSegment = selectedSegment
                 await targetViewModel.refresh()
                 await likeManager.checkLikeStatus(for: targetViewModel.posts)
                 await favoriteManager.checkFavoriteStatus(for: targetViewModel.posts)
+                if refreshedSegment == .all {
+                    await dailyPickViewModel.load(viewerId: viewModel.currentUserId, force: true)
+                }
             }
             .onAppear {
                 Task {
@@ -137,6 +145,12 @@ struct HomeView: View {
                     if let uid = viewModel.currentUserId {
                         await onThisDayViewModel.load(userId: uid)
                     }
+                }
+                // 今日のおすすめのそらもよう ⭐️
+                // ゲスト（未ログイン）にもカードを出すため、ログイン条件は付けない
+                // （利用者の決定 2026-10-24・2026-10-26）
+                Task {
+                    await dailyPickViewModel.load(viewerId: viewModel.currentUserId)
                 }
             }
             .onChange(of: selectedSegment) { newSegment in
@@ -224,6 +238,15 @@ struct HomeView: View {
                             "current_streak": onThisDayViewModel.streak.currentStreak,
                         ])
                         showingStreakZukan = true
+                    }
+
+                    // 今日のおすすめのそらもよう — 決まっているときだけ表示する ⭐️
+                    // （load は HomeView の onAppear / refreshable。「あなた向け」には出さない）
+                    DailyPickCardView(viewModel: dailyPickViewModel) { post in
+                        let impact = UIImpactFeedbackGenerator(style: .light)
+                        impact.impactOccurred()
+                        dailyPickViewModel.recordTapped()
+                        selectedPost = post
                     }
 
                     // On This Day（1年前の空）— 同月日の過去投稿がある時だけ表示する ⭐️
