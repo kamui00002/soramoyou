@@ -27,9 +27,27 @@ struct DailyPick: Equatable {
     ///   - dateKey: 文書 ID
     ///   - data: `DocumentSnapshot.data()`
     /// - Returns: 使える postIds が 1 件も無ければ nil
-    static func parse(dateKey _: String, data _: [String: Any]) -> DailyPick? {
-        // 契約の仮の実装（A1 が置き換える）
-        nil
+    static func parse(dateKey: String, data: [String: Any]) -> DailyPick? {
+        // postIds が配列でなければ使えない
+        guard let rawIds = data["postIds"] as? [Any] else { return nil }
+
+        var seen = Set<String>()
+        var ids: [String] = []
+        for raw in rawIds {
+            // 文字列以外は落とす
+            guard let text = raw as? String else { continue }
+            let id = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 空・「/」入り（fetchPost の文書パスが壊れる）は落とす
+            guard !id.isEmpty, !id.contains("/") else { continue }
+            // 重複は最初の 1 つだけ残す（順番は保つ）
+            guard seen.insert(id).inserted else { continue }
+            ids.append(id)
+            // 上限に達したらそれ以上は読まない
+            if ids.count >= maxCandidates { break }
+        }
+
+        guard !ids.isEmpty else { return nil }
+        return DailyPick(dateKey: dateKey, postIds: ids)
     }
 }
 
@@ -50,16 +68,18 @@ enum DailyPickResolver {
     ///   - post: fetchPost で読めた投稿
     ///   - blockedUserIds: 見ている人がブロックしている投稿者（ゲストは空）
     /// - Returns: 公開かつブロックしていない投稿者なら `.show`、それ以外は `.skip`
-    static func classify(post _: Post, blockedUserIds _: Set<String>) -> DailyPickOutcome {
-        // 契約の仮の実装（A1 が置き換える）
-        .stop
+    static func classify(post: Post, blockedUserIds: Set<String>) -> DailyPickOutcome {
+        // フォロー中なら followers の投稿も read が通るので、端末でも必ず public を確かめる
+        guard post.visibility == .public else { return .skip }
+        // ブロック中の投稿者は出さない
+        guard !blockedUserIds.contains(post.userId) else { return .skip }
+        return .show
     }
 
     /// 読めなかった投稿を分類する
     /// - Parameter error: fetchPost が投げたエラー
     /// - Returns: `PostAvailability.isUnavailable` なら `.skip`、それ以外（ネットワーク断など）は `.stop`
-    static func classify(error _: Error) -> DailyPickOutcome {
-        // 契約の仮の実装（A1 が置き換える）
-        .stop
+    static func classify(error: Error) -> DailyPickOutcome {
+        PostAvailability.isUnavailable(error) ? .skip : .stop
     }
 }

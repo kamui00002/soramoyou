@@ -19,8 +19,30 @@ enum DailyPickKey {
     /// 今日の鍵と前日の鍵を返す
     /// - Parameter now: 基準の瞬間（テストでは固定の時刻を渡す）
     /// - Returns: today＝今日のおすすめの鍵、fallback＝その前日の鍵（どちらも yyyy-MM-dd）
-    static func keys(now _: Date) -> (today: String, fallback: String) {
-        // 契約の仮の実装（A1 が置き換える）
-        (today: "", fallback: "")
+    static func keys(now: Date) -> (today: String, fallback: String) {
+        // 「今 − 7 時間」の瞬間を作り、その瞬間の日本時間の日付を鍵にする
+        // （サーバーの「UTC に (9 − 7) 時間足して日付部分を取る」と同じ結果）
+        let shifted = now.addingTimeInterval(-TimeInterval(switchHourJST) * 3600)
+        let today = formatKey(shifted)
+        // fallback は鍵の日付の前日（日本は夏時間が無いので 24 時間引きと同じ）
+        let previous = shifted.addingTimeInterval(-24 * 3600)
+        return (today: today, fallback: formatKey(previous))
+    }
+
+    /// 日本時間のカレンダー（グレゴリオ暦・Asia/Tokyo 固定）
+    /// - Note: Calendar は値型で、ここでは読み取りだけなのでどのスレッドから呼んでも安全。
+    ///   DateFormatter は共有せず、年月日の数値から自前で yyyy-MM-dd を組み立てる
+    ///   （端末のロケール・暦の設定の影響を受けず、スレッドの心配も要らない）。
+    private static let tokyoCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo") ?? TimeZone(secondsFromGMT: 9 * 3600)!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        return calendar
+    }()
+
+    /// 瞬間の「日本時間での日付」を yyyy-MM-dd にする
+    private static func formatKey(_ date: Date) -> String {
+        let parts = tokyoCalendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 }
