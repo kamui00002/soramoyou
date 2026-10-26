@@ -245,6 +245,15 @@ extension GoldenHourNotificationManager: UNUserNotificationCenterDelegate {
         if response.notification.request.identifier.hasPrefix(Self.identifierPrefix) {
             LoggingService.shared.logEvent("golden_hour_notification_tapped", parameters: nil)
         }
+        // 「今日のおすすめのそらもよう」に選ばれた人への通知（サーバーが data に type: "dailyPick" / postId / dateKey を付ける）を開いた計測 ⭐️
+        // 通知タップはアプリを開くだけ（今のいいね通知と同じ・行き先は作らない＝利用者の決定 2026-10-24）。
+        // 「私のおすすめの空」の通知（recommendationNotices）とは別物。
+        // postId・uid・名前は送らない（計装に個人を特定する値を載せない）。
+        let dailyPickUserInfo = response.notification.request.content.userInfo
+        if dailyPickUserInfo["type"] as? String == "dailyPick" {
+            let dateKey = dailyPickUserInfo["dateKey"] as? String ?? ""
+            LoggingService.shared.logEvent("daily_pick_notification_opened", parameters: ["date_key": dateKey])
+        }
         // そらとも（友達グループで空を共有）の新着通知なら、行き先をルーターへ渡す ⭐️ tasks 14.1
         // ルーターは type が soratomoPost のものだけを保留にし、既存の通知とゴールデンアワーでは何もしない。
         // 表示はここでは決めない（ログイン状態・そらともを使えるかの判定・What's New の表示中かが分かった時点で画面側が解決する。
