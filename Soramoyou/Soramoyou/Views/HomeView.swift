@@ -28,15 +28,33 @@ struct HomeView: View {
     @State private var animateCards = false // フィードアニメーション用 ☀️
     /// ホームフィードの表示セグメント（すべて / あなた向け）⭐️ PR-7
     @State private var selectedSegment: HomeFeedSegment = .all
+    /// 「あなた向け」の初回の読み込みが終わったか ⭐️ PR-H
+    ///
+    /// めくって切り替える TabView は、隣の「あなた向け」のページを指の動きに合わせて先に見せる。
+    /// まだ一度も読んでいない（遅延読み込みの前の）あいだは VM の初期値が「投稿 0 件・読み込み中でない」なので、
+    /// そのまま出すと「あなた向けの投稿はまだありません」がチラッと見えてしまう。
+    /// VM には「一度でも読んだか」のフラグが無いため、ここで持ち、false のあいだは読み込み中の表示にする。
+    /// true にするのは読み込みが**終わってから**（始める前に立てると、Task が走り出す前の一瞬に空の表示が出うるため）。
+    @State private var hasLoadedForYouFeedOnce = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// アプリが前に出たか（今日のおすすめを、日をまたいで開いたままでも今日の分に読み直すため）⭐️
     @Environment(\.scenePhase) private var scenePhase
 
     /// 現在のセグメントに対応する ViewModel ⭐️ PR-7
-    /// ForYouFeedViewModel は HomeViewModel のサブクラスなので、この1本の参照で
-    /// フィード表示・状態表示を共通化できる（両方 @StateObject なので変更は body に届く）。
+    /// ForYouFeedViewModel は HomeViewModel のサブクラスなので、この1本の参照で扱える
+    /// （両方 @StateObject なので変更は body に届く）。
+    /// ⭐️ PR-H: めくって切り替えにしてからは、フィード表示・状態表示・引っ張って更新は
+    /// ページごとに `feedViewModel(for:)` で決める。ここを見るのはエラーのアラートだけ。
     private var activeViewModel: HomeViewModel {
         selectedSegment == .forYou ? forYouViewModel : viewModel
+    }
+
+    /// セグメント（ページ）に対応する ViewModel ⭐️ PR-H
+    /// 「すべて」→ viewModel、「あなた向け」→ forYouViewModel。
+    /// 選択中のセグメントでなく「そのページのセグメント」から引くので、
+    /// めくっている途中で隣のページを描くときも、そのページ自身の VM の状態が出る。
+    private func feedViewModel(for segment: HomeFeedSegment) -> HomeViewModel {
+        segment == .forYou ? forYouViewModel : viewModel
     }
 
     var body: some View {
@@ -64,41 +82,9 @@ struct HomeView: View {
                         .padding(.top, DesignTokens.Spacing.sm)
                     }
 
-                    ZStack {
-                        if activeViewModel.isLoading, activeViewModel.posts.isEmpty {
-                            // 初回読み込み中 ☁️
-                            LoadingStateView(type: .initial)
-                        } else if let error = activeViewModel.lastError, activeViewModel.posts.isEmpty {
-                            // エラー発生時（投稿が空の場合）☁️
-                            ErrorStateView(
-                                error: error,
-                                retryAction: {
-                                    await activeViewModel.refresh()
-                                },
-                                secondaryAction: nil,
-                                secondaryActionTitle: nil
-                            )
-                        } else if activeViewModel.posts.isEmpty {
-                            if selectedSegment == .forYou {
-                                // あなた向けの投稿がない場合（フォロー0・タグ0など）⭐️ PR-7
-                                EmptyStateView(type: .custom(
-                                    icon: "person.2",
-                                    title: "あなた向けの投稿はまだありません",
-                                    description: "ユーザーやタグをフォローすると、その新着がここに流れます",
-                                    actionTitle: nil
-                                ))
-                            } else {
-                                // 投稿がない場合 ☁️
-                                EmptyStateView(type: .posts) {
-                                    // 投稿タブに切り替える（TabViewの切り替えはMainTabViewで管理）
-                                }
-                            }
-                        } else {
-                            // フィード表示
-                            feedView
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // フィード本体（すべて⇄あなた向けを左右にめくって切り替える）⭐️ PR-H
+                    feedPages
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     // 画面下部に固定表示されるバナー広告
                     BannerAdContainer()
@@ -116,20 +102,9 @@ struct HomeView: View {
                 }
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
-            .refreshable {
-                // await 中にセグメントが切り替わっても、更新対象といいね照合対象を
-                // 同じ VM に固定する（activeViewModel は computed のため再評価されうる。レビュー D6）
-                let targetViewModel = activeViewModel
-                // 今日のおすすめは「すべて」のときだけ引っ張って更新する
-                // （セグメントも最初の await の前に定数に取る＝上と同じ理由）⭐️
-                let refreshedSegment = selectedSegment
-                await targetViewModel.refresh()
-                await likeManager.checkLikeStatus(for: targetViewModel.posts)
-                await favoriteManager.checkFavoriteStatus(for: targetViewModel.posts)
-                if refreshedSegment == .all {
-                    await dailyPickViewModel.load(viewerId: viewModel.currentUserId, force: true)
-                }
-            }
+            // ⭐️ PR-H: 引っ張って更新（.refreshable）は、各ページの ScrollView（feedView）へ移した。
+            // ここに置いたままだと、めくって切り替えた 2 ページが同じ更新処理を共有し、
+            // 「今どちらのページか」を選択中のセグメントから読むことになるため。
             .onAppear {
                 Task {
                     await viewModel.fetchPosts()
@@ -156,13 +131,20 @@ struct HomeView: View {
                 }
             }
             .onChange(of: selectedSegment) { newSegment in
+                // 切り替わった手ごたえ ⭐️ PR-H
+                // 上の Picker のタップも、TabView を左右にめくったのも、どちらもここを通るので 1 か所で鳴らす
+                Haptics.play(.selection)
                 LoggingService.shared.logEvent("home_feed_segment_changed", parameters: [
                     "segment": newSegment.analyticsValue,
                 ])
                 // 「あなた向け」は初回選択時に遅延読み込み（未使用時のクエリコストを避ける）⭐️ PR-7
+                // ⚠️ PR-H: ページの onAppear で読みに行く形にはしない。TabView の page は隣のページを
+                //    先に作ることがあり、「すべて」を見ているだけで「あなた向け」を読んでしまう（遅延読み込みの意味が消える）。
                 if newSegment == .forYou, forYouViewModel.posts.isEmpty, !forYouViewModel.isLoading {
                     Task {
                         await forYouViewModel.fetchPosts()
+                        // 初回の読み込みが終わった＝ここからは VM の状態どおりに出す ⭐️ PR-H
+                        hasLoadedForYouFeedOnce = true
                         await likeManager.checkLikeStatus(for: forYouViewModel.posts)
                         await favoriteManager.checkFavoriteStatus(for: forYouViewModel.posts)
                     }
@@ -238,14 +220,133 @@ struct HomeView: View {
         .navigationViewStyle(.stack)
     }
 
+    // MARK: - Feed Pages ⭐️ PR-H
+
+    /// フィードのページ（すべて⇄あなた向けを左右にめくって切り替える）⭐️ PR-H
+    ///
+    /// - ログイン中: `TabView` の page 形式で 2 ページ。選択は上の Picker と同じ `selectedSegment` を共有するので、
+    ///   タップでもめくりでも切り替わる（どちらも `onChange(of: selectedSegment)` を通る）。
+    /// - ゲスト（未ログイン）: 「あなた向け」が成り立たない（publicProfiles を読めない）ので、
+    ///   TabView に入れず「すべて」の 1 ページだけを今までどおり出す（めくれない）。
+    ///   判定は Picker と同じ `viewModel.currentUserId`（ゲストには Picker も出していない）。
+    /// - Note: カードを横に引く操作（DragGesture の自作・List 化）はしない。
+    ///   指の動きの検知はスクロールとぶつかる（下の CardButtonStyle の記録）ため、ページ送りは TabView に任せる。
+    @ViewBuilder
+    private var feedPages: some View {
+        if viewModel.currentUserId != nil {
+            TabView(selection: $selectedSegment) {
+                ForEach(HomeFeedSegment.allCases) { segment in
+                    feedPage(for: segment)
+                        .tag(segment)
+                }
+            }
+            // ページの印（点）は出さない＝今どちらのページかは上の Picker が示す
+            .tabViewStyle(.page(indexDisplayMode: .never))
+        } else {
+            feedPage(for: .all)
+        }
+    }
+
+    /// 1 ページ分の中身（読み込み中／エラー／空／一覧）⭐️ PR-H
+    ///
+    /// 以前は body で `activeViewModel`（選択中のセグメントの VM）1 つを見て出し分けていた。
+    /// めくっている途中は 2 ページが同時に見えるので、ページ自身のセグメントの VM で出し分ける。
+    /// - Parameter segment: このページのセグメント
+    @ViewBuilder
+    private func feedPage(for segment: HomeFeedSegment) -> some View {
+        let pageViewModel = feedViewModel(for: segment)
+        ZStack {
+            if segment == .forYou, !hasLoadedForYouFeedOnce {
+                // 「あなた向け」をまだ一度も読み終えていない（遅延読み込みの前・最中）⭐️ PR-H
+                // めくる途中に隣のページとして見えても「投稿はまだありません」と誤って見せない
+                LoadingStateView(type: .initial)
+            } else if pageViewModel.isLoading, pageViewModel.posts.isEmpty {
+                // 初回読み込み中 ☁️
+                LoadingStateView(type: .initial)
+            } else if let error = pageViewModel.lastError, pageViewModel.posts.isEmpty {
+                // エラー発生時（投稿が空の場合）☁️
+                ErrorStateView(
+                    error: error,
+                    retryAction: {
+                        await pageViewModel.refresh()
+                    },
+                    secondaryAction: nil,
+                    secondaryActionTitle: nil
+                )
+            } else if pageViewModel.posts.isEmpty {
+                if segment == .forYou {
+                    // あなた向けの投稿がない場合（フォロー0・タグ0など）⭐️ PR-7
+                    EmptyStateView(type: .custom(
+                        icon: "person.2",
+                        title: "あなた向けの投稿はまだありません",
+                        description: "ユーザーやタグをフォローすると、その新着がここに流れます",
+                        actionTitle: nil
+                    ))
+                } else {
+                    // 投稿がない場合 ☁️
+                    EmptyStateView(type: .posts) {
+                        // 投稿タブに切り替える（TabViewの切り替えはMainTabViewで管理）
+                    }
+                }
+            } else {
+                // フィード表示
+                feedView(segment: segment, pageViewModel: pageViewModel)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 引っ張って更新（1 ページ分）⭐️ PR-H で外側から各ページの ScrollView へ移した
+    ///
+    /// 対象の VM とセグメントは、引っ張ったページのものを引数で受ける。
+    /// 以前（外側に 1 つ）は「await 中にセグメントが切り替わっても、更新対象といいね照合対象を
+    /// 同じ VM に固定する」ため、最初の await の前に定数へ取っていた（activeViewModel は computed のため
+    /// 再評価されうる。レビュー D6）。引数で受ければ途中でめくっても対象は変わらないので、その意図は形のうえで保たれる。
+    /// - Note: 読み込み中／エラー／空の表示には ScrollView が無いので、引っ張って更新が効くのは一覧のときだけ
+    ///   （外側に付けていた以前も同じ）。
+    /// - Parameters:
+    ///   - segment: 引っ張ったページのセグメント
+    ///   - pageViewModel: 引っ張ったページの VM
+    private func refreshPage(segment: HomeFeedSegment, pageViewModel: HomeViewModel) async {
+        await pageViewModel.refresh()
+        await likeManager.checkLikeStatus(for: pageViewModel.posts)
+        await favoriteManager.checkFavoriteStatus(for: pageViewModel.posts)
+        // 今日のおすすめは「すべて」のページで引っ張ったときだけ読み直す ⭐️
+        if segment == .all {
+            await dailyPickViewModel.load(viewerId: viewModel.currentUserId, force: true)
+        }
+    }
+
+    /// 写真を 2 回タップしたときのいいね（付けるだけ）⭐️ PR-H
+    ///
+    /// Instagram と同じく、付いていても外さない（2 回タップを重ねても「付けた→外れた」にならない）。
+    /// - ⚠️ 判定は Task の中（toggleLike を呼ぶ直前）で行う。LikeManager は @MainActor で、
+    ///   楽観更新（likedPostIds への追加）は toggleLike の最初の await より前に入るため、
+    ///   「確かめてから呼ぶ」の間に別のいいね操作が割り込まない。
+    /// - LikeManager は書き込み中の投稿への呼び出しを捨てる（inFlightPostIds）ので、
+    ///   通信中に 2 回タップを重ねても 2 回トグルされることはない（ここで別の守りは足さない）。
+    /// - ゲスト（未ログイン）は、いいねボタンと同じく toggleLike に任せる
+    ///   （LikeManager が showLoginPrompt を立てて何もしない）。
+    /// - Parameter post: 2 回タップされた投稿
+    private func addLikeFromDoubleTap(_ post: Post) {
+        Task {
+            guard !likeManager.isLiked(post.id) else { return }
+            await likeManager.toggleLike(post: post)
+        }
+    }
+
     // MARK: - Feed View ☀️
 
-    private var feedView: some View {
+    /// 1 ページ分の一覧 ⭐️ PR-H で引数つきに変えた（選択中のセグメントでなく、そのページの VM とセグメントを見る）
+    /// - Parameters:
+    ///   - segment: このページのセグメント（ストリーク・今日のおすすめ・On This Day を出すか）
+    ///   - pageViewModel: このページの VM（一覧・ページ送り・引っ張って更新の対象）
+    private func feedView(segment: HomeFeedSegment, pageViewModel: HomeViewModel) -> some View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: DesignTokens.Spacing.lg) {
                 // ストリークチップ・On This Day は「すべて」セグメントのみ表示 ⭐️ PR-7
                 // （あなた向けは「フォロー由来の投稿だけが流れる場所」として純度を保つ）
-                if selectedSegment == .all {
+                if segment == .all {
                     // ストリークチップ（🔥◯日連続）— 継続中のみ表示、タップで図鑑へ ⭐️
                     SkyStreakChipView(streak: onThisDayViewModel.streak) {
                         LoggingService.shared.logEvent("streak_chip_tapped", parameters: [
@@ -268,10 +369,10 @@ struct HomeView: View {
                     OnThisDayCardView(viewModel: onThisDayViewModel)
                 }
 
-                ForEach(Array(activeViewModel.posts.enumerated()), id: \.element.id) { index, post in
+                ForEach(Array(pageViewModel.posts.enumerated()), id: \.element.id) { index, post in
                     PostCard(
                         post: post,
-                        author: activeViewModel.authorsByUserId[post.userId],
+                        author: pageViewModel.authorsByUserId[post.userId],
                         isLiked: likeManager.isLiked(post.id),
                         likeCount: likeManager.likeCount(for: post),
                         isFavorited: favoriteManager.isFavorited(post.id),
@@ -293,7 +394,7 @@ struct HomeView: View {
                         onAuthorTapped: {
                             // 自分の投稿の場合はプロフィールタブへの遷移を促すか
                             // 既存仕様に任せる。ここでは他ユーザーであれば UserProfileView を開く
-                            if let currentUserId = activeViewModel.currentUserId,
+                            if let currentUserId = pageViewModel.currentUserId,
                                currentUserId == post.userId
                             {
                                 // 自分の投稿: プロフィールタブで見るほうが自然なので何もしない
@@ -303,6 +404,13 @@ struct HomeView: View {
                         },
                         onHashtagTapped: { tag in
                             selectedTag = tag
+                        },
+                        // 写真を 2 回タップでいいね（付けるだけ）⭐️ PR-H
+                        // ゲストにも渡す（いいねボタンと同じく LikeManager に任せる）。
+                        // ゲストには 2 回タップを付けないと決めたら、ここを
+                        // `viewModel.currentUserId == nil ? nil : { addLikeFromDoubleTap(post) }` に変える 1 か所で済む。
+                        onDoubleTapLike: {
+                            addLikeFromDoubleTap(post)
                         }
                     )
                     // スタガードアニメーション（改善）
@@ -317,14 +425,15 @@ struct HomeView: View {
                     .onAppear {
                         // ページネーション: 最後の投稿が表示されたら次のページを読み込む ☁️
                         // 重複リクエスト防止: 読み込み中の場合はスキップ
-                        if post.id == activeViewModel.posts.last?.id,
-                           !activeViewModel.isLoadingMore,
-                           activeViewModel.hasMorePosts
+                        if post.id == pageViewModel.posts.last?.id,
+                           !pageViewModel.isLoadingMore,
+                           pageViewModel.hasMorePosts
                         {
                             Task {
                                 // await 中のセグメント切替で件数計算と照合対象の VM が
                                 // 食い違わないよう、処理全体を同じ参照で完結させる（レビュー D6）
-                                let targetViewModel = activeViewModel
+                                // ⭐️ PR-H: 引数で受けたこのページの VM なので、途中でめくっても参照は変わらない
+                                let targetViewModel = pageViewModel
                                 let previousCount = targetViewModel.posts.count
                                 await targetViewModel.loadMorePosts()
                                 // 新しく読み込んだ投稿のいいね状態をチェック
@@ -337,7 +446,7 @@ struct HomeView: View {
                 }
 
                 // 追加読み込み中のインジケーター
-                if activeViewModel.isLoadingMore {
+                if pageViewModel.isLoadingMore {
                     HStack(spacing: DesignTokens.Spacing.sm) {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -350,7 +459,7 @@ struct HomeView: View {
                 }
 
                 // これ以上投稿がない場合
-                if !activeViewModel.hasMorePosts, !activeViewModel.posts.isEmpty {
+                if !pageViewModel.hasMorePosts, !pageViewModel.posts.isEmpty {
                     VStack(spacing: DesignTokens.Spacing.sm) {
                         Image(systemName: "checkmark.circle")
                             .font(.system(size: 24))
@@ -369,6 +478,10 @@ struct HomeView: View {
             }
             .padding(.horizontal, DesignTokens.Spacing.screenMargin)
             .padding(.top, DesignTokens.Spacing.sm)
+        }
+        // 引っ張って更新 — このページの VM とセグメントに固定する ⭐️ PR-H（理由は refreshPage の説明）
+        .refreshable {
+            await refreshPage(segment: segment, pageViewModel: pageViewModel)
         }
     }
 }
@@ -394,6 +507,19 @@ struct PostCard: View {
     /// ハッシュタグをタップしたときのハンドラ（タグ詳細へ遷移）⭐️
     /// nil の場合はチップが表示のみになる（タグ詳細画面内の再帰的な遷移を避けるため）。
     var onHashtagTapped: ((String) -> Void)?
+    /// 写真を 2 回タップしたときのハンドラ（いいねを付ける）⭐️ PR-H
+    /// nil のときは 2 回タップを付けない＝1 回タップが遅れない（SearchView・TagDetailView・ProfileView は今のまま）。
+    /// 渡したときだけ、写真の 2 回タップ・ハートの演出・触覚・読み上げの「いいね」操作が付く。
+    /// 付けるかどうか（付いていたら何もしない）は渡す側（HomeView）が決める。
+    var onDoubleTapLike: (() -> Void)?
+
+    /// 2 回タップのハートが見えているか ⭐️ PR-H
+    @State private var isDoubleTapHeartVisible = false
+    /// ハートを消す予約の番号 ⭐️ PR-H
+    /// 続けて 2 回タップしたとき、前の「消す」予約が新しく出したハートを早く消さないよう、最後の予約だけを効かせる。
+    @State private var doubleTapHeartToken = 0
+    /// 「視差効果を減らす」が ON か ⭐️ PR-H（ON のときハートは拡大せず、ふわっと出て消えるだけ）
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -435,11 +561,14 @@ struct PostCard: View {
                 }
             }
             .contentShape(Rectangle())
-            .onTapGesture {
-                let impact = UIImpactFeedbackGenerator(style: .light)
-                impact.impactOccurred()
-                onCardTapped?()
-            }
+            // 2 回タップで写真の中央に出るハート ⭐️ PR-H（onDoubleTapLike が無い画面では描かない）
+            .overlay { doubleTapHeart }
+            // 1 回タップ＝詳細へ／2 回タップ＝いいね ⭐️ PR-H
+            // 2 回タップは onDoubleTapLike があるときだけ付ける（無い画面は 1 回タップだけ＝今までと同じ動き）
+            .modifier(PostCardPhotoTapModifier(
+                onSingleTap: { openDetailFromPhoto() },
+                onDoubleTap: onDoubleTapLike == nil ? nil : { handleDoubleTapLike() }
+            ))
 
             // 投稿情報
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
@@ -583,6 +712,78 @@ struct PostCard: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
         .shadow(DesignTokens.Shadow.card)
+        // 読み上げ（VoiceOver）の「いいね」操作 ⭐️ PR-H
+        // 読み上げ中は 2 回タップ＝「開く」になり、写真の 2 回タップのいいねが使えないため、
+        // onDoubleTapLike があるときだけ操作の一覧に「いいね」を足す（動きは 2 回タップと同じ「付けるだけ」）
+        .modifier(PostCardLikeAccessibilityActionModifier(
+            onLike: onDoubleTapLike == nil ? nil : { handleDoubleTapLike() }
+        ))
+    }
+
+    // MARK: - Double Tap Like ⭐️ PR-H
+
+    /// 写真を 1 回タップ → 詳細へ
+    /// PR-H で body の `.onTapGesture` から関数へ切り出しただけ（中身は今までと同じ・触覚の直書きも今回は移さない）。
+    /// 2 回タップの有無で付けるジェスチャーを分ける（PostCardPhotoTapModifier）ため、両方から同じ処理を呼べる形にした。
+    private func openDetailFromPhoto() {
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+        onCardTapped?()
+    }
+
+    /// 写真を 2 回タップ（または読み上げの「いいね」操作）→ いいねを付ける
+    ///
+    /// 見た目（ハート）と触覚はここ（カード）で出し、付けるかどうか（付いていたら何もしない）は
+    /// 渡されたハンドラ（HomeView）が決める。ハートと触覚は毎回出す
+    /// （付いている投稿でも「受け付けた」ことを返す・Instagram と同じ）。
+    private func handleDoubleTapLike() {
+        Haptics.play(.likeOn)
+        showDoubleTapHeart()
+        onDoubleTapLike?()
+    }
+
+    /// 写真の中央にハートを出して、少し置いてから消す
+    ///
+    /// - 「視差効果を減らす」OFF: 小さい所からばねで広がって出る → 縮みながら薄れて消える。
+    /// - ON: 大きさは変えず（拡大しない）、薄く出て薄れて消えるだけ。
+    ///   `Motion.animation` は ON のとき nil（動かさない）を返すので、ON のときの出方は「ふわっと（fastEase）」に差し替える。
+    ///   薄く出る・消えるだけの動きは、画面の動きで気分が悪くなる原因（拡大・移動）を含まないため。
+    ///   大きさを変えないのは `doubleTapHeart` の scaleEffect 側（ON のときはいつも等倍）。
+    private func showDoubleTapHeart() {
+        doubleTapHeartToken += 1
+        let token = doubleTapHeartToken
+        withAnimation(
+            Motion.animation(DesignTokens.Animation.bouncySpring, reduceMotion: reduceMotion)
+                ?? DesignTokens.Animation.fastEase
+        ) {
+            isDoubleTapHeartVisible = true
+        }
+        // 少し見せてから消す（続けて 2 回タップしたときは、最後の予約だけが消す）
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard token == doubleTapHeartToken else { return }
+            withAnimation(DesignTokens.Animation.fadeOut) {
+                isDoubleTapHeartVisible = false
+            }
+        }
+    }
+
+    /// 2 回タップで写真の中央に出るハート
+    /// onDoubleTapLike が無い画面では描かない。タップは下の写真が受ける（allowsHitTesting(false)）・読み上げには出さない。
+    @ViewBuilder
+    private var doubleTapHeart: some View {
+        if onDoubleTapLike != nil {
+            Image(systemName: "heart.fill")
+                .font(.system(size: 80, weight: .semibold))
+                // 写真の上に出す白（画像数インジケーターと同じ）＋影で、明るい空の写真の上でも見えるようにする
+                .foregroundColor(.white)
+                .shadow(DesignTokens.Shadow.medium)
+                // 「視差効果を減らす」ON のときは拡大しない（いつも等倍で、薄く出て消えるだけ）
+                .scaleEffect(reduceMotion || isDoubleTapHeartVisible ? 1 : 0.5)
+                .opacity(isDoubleTapHeartVisible ? 1 : 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 
     // MARK: - Author Header ⭐️ Issue #2
@@ -653,6 +854,57 @@ struct PostCard: View {
                     .font(.system(size: 14))
                     .foregroundColor(.white.opacity(0.7))
             )
+    }
+}
+
+// MARK: - Post Card Photo Tap ⭐️ PR-H
+
+/// カードの写真のタップ（1 回＝詳細へ／2 回＝いいね）⭐️ PR-H
+///
+/// 2 回タップのハンドラが nil の画面（検索・タグ詳細・プロフィール）は、1 回タップだけを付ける＝今までと全く同じ動き。
+/// 2 回タップを付けると、1 回タップは「2 回目が来ないこと」を確かめてから確定するので 0.2〜0.3 秒ほど遅れる
+/// （Instagram と同じ・利用者は了解済み）。その遅れを nil の画面へ広げないための分岐。
+/// - Note: `exclusively(before:)` は先に書いた方（2 回タップ）を優先し、成り立たなかったときだけ 1 回タップにする。
+///   指の動き（DragGesture）は使わないので、ScrollView のスクロールやページのめくりとはぶつからない。
+private struct PostCardPhotoTapModifier: ViewModifier {
+    /// 1 回タップ（詳細へ）
+    let onSingleTap: () -> Void
+    /// 2 回タップ（いいね）。nil なら付けない
+    let onDoubleTap: (() -> Void)?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let onDoubleTap {
+            content.gesture(
+                TapGesture(count: 2)
+                    .onEnded { onDoubleTap() }
+                    .exclusively(before: TapGesture().onEnded { onSingleTap() })
+            )
+        } else {
+            content.onTapGesture {
+                onSingleTap()
+            }
+        }
+    }
+}
+
+/// 読み上げ（VoiceOver）の「いいね」操作 ⭐️ PR-H
+///
+/// `.accessibilityAction` は条件つきで外せないので、ハンドラがあるときだけ付ける分岐をここにまとめる。
+/// ハンドラが nil の画面は何も足さない（今までと同じ読み上げ）。
+private struct PostCardLikeAccessibilityActionModifier: ViewModifier {
+    /// 「いいね」を選んだときの処理。nil なら操作を足さない
+    let onLike: (() -> Void)?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let onLike {
+            content.accessibilityAction(named: "いいね") {
+                onLike()
+            }
+        } else {
+            content
+        }
     }
 }
 
