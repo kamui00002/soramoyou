@@ -127,12 +127,18 @@
 }
 ```
 
-- **所有者のみ read/write**（`isOwner(userId)`）。「自分だけが見られる」を rules ではなく**構造**で保証する。
+- **read は持ち主**（`isOwner(userId)`）、**または「フォロワー（`follows/{閲覧者}_{持ち主}` がある）かつ
+  `publicProfiles/{持ち主}.showsFavorites == true`」**（1.18.0〜・既定 OFF）。
+  フォロワーの list は `limit <= 30` のときだけ（⚠️ `FavoritesViewModel` の pageSize と一致させる）。
+  **write（create / update / delete）は今どおり持ち主だけ**。
+  - ⚠️ 文書 ID は投稿 ID なので、ON にした人のフォロワーには、フォロワー限定・非公開の投稿の ID と、
+    お気に入りにした日時も読める（投稿の中身は `posts` のルールで守られる）。
+  - テスト: `functions/profileVisibilityRules.emulator.test.js`（エミュレーターで本物の要求として評価する）
 - **複合インデックス不要**: 一覧は `order(by: createdAt, descending: true)` の 1 本だけ。
   サブコレクションにしたのはこのためで、2026-06-15 のコメント不具合（index 欠落で
   「件数だけ増えて中身が出ない」）と同型の事故を構造的に防ぐ。
 - **通知トリガーなし**: ❤️いいね（`onLikeCreated`）と違い、Functions を一切足さない。
-  お気に入りはプライベート保存であり、相手に知らせない・件数も公開しない。
+  お気に入りにしても投稿者に知らせない（ON にしてフォロワーに一覧が見えるときも、通知は飛ばない）。
 - **投稿は 1 件ずつ `fetchPost` で解決する**（TaskGroup で並列）。
   `posts` の read rule は visibility 依存のため、`documentID in [...]` の一括クエリだと
   1 件でも読めないものが混ざった時点で**クエリ全体が permission denied** になる。
@@ -279,7 +285,8 @@
 ```
 
 - **publicProfiles に置く理由**: 他の人がプロフィールを見たときにも読める必要がある（`users` は所有者のみ read）。
-  🔖 お気に入り（`users/{uid}/favorites`・自分だけ）とは公開範囲が逆なので混同しないこと。
+  🔖 お気に入り（`users/{uid}/favorites`・既定は自分だけ。本人が `showsFavorites` を ON にしたときだけフォロワーにも）とは
+  公開範囲が違うので混同しないこと。
 - 書き込みは `addRecommendedPost` / `removeRecommendedPosts` / `moveRecommendedPost` だけ。
   **どれもトランザクションでサーバーの最新一覧を読んでから書く**（上限 3 件・重複なしを守り、
   手元の古い一覧で丸ごと上書きして別端末で足した空を消す lost update を防ぐ）。`PublicProfile` 全体は書かない。
@@ -287,6 +294,7 @@
   - 公開プロフィール未作成の旧アカウントは `notFound` → `createPublicProfile` してから 1 回だけ再試行する（`RecommendationManager`）。
 - rules: `recommendedPostIds` は「フィールド無し」または「配列かつ 3 件以下」のみ許可（create / update とも）。
   ⚠️ 上限は iOS `RecommendedSkies.maxCount` / Functions `recommendationCore.MAX_RECOMMENDATIONS` と一致させること。
+- rules: `showsRecommendedSkies`・`showsSkyCalendar`・`showsFavorites` は「フィールド無し」または bool のみ許可（create / update とも・`isValidProfileVisibility`）。
 - 表示時は **1 件ずつ `fetchPost`** で解決する（お気に入りと同じ理由: posts の read rule は visibility 依存で、
   `documentID in [...]` だと 1 件でも読めない投稿が混ざるとクエリ全体が denied になる）。
   公開（`public`）以外・削除済みは出さず、持ち主には「表示できない空が N 枚」と整理を促す。

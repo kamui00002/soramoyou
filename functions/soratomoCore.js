@@ -42,8 +42,11 @@ const SORATOMO_PREF_KEY = "notifySoratomo";
  *    既存の3つの通知設定とその既定値を変えないため、別の項目・別の既定値として持つ）。
  */
 const SORATOMO_PREF_DEFAULT = true;
-/** 表示名が空のときに通知文で使う名前（index.js の displayNameOf と同じ）。 */
-const FALLBACK_NAME = "だれか";
+/**
+ * 表示名が空のときに通知文で使う名前と、通知の文で人を呼ぶ形（notificationName.js に 1 か所・index.js の通知と同じ）。
+ * 名前があれば「○○さん」、無ければ「さん」なしの「空が好きなだれか」（2026-10-25 利用者の決定）。
+ */
+const { FALLBACK_NAME, callName } = require("./notificationName");
 
 /**
  * 招待コードの入力で区切りとして無視する文字（空白とハイフン類）。
@@ -163,13 +166,14 @@ function validateGroupName(input) {
 /**
  * 新着投稿の通知文を組み立てる（要件9.2・9.3）。
  * タイトルはグループ名。本文は「{表示名}さんが空を投稿しました」で、キャプションがあれば
- * 先頭30文字（コードポイント）を「」で囲んで末尾に付ける。表示名が空なら「だれか」。
+ * 先頭30文字（コードポイント）を「」で囲んで末尾に付ける。表示名が空なら「空が好きなだれかが空を投稿しました」
+ * （FALLBACK_NAME・「さん」を付けない）。
  * @param {{ groupName: string, posterName: unknown, caption: unknown }} args
  * @returns {{ title: string, body: string }}
  */
 function buildNotification({ groupName, posterName, caption }) {
-  const name = typeof posterName === "string" && posterName ? posterName : FALLBACK_NAME;
-  let body = `${name}さんが空を投稿しました`;
+  const name = typeof posterName === "string" && posterName ? posterName : "";
+  let body = `${callName(name)}が空を投稿しました`;
   if (typeof caption === "string" && caption.length > 0) {
     // サロゲートペア（絵文字）を割らないよう、コードポイントの配列で切る。
     body += `「${Array.from(caption).slice(0, CAPTION_HEAD).join("")}」`;
@@ -608,8 +612,9 @@ function isReactionKind(value) {
 /**
  * 投稿者へのリアクションの通知文を組み立てる（要件6.9〜6.11）。
  * 題はグループ名。本文は「{付けた人の表示名}さんがあなたの空に{絵文字}を付けました」。
- * 表示名が空・空白だけ・文字列でないときは「だれか」（FALLBACK_NAME・6.10）。新着投稿の buildNotification と
- * 違い、空白だけの表示名も「だれか」にする（tasks 2.1）。
+ * 表示名が空・空白だけ・文字列でないときは「空が好きなだれかがあなたの空に{絵文字}を付けました」
+ * （FALLBACK_NAME・「さん」を付けない・6.10）。新着投稿の buildNotification と違い、空白だけの表示名も
+ * 名前が無いとみなす（tasks 2.1）。
  * キャプションは入れず、引数にも取らない（ロック画面などアプリの外にキャプションを出す場面を増やさない・6.11）。
  * @param {{ groupName: string, reactorName: unknown, kind: string }} args kind は isReactionKind を通った名前
  * @returns {{ title: string, body: string }}
@@ -618,8 +623,8 @@ function isReactionKind(value) {
 function buildReactionNotification({ groupName, reactorName, kind }) {
   const def = REACTION_KINDS.find((d) => d.name === kind);
   if (!def) throw new TypeError("buildReactionNotification: kind がリアクションの名前でない");
-  const name = typeof reactorName === "string" && reactorName.trim() !== "" ? reactorName : FALLBACK_NAME;
-  return { title: groupName, body: `${name}さんがあなたの空に${def.emoji}を付けました` };
+  const name = typeof reactorName === "string" && reactorName.trim() !== "" ? reactorName : "";
+  return { title: groupName, body: `${callName(name)}があなたの空に${def.emoji}を付けました` };
 }
 
 /**
