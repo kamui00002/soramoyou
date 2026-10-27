@@ -5,6 +5,10 @@
 //  What's New（新機能紹介）の表示判定 純関数テスト。
 //  「アップデートした既存ユーザーに1回だけ」を保証する条件を検証する。
 //
+//  陽性対照（2026-10-26・1.17.0・iPhone 18 Pro シミュレーター）: WhatsNewContent.currentID を前回の
+//  "2026-10-soratomo-reactions" に戻すと、testCurrentIDDiffersFromPastIDs だけが赤（7 本中 1 本）。
+//  testRealCurrentIDBehavior は ID が空でなければ通るので緑のまま（予言どおり）。壊す前は 7 本すべて緑。
+//
 
 @testable import Soramoyou
 import XCTest
@@ -73,7 +77,7 @@ final class WhatsNewGateTests: XCTestCase {
         ))
     }
 
-    /// 1.15.0 の `currentID` は、過去に使った値のどれとも違う（soratomo-public-launch 7.1）。
+    /// 1.17.0 の `currentID` は、過去に使った値のどれとも違う（soratomo-public-launch 7.1）。
     /// 過去の値に戻すと、その値を既読にした人（1.12.0 までを見た人・先行公開の紹介を見た人）には出ない
     func testCurrentIDDiffersFromPastIDs() {
         let pastIDs = [
@@ -84,6 +88,7 @@ final class WhatsNewGateTests: XCTestCase {
             "2026-10-soratomo-beta",
             "2026-10-soratomo-public",
             "2026-10-block-from-profile",
+            "2026-10-soratomo-reactions",
         ]
         for pastID in pastIDs {
             XCTAssertNotEqual(WhatsNewContent.currentID, pastID, "過去の値 \(pastID) と同じ")
