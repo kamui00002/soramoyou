@@ -325,8 +325,8 @@ struct HomeView: View {
     ///   「確かめてから呼ぶ」の間に別のいいね操作が割り込まない。
     /// - LikeManager は書き込み中の投稿への呼び出しを捨てる（inFlightPostIds）ので、
     ///   通信中に 2 回タップを重ねても 2 回トグルされることはない（ここで別の守りは足さない）。
-    /// - ゲスト（未ログイン）は、いいねボタンと同じく toggleLike に任せる
-    ///   （LikeManager が showLoginPrompt を立てて何もしない）。
+    /// - ゲスト（未ログイン）には呼び出し側（feedView）で 2 回タップを付けない（onDoubleTapLike を nil にする）ので、
+    ///   ここには来ない。
     /// - Parameter post: 2 回タップされた投稿
     private func addLikeFromDoubleTap(_ post: Post) {
         Task {
@@ -406,12 +406,11 @@ struct HomeView: View {
                             selectedTag = tag
                         },
                         // 写真を 2 回タップでいいね（付けるだけ）⭐️ PR-H
-                        // ゲストにも渡す（いいねボタンと同じく LikeManager に任せる）。
-                        // ゲストには 2 回タップを付けないと決めたら、ここを
-                        // `viewModel.currentUserId == nil ? nil : { addLikeFromDoubleTap(post) }` に変える 1 か所で済む。
-                        onDoubleTapLike: {
-                            addLikeFromDoubleTap(post)
-                        }
+                        // ゲスト（未ログイン）には付けない（nil）＝写真の 1 回タップも遅れない。
+                        // 理由: toggleLike はゲストだと showLoginPrompt を立てて戻るだけで、その旗を読む画面がまだ無い。
+                        // 付けるとハートと触覚は出るのにいいねされず、誤解を招く（2026-10-28 利用者の決定）。
+                        // 判定は Picker・feedPages と同じ `viewModel.currentUserId`。
+                        onDoubleTapLike: viewModel.currentUserId == nil ? nil : { addLikeFromDoubleTap(post) }
                     )
                     // スタガードアニメーション（改善）
                     .opacity(animateCards ? 1 : 0)
