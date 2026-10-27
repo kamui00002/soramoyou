@@ -96,8 +96,22 @@ struct DailyPickCardView: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("今日のおすすめのそらもようを見る")
+        // カード全体で 1 つのボタンなので、ラベルを付けると中の文字は読まれない。
+        // 見出し・投稿者の名前・説明をラベルにまとめ、押すと何が起きるかはヒントに分ける
+        .accessibilityLabel(spokenLabel(for: item))
+        .accessibilityHint("投稿の詳細を開きます")
         .accessibilityIdentifier("DailyPickCard")
+    }
+
+    /// 読み上げのラベル（見出し・投稿者の名前・説明の順。説明が無ければ見出しと名前だけ）
+    /// - Parameter item: カードに出している 1 件
+    private func spokenLabel(for item: DailyPickItem) -> String {
+        // 名前は画面と同じ扱い（取れないとき・ゲストは "ユーザー"）
+        var parts = ["今日のおすすめのそらもよう", item.authorName ?? "ユーザー"]
+        if let caption = item.post.caption, !caption.isEmpty {
+            parts.append(caption)
+        }
+        return parts.joined(separator: "、")
     }
 
     /// 見出し（✨＋文字）
