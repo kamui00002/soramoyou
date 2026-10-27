@@ -8,7 +8,6 @@
 //  ※「私のおすすめの空」（publicProfiles.recommendedPostIds）とは別物。
 //
 
-import Kingfisher
 import SwiftUI
 
 struct DailyPickCardView: View {
@@ -20,6 +19,13 @@ struct DailyPickCardView: View {
     @ObservedObject var viewModel: DailyPickViewModel
     /// カードがタップされたときに呼ぶ（ホームが投稿の詳細を開く）
     let onTap: (Post) -> Void
+
+    /// カードの濃いそらいろ。見出し・説明・名前の文字と、「そらに出会う」の帯（白い文字の下地）に使う
+    ///
+    /// 白は背景（昼の空の上のすりガラス）とのコントラスト比が約 1.4、DesignTokens の skyBlue でも約 2.1 で薄い。
+    /// そらともの丸（SoratomoGroupIcon）の濃い方と同じ青で約 4.9（小さい文字の目安 4.5 を越える）。
+    /// 背景の色はスクショから見積もった目安（2026-10-27・利用者判断で「文字は濃いそらいろ」）
+    private static let textColor = Color(red: 0.16, green: 0.33, blue: 0.72)
 
     var body: some View {
         Group {
@@ -33,36 +39,54 @@ struct DailyPickCardView: View {
         Button {
             onTap(item.post)
         } label: {
-            HStack(spacing: DesignTokens.Spacing.md) {
-                thumbnail(item.post)
+            // 写真は出さず、見出し・説明・名前・「そらに出会う」を中央に出す。空を見るかどうかは利用者に任せる
+            // （2026-10-27 利用者判断。押すと投稿の詳細が開き、そこで写真が見える）
+            VStack(spacing: DesignTokens.Spacing.sm) {
+                // 見出しは 1 行（2026-10-27 利用者判断）。収まらないとき（大きな文字の設定・小さい iPhone）だけ、
+                // 「そらもよう」の途中で折れないよう名前の前で 2 行にする（What's New の見出しと同じ区切り）。
+                // 入る形を上から順に試す（SoratomoGroupListView の actionButtons と同じ）
+                ViewThatFits(in: .horizontal) {
+                    titleLabel("今日のおすすめのそらもよう")
+                    titleLabel("""
+                    今日のおすすめの
+                    そらもよう
+                    """)
+                }
+                .multilineTextAlignment(.center)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("今日のおすすめのそらもよう", systemImage: "sparkles")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-
+                VStack(spacing: 4) {
+                    // 説明は白い帯（両端が半円）の上に出す（2026-10-27 利用者判断）
                     if let caption = item.post.caption, !caption.isEmpty {
                         Text(caption)
-                            .font(.caption)
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                            .font(.footnote)
                             .lineLimit(2)
-                            .multilineTextAlignment(.leading)
+                            .padding(.horizontal, DesignTokens.Spacing.md)
+                            .padding(.vertical, DesignTokens.Spacing.xs)
+                            .background(Capsule().fill(Color.white))
                     }
 
                     // 投稿者名。名前が取れないとき（ゲストはいつもこちら）は "ユーザー"
                     // （HomeView の投稿者欄と同じ扱い）
                     Text(item.authorName ?? "ユーザー")
-                        .font(.caption2)
-                        .foregroundColor(DesignTokens.Colors.textTertiary)
+                        .font(.caption)
                         .lineLimit(1)
                 }
+                .foregroundColor(Self.textColor)
+                .multilineTextAlignment(.center)
 
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(DesignTokens.Colors.textTertiary)
+                // 「そらに出会う」はボタンに見える形だけ（押せるのはカード全体＝押す所を 1 つにする。
+                // ボタンの中にボタンを入れると押し分けが不安定になるため、ここは Button にしない）
+                HStack(spacing: 4) {
+                    Text("そらに出会う")
+                    Image(systemName: "chevron.right")
+                }
+                .font(.subheadline.weight(.bold))
+                .foregroundColor(.white)
+                .padding(.horizontal, DesignTokens.Spacing.lg)
+                .padding(.vertical, DesignTokens.Spacing.sm)
+                .background(Capsule().fill(Self.textColor))
             }
+            .frame(maxWidth: .infinity)
             .padding(DesignTokens.Spacing.md)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
             .overlay(
@@ -75,21 +99,15 @@ struct DailyPickCardView: View {
         .accessibilityIdentifier("DailyPickCard")
     }
 
-    @ViewBuilder
-    private func thumbnail(_ post: Post) -> some View {
-        let first = post.images.first
-        // 1 枚目のサムネイルを表示（公開は URL、公開以外は Storage のパスで読む。判定は PostImageSource）
-        if let first, let image = KFImage.post(PostImageSource.resolve(first, prefersThumbnail: true)) {
-            image
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.md))
-        } else {
-            RoundedRectangle(cornerRadius: DesignTokens.Radius.md)
-                .fill(Color.white.opacity(0.12))
-                .frame(width: 64, height: 64)
-                .overlay(Image(systemName: "photo").foregroundColor(DesignTokens.Colors.textTertiary))
+    /// 見出し（✨＋文字）
+    /// - Parameter text: 見出しの文字（1 行の形と 2 行の形を ViewThatFits に渡す）
+    private func titleLabel(_ text: String) -> some View {
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: "sparkles")
         }
+        .font(.headline.weight(.bold))
+        .foregroundColor(Self.textColor)
     }
 }
