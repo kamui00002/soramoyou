@@ -45,6 +45,14 @@
 //  結果（2026-10-28・iPhone 18 Pro シミュレーター）: 予言の 1 本だけが赤（23 本中 1 本）。ほかの 22 本は緑。
 //  Edit で戻して指紋（shasum）が壊す前と一致することを確かめ、戻した中身で 23 本すべて緑
 //
+//  陽性対照 ⑤（2026-10-28・レビュー D7＝item を残した一時失敗では unavailable を送らない）:
+//  DailyPickViewModel.load の .failed の `if item == nil {` を `do {` にする（いつでも送る＝直す前と同じ）
+//     → 赤になるはずのテスト:
+//        testLoadFailureThatKeepsItemDoesNotSendUnavailable
+//  （ほかは緑のまま: ほかの load_failed のテストは、どれも item が nil のまま失敗する）
+//  結果（2026-10-28・iPhone 18 Pro シミュレーター）: 予言の 1 本だけが赤（24 本中 1 本）。ほかの 23 本は緑。
+//  Edit で戻して指紋（shasum）が壊す前と一致することを確かめ、戻した中身で 24 本すべて緑
+//
 
 @testable import Soramoyou
 import XCTest
@@ -447,6 +455,25 @@ final class DailyPickViewModelTests: XCTestCase {
         await viewModel.load(viewerId: "viewer")
         XCTAssertEqual(fixture.service.requestedKeys.count, 3, "load_failed の後は force でなくても取り直す")
         XCTAssertEqual(viewModel.item?.post.id, "p1")
+    }
+
+    func testLoadFailureThatKeepsItemDoesNotSendUnavailable() async {
+        // 陽性対照 ⑤ で赤になるはず（item を残したまま unavailable "load_failed" を送ってしまう）
+        let fixture = makeFixture()
+        fixture.service.picksByKey = ["2026-10-26": DailyPick(dateKey: "2026-10-26", postIds: ["p1"])]
+        fixture.firestore.posts = ["p1": makePost("p1", owner: "kumo")]
+        let viewModel = makeViewModel(fixture)
+        await viewModel.load(viewerId: "viewer")
+        XCTAssertEqual(viewModel.item?.post.id, "p1", "前提: 1 件目が出ている")
+
+        fixture.firestore.transientFailurePostIds = ["p1"]
+        await viewModel.load(viewerId: "viewer", force: true)
+
+        XCTAssertEqual(viewModel.item?.post.id, "p1", "前提: 一時失敗では出している item を残す")
+        XCTAssertTrue(
+            fixture.logger.parameters(of: "daily_pick_unavailable").isEmpty,
+            "カードが出ているので「出せなかった」は送らない"
+        )
     }
 
     func testBlockListFailureStopsWithoutShowing() async throws {

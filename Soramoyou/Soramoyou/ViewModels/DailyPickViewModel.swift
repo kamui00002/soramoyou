@@ -212,7 +212,7 @@ final class DailyPickViewModel: ObservableObject {
     /// - 同じ（今日の鍵・見ている人）で「出した」か「出すものが無いと確定」していれば、force でない限り何もしない。
     /// - 同じ鍵の読み込みが進行中なら、force でない限り重ねない。force は常に取り直し、後から始めた読み込みの結果だけを反映する。
     /// - 一時的な失敗（load_failed）では、出している item を消さない（引っ張って更新の失敗でカードが消えないように）。
-    ///   次の呼び出しでは取り直す。
+    ///   次の呼び出しでは取り直す。item を残したときは unavailable を送らない（カードは出ている）。
     /// - Parameters:
     ///   - viewerId: 見ている人の uid。ゲストは nil（ブロック一覧と名前を取りに行かない）
     ///   - force: 引っ張って更新のとき true（同じ鍵でも取り直す）
@@ -264,7 +264,11 @@ final class DailyPickViewModel: ObservableObject {
             {
                 hide()
             }
-            logUnavailableIfFirst(reason: Self.reasonLoadFailed, todayKey: keys.today, viewerId: viewerId)
+            // 「出せなかった」はカードが出ていないときだけ送る（item を残した失敗では、見ている人にはカードが出ている）。
+            // 上で下げた後に見るので、見ている人が変わって下げたときも送られる
+            if item == nil {
+                logUnavailableIfFirst(reason: Self.reasonLoadFailed, todayKey: keys.today, viewerId: viewerId)
+            }
         case .superseded:
             // resolveLoad は世代が変わったときだけこれを返す＝上の guard で戻っているので、ここには来ない
             break
