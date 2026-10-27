@@ -29,6 +29,8 @@ struct HomeView: View {
     /// ホームフィードの表示セグメント（すべて / あなた向け）⭐️ PR-7
     @State private var selectedSegment: HomeFeedSegment = .all
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// アプリが前に出たか（今日のおすすめを、日をまたいで開いたままでも今日の分に読み直すため）⭐️
+    @Environment(\.scenePhase) private var scenePhase
 
     /// 現在のセグメントに対応する ViewModel ⭐️ PR-7
     /// ForYouFeedViewModel は HomeViewModel のサブクラスなので、この1本の参照で
@@ -163,6 +165,16 @@ struct HomeView: View {
                         await forYouViewModel.fetchPosts()
                         await likeManager.checkLikeStatus(for: forYouViewModel.posts)
                         await favoriteManager.checkFavoriteStatus(for: forYouViewModel.posts)
+                    }
+                }
+            }
+            // アプリに戻ってきたら今日のおすすめを読み直す（日をまたいで開いたままだと、onAppear が来ず前日のままになるため）⭐️
+            // force なしなので、同じ日・同じ人で終わっていればすぐ戻る（読み取りは増えない）。
+            // 起動時などに onAppear と重なっても、同じ鍵の読み込みが進行中なら重ねない（DailyPickViewModel.load）
+            .onChange(of: scenePhase) { newPhase in
+                if newPhase == .active {
+                    Task {
+                        await dailyPickViewModel.load(viewerId: viewModel.currentUserId)
                     }
                 }
             }
