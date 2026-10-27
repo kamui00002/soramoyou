@@ -26,6 +26,17 @@
 //  ほかの 16 本は緑。同じ組み直しで DailyPickKey.switchHourJST も 0 にしたが、このクラスの固定の時刻（JST 10:00）では
 //  鍵が変わらない。壊す前（同じ中身）は 20 本すべて緑
 //
+//  陽性対照 ③（2026-10-27・投稿者の写真を足したとき）:
+//  DailyPickViewModel.fetchAuthor の photoURL を `profile.photoURL.map { _ in "wrong" }` にする
+//  （写真があれば別の値、空白だけでも nil にしない）
+//     → 赤になるはずのテスト:
+//        testShowsFirstCandidateOfToday
+//        testUserBlockedNotificationMovesToNextCandidate
+//        testBlankNameStillKeepsPhoto
+//        testBlankPhotoURLBecomesNil
+//  結果（2026-10-27・iPhone 18 Pro シミュレーター）: 予言の 4 本だけが赤（22 本中 4 本）。ほかの 18 本は緑。
+//  Edit で戻して指紋（shasum）が壊す前と一致することを確かめ、戻した中身で 22 本すべて緑
+//
 
 @testable import Soramoyou
 import XCTest
@@ -47,6 +58,7 @@ final class DailyPickViewModelTests: XCTestCase {
         fixture.service.picksByKey = ["2026-10-26": DailyPick(dateKey: "2026-10-26", postIds: ["p1", "p2"])]
         fixture.firestore.posts = ["p1": makePost("p1", owner: "kumo"), "p2": makePost("p2", owner: "sora")]
         fixture.firestore.displayNames = ["kumo": "くも"]
+        fixture.firestore.photoURLs = ["kumo": "https://example.com/kumo.jpg"]
         let viewModel = makeViewModel(fixture)
 
         await viewModel.load(viewerId: "viewer")
@@ -57,6 +69,8 @@ final class DailyPickViewModelTests: XCTestCase {
         XCTAssertEqual(item.candidateIndex, 0)
         XCTAssertFalse(item.isFallbackDay)
         XCTAssertEqual(item.authorName, "くも", "ログイン中は投稿者の名前が入る")
+        XCTAssertEqual(item.authorPhotoURL, "https://example.com/kumo.jpg", "ログイン中は投稿者の写真も入る")
+        XCTAssertEqual(fixture.firestore.requestedProfileIds, ["kumo"], "名前と写真は同じ 1 件の読み取りで取る")
         XCTAssertEqual(fixture.service.requestedKeys, ["2026-10-26"], "今日の文書があれば前日は読まない")
         XCTAssertEqual(fixture.firestore.requestedPostIds, ["p1"], "1 件目で決まれば 2 件目は読まない")
 
@@ -209,6 +223,7 @@ final class DailyPickViewModelTests: XCTestCase {
         fixture.service.picksByKey = ["2026-10-26": DailyPick(dateKey: "2026-10-26", postIds: ["p1"])]
         fixture.firestore.posts = ["p1": makePost("p1", owner: "kumo")]
         fixture.firestore.displayNames = ["kumo": "くも"]
+        fixture.firestore.photoURLs = ["kumo": "https://example.com/kumo.jpg"]
         let viewModel = makeViewModel(fixture)
 
         await viewModel.load(viewerId: nil)
@@ -216,6 +231,7 @@ final class DailyPickViewModelTests: XCTestCase {
         let item = try XCTUnwrap(viewModel.item)
         XCTAssertEqual(item.post.id, "p1")
         XCTAssertNil(item.authorName, "ゲストは publicProfiles を読めないので名前は出さない")
+        XCTAssertNil(item.authorPhotoURL, "ゲストは写真も出さない（カードは人の形の印）")
         XCTAssertEqual(fixture.firestore.blockedListRequestCount, 0)
         XCTAssertTrue(fixture.firestore.requestedProfileIds.isEmpty)
 
@@ -232,6 +248,7 @@ final class DailyPickViewModelTests: XCTestCase {
         fixture.service.picksByKey = ["2026-10-26": DailyPick(dateKey: "2026-10-26", postIds: ["p1", "p2"])]
         fixture.firestore.posts = ["p1": makePost("p1", owner: "kumo"), "p2": makePost("p2", owner: "sora")]
         fixture.firestore.displayNames = ["kumo": "くも", "sora": "そら"]
+        fixture.firestore.photoURLs = ["kumo": "https://example.com/kumo.jpg", "sora": "https://example.com/sora.jpg"]
         let viewModel = makeViewModel(fixture)
         await viewModel.load(viewerId: "viewer")
         XCTAssertEqual(viewModel.item?.post.id, "p1", "前提: ブロック前は 1 件目が出ている")
@@ -244,6 +261,7 @@ final class DailyPickViewModelTests: XCTestCase {
         XCTAssertEqual(item.candidateIndex, 1)
         XCTAssertEqual(item.dateKey, "2026-10-26")
         XCTAssertEqual(item.authorName, "そら", "差し替えた投稿にも名前を付ける")
+        XCTAssertEqual(item.authorPhotoURL, "https://example.com/sora.jpg", "写真も差し替えた投稿の人のものにする")
         XCTAssertEqual(fixture.service.requestedKeys, ["2026-10-26"], "文書は読み直さない")
         XCTAssertEqual(fixture.logger.parameters(of: "daily_pick_shown").count, 1, "同じ date_key なので shown は 1 回のまま")
     }
@@ -415,6 +433,38 @@ final class DailyPickViewModelTests: XCTestCase {
         XCTAssertEqual(parameters["reason"] as? String, "load_failed")
     }
 
+    func testBlankNameStillKeepsPhoto() async throws {
+        // 名前と写真は別々に nil になる（名前が空白だけでも写真は出す）
+        let fixture = makeFixture()
+        fixture.service.picksByKey = ["2026-10-26": DailyPick(dateKey: "2026-10-26", postIds: ["p1"])]
+        fixture.firestore.posts = ["p1": makePost("p1", owner: "kumo")]
+        fixture.firestore.displayNames = ["kumo": "  \n"]
+        fixture.firestore.photoURLs = ["kumo": "https://example.com/kumo.jpg"]
+        let viewModel = makeViewModel(fixture)
+
+        await viewModel.load(viewerId: "viewer")
+
+        let item = try XCTUnwrap(viewModel.item)
+        XCTAssertNil(item.authorName, "空白だけの名前は nil（カードは「ユーザー」）")
+        XCTAssertEqual(item.authorPhotoURL, "https://example.com/kumo.jpg")
+    }
+
+    func testBlankPhotoURLBecomesNil() async throws {
+        // 写真の URL が空白だけなら nil（カードは人の形の印）。名前はそのまま出す
+        let fixture = makeFixture()
+        fixture.service.picksByKey = ["2026-10-26": DailyPick(dateKey: "2026-10-26", postIds: ["p1"])]
+        fixture.firestore.posts = ["p1": makePost("p1", owner: "kumo")]
+        fixture.firestore.displayNames = ["kumo": "くも"]
+        fixture.firestore.photoURLs = ["kumo": " "]
+        let viewModel = makeViewModel(fixture)
+
+        await viewModel.load(viewerId: "viewer")
+
+        let item = try XCTUnwrap(viewModel.item)
+        XCTAssertEqual(item.authorName, "くも")
+        XCTAssertNil(item.authorPhotoURL)
+    }
+
     // MARK: - Helpers
 
     /// 1 ケースぶんの偽物一式（記録係と通知センターもケースごとに新しく作る）
@@ -519,6 +569,8 @@ private final class DailyPickFirestoreServiceStub: FirestoreServiceProtocol {
     var blockListError: Error?
     /// 投稿者 → 表示名
     var displayNames: [String: String] = [:]
+    /// 投稿者 → プロフィール写真の URL
+    var photoURLs: [String: String] = [:]
 
     /// fetchPost で呼ばれた投稿 ID（呼ばれた順）
     private(set) var requestedPostIds: [String] = []
@@ -546,7 +598,7 @@ private final class DailyPickFirestoreServiceStub: FirestoreServiceProtocol {
 
     func fetchPublicProfile(userId: String) async throws -> PublicProfile {
         requestedProfileIds.append(userId)
-        return PublicProfile(id: userId, displayName: displayNames[userId])
+        return PublicProfile(id: userId, displayName: displayNames[userId], photoURL: photoURLs[userId])
     }
 }
 

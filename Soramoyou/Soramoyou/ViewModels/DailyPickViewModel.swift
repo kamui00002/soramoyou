@@ -19,6 +19,8 @@ struct DailyPickItem {
     let post: Post
     /// 投稿者の表示名。ゲスト・取得失敗・名前なしは nil（カードは「ユーザー」と出す＝HomeView の投稿者欄と同じ扱い）
     let authorName: String?
+    /// 投稿者のプロフィール写真の URL。ゲスト・取得失敗・写真なしは nil（カードは人の形の印を出す＝UserAvatarView）
+    let authorPhotoURL: String?
     /// 出している文書の鍵（前日の文書なら前日の鍵）
     let dateKey: String
     /// postIds の何番目か（0 始まり）
@@ -119,10 +121,23 @@ final class DailyPickViewModel: ObservableObject {
         let viewerId: String?
     }
 
+    /// 投稿者の名前と写真（同じ publicProfiles の 1 件から取る。読み取りは増やさない）
+    ///
+    /// 名前と写真は別々に nil になる（名前が空白だけでも写真は出す・その逆も）。
+    private struct AuthorInfo {
+        /// 表示名（前後の空白を除いて空なら nil）
+        let name: String?
+        /// プロフィール写真の URL（前後の空白を除いて空なら nil＝SoratomoProfileStore.photoURL(for:) と同じ）
+        let photoURL: String?
+
+        /// ゲスト・取得失敗のときの「どちらも無い」
+        static let none = AuthorInfo(name: nil, photoURL: nil)
+    }
+
     /// 候補を先頭（または途中）から見た結果
     private enum CandidateResult {
         /// 出す投稿が決まった
-        case found(post: Post, candidateIndex: Int, authorName: String?)
+        case found(post: Post, candidateIndex: Int, author: AuthorInfo)
         /// 全部「次へ」だった
         case allSkipped
         /// 一時的な失敗で止めた（次の候補を取りに行かない）
@@ -335,10 +350,11 @@ final class DailyPickViewModel: ObservableObject {
             viewerId: viewerId
         )
         switch await resolveCandidates(in: pick, from: 0, viewerId: viewerId, generation: generation) {
-        case let .found(post, candidateIndex, authorName):
+        case let .found(post, candidateIndex, author):
             let newItem = DailyPickItem(
                 post: post,
-                authorName: authorName,
+                authorName: author.name,
+                authorPhotoURL: author.photoURL,
                 dateKey: docKey,
                 candidateIndex: candidateIndex,
                 isFallbackDay: isFallbackDay
@@ -400,13 +416,13 @@ final class DailyPickViewModel: ObservableObject {
                 return .stopped
             }
 
-            // 名前（ログイン中だけ。失敗しても止めない）
-            let authorName = await fetchAuthorName(of: post, viewerId: viewerId)
+            // 名前と写真（ログイン中だけ。失敗しても止めない）
+            let author = await fetchAuthor(of: post, viewerId: viewerId)
             guard generation == self.generation else { return .superseded }
 
-            // 名前を待つ間に `.userBlocked` でこの投稿者がブロックされていたら、同じ規則でもう一度見て次へ
+            // 名前と写真を待つ間に `.userBlocked` でこの投稿者がブロックされていたら、同じ規則でもう一度見て次へ
             guard outcome(for: post) == .show else { continue }
-            return .found(post: post, candidateIndex: index, authorName: authorName)
+            return .found(post: post, candidateIndex: index, author: author)
         }
         return .allSkipped
     }
@@ -419,24 +435,27 @@ final class DailyPickViewModel: ObservableObject {
         DailyPickResolver.classify(post: post, blockedUserIds: blockedUserIds)
     }
 
-    /// 投稿者の表示名を読む（ログイン中だけ）
+    /// 投稿者の表示名とプロフィール写真を読む（ログイン中だけ）
     ///
     /// ゲストは publicProfiles を読めない（firestore.rules）ので呼ばない。
-    /// 失敗・nil・空白だけの名前は nil（カードは「ユーザー」と出す）。名前の取得の失敗では止めない。
-    private func fetchAuthorName(of post: Post, viewerId: String?) async -> String? {
-        guard viewerId != nil else { return nil }
+    /// 失敗・nil・空白だけは nil（カードは名前を「ユーザー」、写真を人の形の印で出す）。取得の失敗では止めない。
+    private func fetchAuthor(of post: Post, viewerId: String?) async -> AuthorInfo {
+        guard viewerId != nil else { return .none }
         do {
             let profile = try await firestoreService.fetchPublicProfile(userId: post.userId)
-            guard let name = profile.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !name.isEmpty
-            else {
-                return nil
-            }
-            return name
+            return AuthorInfo(name: Self.nonBlank(profile.displayName), photoURL: Self.nonBlank(profile.photoURL))
         } catch {
-            print("⚠️ 今日のおすすめ: 投稿者の名前の取得に失敗（名前なしで出す）:", error.localizedDescription)
+            print("⚠️ 今日のおすすめ: 投稿者の名前と写真の取得に失敗（無しで出す）:", error.localizedDescription)
+            return .none
+        }
+    }
+
+    /// 前後の空白と改行を除いた文字。nil か、除いた後が空なら nil
+    private static func nonBlank(_ text: String?) -> String? {
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
             return nil
         }
+        return trimmed
     }
 
     // MARK: - 出す・下げる（private）
@@ -543,10 +562,11 @@ final class DailyPickViewModel: ObservableObject {
         isResolving = false
 
         switch result {
-        case let .found(post, candidateIndex, authorName):
+        case let .found(post, candidateIndex, author):
             let newItem = DailyPickItem(
                 post: post,
-                authorName: authorName,
+                authorName: author.name,
+                authorPhotoURL: author.photoURL,
                 dateKey: context.docKey,
                 candidateIndex: candidateIndex,
                 isFallbackDay: context.isFallbackDay

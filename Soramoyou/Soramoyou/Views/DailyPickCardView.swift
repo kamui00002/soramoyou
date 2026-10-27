@@ -39,7 +39,7 @@ struct DailyPickCardView: View {
         Button {
             onTap(item.post)
         } label: {
-            // 写真は出さず、見出し・説明・名前・「そらに出会う」を中央に出す。空を見るかどうかは利用者に任せる
+            // 写真は出さず、見出し・名前・説明・「そらに出会う」を中央に出す。空を見るかどうかは利用者に任せる
             // （2026-10-27 利用者判断。押すと投稿の詳細が開き、そこで写真が見える）
             VStack(spacing: DesignTokens.Spacing.sm) {
                 // 見出しは 1 行（2026-10-27 利用者判断）。収まらないとき（大きな文字の設定・小さい iPhone）だけ、
@@ -54,22 +54,23 @@ struct DailyPickCardView: View {
                 }
                 .multilineTextAlignment(.center)
 
+                // 名前（アイコンつき）を上、説明を下に出す。説明の白い帯はやめて、文字を一段大きくした（2026-10-27 利用者判断）
                 VStack(spacing: 4) {
-                    // 説明は白い帯（両端が半円）の上に出す（2026-10-27 利用者判断）
-                    if let caption = item.post.caption, !caption.isEmpty {
-                        Text(caption)
-                            .font(.footnote)
-                            .lineLimit(2)
-                            .padding(.horizontal, DesignTokens.Spacing.md)
-                            .padding(.vertical, DesignTokens.Spacing.xs)
-                            .background(Capsule().fill(Color.white))
+                    // 投稿者のアイコンと名前。取れないとき（ゲストはいつもこちら）は人の形の印と "ユーザー"
+                    // （HomeView の投稿者欄と同じ扱い）。アイコンの大きさと名前の文字は SoratomoTimelineRow の投稿者欄と同じ
+                    HStack(spacing: 6) {
+                        UserAvatarView(photoURL: item.authorPhotoURL, size: 24)
+                            .accessibilityHidden(true)
+                        Text(item.authorName ?? "ユーザー")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
                     }
 
-                    // 投稿者名。名前が取れないとき（ゲストはいつもこちら）は "ユーザー"
-                    // （HomeView の投稿者欄と同じ扱い）
-                    Text(item.authorName ?? "ユーザー")
-                        .font(.caption)
-                        .lineLimit(1)
+                    if let caption = item.post.caption, !caption.isEmpty {
+                        Text(caption)
+                            .font(.subheadline)
+                            .lineLimit(2)
+                    }
                 }
                 .foregroundColor(Self.textColor)
                 .multilineTextAlignment(.center)
