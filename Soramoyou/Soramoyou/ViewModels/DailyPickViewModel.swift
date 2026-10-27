@@ -207,7 +207,7 @@ final class DailyPickViewModel: ObservableObject {
 
     // MARK: - 読み込み
 
-    /// 今日のおすすめを読み込む（HomeView の onAppear からログイン条件なしで呼ぶ）
+    /// 今日のおすすめを読み込む（HomeView の onAppear・アプリに戻ったとき・引っ張って更新から、ログイン条件なしで呼ぶ）
     ///
     /// - 同じ（今日の鍵・見ている人）で「出した」か「出すものが無いと確定」していれば、force でない限り何もしない。
     /// - 同じ鍵の読み込みが進行中なら、force でない限り重ねない。force は常に取り直し、後から始めた読み込みの結果だけを反映する。
@@ -221,7 +221,8 @@ final class DailyPickViewModel: ObservableObject {
         let loadKey = LoadKey(today: keys.today, viewerId: viewerId)
 
         if !force {
-            // 同じ鍵で終わっていれば取り直さない（タブの行き来・onAppear の重なりで読み取りを増やさない）
+            // 同じ鍵で終わっていれば取り直さない（ゲストのタブの行き来・onAppear の重なり・アプリに戻ったときの読み直しで
+            // 読み取りを増やさない。ログイン中のタブの行き来は MainTabView の switch でホームごと作り直される＝VM も新しい）
             if settledLoadKey == loadKey { return }
             // 同じ鍵の読み込みが進行中なら重ねない
             // （見ている人が変わったときは鍵が違うので、新しい読み込みを始めて古い結果を世代で捨てる）
