@@ -759,7 +759,7 @@ struct GalleryDetailView: View {
             Button {
                 let impact = UIImpactFeedbackGenerator(style: .light)
                 impact.impactOccurred()
-                Task { await likeManager.toggleLike(post: post) }
+                Task { await likeManager.toggleLike(post: post, source: "gallery_detail", method: .button) }
             } label: {
                 Label(
                     "\(likeManager.likeCount(for: post))",

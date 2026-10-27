@@ -331,7 +331,7 @@ struct HomeView: View {
     private func addLikeFromDoubleTap(_ post: Post) {
         Task {
             guard !likeManager.isLiked(post.id) else { return }
-            await likeManager.toggleLike(post: post)
+            await likeManager.toggleLike(post: post, source: "home_card", method: .doubleTap)
         }
     }
 
@@ -378,7 +378,7 @@ struct HomeView: View {
                         isFavorited: favoriteManager.isFavorited(post.id),
                         onLikeTapped: {
                             Task {
-                                await likeManager.toggleLike(post: post)
+                                await likeManager.toggleLike(post: post, source: "home_card", method: .button)
                             }
                         },
                         onFavoriteTapped: {
@@ -1324,7 +1324,7 @@ struct PostDetailView: View {
                 Button {
                     let impact = UIImpactFeedbackGenerator(style: .light)
                     impact.impactOccurred()
-                    Task { await likeManager.toggleLike(post: post) }
+                    Task { await likeManager.toggleLike(post: post, source: "post_detail", method: .button) }
                 } label: {
                     Label(
                         "\(likeManager.likeCount(for: post))",

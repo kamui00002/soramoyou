@@ -230,7 +230,7 @@ struct TagDetailView: View {
             likeCount: likeManager.likeCount(for: post),
             isFavorited: favoriteManager.isFavorited(post.id),
             onLikeTapped: {
-                Task { await likeManager.toggleLike(post: post) }
+                Task { await likeManager.toggleLike(post: post, source: "tag_detail", method: .button) }
             },
             onFavoriteTapped: {
                 Task { await favoriteManager.toggleFavorite(post: post, source: "tag_detail") }
