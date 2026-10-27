@@ -94,6 +94,11 @@ struct DailyPickCardView: View {
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.xl)
                     .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: 1)
             )
+            // カードの中だけ明るい外観に固定する（アプリ全体の外観は変えない）。
+            // 端末がダークモードだとすりガラスが暗い灰色になり、濃いそらいろの文字とのコントラスト比が
+            // 約 2.2 まで下がる（ライトでは約 4.8）。ホームの背景はダークでも昼の空のままなので、
+            // カードもライトと同じ見た目にそろえる（2026-10-28 シミュレーターで実測・利用者判断）
+            .environment(\.colorScheme, .light)
         }
         .buttonStyle(.plain)
         // カード全体で 1 つのボタンなので、ラベルを付けると中の文字は読まれない。
