@@ -37,6 +37,14 @@
 //  結果（2026-10-27・iPhone 18 Pro シミュレーター）: 予言の 4 本だけが赤（22 本中 4 本）。ほかの 18 本は緑。
 //  Edit で戻して指紋（shasum）が壊す前と一致することを確かめ、戻した中身で 22 本すべて緑
 //
+//  陽性対照 ④（2026-10-28・レビュー D1＝ブロックを受けたら次の候補を探す前に下げる）:
+//  DailyPickViewModel.handleUserBlocked の、進行中かどうかを見る前の hide() を消す
+//     → 赤になるはずのテスト:
+//        testCardIsHiddenWhileWaitingForNextCandidateAfterBlock
+//  （ほかは緑のまま: 次の候補が無い・一時失敗のときは、探し終わった後の hide() が下げる）
+//  結果（2026-10-28・iPhone 18 Pro シミュレーター）: 予言の 1 本だけが赤（23 本中 1 本）。ほかの 22 本は緑。
+//  Edit で戻して指紋（shasum）が壊す前と一致することを確かめ、戻した中身で 23 本すべて緑
+//
 
 @testable import Soramoyou
 import XCTest
@@ -283,6 +291,30 @@ final class DailyPickViewModelTests: XCTestCase {
         XCTAssertEqual(unavailable.count, 1)
         XCTAssertEqual(unavailable.first?["reason"] as? String, "all_skipped")
         XCTAssertEqual(unavailable.first?["date_key"] as? String, "2026-10-26")
+    }
+
+    func testCardIsHiddenWhileWaitingForNextCandidateAfterBlock() async throws {
+        // 陽性対照 ④ で赤になるはず（先に下げないと、次の候補を待っている間ブロックした人の p1 が出たまま押せる）
+        let fixture = makeFixture()
+        let firestore = fixture.firestore
+        addTeardownBlock { firestore.releaseAll() }
+        fixture.service.picksByKey = ["2026-10-26": DailyPick(dateKey: "2026-10-26", postIds: ["p1", "p2"])]
+        fixture.firestore.posts = ["p1": makePost("p1", owner: "kumo"), "p2": makePost("p2", owner: "sora")]
+        let viewModel = makeViewModel(fixture)
+        await viewModel.load(viewerId: "viewer")
+        XCTAssertEqual(viewModel.item?.post.id, "p1", "前提: ブロック前は 1 件目が出ている")
+
+        fixture.firestore.holdPostFetch("p2")
+        postUserBlocked("kumo", on: fixture.center)
+        await waitUntil { firestore.isHoldingPostFetch("p2") }
+        XCTAssertTrue(firestore.isHoldingPostFetch("p2"), "前提: 次の候補（p2）の取得で止まっている")
+
+        XCTAssertNil(viewModel.item, "次の候補を待っている間も、ブロックした人の投稿は出さない")
+
+        firestore.releasePostFetch("p2")
+        await waitUntil { viewModel.item?.post.id == "p2" }
+        XCTAssertEqual(viewModel.item?.post.id, "p2", "次の候補が取れたら出す")
+        XCTAssertEqual(viewModel.item?.candidateIndex, 1)
     }
 
     // MARK: - 8. 同じ鍵では取り直さない・force は取り直す
@@ -557,8 +589,11 @@ private final class DailyPickServiceStub: DailyPickServiceProtocol {
 /// FirestoreServiceProtocol の偽物（fetchPost・fetchBlockedUserIds・fetchPublicProfile だけ）
 ///
 /// 使わない関数は FirestoreServiceProtocol+TestDefaults.swift が埋める。
-/// VM からは 1 本ずつ順番に呼ばれる（並列には呼ばれない）ので、記録にロックは付けない。
-private final class DailyPickFirestoreServiceStub: FirestoreServiceProtocol {
+/// `holdPostFetch(_:)` で fetchPost を途中で止められる（次の候補を待っている間の状態を作るため）。
+/// 止めている間に VM の別の読み込みが同じ偽物を呼ぶことがあるので、呼ばれた記録と止める仕組みはロックの中でだけ触る
+/// （SoratomoProfileStoreTests の偽物と同じ形）。返す中身（posts など）は、テストが偽物の呼び出しを走らせていない間
+/// （止めている間を含む）にだけ書き換える。止めた呼び出しは再開した後に中身を読む。
+private final class DailyPickFirestoreServiceStub: FirestoreServiceProtocol, @unchecked Sendable {
     /// 投稿 ID ごとの投稿（無い ID は notFound＝削除済み）
     var posts: [String: Post] = [:]
     /// 一時的な失敗（ネットワーク断）を返す投稿 ID
@@ -572,15 +607,79 @@ private final class DailyPickFirestoreServiceStub: FirestoreServiceProtocol {
     /// 投稿者 → プロフィール写真の URL
     var photoURLs: [String: String] = [:]
 
+    private let lock = NSLock()
+    private var postIdsCalled: [String] = []
+    private var blockedListCalls = 0
+    private var profileIdsCalled: [String] = []
+    /// 次の fetchPost 1 回を止める投稿 ID
+    private var postIdsToHold: Set<String> = []
+    /// 止まっている fetchPost（投稿 ID → 再開の口）
+    private var postWaiters: [String: CheckedContinuation<Void, Never>] = [:]
+    /// releaseAll() の後か（後から止まりに来た呼び出しも、すぐ再開する）
+    private var isReleasedAll = false
+
     /// fetchPost で呼ばれた投稿 ID（呼ばれた順）
-    private(set) var requestedPostIds: [String] = []
+    var requestedPostIds: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return postIdsCalled
+    }
+
     /// fetchBlockedUserIds が呼ばれた回数
-    private(set) var blockedListRequestCount = 0
+    var blockedListRequestCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return blockedListCalls
+    }
+
     /// fetchPublicProfile で呼ばれた投稿者（呼ばれた順）
-    private(set) var requestedProfileIds: [String] = []
+    var requestedProfileIds: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return profileIdsCalled
+    }
+
+    /// その投稿 ID の次の fetchPost 1 回を、`releasePostFetch(_:)` まで止める
+    func holdPostFetch(_ postId: String) {
+        lock.lock()
+        postIdsToHold.insert(postId)
+        lock.unlock()
+    }
+
+    /// その投稿 ID の fetchPost が止まっているか
+    func isHoldingPostFetch(_ postId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return postWaiters[postId] != nil
+    }
+
+    /// 止めていた fetchPost を再開する
+    func releasePostFetch(_ postId: String) {
+        lock.lock()
+        let waiter = postWaiters.removeValue(forKey: postId)
+        lock.unlock()
+        waiter?.resume()
+    }
+
+    /// 止めているものを全部再開し、以降は止めない（テストの後片付け。止まったまま終わると continuation が漏れるため）
+    func releaseAll() {
+        lock.lock()
+        isReleasedAll = true
+        postIdsToHold = []
+        let pending = Array(postWaiters.values)
+        postWaiters = [:]
+        lock.unlock()
+        for waiter in pending {
+            waiter.resume()
+        }
+    }
 
     func fetchPost(postId: String) async throws -> Post {
-        requestedPostIds.append(postId)
+        if recordPostFetchAndShouldHold(postId) {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                parkPostFetch(postId, continuation)
+            }
+        }
         if transientFailurePostIds.contains(postId) {
             throw FirestoreServiceError.fetchFailed(
                 NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
@@ -591,14 +690,49 @@ private final class DailyPickFirestoreServiceStub: FirestoreServiceProtocol {
     }
 
     func fetchBlockedUserIds(userId: String) async throws -> [String] {
-        blockedListRequestCount += 1
+        recordBlockedListFetch()
         if let blockListError { throw blockListError }
         return blockedUserIdsByViewer[userId] ?? []
     }
 
     func fetchPublicProfile(userId: String) async throws -> PublicProfile {
-        requestedProfileIds.append(userId)
+        recordProfileFetch(userId)
         return PublicProfile(id: userId, displayName: displayNames[userId], photoURL: photoURLs[userId])
+    }
+
+    // ロックは同期のメソッドの中でだけ使う（async の関数の中で NSLock を触ると警告になるため）
+
+    /// 呼ばれた投稿 ID を記録し、止める投稿 ID なら true（止めるのは 1 回だけ）
+    private func recordPostFetchAndShouldHold(_ postId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        postIdsCalled.append(postId)
+        guard !isReleasedAll else { return false }
+        return postIdsToHold.remove(postId) != nil
+    }
+
+    /// 止まりに来た fetchPost の再開の口を預かる（releaseAll() の後なら、すぐ再開する）
+    private func parkPostFetch(_ postId: String, _ continuation: CheckedContinuation<Void, Never>) {
+        lock.lock()
+        if isReleasedAll {
+            lock.unlock()
+            continuation.resume()
+        } else {
+            postWaiters[postId] = continuation
+            lock.unlock()
+        }
+    }
+
+    private func recordBlockedListFetch() {
+        lock.lock()
+        blockedListCalls += 1
+        lock.unlock()
+    }
+
+    private func recordProfileFetch(_ userId: String) {
+        lock.lock()
+        profileIdsCalled.append(userId)
+        lock.unlock()
     }
 }
 

@@ -256,8 +256,9 @@ final class DailyPickViewModel: ObservableObject {
             // 出している item は消さない。ただし次の 2 つは下げる
             // - 別の人（ログアウトしてゲストになった等）の読み込みで出したもの
             //   （前の人の画面で読んだ名前や、今の人がブロックしている人の投稿を出し続けないため）
-            // - 今の Set では出せなくなったもの（ブロックを受けて次の候補を探している間に force の読み込みが始まり、
-            //   次の候補探しの結果が捨てられたまま、この読み込みが失敗した場合。ブロックした人の投稿を出し続けない）
+            // - 今の Set では出せなくなったもの（この読み込みで読み直したブロック一覧に、出している投稿の投稿者が
+            //   入っていた場合＝別の端末でブロックした後の引っ張って更新が、候補の取得の一時失敗で止まったとき。
+            //   ブロックした人の投稿を出し続けない。この端末でのブロックは handleUserBlocked が先に下げている）
             if let displayedContext, let current = item,
                displayedContext.viewerId != viewerId || outcome(for: current.post) != .show
             {
@@ -527,9 +528,10 @@ final class DailyPickViewModel: ObservableObject {
 
     /// 投稿者がブロックされたとき
     ///
-    /// ブロック済みの Set に足す。出している投稿の投稿者なら、同じ文書の次の候補（candidateIndex + 1 から）を
-    /// load と同じ規則で探す（文書は読み直さない）。見つかれば差し替え、無ければ item = nil・unavailable "all_skipped"、
-    /// 次が一時失敗なら item = nil（ブロックした人の投稿を出し続けない）。出している投稿の投稿者でなければ足すだけ。
+    /// ブロック済みの Set に足す。出している投稿の投稿者なら、先にカードを下げてから（item = nil）、
+    /// 同じ文書の次の候補（candidateIndex + 1 から）を load と同じ規則で探す（文書は読み直さない）。
+    /// 見つかれば出し、無ければ下げたまま unavailable "all_skipped"、次が一時失敗なら下げたまま次の load で取り直す
+    /// （ブロックした人の投稿を出し続けない）。出している投稿の投稿者でなければ足すだけ。
     /// - Parameter userId: ブロックされたユーザーの ID
     private func handleUserBlocked(_ userId: String) async {
         blockedByNotification.insert(userId)
@@ -538,12 +540,13 @@ final class DailyPickViewModel: ObservableObject {
         // 出している投稿が、足した後の Set でもまだ出せるなら何もしない（＝出している投稿の投稿者ではない）
         guard let current = item, let context = displayedContext, outcome(for: current.post) != .show else { return }
 
+        // ブロックした人の投稿はすぐ下げる（次の候補を探している間も、カードが残って押せてしまわないように）。
+        // 探す文書と続きの位置は、上で current と context に取ってある
+        hide()
+
         // 読み込みが進行中（引っ張って更新・前のブロックを受けた次の候補探し）なら、その読み込みが新しい Set で
-        // 選び直すので、ここでは出している投稿を下げるだけにする（2 本を同時に走らせて item を取り合わないため）
-        if isResolving {
-            hide()
-            return
-        }
+        // 選び直すので、ここでは下げるだけにする（2 本を同時に走らせて item を取り合わないため）
+        if isResolving { return }
 
         // この次の候補探しの世代（プロパティの generation と別の名前にして、取り違えないようにする）
         generation += 1
