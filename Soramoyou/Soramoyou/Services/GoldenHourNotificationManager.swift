@@ -11,15 +11,14 @@
 //  - アプリがフォアグラウンドになるたびに洗い替えし、14日窓をローリング維持
 //
 
-import Foundation
 import CoreLocation
+import Foundation
 import UserNotifications
 
 /// ゴールデンアワー通知の権限要求・スケジュール・削除を担うマネージャ。
 /// UNUserNotificationCenterDelegate を兼ね、フォアグラウンド表示と通知タップの計測を行う。
 @MainActor
 final class GoldenHourNotificationManager: NSObject {
-
     static let shared = GoldenHourNotificationManager()
 
     // MARK: - 定数
@@ -83,7 +82,7 @@ final class GoldenHourNotificationManager: NSObject {
     /// 失敗時は有効化せず、原因を返す（呼び出し側でトグルを戻して設定アプリへ誘導する）。
     func enable() async -> EnableResult {
         // 1. 通知権限（バッジは使わないため alert + sound のみ）
-        let granted = (try? await notificationCenter.requestAuthorization(options: [.alert, .sound])) ?? false
+        let granted = await (try? notificationCenter.requestAuthorization(options: [.alert, .sound])) ?? false
         guard granted else {
             return .notificationPermissionDenied
         }
@@ -138,7 +137,8 @@ final class GoldenHourNotificationManager: NSObject {
         let defaults = UserDefaults.standard
         // object(forKey:) で存在確認（double(forKey:) は未設定でも 0.0 を返すため）
         guard defaults.object(forKey: DefaultsKey.latitude) != nil,
-              defaults.object(forKey: DefaultsKey.longitude) != nil else {
+              defaults.object(forKey: DefaultsKey.longitude) != nil
+        else {
             return 0
         }
         let latitude = defaults.double(forKey: DefaultsKey.latitude)
@@ -229,22 +229,30 @@ final class GoldenHourNotificationManager: NSObject {
 // MARK: - UNUserNotificationCenterDelegate
 
 extension GoldenHourNotificationManager: UNUserNotificationCenterDelegate {
-
     /// アプリがフォアグラウンドでも通知をバナー表示し、通知センターにも残す
     func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
+        _: UNUserNotificationCenter,
+        willPresent _: UNNotification
     ) async -> UNNotificationPresentationOptions {
         Self.foregroundPresentationOptions
     }
 
     /// 通知タップを計測する
     func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
+        _: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
         if response.notification.request.identifier.hasPrefix(Self.identifierPrefix) {
             LoggingService.shared.logEvent("golden_hour_notification_tapped", parameters: nil)
+        }
+        // 「今日のおすすめのそらもよう」に選ばれた人への通知（サーバーが data に type: "dailyPick" / postId / dateKey を付ける）を開いた計測 ⭐️
+        // 通知タップはアプリを開くだけ（今のいいね通知と同じ・行き先は作らない＝利用者の決定 2026-10-24）。
+        // 「私のおすすめの空」の通知（recommendationNotices）とは別物。
+        // postId・uid・名前は送らない（計装に個人を特定する値を載せない）。
+        let dailyPickUserInfo = response.notification.request.content.userInfo
+        if dailyPickUserInfo["type"] as? String == "dailyPick" {
+            let dateKey = dailyPickUserInfo["dateKey"] as? String ?? ""
+            LoggingService.shared.logEvent("daily_pick_notification_opened", parameters: ["date_key": dateKey])
         }
         // そらとも（友達グループで空を共有）の新着通知なら、行き先をルーターへ渡す ⭐️ tasks 14.1
         // ルーターは type が soratomoPost のものだけを保留にし、既存の通知とゴールデンアワーでは何もしない。
