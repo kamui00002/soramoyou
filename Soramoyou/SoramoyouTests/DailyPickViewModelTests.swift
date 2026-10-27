@@ -75,6 +75,15 @@
 //  2 回目は予言の 1 本だけが赤（29 本中 1 本）。ほかの 28 本は緑。
 //  Edit で戻して指紋（shasum）が壊す前と一致することを確かめ、戻した中身で 29 本すべて緑
 //
+//  陽性対照 ⑪（2026-10-28・レビュー D6＝朝 7 時をまたいでアプリに戻ったら新しい日の 1 枚に替わる）:
+//  DailyPickViewModel.load の `if settledLoadKey == loadKey { return }` を
+//  `if let settled = settledLoadKey, settled.viewerId == loadKey.viewerId { return }` にする（鍵の日付を見ない）
+//     → 赤になるはずのテスト:
+//        testNewDayKeyIsFetchedWithoutForce
+//  （ほかは緑のまま: ほかのテストは固定の時刻なので鍵の日付が変わらない）
+//  結果（2026-10-28・iPhone 18 Pro シミュレーター）: 予言の 1 本だけが赤（30 本中 1 本）。ほかの 29 本は緑。
+//  Edit で戻して指紋（shasum）が壊す前と一致することを確かめ、戻した中身で 30 本すべて緑
+//
 
 @testable import Soramoyou
 import XCTest
@@ -389,6 +398,42 @@ final class DailyPickViewModelTests: XCTestCase {
         XCTAssertEqual(fixture.logger.parameters(of: "daily_pick_shown").count, 1, "取り直しても shown は 1 回")
     }
 
+    func testNewDayKeyIsFetchedWithoutForce() async throws {
+        // 陽性対照 ⑪ で赤になるはず（鍵の日付を見ずに止めると、翌朝も前の日の p1 のまま）
+        // アプリに戻ったときの読み直し（HomeView の scenePhase が .active で force なしの load）が、
+        // 朝 7 時をまたいだ後なら新しい日の 1 枚に替わること（レビュー D6）
+        let fixture = makeFixture()
+        fixture.service.picksByKey = [
+            "2026-10-26": DailyPick(dateKey: "2026-10-26", postIds: ["p1"]),
+            "2026-10-27": DailyPick(dateKey: "2026-10-27", postIds: ["p2"]),
+        ]
+        fixture.firestore.posts = ["p1": makePost("p1", owner: "kumo"), "p2": makePost("p2", owner: "sora")]
+        var current = Self.fixedNow
+        let viewModel = makeViewModel(fixture, now: { current })
+
+        await viewModel.load(viewerId: "viewer")
+        XCTAssertEqual(viewModel.item?.post.id, "p1", "前提: 10/26 の 1 枚が出ている")
+
+        // 翌朝の 6:59:59 JST（2026-10-26T21:59:59Z）はまだ 10/26 の鍵＝取り直さない
+        current = Self.fixedNow.addingTimeInterval(21 * 3600 - 1)
+        await viewModel.load(viewerId: "viewer")
+        XCTAssertEqual(fixture.service.requestedKeys, ["2026-10-26"], "7 時より前は同じ鍵なので読まない")
+
+        // 翌朝の 7:00 JST（2026-10-26T22:00:00Z）で鍵が 2026-10-27 に替わる
+        current = Self.fixedNow.addingTimeInterval(21 * 3600)
+        await viewModel.load(viewerId: "viewer")
+
+        let item = try XCTUnwrap(viewModel.item)
+        XCTAssertEqual(item.post.id, "p2", "鍵が変われば force なしでも新しい日の 1 枚に替わる")
+        XCTAssertEqual(item.dateKey, "2026-10-27")
+        XCTAssertEqual(fixture.service.requestedKeys, ["2026-10-26", "2026-10-27"])
+        XCTAssertEqual(fixture.firestore.requestedPostIds, ["p1", "p2"])
+        XCTAssertEqual(
+            fixture.logger.parameters(of: "daily_pick_shown").count, 2,
+            "shown は date_key ごとに 1 回＝新しい日にもう 1 回"
+        )
+    }
+
     // MARK: - 9. shown は同じ date_key で 1 回だけ
 
     func testShownIsSentOncePerDateKeyAcrossViewModels() async {
@@ -681,8 +726,11 @@ final class DailyPickViewModelTests: XCTestCase {
         )
     }
 
-    /// 偽物一式で VM を作る（now は固定の時刻）
-    private func makeViewModel(_ fixture: Fixture) -> DailyPickViewModel {
+    /// 偽物一式で VM を作る（now は省略すると固定の時刻）
+    /// - Parameters:
+    ///   - fixture: そのケースの偽物一式
+    ///   - now: 時計（日をまたぐケースだけ、途中で進められる時計を渡す）
+    private func makeViewModel(_ fixture: Fixture, now: (() -> Date)? = nil) -> DailyPickViewModel {
         let fixedNow = Self.fixedNow
         return DailyPickViewModel(
             dailyPickService: fixture.service,
@@ -690,7 +738,7 @@ final class DailyPickViewModelTests: XCTestCase {
             logger: fixture.logger,
             sessionLog: fixture.sessionLog,
             notificationCenter: fixture.center,
-            now: { fixedNow }
+            now: now ?? { fixedNow }
         )
     }
 
