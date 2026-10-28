@@ -23,6 +23,9 @@ struct UserProfileView: View {
     /// 空カレンダーの入口から開くシートを出しているか ⭐️ 1.18.0 PR-B
     @State private var isShowingSkyCalendar = false
 
+    /// お気に入りの空の入口から push で開いているか ⭐️ 1.18.0（押した記録を入口の Button の action で残すため）
+    @State private var isShowingFavorites = false
+
     /// フォロー一覧への遷移に使う（ViewModel 内の同名プロパティは private のため保持）⭐️ PR-5
     private let targetUserId: String
     private let ownUserId: String?
@@ -77,6 +80,10 @@ struct UserProfileView: View {
                 postsGrid
             }
             .padding(DesignTokens.Spacing.screenMargin)
+            // お気に入りの空へ push で進む見えないリンク（入口のボタンが isShowingFavorites を立てる）⭐️ 1.18.0
+            // ⚠️ リンクは入口のボタン（switch の中）でなくここに置く。入口の状態が変わってボタンが消えても、
+            //    開いている画面が道連れで戻らないように（下の空カレンダーの .sheet と同じ理由）。
+            .background(favoritesPushLink)
         }
         .background(DesignTokens.Colors.detailBackground.ignoresSafeArea())
         .navigationTitle(viewModel.publicProfile?.displayName ?? "プロフィール")
@@ -286,7 +293,7 @@ struct UserProfileView: View {
         }
     }
 
-    /// 「○○さんのお気に入りの空」の入口（押すと push で開く）
+    /// 「○○さんのお気に入りの空」の入口（押すと push で開く。進めるのは body の見えないリンク `favoritesPushLink`）
     @ViewBuilder
     private var favoritesEntry: some View {
         switch viewModel.favoritesEntryState {
@@ -295,38 +302,59 @@ struct UserProfileView: View {
         case .followToSee:
             followToSeeRow("フォローするとお気に入りの空が見られます", systemImage: "bookmark")
         case .open:
-            // `.open` は閲覧者がログイン中（ownUserId が nil でない）のときしか来ないが、
-            // FavoritesView は閲覧者の uid（ブロック一覧を読むのに使う）を String で受け取るので、型の上でも外す。
-            // nil なら何も出さない（暗黙の EmptyView）⭐️ 1.18.0 PR-B
-            if let viewerId = ownUserId {
-                NavigationLink {
-                    FavoritesView(
-                        ownerId: targetUserId,
-                        ownerDisplayName: viewModel.publicProfile?.displayName,
-                        viewerId: viewerId
-                    )
-                    // 🔴 push 先にも入れ直す（上の注意のとおり、cover 経由のときはこの画面の環境に managers が無い）
-                    .environmentObject(likeManager)
-                    .environmentObject(favoriteManager)
-                } label: {
-                    // NavigationLink は押した処理を持てないので、入口の見た目だけを借りる
-                    ProfileSectionEntryButton.label(
-                        title: sectionEntryTitle(for: .favorites),
-                        systemImage: "bookmark"
-                    )
-                }
-                // 押すと少し沈む（空カレンダーの入口と同じ見た目・HomeView.swift の CardButtonStyle）
-                .buttonStyle(CardButtonStyle())
-                // 押したときの触覚と計測（NavigationLink の遷移はそのまま動かし、同時にタップも拾う）
-                // 前例: ShareCardExportView の「共有する」（ShareLink に simultaneousGesture で計測）
-                .simultaneousGesture(TapGesture().onEnded {
+            // `.open` は閲覧者がログイン中（ownUserId が nil でない）のときしか来ない。
+            // 進む先の見えないリンクも ownUserId が nil なら置かないので、ボタンも同じ条件で出す ⭐️ 1.18.0 PR-B
+            if ownUserId != nil {
+                // 押したら: 触覚（軽いタップ）→ 計測 → push で開く（空カレンダーの入口と同じ形）⭐️ 1.18.0
+                // 計測には UID・表示名を送らない（どの欄を開いたかだけ）
+                // ⚠️ 前は NavigationLink ＋ `.simultaneousGesture(TapGesture())` で触覚と計測を拾っていたが、
+                //    TestFlight 118 の実機の iPhone で、開くのに計測が残らなかった。押した処理は Button の action だけに持たせる。
+                //    （同じ 118 の iPad で押しても開かなかった原因は入口でなく、下の postsGrid の画像の当たり判定。
+                //    直しはそちらの `.allowsHitTesting(false)`・iPad (A16) のシミュで確認・2026-10-29）
+                ProfileSectionEntryButton(
+                    title: sectionEntryTitle(for: .favorites),
+                    systemImage: "bookmark"
+                ) {
                     Haptics.play(.tap)
                     LoggingService.shared.logEvent(
                         "user_profile_section_opened",
                         parameters: ["section": ProfileSection.favorites.rawValue]
                     )
-                })
+                    isShowingFavorites = true
+                }
             }
+        }
+    }
+
+    /// お気に入りの空へ push で進む見えないリンク（入口のボタンが `isShowingFavorites` を立てると進む）⭐️ 1.18.0
+    ///
+    /// この画面の入れ物は NavigationView（`.navigationViewStyle(.stack)`・HomeView / TagDetailView / FollowListView）。
+    /// iOS 16 からの `navigationDestination(isPresented:)` は NavigationStack の中でしか効かず
+    /// （SDK の案内文・HomeView.swift の「.navigationDestination は無反応」の記録）、
+    /// NavigationView の中で Button から push するには `NavigationLink(destination:isActive:)` を使う。
+    /// ⚠️ この初期化子は iOS 16 で非推奨（警告が 1 つ出る）。入れ物を NavigationStack に替えるときに
+    ///    `navigationDestination(isPresented:)` へ置き換える。
+    @ViewBuilder
+    private var favoritesPushLink: some View {
+        // FavoritesView は閲覧者の uid（ブロック一覧を読むのに使う）を String で受け取るので、型の上でも外す。
+        // nil なら何も置かない（暗黙の EmptyView）
+        if let viewerId = ownUserId {
+            NavigationLink(
+                destination: FavoritesView(
+                    ownerId: targetUserId,
+                    ownerDisplayName: viewModel.publicProfile?.displayName,
+                    viewerId: viewerId
+                )
+                // 🔴 push 先にも入れ直す（上の注意のとおり、cover 経由のときはこの画面の環境に managers が無い）
+                .environmentObject(likeManager)
+                .environmentObject(favoriteManager),
+                isActive: $isShowingFavorites
+            ) {
+                EmptyView()
+            }
+            // 見た目も読み上げ（VoiceOver）にも出さない（押す所は入口のボタン）
+            .hidden()
+            .accessibilityHidden(true)
         }
     }
 
@@ -474,6 +502,15 @@ struct UserProfileView: View {
                                 .frame(height: 120)
                                 .clipped()
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                                // 🔴 タップを受け止めない ⭐️ 1.18.0
+                                // `.clipped()` は描画だけ切り、当たり判定は scaledToFill ではみ出した大きさのまま残る。
+                                // iPad はセルが広く縦長の写真が上へ 100pt 以上はみ出し、すぐ上の
+                                // 「○○さんのお気に入りの空」の入口を覆って押せなくしていた（iPad (A16) のシミュで
+                                // 画像の枠が高さ 343pt・入口の上まで届くのを確認・2026-10-29）。
+                                // セルは今は押しても何もしないので受け止めなくてよい。
+                                // ⚠️ セルを押せるようにするときは、これを外して `.clipped()` の後に
+                                //    `.contentShape(Rectangle())` を付ける（当たり判定を見える枠に合わせる）。
+                                .allowsHitTesting(false)
                         }
                     }
                 }
