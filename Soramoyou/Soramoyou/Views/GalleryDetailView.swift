@@ -756,20 +756,15 @@ struct GalleryDetailView: View {
 
     private var statsSection: some View {
         HStack(spacing: 24) {
-            Button {
-                let impact = UIImpactFeedbackGenerator(style: .light)
-                impact.impactOccurred()
-                Task { await likeManager.toggleLike(post: post, source: "gallery_detail", method: .button) }
-            } label: {
-                Label(
-                    "\(likeManager.likeCount(for: post))",
-                    systemImage: likeManager.isLiked(post.id) ? "heart.fill" : "heart"
-                )
-                .font(.headline)
-                .foregroundColor(likeManager.isLiked(post.id) ? DesignTokens.Colors.softPink : DesignTokens.Colors.textSecondary)
-                .animation(.easeInOut(duration: 0.2), value: likeManager.isLiked(post.id))
-            }
-            .buttonStyle(.plain)
+            // いいね — 共通部品（触覚・弾み・数字の入れ替わりは部品の中）⭐️ PR-H
+            PostLikeButton(
+                isLiked: likeManager.isLiked(post.id),
+                count: likeManager.likeCount(for: post),
+                style: .detail,
+                action: {
+                    Task { await likeManager.toggleLike(post: post, source: "gallery_detail", method: .button) }
+                }
+            )
 
             Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
                 .font(.headline)
@@ -778,20 +773,14 @@ struct GalleryDetailView: View {
             Spacer()
 
             // お気に入り（🔖）ボタン ⭐️ 件数は出さない（自分だけのプライベート保存）
-            Button {
-                let impact = UIImpactFeedbackGenerator(style: .light)
-                impact.impactOccurred()
-                Task { await favoriteManager.toggleFavorite(post: post, source: "gallery_detail") }
-            } label: {
-                Image(systemName: favoriteManager.isFavorited(post.id) ? "bookmark.fill" : "bookmark")
-                    .font(.headline)
-                    .foregroundColor(favoriteManager.isFavorited(post.id)
-                        ? DesignTokens.Colors.goldenHour
-                        : DesignTokens.Colors.textSecondary)
-                    .animation(.easeInOut(duration: 0.2), value: favoriteManager.isFavorited(post.id))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(favoriteManager.isFavorited(post.id) ? "お気に入りから外す" : "お気に入りに追加")
+            // 共通部品（触覚・弾み・読み上げのラベルは部品の中）⭐️ PR-H
+            PostFavoriteButton(
+                isFavorited: favoriteManager.isFavorited(post.id),
+                style: .detail,
+                action: {
+                    Task { await favoriteManager.toggleFavorite(post: post, source: "gallery_detail") }
+                }
+            )
         }
     }
 
