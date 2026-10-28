@@ -1122,6 +1122,8 @@ struct PostDetailView: View {
     @State private var isPreparingReEdit = false
     /// おすすめの空の追加 / 外すの結果（non-nil でアラートを出す）⭐️
     @State private var recommendationOutcome: RecommendationManager.Outcome?
+    /// 全画面のビューアで開いている写真（non-nil で PostPhotoViewer を全画面で出す）⭐️ PR-H 5b
+    @State private var photoViewerItem: PostPhotoViewerItem?
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
@@ -1356,13 +1358,29 @@ struct PostDetailView: View {
     private func multiImageCarousel(images: [ImageInfo]) -> some View {
         let aspect = carouselAspectRatio(for: images)
         TabView {
-            ForEach(Array(images.enumerated()), id: \.offset) { _, info in
+            ForEach(Array(images.enumerated()), id: \.offset) { index, info in
+                // 読める写真か（読めない写真は灰色の枠なので、タップしても開かない＝ボタンとして読み上げない）
+                let isReadable = PostImageSource.resolve(info, prefersThumbnail: false) != .unavailable
                 PostDetailImageView(imageInfo: info)
+                    // 写真の枠全体でタップを受ける ⭐️ PR-H 5b
+                    .contentShape(Rectangle())
+                    // 1 回タップで、この 1 枚を全画面のビューアで開く ⭐️ PR-H 5b
+                    .onTapGesture {
+                        openPhotoViewer(index: index, imageInfo: info, imageCount: images.count)
+                    }
+                    // VoiceOver: 読める写真だけ「ボタン」と「全画面で表示します」を足す ⭐️ PR-H 5b
+                    .accessibilityAddTraits(isReadable ? .isButton : [])
+                    .accessibilityHint(isReadable ? "全画面で表示します" : "")
             }
         }
         .tabViewStyle(.page(indexDisplayMode: images.count > 1 ? .always : .never))
         .indexViewStyle(.page(backgroundDisplayMode: .always))
         .aspectRatio(aspect, contentMode: .fit)
+        // 全画面の写真ビューア ⭐️ PR-H 5b
+        // ⚠️ body の修飾子チェーンに足すと Xcode 27 の型チェックが重くなる（#123）ため、カルーセルに付ける
+        .fullScreenCover(item: $photoViewerItem) { item in
+            PostPhotoViewer(imageInfo: item.imageInfo)
+        }
     }
 
     /// 画像配列の中で最も縦長なアスペクト比（width / height）を返す。
@@ -1374,6 +1392,23 @@ struct PostDetailView: View {
             return CGFloat(info.width) / CGFloat(info.height)
         }
         return ratios.min() ?? 1.0
+    }
+
+    /// 写真を全画面のビューアで開き、開いたことを計装する ⭐️ PR-H 5b
+    ///
+    /// 読めない写真（`PostImageSource` が `.unavailable`＝灰色の枠）は、開いても何も見えないので何もしない（計装も送らない）。
+    /// 計装 `post_photo_viewer_opened` は、何枚目（0 始まり）と全部で何枚かだけを送る（UID は送らない・利用者の決定 2026-10-28）。
+    /// - Parameters:
+    ///   - index: カルーセルの何ページ目か（0 始まり）
+    ///   - imageInfo: 開く写真
+    ///   - imageCount: 投稿の写真の枚数
+    private func openPhotoViewer(index: Int, imageInfo: ImageInfo, imageCount: Int) {
+        guard PostImageSource.resolve(imageInfo, prefersThumbnail: false) != .unavailable else { return }
+        photoViewerItem = PostPhotoViewerItem(id: index, imageInfo: imageInfo)
+        LoggingService.shared.logEvent(
+            "post_photo_viewer_opened",
+            parameters: PostPhotoViewerMath.openedEventParameters(imageIndex: index, imageCount: imageCount)
+        )
     }
 
     private var postInfoSection: some View {
