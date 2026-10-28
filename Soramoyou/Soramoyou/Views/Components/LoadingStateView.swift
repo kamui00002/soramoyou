@@ -11,21 +11,21 @@ import SwiftUI
 /// ローディングのタイプ
 /// ローディングの種類に応じたメッセージを提供
 enum LoadingType {
-    case initial        // 初回読み込み
-    case refreshing     // プルリフレッシュ
-    case loadingMore    // 追加読み込み
-    case uploading      // アップロード中
-    case processing     // 処理中
+    case initial // 初回読み込み
+    case refreshing // プルリフレッシュ
+    case loadingMore // 追加読み込み
+    case uploading // アップロード中
+    case processing // 処理中
     case custom(message: String)
 
     var message: String {
         switch self {
-        case .initial: return "読み込み中..."
-        case .refreshing: return "更新中..."
-        case .loadingMore: return "追加読み込み中..."
-        case .uploading: return "アップロード中..."
-        case .processing: return "処理中..."
-        case .custom(let message): return message
+        case .initial: "読み込み中..."
+        case .refreshing: "更新中..."
+        case .loadingMore: "追加読み込み中..."
+        case .uploading: "アップロード中..."
+        case .processing: "処理中..."
+        case let .custom(message): message
         }
     }
 }
@@ -34,8 +34,10 @@ enum LoadingType {
 /// アニメーション付きのローディング表示
 struct LoadingStateView: View {
     let type: LoadingType
-    var progress: Double? = nil  // 0.0 ~ 1.0（オプション）
+    var progress: Double? // 0.0 ~ 1.0（オプション）
     @State private var isAnimating = false
+    /// 端末の「視差効果を減らす」。ON のときは後ろの光を脈打たせない（等倍＝始点で止めた絵にする）
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: DesignTokens.Spacing.lg) {
@@ -47,7 +49,7 @@ struct LoadingStateView: View {
                         RadialGradient(
                             colors: [
                                 DesignTokens.Colors.skyBlue.opacity(0.2),
-                                Color.clear
+                                Color.clear,
                             ],
                             center: .center,
                             startRadius: 20,
@@ -57,8 +59,11 @@ struct LoadingStateView: View {
                     .frame(width: 100, height: 100)
                     .blur(radius: 8)
                     .scaleEffect(isAnimating ? 1.2 : 1.0)
+                    // 「視差効果を減らす」を途中で切り替えたら光を作り直し、走っている繰り返しの動きを確実に捨てる
+                    // （SwiftUI は値を始点へ戻しただけでは repeatForever の動きを捨てないことがあるため）
+                    .id(reduceMotion)
 
-                if let progress = progress {
+                if let progress {
                     // プログレスリング
                     ZStack {
                         // 背景リング
@@ -76,7 +81,7 @@ struct LoadingStateView: View {
                                 LinearGradient(
                                     colors: [
                                         DesignTokens.Colors.skyBlue,
-                                        DesignTokens.Colors.selectionAccent
+                                        DesignTokens.Colors.selectionAccent,
                                     ],
                                     startPoint: .leading,
                                     endPoint: .trailing
@@ -107,9 +112,28 @@ struct LoadingStateView: View {
         }
         .padding(DesignTokens.Spacing.xl)
         .onAppear {
-            withAnimation(Animation.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
-                isAnimating = true
+            // 「視差効果を減らす」ON のときは光を脈打たせない（始点＝等倍のまま止めた絵。画面に出た最初の絵と同じ）
+            if !reduceMotion {
+                startGlowPulse()
             }
+        }
+        .onChange(of: reduceMotion) { reduce in
+            // 画面を出している途中で設定が変わったとき: ON → 始点に戻して止める／OFF → 脈打ち始める
+            if reduce {
+                isAnimating = false
+            } else {
+                startGlowPulse()
+            }
+        }
+    }
+
+    // MARK: - Private Methods
+
+    /// 後ろの光をゆっくり大きく・小さくし続ける（ずっと動く）
+    /// 「視差効果を減らす」ON のときは呼ばない
+    private func startGlowPulse() {
+        withAnimation(Animation.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+            isAnimating = true
         }
     }
 }
