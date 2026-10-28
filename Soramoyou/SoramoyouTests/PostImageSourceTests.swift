@@ -7,6 +7,7 @@
 //  - 公開（パスの 3 つ目が public）のときだけ URL で読む
 //  - それ以外は、URL が残っていても Storage のパスで読む（D-2 でトークンを消しても壊れないように）
 //  - パスは storagePath（サムネイルは thumbnailStoragePath）を先に見る。無い古い投稿は URL から取り出す
+//  - 区分の無い古い置き場（posts/{uid}/{名前} など）は、URL が読めれば URL、読めなければ読めない（パスで読むと本人でも断られるため）
 //  期待する値は、ここにパスを直接書く（入力から作った値どうしを比べると、何もしない実装でも緑になるため）
 //
 
@@ -22,6 +23,9 @@ final class PostImageSourceTests: XCTestCase {
     private let publicThumbURL = "https://firebasestorage.googleapis.com/v0/b/demo-bucket.appspot.com/o/thumbnails%2Fu1%2Fpublic%2Fa_thumb.jpg?alt=media&token=t4"
     private let followersThumbURL = "https://firebasestorage.googleapis.com/v0/b/demo-bucket.appspot.com/o/thumbnails%2Fu1%2Ffollowers%2Fa_thumb.jpg?alt=media&token=t5"
     private let followersOriginalURL = "https://firebasestorage.googleapis.com/v0/b/demo-bucket.appspot.com/o/originals%2Fu1%2Ffollowers%2Fo.jpg?alt=media&token=t6"
+    // 区分の無い古い置き場（2026-01-16 より前の投稿の形：posts/{uid}/{名前}・thumbnails/{uid}/{名前}）
+    private let legacyBodyURL = "https://firebasestorage.googleapis.com/v0/b/demo-bucket.appspot.com/o/posts%2Fu1%2Fold.jpg?alt=media&token=t7"
+    private let legacyThumbURL = "https://firebasestorage.googleapis.com/v0/b/demo-bucket.appspot.com/o/thumbnails%2Fu1%2Fold.jpg?alt=media&token=t8"
 
     /// 判定に関係する 4 つだけを変えた画像の情報
     private func image(
@@ -186,5 +190,31 @@ final class PostImageSourceTests: XCTestCase {
             thumbnailStoragePath: "thumbnails/u1/private/a_thumb.jpg"
         )
         XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .storage("thumbnails/u1/private/a_thumb.jpg"))
+    }
+
+    // MARK: - 区分の無い古い置き場（2026-01-16 より前の投稿）
+
+    func testLegacyBodyWithoutSegmentUsesURL() {
+        // 区分の無い古い本体は、Storage のルールに読む行が無い（パスで読むと本人でも断られる）ので URL で読む
+        let info = image(url: legacyBodyURL)
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .remote(URL(string: legacyBodyURL)!))
+    }
+
+    func testLegacyStoredPathUsesURL() {
+        // storagePath に古い形が入っていても同じ（URL で読む）
+        let info = image(url: legacyBodyURL, storagePath: "posts/u1/old.jpg")
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .remote(URL(string: legacyBodyURL)!))
+    }
+
+    func testLegacyThumbnailUsesThumbnailURL() {
+        // 古いサムネイル（thumbnails/{uid}/{名前}）も、サムネイルの URL で読む（本体に落とさない）
+        let info = image(url: legacyBodyURL, thumbnail: legacyThumbURL)
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .remote(URL(string: legacyThumbURL)!))
+    }
+
+    func testLegacyPathWithEmptyURLIsUnavailable() {
+        // 古い形で URL も無いときは、パスで読みにいっても必ず断られるので「読めない」
+        let info = image(url: "", storagePath: "posts/u1/old.jpg")
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .unavailable)
     }
 }
