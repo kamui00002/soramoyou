@@ -66,6 +66,85 @@ service cloud.firestore {
                  && email.matches('[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}'));
     }
 
+    // 画像の URL の形 ⭐️（アプリが受け取る Storage のダウンロード URL の形）
+    // - 空（項目なし・null・""）は通す（"" は、形の全体を (…)? で包んで通す）
+    // - 文字列でない値は、matches が評価の誤りになって断られる
+    // - 名前（/o/ の後ろ）は英数と _ . ~ % - だけ、クエリ（? の後ろ）はそれに = & を足した文字だけ
+    // ⚠️ エミュレーターの Storage（http://127.0.0.1:9199/…）の URL はこの形に入らない。
+    //    手で確かめるためにエミュレーターを起こすときは、その形を足した写しを読ませる
+    function isValidImageUrl(value) {
+      return value == null
+             || value.matches('(https://firebasestorage[.]googleapis[.]com(:443)?/v0/b/soramoyou-ios[.]firebasestorage[.]app/o/[A-Za-z0-9_.~%-]+([?][A-Za-z0-9_.~%=&-]*)?)?');
+    }
+
+    // 写真の配列の i 番目。i 番目が無ければ true
+    function isValidImageEntryAt(entries, i) {
+      return entries.size() <= i || isValidImageEntry(entries[i]);
+    }
+
+    // 写真の 1 個（url と thumbnail）
+    function isValidImageEntry(entry) {
+      return entry is map
+             && isValidImageUrl(entry.get('url', null))
+             && isValidImageUrl(entry.get('thumbnail', null));
+    }
+
+    // 写真の配列（images）。項目なし・null は通す。10 個まで
+    // ルールにはループが無いので、0〜9 番目を 1 つずつ並べて見る
+    function isValidImageList(value) {
+      return value == null
+             || (value is list
+                 && value.size() <= 10
+                 && isValidImageEntryAt(value, 0)
+                 && isValidImageEntryAt(value, 1)
+                 && isValidImageEntryAt(value, 2)
+                 && isValidImageEntryAt(value, 3)
+                 && isValidImageEntryAt(value, 4)
+                 && isValidImageEntryAt(value, 5)
+                 && isValidImageEntryAt(value, 6)
+                 && isValidImageEntryAt(value, 7)
+                 && isValidImageEntryAt(value, 8)
+                 && isValidImageEntryAt(value, 9));
+    }
+
+    // 原画像の配列の i 番目（url）。i 番目が無ければ true
+    // 要素が map でないときは、get が評価の誤りになって断られる
+    function isValidOriginalAt(entries, i) {
+      return entries.size() <= i || isValidImageUrl(entries[i].get('url', null));
+    }
+
+    // 原画像の配列（originalImages）。項目なし・null は通す。10 個まで（並べ方は写真と同じ）
+    function isValidOriginalList(value) {
+      return value == null
+             || (value is list
+                 && value.size() <= 10
+                 && isValidOriginalAt(value, 0)
+                 && isValidOriginalAt(value, 1)
+                 && isValidOriginalAt(value, 2)
+                 && isValidOriginalAt(value, 3)
+                 && isValidOriginalAt(value, 4)
+                 && isValidOriginalAt(value, 5)
+                 && isValidOriginalAt(value, 6)
+                 && isValidOriginalAt(value, 7)
+                 && isValidOriginalAt(value, 8)
+                 && isValidOriginalAt(value, 9));
+    }
+
+    // checkedKeys に入っている項目だけ、画像の URL の形を見る
+    // 作成では request.resource.data.keys()、更新では diff の affectedKeys() を渡す
+    // （更新では、その項目が変わったときだけ見る）
+    function hasValidImageUrlField(checkedKeys, field) {
+      return !(field in checkedKeys)
+             || isValidImageUrl(request.resource.data.get(field, null));
+    }
+
+    // 投稿の images・originalImages の URL の形（渡し方は hasValidImageUrlField と同じ）
+    function hasValidPostImages(checkedKeys) {
+      let data = request.resource.data;
+      return (!('images' in checkedKeys) || isValidImageList(data.get('images', null)))
+             && (!('originalImages' in checkedKeys) || isValidOriginalList(data.get('originalImages', null)));
+    }
+
     // 投稿データの検証
     function isValidPost() {
       let data = request.resource.data;
@@ -164,15 +243,18 @@ service cloud.firestore {
       // 匿名ユーザーはemailを持たないため、emailフィールドは必須としない
       allow create: if isOwner(userId)
                     && request.resource.data.keys().hasAll(['id', 'createdAt'])
-                    && isValidEmail(request.resource.data.get('email', null));
+                    && isValidEmail(request.resource.data.get('email', null))
+                    && hasValidImageUrlField(request.resource.data.keys(), 'photoURL');
 
       // 所有者のみ更新可能
       // idは変更不可。emailは存在する場合のみ変更不可（匿名ユーザーはemailなし）
+      // photoURL の形は、photoURL が変わったときだけ見る ⭐️
       // または、認証済みユーザーによる「followersCount/followingCount のみ±1」更新を許可
       // （follows トランザクションで相手のカウントを更新するために必要）⭐️
       allow update: if (isOwner(userId)
                         && request.resource.data.id == resource.data.id
-                        && request.resource.data.get('email', null) == resource.data.get('email', null))
+                        && request.resource.data.get('email', null) == resource.data.get('email', null)
+                        && hasValidImageUrlField(request.resource.data.diff(resource.data).affectedKeys(), 'photoURL'))
                     || isFollowCounterUpdate();
 
       allow delete: if isOwner(userId);
@@ -240,16 +322,19 @@ service cloud.firestore {
       //    アプリは取得した profile.id をキーに投稿者名を引くので、他人の uid を書けると
       //    他人の投稿に自分の名前・アバターを付けて見せられてしまう。
       //    update は下の「id 不変」で守られるので、作成時に一致させれば常に一致する。
+      // photoURL の形は、作成では有れば見る・更新では photoURL が変わったときだけ見る ⭐️
       allow create: if isOwner(userId)
                     && request.resource.data.keys().hasAll(['id', 'createdAt'])
                     && request.resource.data.id == userId
                     && isValidRecommendedPostIds(request.resource.data)
-                    && isValidProfileVisibility(request.resource.data);
+                    && isValidProfileVisibility(request.resource.data)
+                    && hasValidImageUrlField(request.resource.data.keys(), 'photoURL');
 
       allow update: if isOwner(userId)
                     && request.resource.data.id == resource.data.id
                     && isValidRecommendedPostIds(request.resource.data)
-                    && isValidProfileVisibility(request.resource.data);
+                    && isValidProfileVisibility(request.resource.data)
+                    && hasValidImageUrlField(request.resource.data.diff(resource.data).affectedKeys(), 'photoURL');
 
       allow delete: if isOwner(userId);
     }
@@ -342,16 +427,20 @@ service cloud.firestore {
                   || isOwner(resource.data.userId);
 
       // 作成権限: 認証済みユーザーのみ、自分のIDで作成
+      // images・originalImages の URL の形も見る ⭐️
       allow create: if isAuthenticated()
                     && request.resource.data.userId == request.auth.uid
-                    && isValidPost();
+                    && isValidPost()
+                    && hasValidPostImages(request.resource.data.keys());
 
       // 更新権限:
-      // 1. 所有者による編集（カウント改ざん不可）
+      // 1. 所有者による編集（カウント改ざん不可）。images・originalImages の URL の形は、
+      //    その項目が変わったときだけ見る ⭐️
       // 2. 認証済みユーザーによるカウント更新（いいね/コメントのトランザクション）
       allow update: if (isOwner(resource.data.userId)
                         && request.resource.data.userId == resource.data.userId
-                        && isValidPostUpdate())
+                        && isValidPostUpdate()
+                        && hasValidPostImages(request.resource.data.diff(resource.data).affectedKeys()))
                     || (isAuthenticated() && isCountOnlyUpdate());
 
       // 削除権限: 所有者のみ
@@ -416,11 +505,13 @@ service cloud.firestore {
 
       // コメント作成: 認証済みユーザーのみ、自分のIDで作成
       // TODO: Phase 2で投稿の可視性に基づくアクセス制御を追加
+      // authorPhotoURL の形は、作成では有れば見る・更新では authorPhotoURL が変わったときだけ見る ⭐️
       allow create: if isAuthenticated()
                     && request.resource.data.userId == request.auth.uid
                     && request.resource.data.keys().hasAll(['userId', 'postId', 'content', 'createdAt'])
                     && request.resource.data.content.size() >= 1
-                    && request.resource.data.content.size() <= 500;
+                    && request.resource.data.content.size() <= 500
+                    && hasValidImageUrlField(request.resource.data.keys(), 'authorPhotoURL');
 
       // コメント更新: 自分のコメントのみ、内容のみ更新可能
       allow update: if isAuthenticated()
@@ -428,7 +519,8 @@ service cloud.firestore {
                     && request.resource.data.userId == resource.data.userId
                     && request.resource.data.postId == resource.data.postId
                     && request.resource.data.content.size() >= 1
-                    && request.resource.data.content.size() <= 500;
+                    && request.resource.data.content.size() <= 500
+                    && hasValidImageUrlField(request.resource.data.diff(resource.data).affectedKeys(), 'authorPhotoURL');
 
       // コメント削除: 自分のコメント、または投稿の所有者（モデレーション）
       allow delete: if isAuthenticated()
