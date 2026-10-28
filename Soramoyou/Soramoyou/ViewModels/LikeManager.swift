@@ -141,7 +141,11 @@ class LikeManager: ObservableObject {
             //    FavoriteManager.toggleFavorite と同じガード。
             guard authService.currentUser()?.id == userId else { return }
             // 計装 `like_toggled` ⭐️ PR-H — 書き込みに成功し、アカウントも変わっていないときだけ送る。
-            // 失敗（画面は元に戻る）や前のユーザーの操作まで数えると、実際に付いた／外れたいいねと数が合わなくなるため。
+            // ・これは利用者の操作（押して受け付けられた回数）の数で、実際のいいねの増減の数ではない。
+            //   既にその状態でサーバーが書かなかったときも送る（下の「楽観的な ±1 をサーバーの数字で置き換える」のコメントのとおり）。
+            // ・書き込みの失敗（画面は元に戻る）は操作が通らなかったので送らない。
+            // ・書き込みの最中にサインアウト／アカウント切り替えが挟まったときに送らないのは、
+            //   今のユーザーの識別で送ると、前のユーザーの操作を別の人の操作として数えてしまうため。
             logger.logEvent("like_toggled", parameters: [
                 "is_liked": willLike,
                 "method": method.rawValue,

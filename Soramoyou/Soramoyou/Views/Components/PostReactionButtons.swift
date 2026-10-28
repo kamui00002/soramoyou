@@ -50,7 +50,9 @@ enum PostReactionButtonStyle {
 /// 判定を単体テストで固定するため（`PostReactionButtonFeedbackTests`）。
 ///
 /// ## 弾ませる条件（なぜ `isLiked` をそのまま弾みの合図にしないか）
-/// 「付けるタップをした」かつ「その後に本当に ON になった」ときだけ弾ませる。
+/// 「付けるタップをした」かつ「その後に画面上で ON になった」ときだけ弾ませる。
+/// （LikeManager は楽観更新＝サーバーの返事を待たず先に画面を ON にするので、ここでの「ON」は書き込みの成功を意味しない。
+///   書き込みに失敗したときは、弾んだ後に元の OFF へ戻る。）
 /// - `isLiked` をそのまま `.symbolEffect(.bounce, value:)` の value にすると、フィードを読み込んだとき
 ///   （`LikeManager.checkLikeStatus` がいいね済みの投稿を false → true にする）に、画面中のハートが一斉に弾んでしまう。
 /// - ゲスト（押してもログインの案内が出るだけで付かない）や、通信中の連打（LikeManager が捨てる）でも弾まないようにしたい。
