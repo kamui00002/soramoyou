@@ -23,11 +23,12 @@ import SwiftUI
 ///     isShowingCalendar = true
 /// }
 ///
-/// // push で開く入口（お気に入りの空）。NavigationLink は押した処理を持てないので、見た目だけを借りる
-/// NavigationLink { … } label: {
-///     ProfileSectionEntryButton.label(title: "○○さんのお気に入りの空", systemImage: "bookmark")
+/// // push で開く入口（お気に入りの空）も同じくボタンにして、進めるのは見えない NavigationLink に任せる
+/// // （UserProfileView の favoritesPushLink）。NavigationLink に label だけ借りて
+/// // `.simultaneousGesture` で計測する形は、iPhone で開いても計測が残らなかった（1.18.0・TestFlight 118）
+/// ProfileSectionEntryButton(title: "○○さんのお気に入りの空", systemImage: "bookmark") {
+///     isShowingFavorites = true
 /// }
-/// .buttonStyle(CardButtonStyle())
 /// ```
 struct ProfileSectionEntryButton: View {
     /// ボタンの文言（例「○○さんの空カレンダー」）
