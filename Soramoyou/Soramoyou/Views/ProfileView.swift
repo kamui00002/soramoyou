@@ -387,7 +387,7 @@ struct ProfileView: View {
             // 自分の空に届いた反応を見せ、そのままフォローへ進めるための入口。
             // ⚠️ 一覧は「最近の投稿（最大30件）への反応」なので、文言もそれに合わせている。
             NavigationLink {
-                ReactedUsersView(ownUserId: user.id)
+                ReactedUsersView(ownUserId: user.id, likeManager: likeManager, favoriteManager: favoriteManager)
             } label: {
                 HStack {
                     Image(systemName: "heart.text.square")
@@ -496,7 +496,9 @@ struct ProfileView: View {
                 FollowListView(
                     listType: .followers,
                     targetUserId: user.id,
-                    ownUserId: user.id
+                    ownUserId: user.id,
+                    likeManager: likeManager,
+                    favoriteManager: favoriteManager
                 )
             } label: {
                 statItem(value: user.followersCount, label: "フォロワー", icon: "person.2")
@@ -514,7 +516,9 @@ struct ProfileView: View {
                 FollowListView(
                     listType: .following,
                     targetUserId: user.id,
-                    ownUserId: user.id
+                    ownUserId: user.id,
+                    likeManager: likeManager,
+                    favoriteManager: favoriteManager
                 )
             } label: {
                 statItem(value: user.followingCount, label: "フォロー中", icon: "heart")

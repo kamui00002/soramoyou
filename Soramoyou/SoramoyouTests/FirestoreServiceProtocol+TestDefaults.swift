@@ -76,10 +76,10 @@ extension FirestoreServiceProtocol {
     }
 
     func fetchVisibleUserPosts(
-        userId: String,
-        visibilities: [Visibility],
-        limit: Int,
-        lastDocument: DocumentSnapshot?
+        userId _: String,
+        visibilities _: [Visibility],
+        limit _: Int,
+        lastDocument _: DocumentSnapshot?
     ) async throws -> [Post] {
         fatalError("MockFirestoreService.fetchVisibleUserPosts は未実装です")
     }
@@ -138,12 +138,16 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.fetchPublicProfile は未実装です")
     }
 
-    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
+    func updatePublicProfileFields(userId _: String, displayName _: String?, photoURL _: String?, bio _: String?) async throws {
         fatalError("MockFirestoreService.updatePublicProfileFields は未実装です")
     }
 
     func createPublicProfile(from _: User) async throws {
         fatalError("MockFirestoreService.createPublicProfile は未実装です")
+    }
+
+    func updateProfileSectionVisibility(userId _: String, sections _: [ProfileSection: Bool]) async throws {
+        fatalError("MockFirestoreService.updateProfileSectionVisibility は未実装です")
     }
 
     // MARK: - Account

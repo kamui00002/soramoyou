@@ -5,11 +5,11 @@
 //  Created on 2025-12-06.
 //
 
-import Foundation
 import Combine
 import FirebaseFirestore
-import UIKit
+import Foundation
 import os
+import UIKit
 
 private let logger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "com.soramoyou.photo-editor",
@@ -35,9 +35,22 @@ class ProfileViewModel: ObservableObject {
     @Published var editingProfileImage: UIImage?
     @Published var shouldDeleteProfileImage: Bool = false // プロフィール画像を削除するかどうか
 
+    // プロフィールに表示するもの（見せる/見せない）⭐️
+    /// 編集画面のスイッチの値（「保存」を押すまでサーバーには書かない）
+    @Published var editingSectionVisibility: ProfileSectionVisibility = .default
+    /// 編集画面を開いたときに自分の `publicProfiles` から読んだ値の状態
+    ///
+    /// `.loaded(値)` の値が「保存のときに比べる元」（ここから変わった欄だけを書く）。
+    /// `.idle` / `.loading` / `.error` の間は比べる元が無い＝スイッチを押せなくし、保存しても書かない
+    /// （読めていない値で上書きしないため）。
+    @Published private(set) var sectionVisibilityLoadState: LoadableState<ProfileSectionVisibility> = .idle
+    /// 見せる/見せない の読み込みの世代。読み込みのたびに進め、await 中に世代が変わった古い結果は捨てる
+    /// （編集画面を閉じてすぐ開き直したとき、前の読み込みの結果で新しい状態を上書きしないため）
+    private var sectionVisibilityLoadGeneration = 0
+
     // 編集装備システムの管理（全27ツールの並び替え）
     @Published var availableTools: [EditTool] = EditTool.allCases
-    @Published var selectedTools: [EditTool] = EditTool.allCases  // 全ツールを常に選択状態
+    @Published var selectedTools: [EditTool] = EditTool.allCases // 全ツールを常に選択状態
     @Published var toolsOrder: [String] = []
 
     /// Auth復元後にuserIdを再取得できるようvarに変更
@@ -67,8 +80,9 @@ class ProfileViewModel: ObservableObject {
 
     // 自分のプロフィールかどうか
     var isOwnProfile: Bool {
-        guard let userId = userId,
-              let currentUserId = authService.currentUser()?.id else {
+        guard let userId,
+              let currentUserId = authService.currentUser()?.id
+        else {
             return false
         }
         return userId == currentUserId
@@ -83,10 +97,10 @@ class ProfileViewModel: ObservableObject {
     ) {
         self.authService = authService
         self.imageService = imageService
-        self.isExternalUserId = (userId != nil)
+        isExternalUserId = (userId != nil)
 
         // userIdが指定されていない場合は現在のユーザーIDを使用
-        if let userId = userId {
+        if let userId {
             self.userId = userId
         } else {
             self.userId = authService.currentUser()?.id
@@ -96,8 +110,8 @@ class ProfileViewModel: ObservableObject {
         self.storageService = storageService
 
         // デフォルトで全ツールを選択状態にする
-        self.selectedTools = EditTool.allCases
-        self.toolsOrder = EditTool.allCases.map { $0.rawValue }
+        selectedTools = EditTool.allCases
+        toolsOrder = EditTool.allCases.map(\.rawValue)
 
         // 投稿作成通知を購読（自分のプロフィールの場合のみ投稿一覧を自動更新）☁️
         setupPostCreatedObserver()
@@ -116,14 +130,14 @@ class ProfileViewModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self else { return }
+            guard let self else { return }
             Task { @MainActor in
                 await self.loadProfile()
                 await self.loadUserPosts()
             }
         }
     }
-    
+
     /// Auth状態が復元された後にuserIdを再取得してプロフィールをリロード
     /// Firebase Auth復元前にProfileViewが初期化された場合の対策
     /// - Returns: true = このメソッド内でロード済み（呼び出し元は再ロード不要）
@@ -138,17 +152,17 @@ class ProfileViewModel: ObservableObject {
                 userId = currentUserId
                 await loadProfile()
                 await loadUserPosts()
-                return true  // このメソッド内でロード済み
+                return true // このメソッド内でロード済み
             }
         }
-        return false  // ロード未実施（呼び出し元でロードが必要）
+        return false // ロード未実施（呼び出し元でロードが必要）
     }
-    
+
     // MARK: - Load Profile
-    
+
     /// プロフィール情報を読み込む
     func loadProfile() async {
-        guard let userId = userId else {
+        guard let userId else {
             // 未ログイン時はエラーを表示しない
             return
         }
@@ -164,7 +178,7 @@ class ProfileViewModel: ObservableObject {
             if isOwnProfile {
                 // リトライ可能な操作として実行
                 let fetchedUser = try await RetryableOperation.executeIfRetryable { [self] in
-                    try await self.firestoreService.fetchUser(userId: userId)
+                    try await firestoreService.fetchUser(userId: userId)
                 }
                 user = fetchedUser
 
@@ -180,13 +194,13 @@ class ProfileViewModel: ObservableObject {
                 // users コレクションからフォールバック取得する
                 do {
                     let publicProfile = try await RetryableOperation.executeIfRetryable { [self] in
-                        try await self.firestoreService.fetchPublicProfile(userId: userId)
+                        try await firestoreService.fetchPublicProfile(userId: userId)
                     }
 
                     // PublicProfileからUserモデルに変換（機密情報はnil）
                     user = User(
                         id: publicProfile.id,
-                        email: nil,  // 公開情報には含まれない
+                        email: nil, // 公開情報には含まれない
                         displayName: publicProfile.displayName,
                         photoURL: publicProfile.photoURL,
                         bio: publicProfile.bio,
@@ -195,7 +209,7 @@ class ProfileViewModel: ObservableObject {
                         followersCount: publicProfile.followersCount,
                         followingCount: publicProfile.followingCount,
                         postsCount: publicProfile.postsCount,
-                        blockedUserIds: nil,  // 公開情報には含まれない
+                        blockedUserIds: nil, // 公開情報には含まれない
                         createdAt: publicProfile.createdAt,
                         updatedAt: publicProfile.updatedAt
                     )
@@ -203,7 +217,7 @@ class ProfileViewModel: ObservableObject {
                     // publicProfiles ドキュメント未作成の場合: users コレクションからフォールバック
                     // （マイグレーション未実施の既存ユーザー対応）
                     let fallbackUser = try await RetryableOperation.executeIfRetryable { [self] in
-                        try await self.firestoreService.fetchUser(userId: userId)
+                        try await firestoreService.fetchUser(userId: userId)
                     }
                     // 機密情報（email, blockedUserIds）をマスクして表示
                     user = User(
@@ -254,10 +268,10 @@ class ProfileViewModel: ObservableObject {
 
                         // Firestoreにドキュメントを自動作成（バックグラウンド）
                         Task { [weak self] in
-                            guard let self = self else { return }
-                            if let newUser = self.user {
-                                try? await self.firestoreService.updateUser(newUser)
-                                try? await self.firestoreService.createPublicProfile(from: newUser)
+                            guard let self else { return }
+                            if let newUser = user {
+                                try? await firestoreService.updateUser(newUser)
+                                try? await firestoreService.createPublicProfile(from: newUser)
                             }
                         }
                     } else if !isOwnProfile {
@@ -280,11 +294,12 @@ class ProfileViewModel: ObservableObject {
                     }
                     setDefaultEditTools()
                     return
-                case .fetchFailed(let underlyingError):
+                case let .fetchFailed(underlyingError):
                     // 権限エラーの場合もデフォルトUserを生成してエラーを表示しない
                     if let nsError = underlyingError as NSError?,
                        nsError.domain == "FIRFirestoreErrorDomain",
-                       nsError.code == 7 { // PERMISSION_DENIED
+                       nsError.code == 7
+                    { // PERMISSION_DENIED
                         if isOwnProfile, let currentAuthUser = authService.currentUser(), user == nil {
                             user = User(
                                 id: currentAuthUser.id,
@@ -316,18 +331,20 @@ class ProfileViewModel: ObservableObject {
             errorMessage = error.userFriendlyMessage
         }
     }
-    
+
     /// 編集装備を読み込む（内部用）
     /// 全27ツールの順序のみを管理
     private func loadEditTools() async {
         guard userId != nil,
-              let user = user else {
+              let user
+        else {
             return
         }
 
         // customEditToolsOrderから順序を復元
         if let toolsOrderFromUser = user.customEditToolsOrder,
-           !toolsOrderFromUser.isEmpty {
+           !toolsOrderFromUser.isEmpty
+        {
             // 順序に従ってEditToolを取得
             var orderedTools: [EditTool] = []
             for toolId in toolsOrderFromUser {
@@ -345,7 +362,7 @@ class ProfileViewModel: ObservableObject {
 
             equippedTools = orderedTools
             selectedTools = orderedTools
-            self.toolsOrder = orderedTools.map { $0.rawValue }
+            toolsOrder = orderedTools.map(\.rawValue)
         } else {
             // デフォルトは全ツールをそのままの順序で
             setDefaultEditTools()
@@ -355,7 +372,7 @@ class ProfileViewModel: ObservableObject {
     /// 編集装備設定のみを読み込む（EditToolsSettingsView用）
     /// エラーが発生してもアラートを表示せず、デフォルトのツールを使用する
     func loadEditToolsSettings() async {
-        guard let userId = userId else {
+        guard let userId else {
             // 未ログイン時はデフォルトのツールを使用
             setDefaultEditTools()
             return
@@ -368,7 +385,7 @@ class ProfileViewModel: ObservableObject {
         do {
             // ユーザードキュメントの取得を試みる
             let fetchedUser = try await RetryableOperation.executeIfRetryable { [self] in
-                try await self.firestoreService.fetchUser(userId: userId)
+                try await firestoreService.fetchUser(userId: userId)
             }
             user = fetchedUser
 
@@ -387,20 +404,23 @@ class ProfileViewModel: ObservableObject {
         let allTools = EditTool.allCases
         equippedTools = allTools
         selectedTools = allTools
-        toolsOrder = allTools.map { $0.rawValue }
+        toolsOrder = allTools.map(\.rawValue)
     }
-    
+
     // MARK: - Load Posts
-    
+
     /// ユーザーの投稿一覧を読み込む ☁️
     func loadUserPosts() async {
-        guard let userId = userId else {
+        guard let userId else {
             logger.warning("loadUserPosts: userId is nil, skipping")
             return
         }
 
         let currentAuthId = authService.currentUser()?.id
-        logger.debug("loadUserPosts: userId=\(userId, privacy: .private), authId=\(currentAuthId ?? "nil", privacy: .private), isOwnProfile=\(self.isOwnProfile)")
+        // ⚠️ Logger の文字列にプロパティを直に書くと `self.` が要るが、整形フック（swiftformat）がその `self.` を
+        //    消してビルドが壊れる。先にローカルへ取ってから渡す（publicCount・hasMore も同じ理由）
+        let isOwn = isOwnProfile
+        logger.debug("loadUserPosts: userId=\(userId, privacy: .private), authId=\(currentAuthId ?? "nil", privacy: .private), isOwnProfile=\(isOwn)")
 
         isLoadingPosts = true
         // エラーメッセージはリセットしない（loadProfileで設定されている可能性があるため）
@@ -414,7 +434,7 @@ class ProfileViewModel: ObservableObject {
         do {
             // リトライ可能な操作として実行
             let page = try await RetryableOperation.executeIfRetryable { [self] in
-                try await self.firestoreService.fetchUserPostsPage(
+                try await firestoreService.fetchUserPostsPage(
                     userId: userId,
                     limit: Self.postsPageSize,
                     lastDocument: nil
@@ -433,7 +453,8 @@ class ProfileViewModel: ObservableObject {
             // 他ユーザーのプロフィールの場合は公開投稿のみフィルタリング
             if !isOwnProfile {
                 userPosts = posts.filter { $0.visibility == .public }
-                logger.debug("loadUserPosts: filtered to \(self.userPosts.count) public posts (not own profile)")
+                let publicCount = userPosts.count
+                logger.debug("loadUserPosts: filtered to \(publicCount) public posts (not own profile)")
             } else {
                 userPosts = posts
             }
@@ -462,9 +483,10 @@ class ProfileViewModel: ObservableObject {
                     // 投稿がない場合は正常
                     logger.debug("loadUserPosts: notFound (no posts yet)")
                     return
-                case .fetchFailed(let underlyingError):
+                case let .fetchFailed(underlyingError):
                     if let nsError = underlyingError as NSError?,
-                       nsError.domain == "FIRFirestoreErrorDomain" {
+                       nsError.domain == "FIRFirestoreErrorDomain"
+                    {
                         logger.error("loadUserPosts: Firestore error code=\(nsError.code), desc=\(nsError.localizedDescription)")
                         // 権限エラー（code 7）やインデックス未作成（code 9）はサイレントに処理
                         // 新規ユーザーや権限設定中の場合にエラーダイアログを表示しない
@@ -482,13 +504,14 @@ class ProfileViewModel: ObservableObject {
             errorMessage = error.userFriendlyMessage
         }
     }
-    
+
     // MARK: - Update Profile
-    
+
     /// プロフィール情報を更新
     func updateProfile() async {
-        guard let userId = userId,
-              var updatedUser = user else {
+        guard let userId,
+              var updatedUser = user
+        else {
             errorMessage = "ユーザー情報が取得できません"
             return
         }
@@ -501,14 +524,14 @@ class ProfileViewModel: ObservableObject {
         do {
             // プロフィール画像の処理
             var photoURL = updatedUser.photoURL
-            
+
             if shouldDeleteProfileImage {
                 // 既存の画像を削除（リトライ可能）
                 if photoURL != nil {
                     // Storageから画像を削除（storage.rules のパス形式: users/{userId}/profile/{imageId}）
                     let path = "users/\(userId)/profile/profile.jpg"
                     try? await RetryableOperation.executeIfRetryable { [self] in
-                        try await self.storageService.deleteImage(path: path)
+                        try await storageService.deleteImage(path: path)
                     }
                 }
                 photoURL = nil
@@ -527,20 +550,20 @@ class ProfileViewModel: ObservableObject {
                 // storage.rules のパス形式: users/{userId}/profile/{imageId}
                 let imagePath = "users/\(userId)/profile/profile.jpg"
                 let uploadedURL = try await RetryableOperation.executeIfRetryable { [self] in
-                    try await self.storageService.uploadImage(resizedImage, path: imagePath)
+                    try await storageService.uploadImage(resizedImage, path: imagePath)
                 }
                 photoURL = uploadedURL.absoluteString
             }
-            
+
             // ユーザー情報を更新
             updatedUser.displayName = editingDisplayName.isEmpty ? nil : editingDisplayName
             updatedUser.bio = editingBio.isEmpty ? nil : editingBio
             updatedUser.photoURL = photoURL
             updatedUser.updatedAt = Date()
-            
+
             // Firestoreに更新（リトライ可能）
             let savedUser = try await RetryableOperation.executeIfRetryable { [self] in
-                try await self.firestoreService.updateUser(updatedUser)
+                try await firestoreService.updateUser(updatedUser)
             }
             user = savedUser
 
@@ -551,7 +574,7 @@ class ProfileViewModel: ObservableObject {
             //    （表示名・アイコン・自己紹介）だけを updateData するメソッドを使う。
             do {
                 try await RetryableOperation.executeIfRetryable { [self] in
-                    try await self.firestoreService.updatePublicProfileFields(
+                    try await firestoreService.updatePublicProfileFields(
                         userId: savedUser.id,
                         displayName: savedUser.displayName,
                         photoURL: savedUser.photoURL,
@@ -564,7 +587,7 @@ class ProfileViewModel: ObservableObject {
                 // ドキュメントが存在しない ＝ サーバーが保つカウンタも存在しないので、
                 // ここで User 由来の値ごと作成しても真値を潰すことはない。
                 try await RetryableOperation.executeIfRetryable { [self] in
-                    try await self.firestoreService.createPublicProfile(from: savedUser)
+                    try await firestoreService.createPublicProfile(from: savedUser)
                 }
             }
 
@@ -583,6 +606,18 @@ class ProfileViewModel: ObservableObject {
             // 編集用の値をリセット
             editingProfileImage = nil
             shouldDeleteProfileImage = false
+
+            // プロフィールに表示するもの（見せる/見せない）を、変わった欄だけ書く ⭐️
+            // ⚠️ この位置（いちばん最後）に置く理由:
+            //    1. 公開プロフィールの書き込み（上の updatePublicProfileFields と、その notFound のときの
+            //       createPublicProfile）より後にする。createPublicProfile は setData の丸ごと上書きで、
+            //       先に見せる/見せないを書くとここで消える。
+            //    2. `.profileUpdated` の通知より後にする。表示名とアイコンはもう保存できているので、
+            //       見せる/見せないの書き込みが失敗しても、そらともへの通知を止める理由が無い。
+            //    3. 画像の指定のリセットより後にする。ここで失敗すると errorMessage が出て編集画面は閉じない
+            //       （ProfileEditView.saveProfile）。もう一度「保存」を押したとき、画像を送り直さずに済む。
+            //    失敗は下の catch で既存の errorMessage に出る（比べる元は変えないので、もう一度押せば書き直す）。
+            try await saveSectionVisibilityIfChanged(savedUser: savedUser)
         } catch {
             // エラーをログに記録
             ErrorHandler.logError(error, context: "ProfileViewModel.updateProfile", userId: userId)
@@ -613,7 +648,7 @@ class ProfileViewModel: ObservableObject {
 
         do {
             let page = try await RetryableOperation.executeIfRetryable { [self] in
-                try await self.firestoreService.fetchUserPostsPage(
+                try await firestoreService.fetchUserPostsPage(
                     userId: userId,
                     limit: Self.postsPageSize,
                     lastDocument: cursor
@@ -631,7 +666,8 @@ class ProfileViewModel: ObservableObject {
             let existingIds = Set(userPosts.map(\.id))
             let newPosts = visible.filter { !existingIds.contains($0.id) }
             userPosts.append(contentsOf: newPosts)
-            logger.info("loadMoreUserPosts: appended \(newPosts.count) posts (hasMore=\(self.hasMorePosts))")
+            let hasMore = hasMorePosts
+            logger.info("loadMoreUserPosts: appended \(newPosts.count) posts (hasMore=\(hasMore))")
             return newPosts
         } catch {
             // 追加読み込みの失敗はダイアログを出さない（一覧は既に見えているため）。
@@ -698,7 +734,7 @@ class ProfileViewModel: ObservableObject {
 
     /// 編集装備の順序を更新（Firestoreに保存）
     func updateEditTools() async {
-        guard let userId = userId else {
+        guard let userId else {
             errorMessage = "ユーザーIDが取得できません"
             return
         }
@@ -710,21 +746,21 @@ class ProfileViewModel: ObservableObject {
 
         do {
             // 選択されたツールの順序を取得
-            let toolsOrder = selectedTools.map { $0.rawValue }
-            
+            let toolsOrder = selectedTools.map(\.rawValue)
+
             // リトライ可能な操作として実行
             try await RetryableOperation.executeIfRetryable { [self] in
-                try await self.firestoreService.updateEditTools(
+                try await firestoreService.updateEditTools(
                     userId: userId,
-                    tools: self.selectedTools,
+                    tools: selectedTools,
                     order: toolsOrder
                 )
             }
-            
+
             // ローカルの状態を更新
             equippedTools = selectedTools
             self.toolsOrder = toolsOrder
-            
+
             // ユーザー情報を再読み込み
             await loadProfile()
         } catch {
@@ -739,7 +775,7 @@ class ProfileViewModel: ObservableObject {
     func moveEditTool(from source: IndexSet, to destination: Int) {
         selectedTools.move(fromOffsets: source, toOffset: destination)
     }
-    
+
     /// 編集装備の選択をリセット（現在保存されている順序に戻す）
     func resetEditTools() {
         selectedTools = equippedTools
@@ -755,15 +791,119 @@ class ProfileViewModel: ObservableObject {
         editingBio = user?.bio ?? ""
         editingProfileImage = nil
         shouldDeleteProfileImage = false
+        // 見せる/見せない のスイッチも、読み込んだ値（保存できたらその値）に戻す ⭐️
+        // （読めていないときは比べる元が無いので触らない。次に開いたとき読み直す）
+        if let loaded = sectionVisibilityLoadState.data {
+            editingSectionVisibility = loaded
+        }
     }
-    
+
+    // MARK: - プロフィールに表示するもの（見せる/見せない）⭐️
+
+    /// スイッチを押せるか（自分の公開プロフィールから値を読めたとき＝文書が無くて既定値にしたときも含む）
+    var canEditSectionVisibility: Bool {
+        sectionVisibilityLoadState.isLoaded
+    }
+
+    /// 読み込みに失敗したか（編集画面の節を押せなくして「読み込めませんでした」を出す）
+    var sectionVisibilityLoadFailed: Bool {
+        sectionVisibilityLoadState.isError
+    }
+
+    /// 編集画面を開いたときに、今の見せる/見せない を自分の `publicProfiles` から読む ⭐️
+    ///
+    /// - 読めた → その値（項目が無い欄は既定値・`PublicProfile.init(from:)`）でスイッチを押せる状態にする
+    /// - `FirestoreServiceError.notFound`（公開プロフィールの文書がまだ無い旧アカウント）→ 既定値で押せる状態にする。
+    ///   ⚠️ ここを押せなくすると、その人は永久に ON にできない。保存のときに `updateProfile` の公開プロフィールの
+    ///   書き込み（無ければ作る）の後に書くので、文書はそこでできる。
+    /// - それ以外の失敗 → 押せない状態にする（読めていない値で上書きしないため）。
+    ///   `errorMessage` には入れない（入れると編集画面の alert が出る。節の中の「読み込めませんでした」で知らせる）。
+    ///   `isLoading` も立てない（立てると「保存」ボタンまで押せなくなる。表示名などの保存は妨げない）。
+    /// - 再試行（RetryableOperation）で包むのは loadProfile の公開プロフィールの読み込みと同じ。
+    ///   一時的な通信の失敗で節が押せないままになるのを減らすため（notFound は再試行しない分類なので 1 回で抜ける）。
+    func loadSectionVisibilityForEdit() async {
+        sectionVisibilityLoadGeneration += 1
+        let generation = sectionVisibilityLoadGeneration
+
+        guard let userId else {
+            // 未ログイン（Auth の復元前など）は読めない＝押せない状態にする
+            sectionVisibilityLoadState = .error(FirestoreServiceError.unauthorized)
+            return
+        }
+
+        sectionVisibilityLoadState = .loading
+
+        do {
+            let profile = try await RetryableOperation.executeIfRetryable { [self] in
+                try await firestoreService.fetchPublicProfile(userId: userId)
+            }
+            guard generation == sectionVisibilityLoadGeneration else { return }
+            editingSectionVisibility = profile.sectionVisibility
+            sectionVisibilityLoadState = .loaded(profile.sectionVisibility)
+        } catch FirestoreServiceError.notFound {
+            guard generation == sectionVisibilityLoadGeneration else { return }
+            // 文書がまだ無い人は、項目が無い人と同じ既定値（おすすめ＝見せる・カレンダーとお気に入り＝見せない）
+            editingSectionVisibility = .default
+            sectionVisibilityLoadState = .loaded(.default)
+        } catch {
+            guard generation == sectionVisibilityLoadGeneration else { return }
+            ErrorHandler.logError(error, context: "ProfileViewModel.loadSectionVisibilityForEdit", userId: userId)
+            sectionVisibilityLoadState = .error(error)
+        }
+    }
+
+    /// 見せる/見せない を、読み込んだ値から変わった欄だけ書く（`updateProfile` の最後から呼ぶ）⭐️
+    ///
+    /// - 読めていない（比べる元が無い）なら書かない＝読めていない値で上書きしない
+    /// - 変わった欄が無ければ呼ばない
+    /// - 公開プロフィールの文書が無い（notFound）なら、無いときだけ作って（`createPublicProfileIfMissing`）から書き直す。
+    ///   丸ごと上書きの `createPublicProfile` を使わないのは、別の端末が同時に作った値を消さないため
+    ///   （`RecommendationManager.addWithProfileFallback` と同じ形。ここは保存した `savedUser` が手元にあるので読み直さない）。
+    /// - 書けたら、比べる元を今の値にし、欄ごとに `profile_visibility_changed` を送る（UID は送らない）
+    /// - Throws: 書き込みの失敗（呼び出し側の `updateProfile` が errorMessage に出す）
+    private func saveSectionVisibilityIfChanged(savedUser: User) async throws {
+        guard let loaded = sectionVisibilityLoadState.data else { return }
+
+        let edited = editingSectionVisibility
+        let changedSections = edited.changedSections(from: loaded)
+        guard !changedSections.isEmpty else { return }
+
+        // 再試行の閉包に渡すので let で作る（可変の値を閉包に捕まえさせない）
+        let sections = Dictionary(uniqueKeysWithValues: changedSections.map { section in
+            (section, edited.isShown(section))
+        })
+
+        do {
+            try await RetryableOperation.executeIfRetryable { [self] in
+                try await firestoreService.updateProfileSectionVisibility(userId: savedUser.id, sections: sections)
+            }
+        } catch FirestoreServiceError.notFound {
+            try await RetryableOperation.executeIfRetryable { [self] in
+                try await firestoreService.createPublicProfileIfMissing(from: savedUser)
+            }
+            try await RetryableOperation.executeIfRetryable { [self] in
+                try await firestoreService.updateProfileSectionVisibility(userId: savedUser.id, sections: sections)
+            }
+        }
+
+        // 書けた値を、次に比べる元にする（同じ画面でもう一度「保存」しても同じ欄を書き直さない）
+        sectionVisibilityLoadState = .loaded(edited)
+
+        for section in changedSections {
+            LoggingService.shared.logEvent("profile_visibility_changed", parameters: [
+                "section": section.rawValue,
+                "enabled": edited.isShown(section),
+            ])
+        }
+    }
+
     // MARK: - Validation
-    
+
     /// 編集装備の選択が有効かどうか（常にtrue - 全ツール表示のため）
     var isValidEditToolsSelection: Bool {
         true
     }
-    
+
     /// プロフィール編集が有効かどうか
     var isValidProfileEdit: Bool {
         // 表示名と自己紹介の長さチェック（任意）

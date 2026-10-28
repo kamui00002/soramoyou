@@ -6,8 +6,8 @@
 //  セキュリティ: email, blockedUserIds等の機密情報はUserモデルで管理
 //
 
-import Foundation
 import FirebaseFirestore
+import Foundation
 
 /// 公開プロフィール情報（他のユーザーから閲覧可能）
 struct PublicProfile: Identifiable, Codable {
@@ -26,6 +26,12 @@ struct PublicProfile: Identifiable, Codable {
     /// ⚠️ 書き込みは `addRecommendedPost` / `removeRecommendedPosts` / `moveRecommendedPost` だけで行う
     ///    （PublicProfile 全体を書く経路で古い値に巻き戻さないため）。
     var recommendedPostIds: [String]
+    /// プロフィールの見せる/見せない ⭐️（おすすめの空・空カレンダー・お気に入りの空）
+    ///
+    /// 項目が無い人（今いる人全員）は `ProfileSectionVisibility.default`＝おすすめ＝見せる・カレンダー＝見せない・お気に入り＝見せない。
+    /// ⚠️ 書き込みは `updateProfileSectionVisibility` だけ（変えた欄だけを updateData）。`toFirestoreData()` には入れない
+    ///    （丸ごと上書きの道 `createPublicProfile` で値が消えても、既定値＝閉じる側に戻るだけにするため）。
+    var sectionVisibility: ProfileSectionVisibility
     let createdAt: Date
     var updatedAt: Date
 
@@ -40,6 +46,7 @@ struct PublicProfile: Identifiable, Codable {
         followingCount: Int = 0,
         postsCount: Int = 0,
         recommendedPostIds: [String] = [],
+        sectionVisibility: ProfileSectionVisibility = .default,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -53,25 +60,28 @@ struct PublicProfile: Identifiable, Codable {
         self.followingCount = followingCount
         self.postsCount = postsCount
         self.recommendedPostIds = recommendedPostIds
+        self.sectionVisibility = sectionVisibility
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
 
     /// Userモデルから公開プロフィールを生成
     init(from user: User) {
-        self.id = user.id
-        self.displayName = user.displayName
-        self.photoURL = user.photoURL
-        self.bio = user.bio
-        self.customEditTools = user.customEditTools
-        self.customEditToolsOrder = user.customEditToolsOrder
-        self.followersCount = user.followersCount
-        self.followingCount = user.followingCount
-        self.postsCount = user.postsCount
+        id = user.id
+        displayName = user.displayName
+        photoURL = user.photoURL
+        bio = user.bio
+        customEditTools = user.customEditTools
+        customEditToolsOrder = user.customEditToolsOrder
+        followersCount = user.followersCount
+        followingCount = user.followingCount
+        postsCount = user.postsCount
         // おすすめの空は publicProfiles にしか無い（users には持たない）
-        self.recommendedPostIds = []
-        self.createdAt = user.createdAt
-        self.updatedAt = user.updatedAt
+        recommendedPostIds = []
+        // 見せる/見せない も publicProfiles にしか無い（users には持たない）→ 既定値
+        sectionVisibility = .default
+        createdAt = user.createdAt
+        updatedAt = user.updatedAt
     }
 
     // MARK: - Firestore Mapping
@@ -81,26 +91,26 @@ struct PublicProfile: Identifiable, Codable {
         var data: [String: Any] = [
             "id": id,
             "createdAt": Timestamp(date: createdAt),
-            "updatedAt": Timestamp(date: updatedAt)
+            "updatedAt": Timestamp(date: updatedAt),
         ]
 
-        if let displayName = displayName {
+        if let displayName {
             data["displayName"] = displayName
         }
 
-        if let photoURL = photoURL {
+        if let photoURL {
             data["photoURL"] = photoURL
         }
 
-        if let bio = bio {
+        if let bio {
             data["bio"] = bio
         }
 
-        if let customEditTools = customEditTools {
+        if let customEditTools {
             data["customEditTools"] = customEditTools
         }
 
-        if let customEditToolsOrder = customEditToolsOrder {
+        if let customEditToolsOrder {
             data["customEditToolsOrder"] = customEditToolsOrder
         }
 
@@ -113,6 +123,10 @@ struct PublicProfile: Identifiable, Codable {
             data["recommendedPostIds"] = recommendedPostIds
         }
 
+        // ⚠️ sectionVisibility（showsRecommendedSkies など 3 項目）は意図して書かない ⭐️
+        //    これは丸ごと上書き（createPublicProfile の setData）にも使われるので、ここに入れると
+        //    手元の古い値で本人の選んだ値を巻き戻しうる。書くのは updateProfileSectionVisibility だけ。
+
         return data
     }
 
@@ -122,29 +136,40 @@ struct PublicProfile: Identifiable, Codable {
             throw PublicProfileError.missingUserId
         }
 
-        self.id = userId
-        self.displayName = documentData["displayName"] as? String
-        self.photoURL = documentData["photoURL"] as? String
-        self.bio = documentData["bio"] as? String
-        self.customEditTools = documentData["customEditTools"] as? [String]
-        self.customEditToolsOrder = documentData["customEditToolsOrder"] as? [String]
-        self.followersCount = documentData["followersCount"] as? Int ?? 0
-        self.followingCount = documentData["followingCount"] as? Int ?? 0
-        self.postsCount = documentData["postsCount"] as? Int ?? 0
+        id = userId
+        displayName = documentData["displayName"] as? String
+        photoURL = documentData["photoURL"] as? String
+        bio = documentData["bio"] as? String
+        customEditTools = documentData["customEditTools"] as? [String]
+        customEditToolsOrder = documentData["customEditToolsOrder"] as? [String]
+        followersCount = documentData["followersCount"] as? Int ?? 0
+        followingCount = documentData["followingCount"] as? Int ?? 0
+        postsCount = documentData["postsCount"] as? Int ?? 0
         // 旧データ（フィールド無し）・型違いは空配列として扱う
-        self.recommendedPostIds = RecommendedSkies.normalized(documentData["recommendedPostIds"] as? [String] ?? [])
+        recommendedPostIds = RecommendedSkies.normalized(documentData["recommendedPostIds"] as? [String] ?? [])
+        // 見せる/見せない ⭐️: 項目が無い（今いる人全員）・型違い（"true" の文字列など）は既定値として読む。
+        // ルール（isValidProfileVisibility）は「無い or bool」しか書かせないが、ルール以前のデータや独自クライアントに備える
+        let defaultVisibility = ProfileSectionVisibility.default
+        sectionVisibility = ProfileSectionVisibility(
+            showsRecommendedSkies: documentData[ProfileSection.recommendedSkies.firestoreField] as? Bool
+                ?? defaultVisibility.showsRecommendedSkies,
+            showsSkyCalendar: documentData[ProfileSection.skyCalendar.firestoreField] as? Bool
+                ?? defaultVisibility.showsSkyCalendar,
+            showsFavorites: documentData[ProfileSection.favorites.firestoreField] as? Bool
+                ?? defaultVisibility.showsFavorites
+        )
 
         // TimestampからDateに変換
         if let createdAtTimestamp = documentData["createdAt"] as? Timestamp {
-            self.createdAt = createdAtTimestamp.dateValue()
+            createdAt = createdAtTimestamp.dateValue()
         } else {
-            self.createdAt = Date()
+            createdAt = Date()
         }
 
         if let updatedAtTimestamp = documentData["updatedAt"] as? Timestamp {
-            self.updatedAt = updatedAtTimestamp.dateValue()
+            updatedAt = updatedAtTimestamp.dateValue()
         } else {
-            self.updatedAt = Date()
+            updatedAt = Date()
         }
     }
 

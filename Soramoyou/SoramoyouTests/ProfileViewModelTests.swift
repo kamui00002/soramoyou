@@ -5,9 +5,10 @@
 //  Created on 2025-12-06.
 //
 
-import XCTest
-@testable import Soramoyou
 import FirebaseFirestore
+@testable import Soramoyou
+import XCTest
+
 // Note: FirebaseAuth.Userとの競合を避けるため、Userは Soramoyou.User を参照
 
 @MainActor
@@ -15,20 +16,20 @@ final class ProfileViewModelTests: XCTestCase {
     var viewModel: ProfileViewModel!
     var mockFirestoreService: MockFirestoreServiceForProfile!
     var mockStorageService: MockStorageServiceForProfile!
-    
+
     override func setUp() {
         super.setUp()
         mockFirestoreService = MockFirestoreServiceForProfile()
         mockStorageService = MockStorageServiceForProfile()
     }
-    
+
     override func tearDown() {
         viewModel = nil
         mockFirestoreService = nil
         mockStorageService = nil
         super.tearDown()
     }
-    
+
     func testProfileViewModelInitialization() {
         // Given & When
         let viewModel = ProfileViewModel(
@@ -36,7 +37,7 @@ final class ProfileViewModelTests: XCTestCase {
             firestoreService: mockFirestoreService,
             storageService: mockStorageService
         )
-        
+
         // Then
         XCTAssertNotNil(viewModel)
         XCTAssertNil(viewModel.user)
@@ -44,7 +45,7 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.equippedTools.isEmpty)
         XCTAssertFalse(viewModel.isLoading)
     }
-    
+
     func testLoadProfile() async {
         // Given
         let testUser = createTestUser()
@@ -54,17 +55,17 @@ final class ProfileViewModelTests: XCTestCase {
             firestoreService: mockFirestoreService,
             storageService: mockStorageService
         )
-        
+
         // When
         await viewModel.loadProfile()
-        
+
         // Then
         XCTAssertNotNil(viewModel.user)
         XCTAssertEqual(viewModel.user?.id, testUser.id)
         XCTAssertEqual(viewModel.editingDisplayName, testUser.displayName ?? "")
         XCTAssertEqual(viewModel.editingBio, testUser.bio ?? "")
     }
-    
+
     func testLoadUserPosts() async {
         // Given
         let testUser = createTestUser()
@@ -76,15 +77,15 @@ final class ProfileViewModelTests: XCTestCase {
             firestoreService: mockFirestoreService,
             storageService: mockStorageService
         )
-        
+
         // When
         await viewModel.loadUserPosts()
-        
+
         // Then
         XCTAssertFalse(viewModel.userPosts.isEmpty)
         XCTAssertEqual(viewModel.userPosts.count, testPosts.count)
     }
-    
+
     /// ⭐️ 回帰防止: 投稿が 50 件を超えても投稿数が 50 に書き戻されないこと。
     /// 旧実装は「取得した 1 ページ分の件数」を投稿数として保存していた。
     func testLoadUserPosts_自分の投稿数は取得件数でなく集計値になる() async {
@@ -100,7 +101,7 @@ final class ProfileViewModelTests: XCTestCase {
             storageService: mockStorageService,
             authService: authService
         )
-        viewModel.user = testUser  // postsCount = 5（古い値）
+        viewModel.user = testUser // postsCount = 5（古い値）
 
         // When
         await viewModel.loadUserPosts()
@@ -139,7 +140,7 @@ final class ProfileViewModelTests: XCTestCase {
             Post(id: id, userId: testUser.id, images: [imageInfo], caption: nil, visibility: .public)
         }
         let onePost = makePost("post-single")
-        let fullPage = (0..<ProfileViewModel.postsPageSize).map { makePost("post-\($0)") }
+        let fullPage = (0 ..< ProfileViewModel.postsPageSize).map { makePost("post-\($0)") }
         mockFirestoreService.userPostPages = [fullPage]
         // 本物の AuthService（Auth.auth()）に触れないようモックを注入する（自分のプロフィール扱い）
         let authService = MockAuthService()
@@ -169,7 +170,7 @@ final class ProfileViewModelTests: XCTestCase {
         let makePost = { (id: String) in
             Post(id: id, userId: testUser.id, images: [imageInfo], caption: nil, visibility: .public)
         }
-        let fullPage = (0..<ProfileViewModel.postsPageSize).map { makePost("post-\($0)") }
+        let fullPage = (0 ..< ProfileViewModel.postsPageSize).map { makePost("post-\($0)") }
         // 2 ページ目の先頭は 1 ページ目の最後と同じ投稿（ページ境界の重複）
         let lastOfFirstPage = "post-\(ProfileViewModel.postsPageSize - 1)"
         let secondPage = [makePost(lastOfFirstPage), makePost("post-a"), makePost("post-b")]
@@ -246,18 +247,18 @@ final class ProfileViewModelTests: XCTestCase {
             storageService: mockStorageService
         )
         await viewModel.loadProfile()
-        
+
         viewModel.editingDisplayName = "Updated Name"
         viewModel.editingBio = "Updated Bio"
-        
+
         // When
         await viewModel.updateProfile()
-        
+
         // Then
         XCTAssertEqual(viewModel.user?.displayName, "Updated Name")
         XCTAssertEqual(viewModel.user?.bio, "Updated Bio")
     }
-    
+
     /// プロフィール編集を保存せずに閉じたら、入力（表示名・自己紹介・画像・画像削除の指定）が
     /// 保存済みの値に戻ること。戻さないと次に開いたとき入力途中の値が残る（2026-10-07 シミュレータで実測）。
     func testResetProfileEdit_保存せずに閉じたら入力が保存済みの値に戻る() {
@@ -320,14 +321,14 @@ final class ProfileViewModelTests: XCTestCase {
             storageService: mockStorageService
         )
         await viewModel.loadProfile()
-        
+
         let testImage = UIImage(systemName: "photo")!
         viewModel.editingProfileImage = testImage
         viewModel.editingDisplayName = "Updated Name"
-        
+
         // When
         await viewModel.updateProfile()
-        
+
         // Then
         XCTAssertNotNil(mockStorageService.uploadedImage)
         XCTAssertEqual(viewModel.user?.displayName, "Updated Name")
@@ -572,7 +573,7 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertNotNil(viewModel.errorMessage)
         await fulfillment(of: [notified], timeout: 0.5)
     }
-    
+
     func testLoadEditTools() async {
         // Given
         let testUser = createTestUser(
@@ -585,15 +586,15 @@ final class ProfileViewModelTests: XCTestCase {
             firestoreService: mockFirestoreService,
             storageService: mockStorageService
         )
-        
+
         // When
         await viewModel.loadProfile()
-        
+
         // Then
         XCTAssertFalse(viewModel.equippedTools.isEmpty)
         XCTAssertEqual(viewModel.equippedTools.count, 3)
     }
-    
+
     func testUpdateEditTools() async {
         // Given
         let testUser = createTestUser()
@@ -604,18 +605,18 @@ final class ProfileViewModelTests: XCTestCase {
             storageService: mockStorageService
         )
         await viewModel.loadProfile()
-        
+
         // 5個のツールを選択（最小値）
         viewModel.selectedTools = Array(EditTool.allCases.prefix(5))
-        
+
         // When
         await viewModel.updateEditTools()
-        
+
         // Then
         XCTAssertEqual(viewModel.equippedTools.count, 5)
         XCTAssertTrue(mockFirestoreService.updateEditToolsCalled)
     }
-    
+
     func testUpdateEditToolsAllToolsOrder() async {
         // Given - 全ツール表示モードではバリデーションエラーなし
         let testUser = createTestUser()
@@ -634,7 +635,7 @@ final class ProfileViewModelTests: XCTestCase {
         // Then - エラーなし
         XCTAssertNil(viewModel.errorMessage)
     }
-    
+
     func testMoveEditTool() {
         // Given
         viewModel = ProfileViewModel(
@@ -689,9 +690,279 @@ final class ProfileViewModelTests: XCTestCase {
         viewModel.selectedTools = Array(EditTool.allCases.prefix(9))
         XCTAssertTrue(viewModel.isValidEditToolsSelection)
     }
-    
+
+    // MARK: - プロフィールに表示するもの（見せる/見せない）⭐️
+
+    /// 編集画面を開いたら、自分の公開プロフィールの値を読み、スイッチを押せる状態にする
+    func testLoadSectionVisibilityForEdit_公開プロフィールの値を読む() async {
+        let testUser = setUpOwnProfile()
+        mockFirestoreService.publicProfile = PublicProfile(
+            id: testUser.id,
+            sectionVisibility: ProfileSectionVisibility(
+                showsRecommendedSkies: false,
+                showsSkyCalendar: true,
+                showsFavorites: false
+            )
+        )
+
+        await viewModel.loadSectionVisibilityForEdit()
+
+        XCTAssertFalse(viewModel.editingSectionVisibility.showsRecommendedSkies)
+        XCTAssertTrue(viewModel.editingSectionVisibility.showsSkyCalendar)
+        XCTAssertFalse(viewModel.editingSectionVisibility.showsFavorites)
+        XCTAssertTrue(viewModel.canEditSectionVisibility)
+        XCTAssertFalse(viewModel.sectionVisibilityLoadFailed)
+    }
+
+    /// 公開プロフィールの文書がまだ無い（notFound）→ 既定値で押せる状態にする
+    /// （押せなくすると、その人は永久に ON にできない）
+    func testLoadSectionVisibilityForEdit_文書が無ければ既定値で押せる() async {
+        setUpOwnProfile()
+        mockFirestoreService.fetchPublicProfileError = FirestoreServiceError.notFound
+        // 前に開いたときの値が残っていても、既定値に置き換わることを確かめるため、既定値と逆の値から始める
+        viewModel.editingSectionVisibility = ProfileSectionVisibility(
+            showsRecommendedSkies: false,
+            showsSkyCalendar: true,
+            showsFavorites: true
+        )
+
+        await viewModel.loadSectionVisibilityForEdit()
+
+        XCTAssertTrue(viewModel.editingSectionVisibility.showsRecommendedSkies)
+        XCTAssertFalse(viewModel.editingSectionVisibility.showsSkyCalendar)
+        XCTAssertFalse(viewModel.editingSectionVisibility.showsFavorites)
+        XCTAssertTrue(viewModel.canEditSectionVisibility)
+        XCTAssertFalse(viewModel.sectionVisibilityLoadFailed)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    /// notFound 以外で読めなかった → 押せない状態・「読み込めませんでした」。
+    /// 編集画面の alert（errorMessage）は出さず、「保存」も押せるまま（isLoading を立てない）
+    func testLoadSectionVisibilityForEdit_読み込みに失敗したら押せない() async {
+        setUpOwnProfile()
+        // 再試行しない種類のエラーにする（FirestoreServiceError.fetchFailed だと 1 秒・2 秒待って再試行するため）
+        mockFirestoreService.fetchPublicProfileError = NSError(domain: "test", code: 14)
+
+        await viewModel.loadSectionVisibilityForEdit()
+
+        XCTAssertFalse(viewModel.canEditSectionVisibility)
+        XCTAssertTrue(viewModel.sectionVisibilityLoadFailed)
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertFalse(viewModel.isLoading)
+    }
+
+    /// 保存: 読み込んだ値から変わった欄だけを書く（渡った辞書を直に比べる）。
+    /// 書けたら、同じ画面でもう一度「保存」しても同じ欄を書き直さない
+    func testUpdateProfile_変わった欄だけを書く() async {
+        let testUser = setUpOwnProfile()
+        // 項目なし＝既定値（おすすめ＝見せる・カレンダー＝見せない・お気に入り＝見せない）
+        mockFirestoreService.publicProfile = PublicProfile(id: testUser.id)
+        await viewModel.loadSectionVisibilityForEdit()
+        viewModel.editingSectionVisibility.showsSkyCalendar = true
+
+        await viewModel.updateProfile()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(mockFirestoreService.updateProfileSectionVisibilityUserIds, ["test-user-id"])
+        XCTAssertEqual(mockFirestoreService.updateProfileSectionVisibilitySections, [[.skyCalendar: true]])
+        XCTAssertEqual(mockFirestoreService.createPublicProfileIfMissingCallCount, 0)
+
+        // もう一度保存しても、もう書いた欄は書き直さない
+        await viewModel.updateProfile()
+
+        XCTAssertEqual(mockFirestoreService.updateProfileSectionVisibilitySections, [[.skyCalendar: true]])
+    }
+
+    /// 3 つとも変えたら、3 つとも 1 回の書き込みで渡る（欄ごとの値も直に）
+    func testUpdateProfile_3つとも変えたら3つとも1回で書く() async {
+        let testUser = setUpOwnProfile()
+        mockFirestoreService.publicProfile = PublicProfile(id: testUser.id)
+        await viewModel.loadSectionVisibilityForEdit()
+        viewModel.editingSectionVisibility = ProfileSectionVisibility(
+            showsRecommendedSkies: false,
+            showsSkyCalendar: true,
+            showsFavorites: true
+        )
+
+        await viewModel.updateProfile()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(
+            mockFirestoreService.updateProfileSectionVisibilitySections,
+            [[.recommendedSkies: false, .skyCalendar: true, .favorites: true]]
+        )
+    }
+
+    /// 変わっていなければ書かない（切り替えて戻した＝読んだときと同じ値）。表示名などの保存は今までどおり
+    func testUpdateProfile_変わっていなければ書かない() async {
+        let testUser = setUpOwnProfile()
+        mockFirestoreService.publicProfile = PublicProfile(
+            id: testUser.id,
+            sectionVisibility: ProfileSectionVisibility(
+                showsRecommendedSkies: true,
+                showsSkyCalendar: true,
+                showsFavorites: false
+            )
+        )
+        await viewModel.loadSectionVisibilityForEdit()
+        viewModel.editingSectionVisibility.showsFavorites = true
+        viewModel.editingSectionVisibility.showsFavorites = false
+
+        await viewModel.updateProfile()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(mockFirestoreService.updateProfileSectionVisibilitySections, [])
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.count, 1)
+    }
+
+    /// 公開プロフィールの文書が無い（notFound）→ 無いときだけ作って（createPublicProfileIfMissing）→ もう一度書く。
+    /// 呼ばれた順と、2 回とも同じ欄を書くことを直に確かめる
+    func testUpdateProfile_文書が無ければ作ってから書き直す() async {
+        setUpOwnProfile()
+        mockFirestoreService.fetchPublicProfileError = FirestoreServiceError.notFound
+        await viewModel.loadSectionVisibilityForEdit()
+        viewModel.editingSectionVisibility.showsFavorites = true
+        mockFirestoreService.updateProfileSectionVisibilityErrors = [FirestoreServiceError.notFound]
+
+        await viewModel.updateProfile()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(mockFirestoreService.sectionVisibilityWriteLog, ["update", "createIfMissing", "update"])
+        XCTAssertEqual(mockFirestoreService.updateProfileSectionVisibilitySections, [[.favorites: true], [.favorites: true]])
+        XCTAssertEqual(mockFirestoreService.createPublicProfileIfMissingCallCount, 1)
+        // 丸ごと上書きの createPublicProfile には流さない（別の端末が同時に作った値を消さないため）
+        XCTAssertFalse(mockFirestoreService.createPublicProfileCalled)
+    }
+
+    /// 読み込みに失敗したときは、スイッチの値がどうであっても書かない（読めていない値で上書きしない）。
+    /// 表示名などの保存は今までどおり行う
+    func testUpdateProfile_読み込みに失敗したときは書かない() async {
+        setUpOwnProfile()
+        mockFirestoreService.fetchPublicProfileError = NSError(domain: "test", code: 14)
+        await viewModel.loadSectionVisibilityForEdit()
+        // 押せない状態でも、値が既定値から変わっていたとする
+        viewModel.editingSectionVisibility = ProfileSectionVisibility(
+            showsRecommendedSkies: false,
+            showsSkyCalendar: true,
+            showsFavorites: true
+        )
+
+        await viewModel.updateProfile()
+
+        XCTAssertEqual(mockFirestoreService.updateProfileSectionVisibilitySections, [])
+        XCTAssertEqual(mockFirestoreService.sectionVisibilityWriteLog, [])
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.count, 1)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    /// まだ読んでいない（編集画面の読み込みが走る前）も書かない
+    func testUpdateProfile_まだ読んでいなければ書かない() async {
+        setUpOwnProfile()
+        viewModel.editingSectionVisibility = ProfileSectionVisibility(
+            showsRecommendedSkies: false,
+            showsSkyCalendar: true,
+            showsFavorites: true
+        )
+
+        await viewModel.updateProfile()
+
+        XCTAssertEqual(mockFirestoreService.updateProfileSectionVisibilitySections, [])
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    /// 見せる/見せない の書き込みに失敗 → errorMessage に出す。比べる元は変えないので、
+    /// もう一度「保存」すると同じ欄を書き直す
+    func testUpdateProfile_見せる見せないの書き込みに失敗したらエラーを出し次の保存で書き直す() async {
+        let testUser = setUpOwnProfile()
+        mockFirestoreService.publicProfile = PublicProfile(id: testUser.id)
+        await viewModel.loadSectionVisibilityForEdit()
+        viewModel.editingSectionVisibility.showsSkyCalendar = true
+        // 再試行しない種類のエラーにする（待たないため）
+        mockFirestoreService.updateProfileSectionVisibilityErrors = [NSError(domain: "test", code: 7)]
+
+        await viewModel.updateProfile()
+
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertEqual(mockFirestoreService.updateProfileSectionVisibilitySections, [[.skyCalendar: true]])
+
+        // When: もう一度保存する（今度は書ける）
+        viewModel.errorMessage = nil
+        await viewModel.updateProfile()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(
+            mockFirestoreService.updateProfileSectionVisibilitySections,
+            [[.skyCalendar: true], [.skyCalendar: true]]
+        )
+    }
+
+    /// 見せる/見せない の書き込みに失敗しても、表示名とアイコンはもう保存できているので、
+    /// そらともへの通知（.profileUpdated）は出す
+    func testUpdateProfile_見せる見せないの書き込みに失敗しても表示名の通知は出す() async {
+        let testUser = setUpOwnProfile()
+        mockFirestoreService.publicProfile = PublicProfile(id: testUser.id)
+        await viewModel.loadSectionVisibilityForEdit()
+        viewModel.editingSectionVisibility.showsFavorites = true
+        viewModel.editingDisplayName = "天名"
+        mockFirestoreService.updateProfileSectionVisibilityErrors = [NSError(domain: "test", code: 7)]
+        let notified = expectation(forNotification: .profileUpdated, object: nil) { notification in
+            notification.userInfo?[Notification.profileUpdatedDisplayNameKey] as? String == "天名"
+        }
+
+        await viewModel.updateProfile()
+
+        XCTAssertNotNil(viewModel.errorMessage)
+        await fulfillment(of: [notified], timeout: 1)
+    }
+
+    /// 保存せずに閉じたら、見せる/見せない のスイッチも読み込んだ値に戻る
+    func testResetProfileEdit_見せる見せないも読み込んだ値に戻る() async {
+        let testUser = setUpOwnProfile()
+        mockFirestoreService.publicProfile = PublicProfile(
+            id: testUser.id,
+            sectionVisibility: ProfileSectionVisibility(
+                showsRecommendedSkies: true,
+                showsSkyCalendar: true,
+                showsFavorites: false
+            )
+        )
+        await viewModel.loadSectionVisibilityForEdit()
+        viewModel.editingSectionVisibility = ProfileSectionVisibility(
+            showsRecommendedSkies: false,
+            showsSkyCalendar: false,
+            showsFavorites: true
+        )
+
+        viewModel.resetProfileEdit()
+
+        XCTAssertTrue(viewModel.editingSectionVisibility.showsRecommendedSkies)
+        XCTAssertTrue(viewModel.editingSectionVisibility.showsSkyCalendar)
+        XCTAssertFalse(viewModel.editingSectionVisibility.showsFavorites)
+        XCTAssertEqual(mockFirestoreService.updateProfileSectionVisibilitySections, [])
+    }
+
     // MARK: - Helper Methods
-    
+
+    /// 自分のプロフィールの ViewModel を `viewModel` に用意する（見せる/見せない のテスト用）⭐️
+    ///
+    /// 本物の AuthService（Auth.auth()）に触れないようモックを注入し、保存済みのユーザーを入れておく
+    /// （updateProfile は `user` が無いと何もしないため）。
+    @discardableResult
+    private func setUpOwnProfile() -> User {
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        let authService = MockAuthService()
+        authService.currentUserValue = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService,
+            authService: authService
+        )
+        viewModel.user = testUser
+        return testUser
+    }
+
     private func createTestUser(
         customEditTools: [String]? = nil,
         customEditToolsOrder: [String]? = nil
@@ -709,7 +980,7 @@ final class ProfileViewModelTests: XCTestCase {
             postsCount: 5
         )
     }
-    
+
     private func createTestPosts(userId: String) -> [Post] {
         let imageInfo = ImageInfo(
             url: "https://example.com/image.jpg",
@@ -717,7 +988,7 @@ final class ProfileViewModelTests: XCTestCase {
             height: 768,
             order: 0
         )
-        
+
         return [
             Post(
                 id: UUID().uuidString,
@@ -732,7 +1003,7 @@ final class ProfileViewModelTests: XCTestCase {
                 images: [imageInfo],
                 caption: "Test caption 2",
                 visibility: .public
-            )
+            ),
         ]
     }
 }
@@ -749,24 +1020,38 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     var updatePublicProfileFieldsError: Error?
     /// createPublicProfile が呼ばれたか（フォールバック検証用） ⭐️
     var createPublicProfileCalled = false
-    
-    func fetchUser(userId: String) async throws -> User {
-        guard let user = user else {
+    /// fetchPublicProfile が返す公開プロフィール（nil なら fetchPublicProfileError を投げる）⭐️
+    var publicProfile: PublicProfile?
+    /// fetchPublicProfile が投げるエラー（publicProfile が nil のとき。nil なら今までどおり notFound）⭐️
+    var fetchPublicProfileError: Error?
+    /// updateProfileSectionVisibility に渡された userId（呼ばれた順）⭐️
+    var updateProfileSectionVisibilityUserIds: [String] = []
+    /// updateProfileSectionVisibility に渡された欄と値（呼ばれた順）⭐️
+    var updateProfileSectionVisibilitySections: [[ProfileSection: Bool]] = []
+    /// updateProfileSectionVisibility が投げるエラー（呼ばれるたびに先頭から 1 つ使う・空なら成功）⭐️
+    var updateProfileSectionVisibilityErrors: [Error] = []
+    /// createPublicProfileIfMissing が呼ばれた回数 ⭐️
+    var createPublicProfileIfMissingCallCount = 0
+    /// 見せる/見せない の保存で呼ばれた順（"update" = updateProfileSectionVisibility・"createIfMissing" = createPublicProfileIfMissing）⭐️
+    var sectionVisibilityWriteLog: [String] = []
+
+    func fetchUser(userId _: String) async throws -> User {
+        guard let user else {
             throw FirestoreServiceError.notFound
         }
         return user
     }
-    
+
     func updateUser(_ user: User) async throws -> User {
-        return user
+        user
     }
-    
-    func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws {
+
+    func updateEditTools(userId _: String, tools _: [EditTool], order _: [String]) async throws {
         updateEditToolsCalled = true
     }
-    
-    func fetchUserPosts(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] {
-        return userPosts
+
+    func fetchUserPosts(userId _: String, limit _: Int, lastDocument _: DocumentSnapshot?) async throws -> [Post] {
+        userPosts
     }
 
     /// fetchUserPostsPage が返すページ（未設定なら userPosts を 1 ページで返す）⭐️
@@ -781,7 +1066,7 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     /// recountPostsCount が呼ばれた回数
     var recountPostsCountCallCount = 0
 
-    func fetchUserPostsPage(userId: String, limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage {
+    func fetchUserPostsPage(userId _: String, limit: Int, lastDocument _: DocumentSnapshot?) async throws -> PostPage {
         defer { fetchUserPostsPageCallCount += 1 }
         // 本番（PostPage(posts:snapshot:limit:)）と同じく、読んだ件数で続きの有無を決める
         guard let pages = userPostPages else {
@@ -793,46 +1078,68 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
         return PostPage(posts: page, lastDocument: nil, isExhausted: readCount < limit)
     }
 
-    func recountPostsCount(userId: String) async throws -> Int {
+    func recountPostsCount(userId _: String) async throws -> Int {
         recountPostsCountCallCount += 1
         return recountedPostsCount ?? userPosts.count
     }
-    
+
     // その他のメソッドは空実装
-    func createPost(_ post: Post) async throws -> Post { return post }
-    func fetchPosts(limit: Int, lastDocument: DocumentSnapshot?) async throws -> [Post] { return [] }
-    func fetchPostsWithSnapshot(limit: Int, lastDocument: DocumentSnapshot?) async throws -> PostPage { return PostPage(posts: [], lastDocument: nil, isExhausted: true) }
-    func fetchPost(postId: String) async throws -> Post { throw FirestoreServiceError.notFound }
-    func deletePost(postId: String, userId: String) async throws {}
-    func saveDraft(_ draft: Draft) async throws -> Draft { return draft }
-    func fetchDrafts(userId: String) async throws -> [Draft] { return [] }
-    func loadDraft(draftId: String) async throws -> Draft { throw FirestoreServiceError.notFound }
-    func deleteDraft(draftId: String) async throws {}
-    func searchByHashtag(_ hashtag: String) async throws -> [Post] { return [] }
-    func searchByColor(_ color: String, threshold: Double?) async throws -> [Post] { return [] }
-    func searchByTimeOfDay(_ timeOfDay: TimeOfDay) async throws -> [Post] { return [] }
-    func searchBySkyType(_ skyType: SkyType) async throws -> [Post] { return [] }
+    func createPost(_ post: Post) async throws -> Post { post }
+    func fetchPosts(limit _: Int, lastDocument _: DocumentSnapshot?) async throws -> [Post] { [] }
+    func fetchPostsWithSnapshot(limit _: Int, lastDocument _: DocumentSnapshot?) async throws -> PostPage { PostPage(posts: [], lastDocument: nil, isExhausted: true) }
+    func fetchPost(postId _: String) async throws -> Post { throw FirestoreServiceError.notFound }
+    func deletePost(postId _: String, userId _: String) async throws {}
+    func saveDraft(_ draft: Draft) async throws -> Draft { draft }
+    func fetchDrafts(userId _: String) async throws -> [Draft] { [] }
+    func loadDraft(draftId _: String) async throws -> Draft { throw FirestoreServiceError.notFound }
+    func deleteDraft(draftId _: String) async throws {}
+    func searchByHashtag(_: String) async throws -> [Post] { [] }
+    func searchByColor(_: String, threshold _: Double?) async throws -> [Post] { [] }
+    func searchByTimeOfDay(_: TimeOfDay) async throws -> [Post] { [] }
+    func searchBySkyType(_: SkyType) async throws -> [Post] { [] }
     func searchPosts(
-        hashtag: String?,
-        color: String?,
-        timeOfDay: TimeOfDay?,
-        skyType: SkyType?,
-        colorThreshold: Double?,
-        limit: Int
-    ) async throws -> [Post] { return [] }
-    func fetchPublicProfile(userId: String) async throws -> PublicProfile { throw FirestoreServiceError.notFound }
+        hashtag _: String?,
+        color _: String?,
+        timeOfDay _: TimeOfDay?,
+        skyType _: SkyType?,
+        colorThreshold _: Double?,
+        limit _: Int
+    ) async throws -> [Post] { [] }
+    func fetchPublicProfile(userId _: String) async throws -> PublicProfile {
+        if let publicProfile {
+            return publicProfile
+        }
+        throw fetchPublicProfileError ?? FirestoreServiceError.notFound
+    }
+
     func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
         updatePublicProfileFieldsCalls.append((userId: userId, displayName: displayName, photoURL: photoURL, bio: bio))
         if let error = updatePublicProfileFieldsError {
             throw error
         }
     }
-    func createPublicProfile(from user: User) async throws { createPublicProfileCalled = true }
-    func deleteUserData(userId: String) async throws {}
-    func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {}
-    func blockUser(userId: String, blockedUserId: String) async throws {}
-    func unblockUser(userId: String, blockedUserId: String) async throws {}
-    func fetchBlockedUserIds(userId: String) async throws -> [String] { return [] }
+
+    func createPublicProfile(from _: User) async throws { createPublicProfileCalled = true }
+
+    func updateProfileSectionVisibility(userId: String, sections: [ProfileSection: Bool]) async throws {
+        sectionVisibilityWriteLog.append("update")
+        updateProfileSectionVisibilityUserIds.append(userId)
+        updateProfileSectionVisibilitySections.append(sections)
+        if !updateProfileSectionVisibilityErrors.isEmpty {
+            throw updateProfileSectionVisibilityErrors.removeFirst()
+        }
+    }
+
+    func createPublicProfileIfMissing(from _: User) async throws {
+        sectionVisibilityWriteLog.append("createIfMissing")
+        createPublicProfileIfMissingCallCount += 1
+    }
+
+    func deleteUserData(userId _: String) async throws {}
+    func reportPost(postId _: String, reporterId _: String, reportedUserId _: String, reason _: String) async throws {}
+    func blockUser(userId _: String, blockedUserId _: String) async throws {}
+    func unblockUser(userId _: String, blockedUserId _: String) async throws {}
+    func fetchBlockedUserIds(userId _: String) async throws -> [String] { [] }
 }
 
 class MockStorageServiceForProfile: StorageServiceProtocol {
@@ -841,8 +1148,8 @@ class MockStorageServiceForProfile: StorageServiceProtocol {
     var uploadError: Error?
     /// uploadImage が呼ばれた回数（再試行の有無の確認用）
     var uploadCallCount = 0
-    
-    func uploadImage(_ image: UIImage, path: String) async throws -> URL {
+
+    func uploadImage(_ image: UIImage, path _: String) async throws -> URL {
         uploadCallCount += 1
         if let uploadError {
             throw uploadError
@@ -850,18 +1157,15 @@ class MockStorageServiceForProfile: StorageServiceProtocol {
         uploadedImage = image
         return URL(string: "https://example.com/uploaded.jpg")!
     }
-    
-    func uploadThumbnail(_ image: UIImage, path: String) async throws -> URL {
-        return URL(string: "https://example.com/thumbnail.jpg")!
+
+    func uploadThumbnail(_: UIImage, path _: String) async throws -> URL {
+        URL(string: "https://example.com/thumbnail.jpg")!
     }
-    
-    func deleteImage(path: String) async throws {}
-    func uploadProgress(path: String) -> AsyncStream<Double> {
-        return AsyncStream { continuation in
+
+    func deleteImage(path _: String) async throws {}
+    func uploadProgress(path _: String) -> AsyncStream<Double> {
+        AsyncStream { continuation in
             continuation.finish()
         }
     }
 }
-
-
-

@@ -8,6 +8,9 @@
 //  陽性対照（2026-10-26・1.17.0・iPhone 18 Pro シミュレーター）: WhatsNewContent.currentID を前回の
 //  "2026-10-soratomo-reactions" に戻すと、testCurrentIDDiffersFromPastIDs だけが赤（7 本中 1 本）。
 //  testRealCurrentIDBehavior は ID が空でなければ通るので緑のまま（予言どおり）。壊す前は 7 本すべて緑。
+//  陽性対照（2026-10-28・1.18.0 の枝に 1.17.0 の main を取り込んだとき・iPhone 18 Pro シミュレーター）: currentID を
+//  1.17.0 の "2026-10-daily-pick" にすると（衝突の解消を取り違えた形）、testCurrentIDDiffersFromPastIDs だけが赤（7 本中 1 本）。
+//  ⚠️ このテストはページの数と順番は見ない（1.17.0 のページが落ちても緑のまま）。
 //
 
 @testable import Soramoyou
@@ -77,7 +80,7 @@ final class WhatsNewGateTests: XCTestCase {
         ))
     }
 
-    /// 1.17.0 の `currentID` は、過去に使った値のどれとも違う（soratomo-public-launch 7.1）。
+    /// 1.18.0 の `currentID` は、過去に使った値のどれとも違う（soratomo-public-launch 7.1）。
     /// 過去の値に戻すと、その値を既読にした人（1.12.0 までを見た人・先行公開の紹介を見た人）には出ない
     func testCurrentIDDiffersFromPastIDs() {
         let pastIDs = [
@@ -89,6 +92,7 @@ final class WhatsNewGateTests: XCTestCase {
             "2026-10-soratomo-public",
             "2026-10-block-from-profile",
             "2026-10-soratomo-reactions",
+            "2026-10-daily-pick",
         ]
         for pastID in pastIDs {
             XCTAssertNotEqual(WhatsNewContent.currentID, pastID, "過去の値 \(pastID) と同じ")

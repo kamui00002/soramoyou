@@ -6,6 +6,10 @@
 //  「空白の日を埋めたい」動機と振り返り習慣を作る（継続利用の本丸）。
 //  プロフィール画面の「空図鑑を見る」導線の直下から開く。
 //
+//  他人の空カレンダー ⭐️: 持ち主が「空カレンダーを見せる」を ON にしていると、フォロワーが
+//  他人のプロフィールの入口から `init(otherUserId:displayName:)` で開く。読むのは公開・フォロワー限定の
+//  投稿だけ（`CalendarDiaryViewModel.loadOtherUser`）。題と文は三人称にし、本人への呼びかけは出さない。
+//
 //  グリッドレイアウト・日付計算は MonthCalendarGridView を共有し、
 //  ストリークカレンダー（SkyStreakCalendarView）と重複実装しない ⭐️。
 //
@@ -26,7 +30,12 @@ private let skyGradient = LinearGradient(
 )
 
 struct SkyCalendarDiaryView: View {
+    /// 空カレンダーの持ち主の uid（本人用なら自分・他人用なら相手）
     let userId: String
+    /// 他人の空カレンダーか（フォロワーが他人のプロフィールの入口から開いたとき true）⭐️
+    private let isOtherUser: Bool
+    /// 他人用の題に使う持ち主の表示名（本人用では使わない）
+    private let ownerDisplayName: String?
 
     @StateObject private var viewModel = CalendarDiaryViewModel()
     @Environment(\.dismiss) private var dismiss
@@ -37,13 +46,41 @@ struct SkyCalendarDiaryView: View {
     /// サムネイル用日セルの高さ（ストリークカレンダーの点マーク(30)より大きめに）
     private let cellHeight: CGFloat = 44
 
+    /// 本人の空カレンダー（プロフィールから開く・今までどおり）
+    init(userId: String) {
+        self.userId = userId
+        isOtherUser = false
+        ownerDisplayName = nil
+    }
+
+    /// 他人の空カレンダー（他人のプロフィールの入口からシートで開く）⭐️
+    /// - Parameters:
+    ///   - otherUserId: 持ち主（他人）の uid
+    ///   - displayName: 持ち主の表示名（無い・空ならば題は「空が好きなだれかの空カレンダー」）
+    init(otherUserId: String, displayName: String?) {
+        userId = otherUserId
+        isOtherUser = true
+        ownerDisplayName = displayName
+    }
+
+    /// 画面の題（本人用は今までどおり「空カレンダー」・他人用は「○○さんの空カレンダー」）
+    ///
+    /// ⚠️ 表示名が無い・空白だけのときは「空が好きなだれかの空カレンダー」にする ⭐️ 1.18.0 PR-B
+    ///    （2026-10-24 利用者の決定。「さんの空カレンダー」のように名前の抜けた題を出さないため）。
+    ///    持ち主の呼び方は `ProfileOwnerName` の 1 か所で決める（入口のボタン・お気に入りの題とそろえる）。
+    private var titleText: String {
+        guard isOtherUser else { return "空カレンダー" }
+        return ProfileOwnerName.possessive(ownerDisplayName) + "空カレンダー"
+    }
+
     var body: some View {
         NavigationView {
             ZStack {
                 skyGradient.ignoresSafeArea()
                 content
             }
-            .navigationTitle("空カレンダー")
+            // String を渡す（LocalizedStringKey として扱わせない）ので、表示名の中の記号もそのまま出る
+            .navigationTitle(titleText)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -58,13 +95,23 @@ struct SkyCalendarDiaryView: View {
             Text(viewModel.errorMessage ?? "")
         }
         .task {
-            // 計装: sheet 表示時に1回（読み込み完了を待たず、表示された事実を記録する）
-            // ⚠️ `sky_calendar_viewed`（機能別の既存イベント・ダッシュボードが依存）と
-            //    `logScreen`（全画面横断の screen 計測）は役割が違うため併存させる。
-            //    同じ行動を2つの「同種」イベントで送っているわけではない。
-            LoggingService.shared.logEvent("sky_calendar_viewed")
-            LoggingService.shared.logScreen("空カレンダー")
-            await viewModel.load(userId: userId)
+            if isOtherUser {
+                // ⚠️ 他人用では `sky_calendar_viewed` を**送らない**。
+                //    このイベントは「自分の空カレンダーを見た回数」（振り返りの習慣の指標）として
+                //    既存のダッシュボードが数えている。他人の分を混ぜると、その数の意味が変わってしまう。
+                //    他人の空カレンダーを開いた事実は、入口のボタンの `user_profile_section_opened`
+                //    （section = sky_calendar）が記録している。画面の計測だけ別の名前で送る。
+                LoggingService.shared.logScreen("他人の空カレンダー")
+                await viewModel.loadOtherUser(userId: userId)
+            } else {
+                // 計装: sheet 表示時に1回（読み込み完了を待たず、表示された事実を記録する）
+                // ⚠️ `sky_calendar_viewed`（機能別の既存イベント・ダッシュボードが依存）と
+                //    `logScreen`（全画面横断の screen 計測）は役割が違うため併存させる。
+                //    同じ行動を2つの「同種」イベントで送っているわけではない。
+                LoggingService.shared.logEvent("sky_calendar_viewed")
+                LoggingService.shared.logScreen("空カレンダー")
+                await viewModel.load(userId: userId)
+            }
         }
     }
 
@@ -119,13 +166,24 @@ struct SkyCalendarDiaryView: View {
                     Text("空の日記")
                         .font(.subheadline.weight(.bold))
                         .foregroundColor(DesignTokens.Colors.textPrimary)
-                    Text("投稿した空が、撮った日のマスに写真で並びます。日付をタップするとその日の投稿を振り返れます。")
+                    Text(introDescription)
                         .font(.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+
+    /// 使い方ガイドの説明文
+    ///
+    /// 本人用は今までどおり。他人用は「投稿した空が〜振り返れます」が本人に語りかける文なので、
+    /// 持ち主を主語にした三人称の文に置き換える（表示名が無くても読める文にする）。
+    private var introDescription: String {
+        if isOtherUser {
+            return "投稿された空が、撮った日のマスに写真で並びます。日付をタップするとその日の投稿を見られます。"
+        }
+        return "投稿した空が、撮った日のマスに写真で並びます。日付をタップするとその日の投稿を振り返れます。"
     }
 
     // MARK: - 月が空のときの前向きな空状態
@@ -140,10 +198,13 @@ struct SkyCalendarDiaryView: View {
                 Text("この月はまだ空がありません")
                     .font(.headline)
                     .foregroundColor(DesignTokens.Colors.textPrimary)
-                Text("今日の空を投稿してみましょう。")
-                    .font(.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                    .multilineTextAlignment(.center)
+                // 「今日の空を投稿してみましょう。」は本人への呼びかけなので、他人用では出さない
+                if !isOtherUser {
+                    Text("今日の空を投稿してみましょう。")
+                        .font(.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
             }
         }
     }

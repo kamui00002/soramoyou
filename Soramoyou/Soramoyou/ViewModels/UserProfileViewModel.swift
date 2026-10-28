@@ -13,6 +13,20 @@ private let logger = Logger(
     category: "UserProfileViewModel"
 )
 
+/// 他人のプロフィールに出す「空カレンダー」「お気に入りの空」の入口の出し方 ⭐️（1.18.0・PR-B）
+///
+/// 入口を出すかどうかは View ではなく ViewModel の計算プロパティ（`sectionEntryState(for:)`）で決める。
+/// View の private に置くと単体テストで固定できず、判定の取り違えが検出できないため
+/// （`FollowListViewModel.followButtonTitle(for:)` と同じ教訓）。
+enum UserProfileSectionEntryState: Equatable {
+    /// 出さない（持ち主が OFF・自分のプロフィール・プロフィール未取得）
+    case hidden
+    /// 「フォローすると〜が見られます」の 1 行だけ出す（フォロワーでない・持ち主が ON。ゲストも含む）
+    case followToSee
+    /// 入口のボタンを出す（フォロワー・持ち主が ON）
+    case open
+}
+
 @MainActor
 class UserProfileViewModel: ObservableObject {
     // MARK: - Published State
@@ -36,6 +50,50 @@ class UserProfileViewModel: ObservableObject {
 
     var isOwnProfile: Bool {
         ownUserId == targetUserId
+    }
+
+    // MARK: - 見せる/見せない（1.18.0・PR-B）⭐️
+
+    /// おすすめの空の欄を出す（＝読み込む）か
+    ///
+    /// 持ち主が OFF にしていたら欄を出さず、**読み込みもしない**（`UserProfileView` の `.task` がこれを見る）。
+    /// プロフィールが取れていないときは、読む元の一覧（`recommendedPostIds`）も無いので false。
+    var showsRecommendedSkies: Bool {
+        publicProfile?.sectionVisibility.isShown(.recommendedSkies) == true
+    }
+
+    /// 「○○さんの空カレンダー」の入口の出し方
+    var skyCalendarEntryState: UserProfileSectionEntryState {
+        entryState(for: .skyCalendar)
+    }
+
+    /// 「○○さんのお気に入りの空」の入口の出し方
+    var favoritesEntryState: UserProfileSectionEntryState {
+        entryState(for: .favorites)
+    }
+
+    /// 入口の出し方を決める（判定はここ 1 か所だけ）⭐️
+    ///
+    /// 上から順に見て、最初に当てはまったものにする:
+    /// 1. プロフィールが取れていない → 出さない（持ち主が ON にしているか分からない。読めないかもしれない中身へ誘わない）
+    /// 2. 自分のプロフィール → 出さない（自分の分はプロフィールタブの入口から見る）
+    /// 3. 持ち主が OFF → 出さない
+    /// 4. ゲスト（`ownUserId` が nil か空）→「フォローすると〜が見られます」の 1 行 ⭐️ 1.18.0 PR-B
+    ///    2026-10-24 利用者の決定でゲストにも出す。押しても何も起きない 1 行で、ログインのきっかけにする。
+    ///    ⚠️ ゲストには入口のボタン（`.open`）を決して出さない（フォロワーでないので中身はルールでも読めない）。
+    ///    `isFollowing` を見ずにここで決め打ちするのは、`isFollowing` がどんな道で true になってもゲストに開かせないため。
+    /// 5. フォロー中 → 入口のボタン
+    /// 6. それ以外（ログイン中・フォロワーでない）→「フォローすると〜が見られます」の 1 行
+    ///
+    /// 計算プロパティから呼ぶので、フォロー解除で `isFollowing` が false になると自動で 6 に変わる。
+    /// フォロー状態の取得に失敗したときも `isFollowing` は false（安全側）なので、入口は開かない。
+    /// - Parameter section: 空カレンダーかお気に入り（おすすめの空は入口ではないので `showsRecommendedSkies` を使う）
+    private func entryState(for section: ProfileSection) -> UserProfileSectionEntryState {
+        guard let visibility = publicProfile?.sectionVisibility else { return .hidden }
+        guard !isOwnProfile else { return .hidden }
+        guard visibility.isShown(section) else { return .hidden }
+        guard let ownUserId, !ownUserId.isEmpty else { return .followToSee }
+        return isFollowing ? .open : .followToSee
     }
 
     init(
@@ -161,6 +219,10 @@ class UserProfileViewModel: ObservableObject {
                     p.followersCount = max(0, p.followersCount - 1)
                     publicProfile = p
                 }
+                // 解除できた手ごたえ（軽いタップ）⭐️ 1.18.0 PR-B
+                // ⚠️ 成功が分かるのはここ（View は押したことしか知らない）なので、触覚は ViewModel で鳴らす。
+                //    投稿の取り直しを待たずに鳴らす（ボタンの見た目が変わるのと同じ瞬間にそろえる）
+                Haptics.play(.tap)
             } else {
                 try await followRepository.follow(targetUserId, by: ownUserId)
                 isFollowing = true
@@ -168,6 +230,8 @@ class UserProfileViewModel: ObservableObject {
                     p.followersCount += 1
                     publicProfile = p
                 }
+                // フォローできた手ごたえ ⭐️ 1.18.0 PR-B（解除と同じく、取り直しを待たずに鳴らす）
+                Haptics.play(.success)
             }
 
             // フォロー状態が変わると閲覧できる範囲（フォロワー限定投稿）が変わるため、
@@ -177,6 +241,8 @@ class UserProfileViewModel: ObservableObject {
         } catch {
             logger.error("toggleFollow 失敗: \(error.localizedDescription)")
             errorMessage = error.userFriendlyMessage
+            // フォロー/解除が通らなかった手ごたえ ⭐️ 1.18.0 PR-B（下の「エラー」の知らせと一緒に鳴る）
+            Haptics.play(.error)
         }
     }
 

@@ -9,13 +9,12 @@
 //  そのため失敗の分類（削除済み・非公開化 → 表示しない ／ ネットワーク → エラー表示）を重点的に見る。
 //
 
-import XCTest
-@testable import Soramoyou
 import FirebaseFirestore
+@testable import Soramoyou
+import XCTest
 
 @MainActor
 final class FavoritesViewModelTests: XCTestCase {
-
     // MARK: - Helpers
 
     private func makeFavorites(_ ids: [String]) -> [Favorite] {
@@ -174,10 +173,10 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.allFavorites = makeFavorites(["p1", "p2", "p3", "p4"])
         mock.postsById = [
             "p1": makePost("p1"), "p2": makePost("p2"),
-            "p3": makePost("p3"), "p4": makePost("p4")
+            "p3": makePost("p3"), "p4": makePost("p4"),
         ]
         mock.failingPostIds = [
-            "p2": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
+            "p2": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009)),
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 3)
 
@@ -214,7 +213,7 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.postsById = ["p3": makePost("p3")]
         mock.failingPostIds = [
             "gone1": FirestoreServiceError.notFound,
-            "gone2": FirestoreServiceError.notFound
+            "gone2": FirestoreServiceError.notFound,
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
 
@@ -234,7 +233,7 @@ final class FavoritesViewModelTests: XCTestCase {
         let mock = MockFirestoreServiceForFavoritesList()
         // 予算より多いページを用意し、全ページとも全件が削除済み
         // pageSize(2) × 予算(5) を超える16件。全件が削除済み
-        mock.allFavorites = makeFavorites((1...16).map { "g\($0)" })
+        mock.allFavorites = makeFavorites((1 ... 16).map { "g\($0)" })
         for favorite in mock.allFavorites {
             mock.failingPostIds[favorite.postId] = FirestoreServiceError.notFound
         }
@@ -261,10 +260,10 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.allFavorites = makeFavorites(["p1", "p2", "p3", "p4"])
         mock.postsById = [
             "p1": makePost("p1"), "p2": makePost("p2"),
-            "p3": makePost("p3"), "p4": makePost("p4")
+            "p3": makePost("p3"), "p4": makePost("p4"),
         ]
         mock.failingPostIds = [
-            "p4": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
+            "p4": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009)),
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
 
@@ -291,8 +290,8 @@ final class FavoritesViewModelTests: XCTestCase {
         )
         let expectedCursors: [Date?] = [
             nil,
-            mock.allFavorites[1].createdAt,  // 2回目 = 1ページ目末尾の p2
-            mock.allFavorites[2].createdAt   // 3回目 = loadMore が切り詰めた位置の p3
+            mock.allFavorites[1].createdAt, // 2回目 = 1ページ目末尾の p2
+            mock.allFavorites[2].createdAt, // 3回目 = loadMore が切り詰めた位置の p3
         ]
         XCTAssertEqual(
             mock.receivedAfterValues, expectedCursors,
@@ -312,11 +311,11 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.allFavorites = makeFavorites(["p1", "p2", "p3", "p4"])
         mock.postsById = [
             "p1": makePost("p1"), "p2": makePost("p2"),
-            "p3": makePost("p3"), "p4": makePost("p4")
+            "p3": makePost("p3"), "p4": makePost("p4"),
         ]
         // 2ページ目の **先頭** p3 でつまずかせる（＝ consumed == 0）
         mock.failingPostIds = [
-            "p3": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
+            "p3": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009)),
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
 
@@ -338,8 +337,8 @@ final class FavoritesViewModelTests: XCTestCase {
         )
         let expectedCursors: [Date?] = [
             nil,
-            mock.allFavorites[1].createdAt,  // 2回目 = p2
-            mock.allFavorites[1].createdAt   // ⭐️ 3回目も p2 のまま。進めると p3 が消える
+            mock.allFavorites[1].createdAt, // 2回目 = p2
+            mock.allFavorites[1].createdAt, // ⭐️ 3回目も p2 のまま。進めると p3 が消える
         ]
         XCTAssertEqual(mock.receivedAfterValues, expectedCursors, "失敗した回はカーソルを進めない")
     }
@@ -356,9 +355,9 @@ final class FavoritesViewModelTests: XCTestCase {
     func testNonEmptyListStallsAtPageBudgetAndRecovers() async {
         let mock = MockFirestoreServiceForFavoritesList()
         // [p1, g0...g10, p2] = 13件。先頭で1件だけ出せて、そのあと11件が削除済み
-        mock.allFavorites = makeFavorites(["p1"] + (0...10).map { "g\($0)" } + ["p2"])
+        mock.allFavorites = makeFavorites(["p1"] + (0 ... 10).map { "g\($0)" } + ["p2"])
         mock.postsById = ["p1": makePost("p1"), "p2": makePost("p2")]
-        for index in 0...10 {
+        for index in 0 ... 10 {
             mock.failingPostIds["g\(index)"] = FirestoreServiceError.notFound
         }
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
@@ -402,7 +401,7 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.failingPostIds = [
             "gone1": FirestoreServiceError.notFound,
             "gone2": FirestoreServiceError.notFound,
-            "p2": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
+            "p2": FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009)),
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 4)
 
@@ -460,13 +459,14 @@ final class FavoritesViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.loadMoreError, "回復したらエラー表示は消える")
         let expectedCursors: [Date?] = [
             nil,
-            mock.allFavorites[1].createdAt,  // 2回目 = p2（ここで throw）
-            mock.allFavorites[1].createdAt   // ⭐️ 3回目も p2。失敗した回はカーソルを進めない
+            mock.allFavorites[1].createdAt, // 2回目 = p2（ここで throw）
+            mock.allFavorites[1].createdAt, // ⭐️ 3回目も p2。失敗した回はカーソルを進めない
         ]
         XCTAssertEqual(mock.receivedAfterValues, expectedCursors, "同じカーソルから読み直す")
     }
 
     // MARK: - 壊れたお気に入りドキュメントを飛ばしたページ ⭐️
+
     //
     // 本番の `fetchFavorites` は、変換に失敗したドキュメントを 1 件ずつ飛ばす（一覧全体は生かす）。
     // そのため満杯（limit 件）に読んだページでも、返る件数は limit を割る。
@@ -480,7 +480,7 @@ final class FavoritesViewModelTests: XCTestCase {
         mock.brokenFavoriteIds = ["broken"]
         mock.postsById = [
             "p1": makePost("p1"), "p2": makePost("p2"),
-            "p3": makePost("p3"), "p4": makePost("p4")
+            "p3": makePost("p3"), "p4": makePost("p4"),
         ]
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 3)
 
@@ -541,8 +541,8 @@ final class FavoritesViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.stalledWithMore)
         let expectedCursors: [Date?] = [
             nil,
-            mock.allFavorites[1].createdAt,  // 2回目 = 1ページ目末尾の p2
-            mock.allFavorites[3].createdAt   // ⭐️ 3回目 = 壊れた broken2。p2 に据え置くと同じページを読み直す
+            mock.allFavorites[1].createdAt, // 2回目 = 1ページ目末尾の p2
+            mock.allFavorites[3].createdAt, // ⭐️ 3回目 = 壊れた broken2。p2 に据え置くと同じページを読み直す
         ]
         XCTAssertEqual(mock.receivedAfterValues, expectedCursors, "壊れたドキュメントも読んだ位置として進める")
     }
@@ -554,7 +554,7 @@ final class FavoritesViewModelTests: XCTestCase {
     func testAllBrokenPagesStopAtPageBudgetAndResumeFromWhereStopped() async {
         let mock = MockFirestoreServiceForFavoritesList()
         // pageSize(2) × 8ページ = 16件、全件が壊れている。9回目の読み込みで0件＝終端
-        mock.allFavorites = makeFavorites((1...16).map { "broken\($0)" })
+        mock.allFavorites = makeFavorites((1 ... 16).map { "broken\($0)" })
         mock.brokenFavoriteIds = Set(mock.allFavorites.map(\.postId))
         let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 2)
 
@@ -578,6 +578,437 @@ final class FavoritesViewModelTests: XCTestCase {
             mock.receivedAfterValues, [nil] + pageEndCursors,
             "各ページの末尾から1ページずつ進む（同じページを読み直さない）"
         )
+    }
+
+    // MARK: - 他人のお気に入り ⭐️
+
+    //
+    // 他人用（init(ownerId:viewerId:)）は、持ち主の favorites を読み、
+    // 公開の投稿だけ・閲覧者がブロックしている人の投稿を除いて出す。件数は数えない・見せない。
+
+    /// 他人用のテストで使う投稿（投稿者と公開範囲を選べる）
+    private func makeOtherUserPost(_ id: String, author: String, visibility: Visibility) -> Post {
+        Post(id: id, userId: author, images: [], visibility: visibility)
+    }
+
+    /// 20. 他人用は「公開」かつ「ブロックしていない人」の投稿だけが残る ⭐️
+    func testOtherUserShowsOnlyPublicPostsFromUnblockedAuthors() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        mock.allFavorites = makeFavorites(["pub1", "fol1", "priv1", "denied1", "blockedPub", "pub2"])
+        mock.postsById = [
+            "pub1": makeOtherUserPost("pub1", author: "a", visibility: .public),
+            // 閲覧者が読めても（フォロワー限定・非公開）、他人用では出さない
+            "fol1": makeOtherUserPost("fol1", author: "a", visibility: .followers),
+            "priv1": makeOtherUserPost("priv1", author: "a", visibility: .private),
+            "blockedPub": makeOtherUserPost("blockedPub", author: "blocked", visibility: .public),
+            "pub2": makeOtherUserPost("pub2", author: "b", visibility: .public),
+        ]
+        // 第三者の非公開の投稿は、閲覧者には読めない（permission-denied）
+        mock.failingPostIds = ["denied1": permissionDeniedError()]
+        mock.blockedUserIds = ["blocked"]
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 30)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["pub1", "pub2"])
+        XCTAssertEqual(mock.receivedFavoritesUserIds, ["owner"], "favorites は持ち主の uid で読む")
+        XCTAssertEqual(mock.receivedBlockedUserIdsQueries, ["viewer"], "ブロック一覧は閲覧者の uid で読む")
+        XCTAssertNil(viewModel.lastError)
+        XCTAssertFalse(viewModel.isAccessRevoked)
+        XCTAssertTrue(viewModel.isViewingOtherUser)
+    }
+
+    /// 21. 他人用は件数を数えない・見せない（本人用は今までどおり数える）⭐️
+    ///
+    /// 件数を出すと、フォロワーに「非公開・フォロワー限定のお気に入りが N 件ある」ことが分かってしまう。
+    func testOtherUserNeverCountsOrShowsUnavailableCount() async {
+        let otherMock = MockFirestoreServiceForFavoritesList()
+        otherMock.allFavorites = makeFavorites(["gone", "denied"])
+        otherMock.failingPostIds = [
+            "gone": FirestoreServiceError.notFound,
+            "denied": permissionDeniedError(),
+        ]
+        let other = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: otherMock, pageSize: 30)
+
+        await other.load()
+
+        XCTAssertEqual(other.posts.map(\.id), [])
+        XCTAssertFalse(other.showsUnavailableCount, "他人用では件数を出してはいけない")
+        XCTAssertEqual(other.unavailableCount, 0, "他人用では件数を数えない（View が分岐を漏らしても出ない）")
+        XCTAssertFalse(other.hasMore)
+        XCTAssertNil(other.lastError)
+
+        // 対照: 本人用で同じ favorites なら、今までどおり 2 件と数えて見せる
+        let ownMock = MockFirestoreServiceForFavoritesList()
+        ownMock.allFavorites = makeFavorites(["gone", "denied"])
+        ownMock.failingPostIds = [
+            "gone": FirestoreServiceError.notFound,
+            "denied": permissionDeniedError(),
+        ]
+        let own = FavoritesViewModel(ownUserId: "me", firestoreService: ownMock, pageSize: 30)
+
+        await own.load()
+
+        XCTAssertTrue(own.showsUnavailableCount)
+        XCTAssertEqual(own.unavailableCount, 2)
+        XCTAssertFalse(own.isViewingOtherUser)
+    }
+
+    /// 22. 他人の favorites の list が拒否されたら「見られなくなった」状態（汎用のエラーではない）⭐️
+    func testOtherUserListPermissionDeniedShowsAccessRevoked() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        mock.allFavorites = makeFavorites(["p1"])
+        mock.postsById = ["p1": makeOtherUserPost("p1", author: "a", visibility: .public)]
+        mock.fetchFavoritesFailure = (call: 1, error: permissionDeniedError())
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 30)
+
+        await viewModel.load()
+
+        XCTAssertTrue(viewModel.isAccessRevoked)
+        XCTAssertNil(viewModel.lastError, "汎用のエラー画面（再試行）にしない")
+        XCTAssertEqual(viewModel.posts.map(\.id), [])
+        XCTAssertFalse(viewModel.hasMore)
+    }
+
+    /// 23. 続きを読む途中で拒否されたら、出ている一覧を消して「見られなくなった」にする。読み直して戻れる ⭐️
+    func testOtherUserLoadMorePermissionDeniedClearsListAndRecoversOnReload() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        mock.allFavorites = makeFavorites(["p1", "p2", "p3"])
+        mock.postsById = [
+            "p1": makeOtherUserPost("p1", author: "a", visibility: .public),
+            "p2": makeOtherUserPost("p2", author: "a", visibility: .public),
+            "p3": makeOtherUserPost("p3", author: "a", visibility: .public),
+        ]
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 2)
+
+        await viewModel.load()
+        XCTAssertEqual(viewModel.posts.map(\.id), ["p1", "p2"])
+
+        // 見ている間に持ち主が OFF にした（2 回目の list が拒否される）
+        mock.fetchFavoritesFailure = (call: 2, error: permissionDeniedError())
+        await viewModel.loadMore()
+
+        XCTAssertTrue(viewModel.isAccessRevoked)
+        XCTAssertEqual(viewModel.posts.map(\.id), [], "持ち主が見せるのをやめたものを出し続けない")
+        XCTAssertNil(viewModel.loadMoreError, "フッターの「再試行」にしない")
+        XCTAssertNil(viewModel.lastError)
+        XCTAssertFalse(viewModel.hasMore)
+
+        // 持ち主が ON に戻した（拒否されなくなった）→ 読み直せば戻れる
+        mock.fetchFavoritesFailure = nil
+        await viewModel.load()
+
+        XCTAssertFalse(viewModel.isAccessRevoked)
+        XCTAssertEqual(viewModel.posts.map(\.id), ["p1", "p2"])
+    }
+
+    /// 24. 本人用の list の拒否は、今までどおり汎用のエラー（「見られなくなった」にしない）
+    func testOwnListPermissionDeniedStaysGenericError() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        mock.allFavorites = makeFavorites(["p1"])
+        mock.postsById = ["p1": makePost("p1")]
+        mock.fetchFavoritesFailure = (call: 1, error: permissionDeniedError())
+        let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 30)
+
+        await viewModel.load()
+
+        XCTAssertNotNil(viewModel.lastError)
+        XCTAssertFalse(viewModel.isAccessRevoked)
+    }
+
+    /// 25. 他人用では、閲覧者の 🔖 の変化で一覧から消さない ⭐️
+    ///
+    /// FavoriteManager が持つのは閲覧者の 🔖。持ち主のお気に入りの一覧を、それで絞ってはいけない。
+    func testOtherUserSyncFavoritedDoesNotRemovePosts() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        mock.allFavorites = makeFavorites(["p1", "p2"])
+        mock.postsById = [
+            "p1": makeOtherUserPost("p1", author: "a", visibility: .public),
+            "p2": makeOtherUserPost("p2", author: "a", visibility: .public),
+        ]
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 30)
+        await viewModel.load()
+
+        // 閲覧者はどちらにも 🔖 を付けていない
+        viewModel.syncFavorited(ids: [])
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["p1", "p2"])
+    }
+
+    /// 26. 本人用はブロック一覧を読まない（読み取りの回数と振る舞いは今までどおり）
+    func testOwnModeReadsOwnFavoritesAndNeverReadsBlockedUsers() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        mock.allFavorites = makeFavorites(["p1"])
+        mock.postsById = ["p1": makePost("p1")]
+        let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 30)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["p1"])
+        XCTAssertEqual(mock.receivedFavoritesUserIds, ["me"])
+        XCTAssertEqual(mock.receivedBlockedUserIdsQueries, [], "本人用ではブロック一覧を読まない")
+    }
+
+    /// 27. ブロック一覧が読めなくても、公開の投稿は出す（HomeViewModel.loadBlockedUsers と同じ考え方）
+    func testOtherUserBlockedListFailureStillShowsPublicPosts() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        mock.allFavorites = makeFavorites(["pub1", "fol1"])
+        mock.postsById = [
+            "pub1": makeOtherUserPost("pub1", author: "a", visibility: .public),
+            "fol1": makeOtherUserPost("fol1", author: "a", visibility: .followers),
+        ]
+        mock.fetchBlockedUserIdsError = FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 30)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["pub1"])
+        XCTAssertNil(viewModel.lastError, "ブロック一覧の失敗で一覧そのものをエラーにしない")
+    }
+
+    /// 28. 1ページ丸ごと絞り込みで落ちても、次のページまで繰る ⭐️
+    ///
+    /// 絞り込みは「消費はした（カーソルは進む）が表示しない」。カーソルが進まないと同じページを読み直し続ける。
+    func testOtherUserAllFilteredPageAdvancesToNextPage() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(2) で切ると 1ページ目 = [fol1, fol2]（全部フォロワー限定）、2ページ目 = [pub3]
+        mock.allFavorites = makeFavorites(["fol1", "fol2", "pub3"])
+        mock.postsById = [
+            "fol1": makeOtherUserPost("fol1", author: "a", visibility: .followers),
+            "fol2": makeOtherUserPost("fol2", author: "a", visibility: .followers),
+            "pub3": makeOtherUserPost("pub3", author: "a", visibility: .public),
+        ]
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 2)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["pub3"])
+        let expectedCursors: [Date?] = [nil, mock.allFavorites[1].createdAt]
+        XCTAssertEqual(mock.receivedAfterValues, expectedCursors, "絞り込みで落ちた fol2 の位置から次のページを読む")
+        XCTAssertFalse(viewModel.hasMore)
+    }
+
+    /// 29. 他人用の既定のページの大きさは 30（ルールの list の上限 `limit <= 30` と結びついている）⭐️
+    func testOtherUserDefaultPageSizeIsThirty() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        mock.allFavorites = makeFavorites(["p1"])
+        mock.postsById = ["p1": makeOtherUserPost("p1", author: "a", visibility: .public)]
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock)
+
+        await viewModel.load()
+
+        XCTAssertEqual(mock.receivedLimits, [30])
+    }
+
+    // MARK: - 他人用: 見せられる空が 1 件も無いページは自動で読み進める ⭐️ 1.18.0 PR-B
+
+    //
+    // 他人用は「公開・ブロック相手でない」投稿しか出さないので、持ち主が見せられないお気に入り
+    // （フォロワー限定・非公開・削除済み・ブロック相手の投稿）が続くと、1 ページまるごと 0 件になりうる。
+    // そこで「まだ続きがあります」だけを出すと、見せられないお気に入りが**ある**ことがフォロワーに伝わる。
+    // 1 回の読み込みの中で、見せられる空が 1 件増えるまで（予算 5 ページまで）次のページを読む。
+    // ⚠️ 本人用の「自動で次へ行かない」テストは書かない。本人用も以前から同じ予算で読み進めている
+    //    （テスト 9・10・13・19 がその事実を固定している）。
+
+    /// 30. 1 ページ目が全部見せられなくても、1 回の load で 2 ページ目の公開の空まで読む ⭐️ 1.18.0 PR-B
+    func testOtherUserAutoAdvancesPastInvisiblePageToPublicPost() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(4) で切ると
+        //   1ページ目 = [fol1, priv2, denied3, blocked4]（全部見せられない）
+        //   2ページ目 = [pub5, fol6, fol7, fol8]（公開が 1 件・満杯に読めたので続きあり）
+        //   3ページ目 = [pub9]（2ページ目で 1 件増えたので読まれないはず）
+        mock.allFavorites = makeFavorites(["fol1", "priv2", "denied3", "blocked4", "pub5", "fol6", "fol7", "fol8", "pub9"])
+        mock.postsById = [
+            "fol1": makeOtherUserPost("fol1", author: "a", visibility: .followers),
+            "priv2": makeOtherUserPost("priv2", author: "a", visibility: .private),
+            "blocked4": makeOtherUserPost("blocked4", author: "blocked", visibility: .public),
+            "pub5": makeOtherUserPost("pub5", author: "a", visibility: .public),
+            "fol6": makeOtherUserPost("fol6", author: "a", visibility: .followers),
+            "fol7": makeOtherUserPost("fol7", author: "a", visibility: .followers),
+            "fol8": makeOtherUserPost("fol8", author: "a", visibility: .followers),
+            "pub9": makeOtherUserPost("pub9", author: "a", visibility: .public),
+        ]
+        // 第三者の非公開の投稿は、閲覧者には読めない（permission-denied）
+        mock.failingPostIds = ["denied3": permissionDeniedError()]
+        mock.blockedUserIds = ["blocked"]
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 4)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["pub5"])
+        XCTAssertEqual(mock.receivedAfterValues.count, 2, "favorites の list は 2 回（1 件見せられた 2 ページ目で止まる）")
+        XCTAssertTrue(viewModel.hasMore)
+        XCTAssertFalse(viewModel.stalledWithMore, "1 件増えたので行き詰まりではない")
+        XCTAssertNil(viewModel.lastError)
+    }
+
+    /// 31. 全ページ見せられず、続きも無ければ、空の一覧で終わる（「まだ続きがあります」にしない）⭐️ 1.18.0 PR-B
+    func testOtherUserAllInvisiblePagesWithoutMoreEndsEmpty() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(2) で切ると 1ページ目 = [fol1, priv2]（満杯）、2ページ目 = [denied3]（pageSize 未満＝終端）
+        mock.allFavorites = makeFavorites(["fol1", "priv2", "denied3"])
+        mock.postsById = [
+            "fol1": makeOtherUserPost("fol1", author: "a", visibility: .followers),
+            "priv2": makeOtherUserPost("priv2", author: "a", visibility: .private),
+        ]
+        mock.failingPostIds = ["denied3": permissionDeniedError()]
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 2)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), [])
+        XCTAssertFalse(viewModel.hasMore, "続きは無い")
+        XCTAssertFalse(viewModel.stalledWithMore)
+        XCTAssertEqual(mock.receivedAfterValues.count, 2)
+        XCTAssertNil(viewModel.lastError)
+        XCTAssertFalse(viewModel.isAccessRevoked)
+    }
+
+    /// 32. 見せられないページが上限より多く続いても、list はちょうど上限の回数で止まり、続きは残す ⭐️ 1.18.0 PR-B
+    func testOtherUserInvisiblePagesStopAtPageBudget() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(2) × 6ページ = 12件。全部フォロワー限定（予算 5 ページより多い）
+        mock.allFavorites = makeFavorites((1 ... 12).map { "fol\($0)" })
+        for favorite in mock.allFavorites {
+            mock.postsById[favorite.postId] = makeOtherUserPost(favorite.postId, author: "a", visibility: .followers)
+        }
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 2)
+
+        await viewModel.load()
+
+        XCTAssertEqual(mock.receivedAfterValues.count, 5, "1 回の読み込みで読むのは 5 ページまで")
+        XCTAssertEqual(viewModel.posts.map(\.id), [])
+        XCTAssertTrue(viewModel.hasMore, "予算切れ。続きが残っているのに『無い』と断定しない")
+        XCTAssertTrue(viewModel.stalledWithMore)
+    }
+
+    /// 33. 1 ページ目で 1 件でも見せられたら、そこで止まる（次のページを先に読まない）⭐️ 1.18.0 PR-B
+    func testOtherUserStopsAfterFirstPageWithPublicPost() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(2) で切ると 1ページ目 = [pub1, fol2]（公開が 1 件・満杯なので続きあり）、2ページ目 = [pub3]
+        mock.allFavorites = makeFavorites(["pub1", "fol2", "pub3"])
+        mock.postsById = [
+            "pub1": makeOtherUserPost("pub1", author: "a", visibility: .public),
+            "fol2": makeOtherUserPost("fol2", author: "a", visibility: .followers),
+            "pub3": makeOtherUserPost("pub3", author: "a", visibility: .public),
+        ]
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 2)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["pub1"])
+        XCTAssertEqual(mock.receivedAfterValues.count, 1)
+        XCTAssertTrue(viewModel.hasMore)
+        XCTAssertFalse(viewModel.stalledWithMore)
+    }
+
+    /// 34. 自動で読み進めた先の list が拒否されたら、1 ページ目で拒否されたときと同じく「見られなくなった」⭐️ 1.18.0 PR-B
+    func testOtherUserPermissionDeniedOnAutoAdvancedPageShowsAccessRevoked() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(2) で切ると 1ページ目 = [fol1, fol2]（全部見せられない）→ 2 回目の list が拒否される
+        mock.allFavorites = makeFavorites(["fol1", "fol2", "pub3"])
+        mock.postsById = [
+            "fol1": makeOtherUserPost("fol1", author: "a", visibility: .followers),
+            "fol2": makeOtherUserPost("fol2", author: "a", visibility: .followers),
+            "pub3": makeOtherUserPost("pub3", author: "a", visibility: .public),
+        ]
+        mock.fetchFavoritesFailure = (call: 2, error: permissionDeniedError())
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 2)
+
+        await viewModel.load()
+
+        XCTAssertEqual(mock.receivedAfterValues.count, 2)
+        XCTAssertTrue(viewModel.isAccessRevoked)
+        XCTAssertNil(viewModel.lastError, "汎用のエラー画面（再試行）にしない")
+        XCTAssertEqual(viewModel.posts.map(\.id), [])
+        XCTAssertFalse(viewModel.hasMore)
+    }
+
+    /// 35. 自動で読み進めた先の list が通信で失敗したら、1 ページ目で失敗したときと同じく汎用のエラー ⭐️ 1.18.0 PR-B
+    func testOtherUserTransientFailureOnAutoAdvancedPageSurfacesError() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(2) で切ると 1ページ目 = [fol1, fol2]（全部見せられない）→ 2 回目の list が通信エラー
+        mock.allFavorites = makeFavorites(["fol1", "fol2", "pub3"])
+        mock.postsById = [
+            "fol1": makeOtherUserPost("fol1", author: "a", visibility: .followers),
+            "fol2": makeOtherUserPost("fol2", author: "a", visibility: .followers),
+            "pub3": makeOtherUserPost("pub3", author: "a", visibility: .public),
+        ]
+        mock.fetchFavoritesFailure = (
+            call: 2,
+            error: FirestoreServiceError.fetchFailed(NSError(domain: NSURLErrorDomain, code: -1009))
+        )
+        let viewModel = FavoritesViewModel(ownerId: "owner", viewerId: "viewer", firestoreService: mock, pageSize: 2)
+
+        await viewModel.load()
+
+        XCTAssertEqual(mock.receivedAfterValues.count, 2)
+        XCTAssertNotNil(viewModel.lastError, "『0件』と嘘をつかずエラーにする")
+        XCTAssertFalse(viewModel.isAccessRevoked, "通信の失敗は「見られなくなった」にしない")
+        XCTAssertEqual(viewModel.posts.map(\.id), [])
+    }
+
+    // MARK: - 他人用: 投稿詳細でのブロック（.userBlocked 通知）⭐️ 1.18.0 PR-B
+
+    //
+    // 他人のお気に入りの一覧から投稿を開いて投稿者をブロックしたら、引っ張って更新を待たずに一覧から消す。
+    // 以降に読むページからも除く（ホーム・ギャラリー・タグ・あなた向けと同じ）。
+
+    /// 36. 他人用: X をブロックしたら、表示中の一覧から X の投稿が消え、続きを読んでも X は出ない ⭐️ 1.18.0 PR-B
+    func testOtherUserBlockedNotificationRemovesAuthorFromListAndLaterPages() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        // pageSize(2) で切ると 1ページ目 = [x1, y1]、2ページ目 = [x2, y2]（2ページ目が終端かは3回目の読み込みで分かる）
+        mock.allFavorites = makeFavorites(["x1", "y1", "x2", "y2"])
+        mock.postsById = [
+            "x1": makeOtherUserPost("x1", author: "X", visibility: .public),
+            "y1": makeOtherUserPost("y1", author: "Y", visibility: .public),
+            "x2": makeOtherUserPost("x2", author: "X", visibility: .public),
+            "y2": makeOtherUserPost("y2", author: "Y", visibility: .public),
+        ]
+        // 他のテストが `.default` に送る通知と混ざらないよう、このテストだけの通知センターを使う
+        let center = NotificationCenter()
+        let viewModel = FavoritesViewModel(
+            ownerId: "owner",
+            viewerId: "viewer",
+            firestoreService: mock,
+            pageSize: 2,
+            notificationCenter: center
+        )
+        await viewModel.load()
+        XCTAssertEqual(viewModel.posts.map(\.id), ["x1", "y1"], "前提: ブロック前は X と Y の両方が出ている")
+
+        center.post(name: .userBlocked, object: nil, userInfo: [Notification.blockedUserIdKey: "X"])
+        await waitForMainActorTasks { viewModel.posts.map(\.id) == ["y1"] }
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["y1"], "引っ張って更新を待たずに、表示中の一覧から X を除く")
+
+        await viewModel.loadMore()
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["y1", "y2"], "続きのページからも X を除く")
+        XCTAssertEqual(mock.receivedAfterValues.count, 2)
+    }
+
+    /// 37. 本人用: `.userBlocked` を受けても一覧は変わらない（本人用は購読しない＝今までどおり）⭐️ 1.18.0 PR-B
+    ///
+    /// 本人用は「自分が 🔖 を付けた空のアルバム」。投稿者をブロックしてもお気に入りが消えるわけではない。
+    func testOwnUserBlockedNotificationDoesNotChangeList() async {
+        let mock = MockFirestoreServiceForFavoritesList()
+        mock.allFavorites = makeFavorites(["x1", "y1"])
+        mock.postsById = [
+            "x1": makeOtherUserPost("x1", author: "X", visibility: .public),
+            "y1": makeOtherUserPost("y1", author: "Y", visibility: .public),
+        ]
+        let viewModel = FavoritesViewModel(ownUserId: "me", firestoreService: mock, pageSize: 30)
+        await viewModel.load()
+        XCTAssertEqual(viewModel.posts.map(\.id), ["x1", "y1"])
+
+        // 本人用の init は通知センターを受け取らない（購読するなら `.default`）ので、`.default` に送る
+        NotificationCenter.default.post(name: .userBlocked, object: nil, userInfo: [Notification.blockedUserIdKey: "X"])
+        // 受け取った場合の処理（MainActor 上の Task）が走りきるだけの時間を与える（条件は満たされないので上限まで譲る）
+        await waitForMainActorTasks { false }
+
+        XCTAssertEqual(viewModel.posts.map(\.id), ["x1", "y1"], "本人用ではブロックした人の投稿も今までどおり出す")
+        XCTAssertEqual(mock.receivedBlockedUserIdsQueries, [], "本人用ではブロック一覧も読まない")
     }
 }
 
@@ -612,8 +1043,23 @@ final class MockFirestoreServiceForFavoritesList: FirestoreServiceProtocol {
     /// 本番の `fetchFavorites` は、変換に失敗したドキュメントを 1 件ずつ飛ばす。
     /// ただしクエリの `limit` には数えられる（＝読んだ件数には入る）ので、返る件数は limit を割る。
     var brokenFavoriteIds: Set<String> = []
+    /// fetchFavorites に渡された `userId`（＝読んだ favorites の持ち主）の記録 ⭐️
+    ///
+    /// ⚠️ 他人用で「持ち主の uid で読む」ことを直に確かめるため。閲覧者の uid と取り違えても、
+    ///    Mock は uid を見ずに同じ `allFavorites` を返すので、記録を見ないと緑のまま通ってしまう。
+    private(set) var receivedFavoritesUserIds: [String] = []
+    /// fetchFavorites に渡された `limit` の記録（他人用の既定のページの大きさ＝ルールの上限 30 を固定する）
+    private(set) var receivedLimits: [Int] = []
+    /// 閲覧者のブロック一覧（`fetchBlockedUserIds` が返す）
+    var blockedUserIds: [String] = []
+    /// `fetchBlockedUserIds` を失敗させるときのエラー
+    var fetchBlockedUserIdsError: Error?
+    /// fetchBlockedUserIds に渡された `userId`（＝閲覧者）の記録。本人用では 1 回も呼ばれないことも見る
+    private(set) var receivedBlockedUserIdsQueries: [String] = []
 
-    func fetchFavorites(userId _: String, limit: Int, after: Date?) async throws -> FavoritePage {
+    func fetchFavorites(userId: String, limit: Int, after: Date?) async throws -> FavoritePage {
+        receivedFavoritesUserIds.append(userId)
+        receivedLimits.append(limit)
         receivedAfterValues.append(after)
         // 何回目の呼び出しかは記録した件数で数える（＝失敗した回も1回として数える）
         if let failure = fetchFavoritesFailure, failure.call == receivedAfterValues.count {
@@ -637,5 +1083,11 @@ final class MockFirestoreServiceForFavoritesList: FirestoreServiceProtocol {
         if let error = failingPostIds[postId] { throw error }
         guard let post = postsById[postId] else { throw FirestoreServiceError.notFound }
         return post
+    }
+
+    func fetchBlockedUserIds(userId: String) async throws -> [String] {
+        receivedBlockedUserIdsQueries.append(userId)
+        if let fetchBlockedUserIdsError { throw fetchBlockedUserIdsError }
+        return blockedUserIds
     }
 }

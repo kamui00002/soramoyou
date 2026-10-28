@@ -22,9 +22,27 @@ struct FollowListView: View {
     /// 削除確認ダイアログの対象（nil なら非表示）
     @State private var removalCandidate: Follow?
 
+    /// いいね・お気に入り（🔖）状態の共有ストア ⭐️ 1.18.0 PR-B
+    ///
+    /// この画面では読まず、行から開く UserProfileView に渡すためだけに持つ。
+    /// UserProfileView → FollowListView → UserProfileView と入れ子になるので、ここも手渡しでつなぐ
+    /// （UserProfileView は fullScreenCover の中で開かれることがあり、環境から読む形だと届く根拠が無い。
+    ///  理由の詳細は UserProfileView の likeManager のコメント）。
+    /// 値で何も描かないので @ObservedObject にしない（変わるたびに一覧を描き直さないため）。
+    private let likeManager: LikeManager
+    private let favoriteManager: FavoriteManager
+
     // MARK: - Initializer
 
-    init(listType: FollowListType, targetUserId: String, ownUserId: String?) {
+    init(
+        listType: FollowListType,
+        targetUserId: String,
+        ownUserId: String?,
+        likeManager: LikeManager,
+        favoriteManager: FavoriteManager
+    ) {
+        self.likeManager = likeManager
+        self.favoriteManager = favoriteManager
         _viewModel = StateObject(
             wrappedValue: FollowListViewModel(
                 listType: listType,
@@ -168,7 +186,12 @@ struct FollowListView: View {
                 rowContent(profile: profile)
             } else {
                 NavigationLink {
-                    UserProfileView(targetUserId: userId, ownUserId: viewModel.ownUserId)
+                    UserProfileView(
+                        targetUserId: userId,
+                        ownUserId: viewModel.ownUserId,
+                        likeManager: likeManager,
+                        favoriteManager: favoriteManager
+                    )
                 } label: {
                     // 行の余白・カード背景までタップ可能領域を広げる
                     // （rowContent だけだと名前部分しか反応せず「行タップで遷移」にならない）

@@ -5,15 +5,15 @@
 //  Created on 2025-12-06.
 //
 
-import SwiftUI
 import Kingfisher
+import SwiftUI
 
 struct ProfileEditView: View {
     @ObservedObject var viewModel: ProfileViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var showingImagePicker = false
     @State private var selectedImage: UIImage?
-    
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -22,7 +22,7 @@ struct ProfileEditView: View {
                     colors: [
                         Color(red: 0.68, green: 0.85, blue: 0.90),
                         Color(red: 0.53, green: 0.81, blue: 0.98),
-                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                        Color(red: 0.39, green: 0.58, blue: 0.93),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -33,13 +33,13 @@ struct ProfileEditView: View {
                     VStack(spacing: 24) {
                         // プロフィール画像セクション
                         profileImageSection
-                        
+
                         // 表示名セクション
                         VStack(alignment: .leading, spacing: 12) {
                             Text("表示名")
                                 .font(.headline)
                                 .foregroundColor(.white)
-                            
+
                             TextField("表示名", text: $viewModel.editingDisplayName)
                                 .textInputAutocapitalization(.never)
                                 .padding()
@@ -53,13 +53,13 @@ struct ProfileEditView: View {
                                 )
                                 .foregroundColor(.primary)
                         }
-                        
+
                         // 自己紹介セクション
                         VStack(alignment: .leading, spacing: 12) {
                             Text("自己紹介")
                                 .font(.headline)
                                 .foregroundColor(.white)
-                            
+
                             TextEditor(text: $viewModel.editingBio)
                                 .frame(minHeight: 100)
                                 .padding(8)
@@ -74,7 +74,7 @@ struct ProfileEditView: View {
                                 .foregroundColor(.primary)
                                 .scrollContentBackground(.hidden)
                         }
-                        
+
                         // バリデーションメッセージ
                         if !viewModel.isValidProfileEdit {
                             Text("表示名は50文字以内、自己紹介は200文字以内で入力してください")
@@ -86,6 +86,19 @@ struct ProfileEditView: View {
                                         .fill(.white.opacity(0.9))
                                 )
                         }
+
+                        // プロフィールに表示するもの（見せる/見せない）⭐️
+                        // 保存は右上の「保存」でほかの項目と一緒に行う（変わった欄だけ書く・ProfileViewModel.updateProfile）
+                        ProfileSectionVisibilityEditor(
+                            visibility: $viewModel.editingSectionVisibility,
+                            isEditable: viewModel.canEditSectionVisibility,
+                            loadFailed: viewModel.sectionVisibilityLoadFailed
+                        )
+                        // 保存中はスイッチも押せなくする（右上の「保存」と同じ isLoading）⭐️ 1.18.0 PR-B
+                        // ⚠️ 保存で書く値は updateProfile の最後に取るので、書き込みを待つ間に戻した操作は
+                        //    保存されずに画面が閉じる（OFF に戻したつもりが ON のまま＝フォロワーに見える）。
+                        // ⚠️ Editor の isEditable に混ぜない。混ぜると保存中に「読み込んでいます」の文が出る。
+                        .disabled(viewModel.isLoading)
                     }
                     .padding()
                 }
@@ -102,7 +115,7 @@ struct ProfileEditView: View {
                     }
                     .foregroundColor(.white)
                 }
-                
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("保存") {
                         Task {
@@ -139,12 +152,17 @@ struct ProfileEditView: View {
             .onAppear {
                 // 編集用の値を初期化（既にProfileViewModelで設定済み）
             }
+            .task {
+                // 見せる/見せない の今の値は、編集画面を開くたびに自分の publicProfiles から読む ⭐️
+                // （表示名などと違い ProfileViewModel.loadProfile では読んでいない。読めるまでスイッチは押せない）
+                await viewModel.loadSectionVisibilityForEdit()
+            }
         }
         .navigationViewStyle(.stack)
     }
-    
+
     // MARK: - Profile Image Section
-    
+
     private var profileImageSection: some View {
         VStack(spacing: 16) {
             // プロフィール画像表示
@@ -175,7 +193,7 @@ struct ProfileEditView: View {
                     .stroke(.white.opacity(0.4), lineWidth: 2)
             )
             .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
-            
+
             // 画像変更ボタン
             Button(action: {
                 showingImagePicker = true
@@ -197,7 +215,7 @@ struct ProfileEditView: View {
                         )
                 )
             }
-            
+
             // 画像を削除ボタン（既存の画像がある場合）
             if viewModel.user?.photoURL != nil || viewModel.editingProfileImage != nil {
                 Button(action: {
@@ -213,18 +231,18 @@ struct ProfileEditView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical)
     }
-    
+
     // MARK: - Actions
-    
+
     private func saveProfile() async {
         await viewModel.updateProfile()
-        
+
         // エラーがなければ画面を閉じる
         if viewModel.errorMessage == nil {
             dismiss()
         }
     }
-    
+
     private func resetEditingValues() {
         // 編集用の値をリセットする。
         // ⚠️ 表示名・自己紹介・画像の入力値はシートでなく ProfileViewModel が持っているので、
@@ -233,4 +251,3 @@ struct ProfileEditView: View {
         viewModel.resetProfileEdit()
     }
 }
-
