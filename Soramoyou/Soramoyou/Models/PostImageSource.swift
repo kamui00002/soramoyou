@@ -25,8 +25,10 @@ enum PostImageSource: Equatable {
     /// 1. 使うパスを決める（サムネイルは thumbnailStoragePath → サムネイルの URL から取り出したパス、
     ///    手がかりが無ければ本体。本体は storagePath → URL から取り出したパス）
     /// 2. パスの区分（3 つ目）がちょうど public で、URL が読める → URL で読む
-    /// 3. それ以外でパスがある → URL が残っていてもパスで読む（D-2 でトークンを消しても壊れないように）
-    /// 4. パスが無い → URL が読めれば URL（Storage の URL でないごく古いデータ）、読めなければ読めない
+    /// 3. 区分の無い古い置き場（4 つに分かれていないパス）→ URL が読めれば URL、読めなければ読めない
+    ///    （Storage のルールにこの形の読む行が無く、パスで読むと本人でも断られるため）
+    /// 4. それ以外でパスがある → URL が残っていてもパスで読む（D-2 でトークンを消しても壊れないように）
+    /// 5. パスが無い → URL が読めれば URL（Storage の URL でないごく古いデータ）、読めなければ読めない
     ///
     /// 判定をパスの区分で行うのは、Storage のルールもパスの区分で読める人を決めているため（storage.rules）。
     /// - Parameters:
@@ -52,6 +54,13 @@ enum PostImageSource: Equatable {
             if isPublicPath(path), let url = readableURL(urlString) {
                 return .remote(url)
             }
+            // 区分の無い古い置き場は、ルールに読む行が無い＝パスでは誰も読めない。URL だけが頼り
+            if isLegacyPathWithoutSegment(path) {
+                if let url = readableURL(urlString) {
+                    return .remote(url)
+                }
+                return .unavailable
+            }
             return .storage(path)
         }
         if let url = readableURL(urlString) {
@@ -68,6 +77,15 @@ enum PostImageSource: Equatable {
     private static func isPublicPath(_ path: String) -> Bool {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
         return parts.count >= 3 && parts[2] == "public"
+    }
+
+    /// 区分の無い古い置き場のパスか（`posts/{uid}/{名前}`・`thumbnails/{uid}/{名前}`）
+    ///
+    /// 2026-01-16 より前の投稿はこの形で置いていた。Storage のルールの投稿の写真の行は、どれも
+    /// `{置き場}/{uid}/{区分}/{名前}` の 4 つに分かれた形なので、4 つに満たないパスには読む行が無い。
+    /// 4 つに分かれていて区分が見慣れないもの（大文字の Public など）はここに入れない（今までどおりパスで読む＝安全な側）。
+    private static func isLegacyPathWithoutSegment(_ path: String) -> Bool {
+        path.split(separator: "/", omittingEmptySubsequences: false).count < 4
     }
 
     /// Storage のダウンロード URL の文字列から、Storage のパスを取り出す（取り出せなければ nil）
