@@ -62,7 +62,7 @@ const EXPECTED_PROJECT_ID = 'soramoyou-ios';
 
 // サービスアカウントキーのパス
 // ⚠️ このスクリプトは scripts/ 配下にあるため、__dirname はリポジトリ直下ではない。
-//    移行スクリプト（migrate-public-profiles.js）と同じ置き場を見るよう '..' を挟む。
+//    リポジトリ直下の serviceAccountKey.json を見るよう '..' を挟む。
 const serviceAccountPath = path.join(__dirname, '..', 'serviceAccountKey.json');
 
 // Firebase Admin SDK初期化
@@ -133,8 +133,8 @@ async function countFollowsFor(userId) {
  * ⚠️ WriteBatch はあえて使わず、ユーザーごとに逐次 await している。理由は 2 つ:
  *   1. 対象が数百件規模で、バッチ化の速度メリットが小さい
  *   2. 1 件の失敗を局所化でき、どのユーザーで失敗したかログに残せる
- *   （移行スクリプト migrate-public-profiles.js は commit 後の batch を再利用しており、
- *     500 件を超えると落ちる。ここでは同じ轍を踏まないようにする）
+ *   （batch を使うなら、500 件ごとに新しい batch を作り直す手当てが要る。移行スクリプト
+ *     migrate-public-profiles.js は以前これが無く、500 件を超えると落ちていた）
  */
 async function backfillFollowCounters() {
   console.log('🚀 Starting backfill...\n');

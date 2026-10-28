@@ -42,7 +42,7 @@ gcloud auth application-default login
 # quota project を求められたら
 gcloud auth application-default set-quota-project soramoyou-ios
 ```
-   - ⚠️ 今の `migrate-public-profiles.js` は鍵ファイル（`serviceAccountKey.json`）を読む作りのままで、ADCでは動かない。実行する前に、初期化を `scripts/follows-cleanup.js` などと同じADCの形に直す（接続先は `soramoyou-ios` に固定。`.firebaserc` が空のためADCの既定に頼らない）
+   - ⚠️ `migrate-public-profiles.js` はこのADCで初期化し、接続先は `soramoyou-ios`（本番）に固定している（`scripts/follows-cleanup.js` と同じ形。`.firebaserc` が空のためADCの既定に頼らない）。鍵ファイル（`serviceAccountKey.json`）は読まないので、作って置かない
 
 3. スクリプトを実行:
 ```bash
@@ -162,9 +162,9 @@ Soramoyou/Soramoyou/Models/PublicProfile.swift
 - Pod installを実行: `cd Soramoyou && pod install`
 - Xcodeを再起動
 
-### 移行スクリプトエラー: "serviceAccountKey.json not found"
-- スクリプトが鍵ファイルを読む作りのままなので出る。鍵ファイルを作って置く方法では直さない
-- 初期化をADCに直してから、「2.」のログインをして実行する
+### 移行スクリプトエラー: "Could not load the default credentials"
+- 「2.」のADCのログインがまだ（または切れている）ときに出る。`✅ Firebase Admin SDK initialized` の行が出た後でも、Firestore を読むところでこのエラーになる（ログインが無いことは、初期化ではなく最初に Firestore を読むときに分かるため）
+- 「2.」の `gcloud auth application-default login` をしてから、もう一度実行する。鍵ファイルを作って置く方法では直さない
 
 ### プロフィール表示エラー
 - Firestoreルールが正しくデプロイされているか確認
