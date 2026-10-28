@@ -840,9 +840,9 @@ struct GalleryDetailImageView: View {
     let imageInfo: ImageInfo
 
     var body: some View {
-        // フルサイズ画像を表示
-        if let imageURL = URL(string: imageInfo.url) {
-            KFImage(imageURL)
+        // フルサイズ画像を読み方（PostImageSource）で読んで表示
+        if let image = KFImage.post(PostImageSource.resolve(imageInfo, prefersThumbnail: false)) {
+            image
                 .placeholder {
                     Rectangle()
                         .fill(Color.gray.opacity(0.3))

@@ -275,8 +275,9 @@ struct RecommendedSkyTile: View {
             .aspectRatio(1, contentMode: .fit)
             .overlay {
                 if let firstImage = item.post.images.first,
-                   let url = URL(string: firstImage.thumbnail ?? firstImage.url) {
-                    KFImage(url)
+                   let image = KFImage.post(PostImageSource.resolve(firstImage, prefersThumbnail: true))
+                {
+                    image
                         .placeholder {
                             Rectangle().fill(Color.gray.opacity(0.3))
                         }

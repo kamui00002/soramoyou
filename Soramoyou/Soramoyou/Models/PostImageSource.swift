@@ -28,42 +28,49 @@ enum PostImageSource: Equatable {
     /// 3. 区分の無い古い置き場（4 つに分かれていないパス）→ URL が読めれば URL、読めなければ読めない
     ///    （Storage のルールにこの形の読む行が無く、パスで読むと本人でも断られるため）
     /// 4. それ以外でパスがある → URL が残っていてもパスで読む（D-2 でトークンを消しても壊れないように）
-    /// 5. パスが無い → URL が読めれば URL（Storage の URL でないごく古いデータ）、読めなければ読めない
+    /// 5. パスが無い → URL が読めれば URL、読めなければ読めない
+    ///
+    /// 「URL が読める」は、URL が決まり（StorageImageURL）に合うこと。合わない URL からはパスも取り出さない。
     ///
     /// 判定をパスの区分で行うのは、Storage のルールもパスの区分で読める人を決めているため（storage.rules）。
     /// - Parameters:
     ///   - image: 投稿の画像の情報
     ///   - prefersThumbnail: サムネイルを読みたいか（一覧など）。false なら本体
+    ///   - policy: 通す URL の決まり（既定は今の Firebase の接続情報から作ったもの）
     /// - Returns: 読み方
-    static func resolve(_ image: ImageInfo, prefersThumbnail: Bool) -> PostImageSource {
+    static func resolve(
+        _ image: ImageInfo,
+        prefersThumbnail: Bool,
+        policy: StorageImageURL.Policy? = StorageImageURL.live
+    ) -> PostImageSource {
         // 本体のパスと URL
-        var path = nonEmpty(image.storagePath) ?? pathInDownloadURL(image.url)
+        var path = nonEmpty(image.storagePath) ?? pathInDownloadURL(image.url, policy: policy)
         var urlString: String? = image.url
 
         // サムネイルが欲しく、その手がかり（パスか URL）があるときだけサムネイルに替える。
         // 手がかりが何も無いときは本体に落とす（今の画面の「サムネイルが無ければ本体」と同じ）
         if prefersThumbnail {
-            let thumbnailPath = nonEmpty(image.thumbnailStoragePath) ?? pathInDownloadURL(image.thumbnail)
-            if thumbnailPath != nil || readableURL(image.thumbnail) != nil {
+            let thumbnailPath = nonEmpty(image.thumbnailStoragePath) ?? pathInDownloadURL(image.thumbnail, policy: policy)
+            if thumbnailPath != nil || readableURL(image.thumbnail, policy: policy) != nil {
                 path = thumbnailPath
                 urlString = image.thumbnail
             }
         }
 
         if let path {
-            if isPublicPath(path), let url = readableURL(urlString) {
+            if isPublicPath(path), let url = readableURL(urlString, policy: policy) {
                 return .remote(url)
             }
             // 区分の無い古い置き場は、ルールに読む行が無い＝パスでは誰も読めない。URL だけが頼り
             if isLegacyPathWithoutSegment(path) {
-                if let url = readableURL(urlString) {
+                if let url = readableURL(urlString, policy: policy) {
                     return .remote(url)
                 }
                 return .unavailable
             }
             return .storage(path)
         }
-        if let url = readableURL(urlString) {
+        if let url = readableURL(urlString, policy: policy) {
             return .remote(url)
         }
         return .unavailable
@@ -88,16 +95,15 @@ enum PostImageSource: Equatable {
         path.split(separator: "/", omittingEmptySubsequences: false).count < 4
     }
 
-    /// Storage のダウンロード URL の文字列から、Storage のパスを取り出す（取り出せなければ nil）
-    private static func pathInDownloadURL(_ string: String?) -> String? {
-        guard let url = readableURL(string) else { return nil }
+    /// Storage のダウンロード URL の文字列から、Storage のパスを取り出す（決まりに合わない・取り出せなければ nil）
+    private static func pathInDownloadURL(_ string: String?, policy: StorageImageURL.Policy?) -> String? {
+        guard let url = readableURL(string, policy: policy) else { return nil }
         return nonEmpty(StorageService.storagePathFromDownloadURL(url))
     }
 
-    /// 空でなく、URL として読める文字列だけを URL にする
-    private static func readableURL(_ string: String?) -> URL? {
-        guard let string, !string.isEmpty else { return nil }
-        return URL(string: string)
+    /// 決まり（StorageImageURL）に合う Storage の画像の URL だけを URL にする
+    private static func readableURL(_ string: String?, policy: StorageImageURL.Policy?) -> URL? {
+        StorageImageURL.url(from: string, policy: policy)
     }
 
     /// 空の文字列は「無い」と同じに扱う

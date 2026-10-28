@@ -67,6 +67,21 @@ final class ImageDownloadServiceTests: XCTestCase {
         }
     }
 
+    func testURLVersionAcceptsOnlyStorageImageURL() async {
+        // URL 版は、決まり（StorageImageURL.live）に合う URL だけ読みに行く。
+        // テスト中の決まりは Emulator（http・127.0.0.1:9199・demo-soramoyou-security.appspot.com）なので、ホストが localhost の URL は通さない
+        do {
+            _ = try await ImageDownloadService.shared.downloadImage(
+                from: "http://localhost:9199/v0/b/demo-soramoyou-security.appspot.com/o/a.jpg"
+            )
+            XCTFail("エラーにならなかった")
+        } catch ImageDownloadError.unsafeURL {
+            // 期待どおり
+        } catch {
+            XCTFail("違うエラー: \(error)")
+        }
+    }
+
     func testDownloadImagesStopsAtUnavailable() async {
         // 再編集・「すべて保存」：読めない 1 枚があれば、そこで失敗する（URL 版で URL が空の 1 枚があるときと同じ）
         do {

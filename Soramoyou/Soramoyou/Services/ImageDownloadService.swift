@@ -58,18 +58,14 @@ final class ImageDownloadService: ImageDownloadServiceProtocol, @unchecked Senda
 
     private init() {}
 
-    private static let allowedSchemes: Set<String> = ["https", "http"]
-
     /// Kingfisher キャッシュから画像を取得（キャッシュミス時はダウンロード）
     func downloadImage(from urlString: String) async throws -> UIImage {
-        guard let url = URL(string: urlString) else {
+        guard URL(string: urlString) != nil else {
             throw ImageDownloadError.invalidURL
         }
 
-        // セキュリティ: https/http のみ許可（file:// や data: を防止）
-        guard let scheme = url.scheme?.lowercased(),
-              Self.allowedSchemes.contains(scheme)
-        else {
+        // 決まり（StorageImageURL.live）に合う Storage の画像の URL だけ通す
+        guard let url = StorageImageURL.url(from: urlString, policy: StorageImageURL.live) else {
             throw ImageDownloadError.unsafeURL
         }
 
@@ -127,7 +123,7 @@ final class ImageDownloadService: ImageDownloadServiceProtocol, @unchecked Senda
 
     /// 投稿の画像を、読み方（`PostImageSource.resolve` の結果）から取得する
     ///
-    /// - `.remote(URL)`：上の URL 版をそのまま使う（https/http の検査・標準のキャッシュ・鍵は URL の文字列＝今までと同じ）
+    /// - `.remote(URL)`：上の URL 版をそのまま使う（URL の確かめ・標準のキャッシュ・鍵は URL の文字列＝今までと同じ）
     /// - `.storage(パス)`：ダウンロード URL を使わず、Storage のパスで取得する（毎回 Storage のルールを通る）。
     ///   専用のキャッシュ（`PostStorageImageCache`）にあればそれを使い、無ければ Storage から取って入れる
     /// - `.unavailable`：読みに行かず `invalidURL`（URL 版で URL が空のときと同じ「画像のURLが無効です」）

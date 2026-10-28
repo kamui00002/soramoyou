@@ -331,22 +331,9 @@ struct GalleryGridItem: View {
             ZStack(alignment: .bottomLeading) {
                 // サムネイル画像
                 if let firstImage = post.images.first {
-                    if let thumbnailURL = firstImage.thumbnail, let url = URL(string: thumbnailURL) {
-                        KFImage(url)
-                            .placeholder {
-                                Rectangle()
-                                    .fill(Color.gray.opacity(0.3))
-                                    .overlay(
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    )
-                            }
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: geometry.size.width, height: geometry.size.width)
-                            .clipped()
-                    } else if let imageURL = URL(string: firstImage.url) {
-                        KFImage(imageURL)
+                    // サムネイル（無ければ本体）を読み方（PostImageSource）で読む
+                    if let image = KFImage.post(PostImageSource.resolve(firstImage, prefersThumbnail: true)) {
+                        image
                             .placeholder {
                                 Rectangle()
                                     .fill(Color.gray.opacity(0.3))
@@ -406,9 +393,9 @@ struct GalleryMosaicItem: View {
         ZStack(alignment: .bottomLeading) {
             // サムネイル画像（比率を保って角丸フレームいっぱいに敷く）
             if let firstImage = post.images.first,
-               let url = URL(string: firstImage.thumbnail ?? firstImage.url)
+               let image = KFImage.post(PostImageSource.resolve(firstImage, prefersThumbnail: true))
             {
-                KFImage(url)
+                image
                     .placeholder {
                         Rectangle()
                             .fill(Color.gray.opacity(0.3))

@@ -15,6 +15,15 @@
 import XCTest
 
 final class PostImageSourceTests: XCTestCase {
+    // MARK: - 通す URL の決まり（下の入力の URL に合わせたテスト用）
+
+    private let policy = StorageImageURL.Policy(
+        scheme: "https",
+        host: "firebasestorage.googleapis.com",
+        ports: [nil, 443],
+        bucket: "demo-bucket.appspot.com"
+    )
+
     // MARK: - 入力に使う URL（Firebase Storage のダウンロード URL の形）
 
     private let publicBodyURL = "https://firebasestorage.googleapis.com/v0/b/demo-bucket.appspot.com/o/posts%2Fu1%2Fpublic%2Fa.jpg?alt=media&token=t1"
@@ -50,73 +59,73 @@ final class PostImageSourceTests: XCTestCase {
     func testPublicBodyUsesURL() {
         // 公開は今までどおり URL で読む
         let info = image(url: publicBodyURL, storagePath: "posts/u1/public/a.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .remote(URL(string: publicBodyURL)!))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .remote(URL(string: publicBodyURL)!))
     }
 
     func testFollowersBodyUsesStoredPathEvenWithURL() {
         // フォロワー限定は、トークン付きの URL が残っていてもパスで読む
         let info = image(url: followersBodyURL, storagePath: "posts/u1/followers/a.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .storage("posts/u1/followers/a.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .storage("posts/u1/followers/a.jpg"))
     }
 
     func testPrivateBodyUsesStoredPathEvenWithURL() {
         // 非公開も同じ
         let info = image(url: privateBodyURL, storagePath: "posts/u1/private/a.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .storage("posts/u1/private/a.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .storage("posts/u1/private/a.jpg"))
     }
 
     func testFollowersBodyWithEmptyURLUsesStoredPath() {
         // 新しい版が書く形（url は空・パスだけ）
         let info = image(url: "", storagePath: "posts/u1/followers/a.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .storage("posts/u1/followers/a.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .storage("posts/u1/followers/a.jpg"))
     }
 
     func testOldFollowersBodyWithoutStoredPathUsesPathFromURL() {
         // storagePath の無い古い投稿は、URL からパスを取り出して読む
         let info = image(url: followersBodyURL)
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .storage("posts/u1/followers/a.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .storage("posts/u1/followers/a.jpg"))
     }
 
     func testEmptyStoredPathIsTreatedAsMissing() {
         // 空の storagePath は無いのと同じ（URL から取り出す）
         let info = image(url: followersBodyURL, storagePath: "")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .storage("posts/u1/followers/a.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .storage("posts/u1/followers/a.jpg"))
     }
 
     func testStoredPathWinsOverPathInURL() {
         // storagePath と URL の中のパスが食い違うときは、storagePath を使う（URL の public を信じない）
         let info = image(url: publicBodyURL, storagePath: "posts/u1/followers/a.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .storage("posts/u1/followers/a.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .storage("posts/u1/followers/a.jpg"))
     }
 
     func testPublicPathWithEmptyURLUsesStoredPath() {
         // 公開のパスでも URL が空なら、パスで読む（公開のパスは誰でも読める）
         let info = image(url: "", storagePath: "posts/u1/public/a.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .storage("posts/u1/public/a.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .storage("posts/u1/public/a.jpg"))
     }
 
     func testSegmentMustBeExactlyPublic() {
         // 3 つ目がちょうど public のときだけ URL（大文字・似た名前は公開扱いにしない）
         let info = image(url: publicBodyURL, storagePath: "posts/u1/Public/a.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .storage("posts/u1/Public/a.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .storage("posts/u1/Public/a.jpg"))
     }
 
     func testFollowersOriginalUsesStoredPath() {
         // 原画像（originals/）も同じ判定
         let info = image(url: followersOriginalURL, storagePath: "originals/u1/followers/o.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .storage("originals/u1/followers/o.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .storage("originals/u1/followers/o.jpg"))
     }
 
-    func testURLWithoutStoragePathUsesURL() {
-        // パスが無く、URL からも取り出せない（Storage の URL でない）ごく古いデータは URL で読む
+    func testURLOutsidePolicyWithoutPathIsUnavailable() {
+        // パスが無く、URL も決まりに合わないときは読めない
         let info = image(url: "https://example.com/a.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .remote(URL(string: "https://example.com/a.jpg")!))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .unavailable)
     }
 
     func testNothingIsUnavailable() {
         // URL もパスも無い
         let info = image(url: "")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .unavailable)
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .unavailable)
     }
 
     // MARK: - サムネイル
@@ -129,13 +138,13 @@ final class PostImageSourceTests: XCTestCase {
             storagePath: "posts/u1/public/a.jpg",
             thumbnailStoragePath: "thumbnails/u1/public/a_thumb.jpg"
         )
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .remote(URL(string: publicThumbURL)!))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true, policy: policy), .remote(URL(string: publicThumbURL)!))
     }
 
     func testPublicWithoutThumbnailFallsBackToBodyURL() {
         // サムネイルの無い公開の投稿は、本体の URL
         let info = image(url: publicBodyURL, storagePath: "posts/u1/public/a.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .remote(URL(string: publicBodyURL)!))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true, policy: policy), .remote(URL(string: publicBodyURL)!))
     }
 
     func testFollowersThumbnailUsesStoredThumbnailPath() {
@@ -145,7 +154,7 @@ final class PostImageSourceTests: XCTestCase {
             storagePath: "posts/u1/followers/a.jpg",
             thumbnailStoragePath: "thumbnails/u1/followers/a_thumb.jpg"
         )
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .storage("thumbnails/u1/followers/a_thumb.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true, policy: policy), .storage("thumbnails/u1/followers/a_thumb.jpg"))
     }
 
     func testStoredThumbnailPathWinsOverThumbnailURL() {
@@ -156,7 +165,7 @@ final class PostImageSourceTests: XCTestCase {
             storagePath: "posts/u1/followers/a.jpg",
             thumbnailStoragePath: "thumbnails/u1/followers/a_thumb.jpg"
         )
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .storage("thumbnails/u1/followers/a_thumb.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true, policy: policy), .storage("thumbnails/u1/followers/a_thumb.jpg"))
     }
 
     func testStoredThumbnailPathWinsOverPathInThumbnailURL() {
@@ -167,19 +176,19 @@ final class PostImageSourceTests: XCTestCase {
             storagePath: "posts/u1/followers/a.jpg",
             thumbnailStoragePath: "thumbnails/u1/followers/a_thumb.jpg"
         )
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .storage("thumbnails/u1/followers/a_thumb.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true, policy: policy), .storage("thumbnails/u1/followers/a_thumb.jpg"))
     }
 
     func testOldFollowersThumbnailUsesPathFromThumbnailURL() {
         // thumbnailStoragePath の無い古い投稿は、サムネイルの URL からパスを取り出す（本体に落とさない）
         let info = image(url: followersBodyURL, thumbnail: followersThumbURL)
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .storage("thumbnails/u1/followers/a_thumb.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true, policy: policy), .storage("thumbnails/u1/followers/a_thumb.jpg"))
     }
 
     func testFollowersWithoutThumbnailFallsBackToBodyPath() {
         // サムネイルの手がかりが何も無ければ、本体のパス
         let info = image(url: "", storagePath: "posts/u1/followers/a.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .storage("posts/u1/followers/a.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true, policy: policy), .storage("posts/u1/followers/a.jpg"))
     }
 
     func testPrivateThumbnailUsesStoredThumbnailPath() {
@@ -189,7 +198,7 @@ final class PostImageSourceTests: XCTestCase {
             storagePath: "posts/u1/private/a.jpg",
             thumbnailStoragePath: "thumbnails/u1/private/a_thumb.jpg"
         )
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .storage("thumbnails/u1/private/a_thumb.jpg"))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true, policy: policy), .storage("thumbnails/u1/private/a_thumb.jpg"))
     }
 
     // MARK: - 区分の無い古い置き場（2026-01-16 より前の投稿）
@@ -197,24 +206,62 @@ final class PostImageSourceTests: XCTestCase {
     func testLegacyBodyWithoutSegmentUsesURL() {
         // 区分の無い古い本体は、Storage のルールに読む行が無い（パスで読むと本人でも断られる）ので URL で読む
         let info = image(url: legacyBodyURL)
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .remote(URL(string: legacyBodyURL)!))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .remote(URL(string: legacyBodyURL)!))
     }
 
     func testLegacyStoredPathUsesURL() {
         // storagePath に古い形が入っていても同じ（URL で読む）
         let info = image(url: legacyBodyURL, storagePath: "posts/u1/old.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .remote(URL(string: legacyBodyURL)!))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .remote(URL(string: legacyBodyURL)!))
     }
 
     func testLegacyThumbnailUsesThumbnailURL() {
         // 古いサムネイル（thumbnails/{uid}/{名前}）も、サムネイルの URL で読む（本体に落とさない）
         let info = image(url: legacyBodyURL, thumbnail: legacyThumbURL)
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true), .remote(URL(string: legacyThumbURL)!))
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true, policy: policy), .remote(URL(string: legacyThumbURL)!))
     }
 
     func testLegacyPathWithEmptyURLIsUnavailable() {
         // 古い形で URL も無いときは、パスで読みにいっても必ず断られるので「読めない」
         let info = image(url: "", storagePath: "posts/u1/old.jpg")
-        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false), .unavailable)
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .unavailable)
+    }
+
+    // MARK: - URL で読むのは決まり（StorageImageURL）に合う URL だけ
+
+    func testPublicURLWithPort443UsesSameURL() {
+        // ホストのあとに :443 が付いた公開の URL は、その値のまま URL で読む
+        let info = image(
+            url: "https://firebasestorage.googleapis.com:443/v0/b/demo-bucket.appspot.com/o/posts%2Fu1%2Fpublic%2Fa.jpg?alt=media&token=t9",
+            storagePath: "posts/u1/public/a.jpg"
+        )
+        XCTAssertEqual(
+            PostImageSource.resolve(info, prefersThumbnail: false, policy: policy),
+            .remote(URL(string: "https://firebasestorage.googleapis.com:443/v0/b/demo-bucket.appspot.com/o/posts%2Fu1%2Fpublic%2Fa.jpg?alt=media&token=t9")!)
+        )
+    }
+
+    func testURLOutsidePolicyWithPublicPathInsideIsUnavailable() {
+        // 決まりに合わない URL からはパスを取り出さない（パスも URL も無い＝読めない）
+        let info = image(url: "https://example.com/v0/b/demo-bucket.appspot.com/o/posts%2Fu1%2Fpublic%2Fa.jpg?alt=media&token=t10")
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .unavailable)
+    }
+
+    func testPublicStoredPathWithURLOutsidePolicyUsesStoredPath() {
+        // 公開のパスでも、URL が決まりに合わなければパスで読む
+        let info = image(url: "https://example.com/a.jpg", storagePath: "posts/u1/public/a.jpg")
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .storage("posts/u1/public/a.jpg"))
+    }
+
+    func testLegacyPathWithURLOutsidePolicyIsUnavailable() {
+        // 区分の無い古い置き場で、URL が決まりに合わなければ読めない
+        let info = image(url: "https://example.com/a.jpg", storagePath: "posts/u1/old.jpg")
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: false, policy: policy), .unavailable)
+    }
+
+    func testThumbnailURLOutsidePolicyFallsBackToBody() {
+        // サムネイルの URL が決まりに合わず、サムネイルのパスも無ければ、本体で読む
+        let info = image(url: publicBodyURL, thumbnail: "https://example.com/a_thumb.jpg", storagePath: "posts/u1/public/a.jpg")
+        XCTAssertEqual(PostImageSource.resolve(info, prefersThumbnail: true, policy: policy), .remote(URL(string: publicBodyURL)!))
     }
 }
