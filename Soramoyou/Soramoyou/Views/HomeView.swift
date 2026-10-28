@@ -1762,9 +1762,25 @@ struct PostDetailImageView: View {
 // MARK: - App Title View
 
 struct AppTitleView: View {
+    /// 見出しのロゴ画像のアセット名（Assets.xcassets の SoramoyouLogo.imageset）
+    ///
+    /// 最低 iOS 16 なので、アセットから自動で作られる名前付きの参照（生成シンボル `Image(.xxx)`。iOS 17〜）が使えない。
+    /// そのため文字列で引く。名前を打ち間違えてもビルドは通ってしまうので、
+    /// 打ち間違いは HomeToolbarImageAssetTests で拾う
+    static let logoAssetName = "SoramoyouLogo"
+
     var body: some View {
         VStack(spacing: 2) {
-            GradientTitleView(title: "そらもよう", fontSize: 28)
+            // ⭐️ PR-H: 文字の題をロゴ画像に替えた（利用者の決定 2026-10-24）。副題は文字のまま
+            //    （ロゴの絵の副題は 30pt の高さだと約 6pt になって読めないので、絵からは切り落としてある）
+            Image(Self.logoAssetName)
+                // ツールバーの中の画像は、何もしないと単色（テンプレート）に塗られることがあるので元の色で描く
+                .renderingMode(.original)
+                .resizable()
+                .scaledToFit()
+                .frame(height: 30)
+                // 画像の名前でなく、前の文字の題と同じ「そらもよう」と読み上げる
+                .accessibilityLabel("そらもよう")
             Text("空を撮る、空を集める")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundColor(.secondary)

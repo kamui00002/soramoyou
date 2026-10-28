@@ -25,6 +25,13 @@ struct SoratomoEntryButton: View {
     /// そらともを使えるかの判定（アプリ全体で 1 つ）
     @EnvironmentObject private var soratomoGate: SoratomoFeatureGate
 
+    /// ボタンの絵（そらともの空の地球）のアセット名（Assets.xcassets の SoratomoGroupIcon.imageset）
+    ///
+    /// 最低 iOS 16 なので、アセットから自動で作られる名前付きの参照（生成シンボル `Image(.xxx)`。iOS 17〜）が使えない。
+    /// そのため文字列で引く。名前を打ち間違えてもビルドは通ってしまうので、
+    /// 打ち間違いは HomeToolbarImageAssetTests で拾う
+    static let iconAssetName = "SoratomoGroupIcon"
+
     // MARK: - Body
 
     var body: some View {
@@ -37,8 +44,13 @@ struct SoratomoEntryButton: View {
                 // 計測の `soratomo_opened` は、開いた一覧の画面が記録するので、ここでは記録しない
                 SoratomoRouter.shared.openFromEntry()
             } label: {
-                Image(systemName: "person.2.circle")
-                    .font(.system(size: 20, weight: .regular))
+                // ⭐️ PR-H: 記号（person.2.circle）から、そらともの絵（空の地球）に替えた（利用者の決定 2026-10-24）
+                Image(Self.iconAssetName)
+                    // ツールバーの中の画像は、何もしないと単色（テンプレート）に塗られることがあるので元の色で描く
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 30, height: 30)
             }
             // VoiceOver では「そらとも」と読み上げ、押すと何が起きるかを補足する
             .accessibilityLabel("そらとも")
