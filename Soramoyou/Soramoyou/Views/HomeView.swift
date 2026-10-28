@@ -292,10 +292,15 @@ struct HomeView: View {
             if segment == .forYou, !hasLoadedForYouFeedOnce {
                 // 「あなた向け」をまだ一度も読み終えていない（遅延読み込みの前・最中）⭐️ PR-H
                 // めくる途中に隣のページとして見えても「投稿はまだありません」と誤って見せない
-                LoadingStateView(type: .initial)
+                // ⭐️ PR-H 光は「このページが選ばれているときだけ」脈打たせる（下の初回読み込み中も同じ）。
+                //    めくり切り替えでは選ばれていないページも生きていて、そこの光が裏で回り続けるのを防ぐ。
+                //    選ばれた時点（selectedSegment が変わった時点）で動き始める。
+                LoadingStateView(type: .initial, pulses: selectedSegment == segment)
             } else if pageViewModel.isLoading, pageViewModel.posts.isEmpty {
                 // 初回読み込み中 ☁️
-                LoadingStateView(type: .initial)
+                // ⭐️ PR-H 上と同じ理由で、選ばれているページだけ光を脈打たせる
+                //    （片方だけだと、「すべて」の初回読み込み中にあなた向けへめくった場合に裏で回り続ける）
+                LoadingStateView(type: .initial, pulses: selectedSegment == segment)
             } else if let error = pageViewModel.lastError, pageViewModel.posts.isEmpty {
                 // エラー発生時（投稿が空の場合）☁️
                 ErrorStateView(
