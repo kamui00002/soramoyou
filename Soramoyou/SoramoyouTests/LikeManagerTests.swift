@@ -17,15 +17,17 @@ final class LikeManagerTests: XCTestCase {
     // MARK: - Helpers
 
     /// ログイン済みの Manager を組み立てる
+    /// 計装の送り先は既定で記録するだけの偽物（テストから本物の LoggingService.shared へ送らない）⭐️ PR-H
     private func makeManager(
         firestore: MockFirestoreServiceForLikes,
-        userId: String? = "me"
+        userId: String? = "me",
+        logger: LikeEventLogging = LikeEventLoggerStub()
     ) -> LikeManager {
         let auth = MockAuthService()
         if let userId {
             auth.currentUserValue = User(id: userId)
         }
-        return LikeManager(firestoreService: firestore, authService: auth)
+        return LikeManager(firestoreService: firestore, authService: auth, logger: logger)
     }
 
     /// 一覧から読んだ時点の投稿（likesCount はその時点のサーバー値）
@@ -58,7 +60,7 @@ final class LikeManagerTests: XCTestCase {
         let manager = makeManager(firestore: mock)
         let post = makePost(id: "p1", likesCount: 5)
 
-        await manager.toggleLike(post: post)
+        await manager.toggleLike(post: post, source: "home_card", method: .button)
 
         XCTAssertTrue(manager.isLiked("p1"))
         XCTAssertTrue(mock.serverLikedPostIds.contains("p1"))
@@ -76,7 +78,7 @@ final class LikeManagerTests: XCTestCase {
         await manager.checkLikeStatus(for: [post])
         XCTAssertTrue(manager.isLiked("p1"), "前提: サーバー値でいいね済みになっている")
 
-        await manager.toggleLike(post: post)
+        await manager.toggleLike(post: post, source: "home_card", method: .button)
 
         XCTAssertFalse(manager.isLiked("p1"))
         XCTAssertFalse(mock.serverLikedPostIds.contains("p1"))
@@ -94,7 +96,7 @@ final class LikeManagerTests: XCTestCase {
         let post = makePost(id: "p1", likesCount: 6)
         XCTAssertFalse(manager.isLiked("p1"), "前提: 手元はいいね済みを知らない")
 
-        await manager.toggleLike(post: post)
+        await manager.toggleLike(post: post, source: "home_card", method: .button)
 
         XCTAssertTrue(mock.serverLikedPostIds.contains("p1"), "サーバーのいいねが消えてはいけない")
         XCTAssertEqual(mock.serverLikesCounts["p1"], 6, "サーバーの数が減っても増えてもいけない")
@@ -110,7 +112,7 @@ final class LikeManagerTests: XCTestCase {
         let manager = makeManager(firestore: mock)
         let stalePost = makePost(id: "p1", likesCount: 5)
 
-        await manager.toggleLike(post: stalePost)
+        await manager.toggleLike(post: stalePost, source: "home_card", method: .button)
         await manager.checkLikeStatus(for: [stalePost])
 
         XCTAssertTrue(manager.isLiked("p1"))
@@ -124,7 +126,7 @@ final class LikeManagerTests: XCTestCase {
         mock.serverLikesCounts["p1"] = 5
         let manager = makeManager(firestore: mock)
 
-        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5))
+        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5), source: "home_card", method: .button)
 
         XCTAssertEqual(manager.likeCount(for: makePost(id: "p1", likesCount: 6)), 6, "自分の +1 を二重に足さない")
         XCTAssertEqual(manager.likeCount(for: makePost(id: "p1", likesCount: 8)), 8, "他の人のいいねも含む最新値を出す")
@@ -156,12 +158,12 @@ final class LikeManagerTests: XCTestCase {
         let post = makePost(id: "p1", likesCount: 5)
         mock.holdNextWrite = true
 
-        let firstTap = Task { await manager.toggleLike(post: post) }
+        let firstTap = Task { await manager.toggleLike(post: post, source: "home_card", method: .button) }
         // 1 回目が書き込みの途中で「実際に止まった」ところまで待つ。
         // ⚠️ 回数（writeCallCount）で待つと、止める準備の前に次へ進んでしまう。
         await waitUntil { mock.isHoldingWrite }
         XCTAssertTrue(manager.isLiked("p1"), "書き込み中も押した直後の状態（いいね）が出ている")
-        await manager.toggleLike(post: post) // 1 回目が終わる前の 2 回目
+        await manager.toggleLike(post: post, source: "home_card", method: .button) // 1 回目が終わる前の 2 回目
         mock.releaseHeldWrite()
         await firstTap.value
 
@@ -177,7 +179,7 @@ final class LikeManagerTests: XCTestCase {
         let manager = makeManager(firestore: mock)
         let post = makePost(id: "p1", likesCount: 5)
 
-        await manager.toggleLike(post: post)
+        await manager.toggleLike(post: post, source: "home_card", method: .button)
 
         XCTAssertEqual(mock.writeCallCount, 1, "サービスを呼んだ上で失敗したことを確かめる")
         XCTAssertFalse(manager.isLiked("p1"))
@@ -190,7 +192,7 @@ final class LikeManagerTests: XCTestCase {
         let mock = MockFirestoreServiceForLikes()
         let manager = makeManager(firestore: mock, userId: nil)
 
-        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5))
+        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5), source: "home_card", method: .button)
 
         XCTAssertTrue(manager.showLoginPrompt)
         XCTAssertEqual(mock.writeCallCount, 0)
@@ -204,7 +206,7 @@ final class LikeManagerTests: XCTestCase {
         let mock = MockFirestoreServiceForLikes()
         mock.serverLikesCounts["p1"] = 5
         let manager = makeManager(firestore: mock)
-        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5))
+        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5), source: "home_card", method: .button)
         XCTAssertEqual(manager.likeCount(for: makePost(id: "p1", likesCount: 5)), 6, "前提: 押した結果が出ている")
 
         // 同じアカウントの別端末でいいねを外した（サーバーは 5 に戻る）
@@ -226,7 +228,7 @@ final class LikeManagerTests: XCTestCase {
         let post = makePost(id: "p1", likesCount: 5)
         mock.holdNextWrite = true
 
-        let tap = Task { await manager.toggleLike(post: post) }
+        let tap = Task { await manager.toggleLike(post: post, source: "home_card", method: .button) }
         await waitUntil { mock.isHoldingWrite }
         // 書き込み前のサーバー（いいね無し）を読んだ結果が、書き込み中に届く
         await manager.checkLikeStatus(for: [post])
@@ -239,6 +241,7 @@ final class LikeManagerTests: XCTestCase {
     }
 
     // MARK: - サインアウト・アカウント切替（#147）⭐️
+
     //
     // LikeManager は App レベルの @StateObject で、サインアウトしても破棄されない。
     // 共有端末で次のユーザーに、前のユーザーのいいね（ピンクのハート）が見えてはいけない。
@@ -250,7 +253,7 @@ final class LikeManagerTests: XCTestCase {
         mock.serverLikedPostIds = ["p2"]
         let manager = makeManager(firestore: mock)
         let post = makePost(id: "p1", likesCount: 5)
-        await manager.toggleLike(post: post)
+        await manager.toggleLike(post: post, source: "home_card", method: .button)
         await manager.checkLikeStatus(for: [makePost(id: "p2", likesCount: 1)])
         manager.showLoginPrompt = true
         XCTAssertTrue(manager.isLiked("p1"))
@@ -269,11 +272,11 @@ final class LikeManagerTests: XCTestCase {
         let mock = MockFirestoreServiceForLikes()
         mock.serverLikesCounts["p1"] = 5
         let auth = makeSignedInAuth(userId: "me")
-        let manager = LikeManager(firestoreService: mock, authService: auth)
+        let manager = LikeManager(firestoreService: mock, authService: auth, logger: LikeEventLoggerStub())
         let post = makePost(id: "p1", likesCount: 5)
         mock.holdNextWrite = true
 
-        let tap = Task { await manager.toggleLike(post: post) }
+        let tap = Task { await manager.toggleLike(post: post, source: "home_card", method: .button) }
         await waitUntil { mock.isHoldingWrite }
         switchAccount(auth, to: "you", manager: manager)
         mock.releaseHeldWrite()
@@ -289,14 +292,14 @@ final class LikeManagerTests: XCTestCase {
         mock.serverLikesCounts["p1"] = 5
         mock.serverLikedPostIds = ["p1"]
         let auth = makeSignedInAuth(userId: "me")
-        let manager = LikeManager(firestoreService: mock, authService: auth)
+        let manager = LikeManager(firestoreService: mock, authService: auth, logger: LikeEventLoggerStub())
         let post = makePost(id: "p1", likesCount: 5)
         await manager.checkLikeStatus(for: [post])
         XCTAssertTrue(manager.isLiked("p1"), "前提: いいね済み")
         mock.writeError = FirestoreServiceError.notFound
         mock.holdNextWrite = true
 
-        let tap = Task { await manager.toggleLike(post: post) } // 外す → 失敗する
+        let tap = Task { await manager.toggleLike(post: post, source: "home_card", method: .button) } // 外す → 失敗する
         await waitUntil { mock.isHoldingWrite }
         switchAccount(auth, to: "you", manager: manager)
         mock.releaseHeldWrite()
@@ -310,7 +313,7 @@ final class LikeManagerTests: XCTestCase {
         let mock = MockFirestoreServiceForLikes()
         mock.serverLikedPostIds = ["p1"]
         let auth = makeSignedInAuth(userId: "me")
-        let manager = LikeManager(firestoreService: mock, authService: auth)
+        let manager = LikeManager(firestoreService: mock, authService: auth, logger: LikeEventLoggerStub())
         mock.holdNextCheck = true
 
         let check = Task { await manager.checkLikeStatus(for: [self.makePost(id: "p1", likesCount: 1)]) }
@@ -334,6 +337,105 @@ final class LikeManagerTests: XCTestCase {
         auth.currentUserValue = nil
         manager.clearOnSignOut()
         auth.currentUserValue = User(id: userId)
+    }
+
+    // MARK: - 計装 like_toggled ⭐️ PR-H
+
+    // 書き込みに成功し、アカウントも変わっていないときだけ 1 件送る。失敗・ゲストでは送らない。
+    // 送るのは is_liked・method・source・is_own_post の 4 つだけ（UID は送らない）。
+
+    /// 16. ボタンでいいねに成功したら `like_toggled` を 1 件送る（付けた・ボタン・渡した発生源・他人の投稿）
+    func testLikeSuccessLogsLikeToggled() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikesCounts["p1"] = 5
+        let logger = LikeEventLoggerStub()
+        let manager = makeManager(firestore: mock, logger: logger)
+
+        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5), source: "gallery_detail", method: .button)
+
+        XCTAssertEqual(logger.events.count, 1)
+        let event = logger.events.first
+        XCTAssertEqual(event?.name, "like_toggled")
+        XCTAssertEqual(event?.parameters["is_liked"] as? Bool, true)
+        XCTAssertEqual(event?.parameters["method"] as? String, "button")
+        XCTAssertEqual(event?.parameters["source"] as? String, "gallery_detail", "渡した発生源をそのまま送る")
+        XCTAssertEqual(event?.parameters["is_own_post"] as? Bool, false)
+        XCTAssertEqual(event?.parameters.keys.sorted(), ["is_liked", "is_own_post", "method", "source"], "送るのはこの 4 つだけ（UID は送らない）")
+    }
+
+    /// 17. 写真の 2 回タップでいいねしたら、`method` を "double_tap" で送る
+    func testDoubleTapLikeLogsDoubleTapMethod() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikesCounts["p1"] = 5
+        let logger = LikeEventLoggerStub()
+        let manager = makeManager(firestore: mock, logger: logger)
+
+        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5), source: "home_card", method: .doubleTap)
+
+        XCTAssertEqual(logger.events.count, 1)
+        XCTAssertEqual(logger.events.first?.name, "like_toggled")
+        XCTAssertEqual(logger.events.first?.parameters["method"] as? String, "double_tap")
+    }
+
+    /// 18. いいねを外すのに成功したら、`is_liked` を false で送る（状態の読み直しでは送らない）
+    func testUnlikeSuccessLogsIsLikedFalse() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikedPostIds = ["p1"]
+        mock.serverLikesCounts["p1"] = 6
+        let logger = LikeEventLoggerStub()
+        let manager = makeManager(firestore: mock, logger: logger)
+        let post = makePost(id: "p1", likesCount: 6)
+        await manager.checkLikeStatus(for: [post])
+        XCTAssertTrue(manager.isLiked("p1"), "前提: サーバー値でいいね済みになっている")
+        XCTAssertEqual(logger.events.count, 0, "前提: 状態の読み直しでは送らない")
+
+        await manager.toggleLike(post: post, source: "home_card", method: .button)
+
+        XCTAssertEqual(logger.events.count, 1)
+        XCTAssertEqual(logger.events.first?.name, "like_toggled")
+        XCTAssertEqual(logger.events.first?.parameters["is_liked"] as? Bool, false)
+    }
+
+    /// 19. 書き込みが失敗したら送らない（画面は元に戻るので、付いた／外れたことにしない）
+    func testFailureDoesNotLogLikeToggled() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikesCounts["p1"] = 5
+        mock.writeError = NSError(domain: "test", code: 1)
+        let logger = LikeEventLoggerStub()
+        let manager = makeManager(firestore: mock, logger: logger)
+
+        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5), source: "home_card", method: .button)
+
+        XCTAssertEqual(mock.writeCallCount, 1, "サービスを呼んだ上で失敗したことを確かめる")
+        XCTAssertEqual(logger.events.count, 0)
+    }
+
+    /// 20. ゲスト（未ログイン）は送らない（ログイン案内を出すだけ）
+    func testGuestDoesNotLogLikeToggled() async {
+        let mock = MockFirestoreServiceForLikes()
+        let logger = LikeEventLoggerStub()
+        let manager = makeManager(firestore: mock, userId: nil, logger: logger)
+
+        await manager.toggleLike(post: makePost(id: "p1", likesCount: 5), source: "home_card", method: .button)
+
+        XCTAssertTrue(manager.showLoginPrompt, "前提: ゲストの道を通った")
+        XCTAssertEqual(logger.events.count, 0)
+    }
+
+    /// 21. 自分の投稿にいいねしたら、`is_own_post` を true で送る
+    func testOwnPostLogsIsOwnPostTrue() async {
+        let mock = MockFirestoreServiceForLikes()
+        mock.serverLikesCounts["p1"] = 5
+        let logger = LikeEventLoggerStub()
+        let manager = makeManager(firestore: mock, logger: logger)
+        // makePost は投稿者が "other" 固定なので、自分（"me"）の投稿は直に作る
+        let ownPost = Post(id: "p1", userId: "me", images: [], likesCount: 5)
+
+        await manager.toggleLike(post: ownPost, source: "profile_list", method: .button)
+
+        XCTAssertEqual(logger.events.count, 1)
+        XCTAssertEqual(logger.events.first?.name, "like_toggled")
+        XCTAssertEqual(logger.events.first?.parameters["is_own_post"] as? Bool, true)
     }
 }
 
@@ -420,5 +522,23 @@ final class MockFirestoreServiceForLikes: FirestoreServiceProtocol {
         }
         // 問い合わせた範囲に絞って返す（本物と同じ振る舞い）
         return likedIds
+    }
+}
+
+/// いいねの計装を送らずに記録するだけの偽物 ⭐️ PR-H
+///
+/// DailyPickViewModelTests の `DailyPickEventLoggerStub` と同じ形（あちらは private なので、ここで作る）。
+final class LikeEventLoggerStub: LikeEventLogging {
+    /// 送ったイベント 1 件
+    struct Event {
+        let name: String
+        let parameters: [String: Any]
+    }
+
+    /// 送ったイベント（送った順）
+    private(set) var events: [Event] = []
+
+    func logEvent(_ name: String, parameters: [String: Any]?) {
+        events.append(Event(name: name, parameters: parameters ?? [:]))
     }
 }

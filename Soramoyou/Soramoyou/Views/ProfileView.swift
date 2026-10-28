@@ -665,14 +665,15 @@ struct ProfileView: View {
                             likeCount: likeManager.likeCount(for: post),
                             isFavorited: favoriteManager.isFavorited(post.id),
                             onLikeTapped: {
-                                Task { await likeManager.toggleLike(post: post) }
+                                Task { await likeManager.toggleLike(post: post, source: "profile_list", method: .button) }
                             },
                             onFavoriteTapped: {
                                 Task { await favoriteManager.toggleFavorite(post: post, source: "profile_list") }
                             },
                             onCardTapped: {
                                 selectedPost = post
-                            }
+                            },
+                            shareSource: "profile_list"
                         )
                         .onAppear { loadMorePostsIfLast(post) }
                         .contextMenu {

@@ -19,6 +19,14 @@ struct HomeView: View {
     @EnvironmentObject private var likeManager: LikeManager
     @EnvironmentObject private var favoriteManager: FavoriteManager
     @State private var selectedPost: Post?
+    /// 詳細をカードの写真から広げて開く（ズーム遷移・iOS 18 以上）ための名前空間 ⭐️ PR-H
+    /// カードの写真（matchedTransitionSource）と詳細（navigationTransition(.zoom)）で同じ名前空間を使い、
+    /// 同じ目印どうしを結び付ける。iOS 16・17 では使われない（詳細は今までどおり下から出る）。
+    @Namespace private var detailZoomNamespace
+    /// 詳細を開くときの出どころの目印（`HomeDetailZoom.sourceID` の値）⭐️ PR-H
+    /// カードから開くときは `selectedPost` を入れる前に入れ、今日のおすすめから開くときは nil にする（ズームしない）。
+    /// シートを閉じても消さない（次に開くときに必ず入れ直すので、残っていても使われない）。
+    @State private var detailZoomSourceID: String?
     /// 他ユーザープロフィール画面表示用 ⭐️ Issue #2
     @State private var selectedAuthorUserId: String?
     /// タップされたハッシュタグ。non-nil でタグ詳細画面を全画面提示する ⭐️
@@ -28,15 +36,40 @@ struct HomeView: View {
     @State private var animateCards = false // フィードアニメーション用 ☀️
     /// ホームフィードの表示セグメント（すべて / あなた向け）⭐️ PR-7
     @State private var selectedSegment: HomeFeedSegment = .all
+    /// 切り替えが上のタップか左右のめくりかを見分ける印（home_feed_segment_changed の via）⭐️ PR-H
+    ///
+    /// Picker と TabView は同じ `selectedSegment` を共有するので、onChange だけではどちらで切り替わったか分からない。
+    /// Picker の Binding の set（タップのときだけ通る）で印を立て、`onChange(of: selectedSegment)` で読み出して下ろす。
+    @State private var segmentChangeTracker = HomeFeedSegmentChangeTracker()
+    /// 「あなた向け」の初回の読み込みが終わったか ⭐️ PR-H
+    ///
+    /// めくって切り替える TabView は、隣の「あなた向け」のページを指の動きに合わせて先に見せる。
+    /// まだ一度も読んでいない（遅延読み込みの前の）あいだは VM の初期値が「投稿 0 件・読み込み中でない」なので、
+    /// そのまま出すと「あなた向けの投稿はまだありません」がチラッと見えてしまう。
+    /// VM には「一度でも読んだか」のフラグが無いため、ここで持ち、false のあいだは読み込み中の表示にする。
+    /// true にするのは読み込みが**終わってから**（始める前に立てると、Task が走り出す前の一瞬に空の表示が出うるため）。
+    @State private var hasLoadedForYouFeedOnce = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// アプリが前に出たか（今日のおすすめを、日をまたいで開いたままでも今日の分に読み直すため）⭐️
     @Environment(\.scenePhase) private var scenePhase
+    /// 端末の「視差効果を減らす」が ON か（フィードのカードの登場の動きを合わせる）⭐️ PR-H
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// 現在のセグメントに対応する ViewModel ⭐️ PR-7
-    /// ForYouFeedViewModel は HomeViewModel のサブクラスなので、この1本の参照で
-    /// フィード表示・状態表示を共通化できる（両方 @StateObject なので変更は body に届く）。
+    /// ForYouFeedViewModel は HomeViewModel のサブクラスなので、この1本の参照で扱える
+    /// （両方 @StateObject なので変更は body に届く）。
+    /// ⭐️ PR-H: めくって切り替えにしてからは、フィード表示・状態表示・引っ張って更新は
+    /// ページごとに `feedViewModel(for:)` で決める。ここを見るのはエラーのアラートだけ。
     private var activeViewModel: HomeViewModel {
         selectedSegment == .forYou ? forYouViewModel : viewModel
+    }
+
+    /// セグメント（ページ）に対応する ViewModel ⭐️ PR-H
+    /// 「すべて」→ viewModel、「あなた向け」→ forYouViewModel。
+    /// 選択中のセグメントでなく「そのページのセグメント」から引くので、
+    /// めくっている途中で隣のページを描くときも、そのページ自身の VM の状態が出る。
+    private func feedViewModel(for segment: HomeFeedSegment) -> HomeViewModel {
+        segment == .forYou ? forYouViewModel : viewModel
     }
 
     var body: some View {
@@ -54,7 +87,16 @@ struct HomeView: View {
                     // フィード切り替え（すべて / あなた向け）⭐️ PR-7
                     // ゲスト（未認証）は publicProfiles を読めず「あなた向け」が成立しないため出さない
                     if viewModel.currentUserId != nil {
-                        Picker("フィード", selection: $selectedSegment) {
+                        // ⭐️ PR-H: Picker にだけ、タップの印を立てる Binding を渡す（via の tap / swipe を分けるため）。
+                        // 下の TabView は生の `$selectedSegment` のまま（あちらも包むと、めくりまで tap と記録される）。
+                        // set では代入より先に印を立てる（代入で onChange が来たときに、印が読めるように）。
+                        Picker("フィード", selection: Binding(
+                            get: { selectedSegment },
+                            set: { newValue in
+                                segmentChangeTracker.noteTap(from: selectedSegment, to: newValue)
+                                selectedSegment = newValue
+                            }
+                        )) {
                             ForEach(HomeFeedSegment.allCases) { segment in
                                 Text(segment.title).tag(segment)
                             }
@@ -64,41 +106,9 @@ struct HomeView: View {
                         .padding(.top, DesignTokens.Spacing.sm)
                     }
 
-                    ZStack {
-                        if activeViewModel.isLoading, activeViewModel.posts.isEmpty {
-                            // 初回読み込み中 ☁️
-                            LoadingStateView(type: .initial)
-                        } else if let error = activeViewModel.lastError, activeViewModel.posts.isEmpty {
-                            // エラー発生時（投稿が空の場合）☁️
-                            ErrorStateView(
-                                error: error,
-                                retryAction: {
-                                    await activeViewModel.refresh()
-                                },
-                                secondaryAction: nil,
-                                secondaryActionTitle: nil
-                            )
-                        } else if activeViewModel.posts.isEmpty {
-                            if selectedSegment == .forYou {
-                                // あなた向けの投稿がない場合（フォロー0・タグ0など）⭐️ PR-7
-                                EmptyStateView(type: .custom(
-                                    icon: "person.2",
-                                    title: "あなた向けの投稿はまだありません",
-                                    description: "ユーザーやタグをフォローすると、その新着がここに流れます",
-                                    actionTitle: nil
-                                ))
-                            } else {
-                                // 投稿がない場合 ☁️
-                                EmptyStateView(type: .posts) {
-                                    // 投稿タブに切り替える（TabViewの切り替えはMainTabViewで管理）
-                                }
-                            }
-                        } else {
-                            // フィード表示
-                            feedView
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // フィード本体（すべて⇄あなた向けを左右にめくって切り替える）⭐️ PR-H
+                    feedPages
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     // 画面下部に固定表示されるバナー広告
                     BannerAdContainer()
@@ -116,20 +126,9 @@ struct HomeView: View {
                 }
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
-            .refreshable {
-                // await 中にセグメントが切り替わっても、更新対象といいね照合対象を
-                // 同じ VM に固定する（activeViewModel は computed のため再評価されうる。レビュー D6）
-                let targetViewModel = activeViewModel
-                // 今日のおすすめは「すべて」のときだけ引っ張って更新する
-                // （セグメントも最初の await の前に定数に取る＝上と同じ理由）⭐️
-                let refreshedSegment = selectedSegment
-                await targetViewModel.refresh()
-                await likeManager.checkLikeStatus(for: targetViewModel.posts)
-                await favoriteManager.checkFavoriteStatus(for: targetViewModel.posts)
-                if refreshedSegment == .all {
-                    await dailyPickViewModel.load(viewerId: viewModel.currentUserId, force: true)
-                }
-            }
+            // ⭐️ PR-H: 引っ張って更新（.refreshable）は、各ページの ScrollView（feedView）へ移した。
+            // ここに置いたままだと、めくって切り替えた 2 ページが同じ更新処理を共有し、
+            // 「今どちらのページか」を選択中のセグメントから読むことになるため。
             .onAppear {
                 Task {
                     await viewModel.fetchPosts()
@@ -156,13 +155,24 @@ struct HomeView: View {
                 }
             }
             .onChange(of: selectedSegment) { newSegment in
+                // 切り替わった手ごたえ ⭐️ PR-H
+                // 上の Picker のタップも、TabView を左右にめくったのも、どちらもここを通るので 1 か所で鳴らす
+                Haptics.play(.selection)
+                // どちらで切り替わったか（via）⭐️ PR-H: Picker の set で印が立っていれば tap、無ければめくり（swipe）。
+                // 印はここで 1 回読んだら下ろす（次の切り替えに持ち越さない）
+                let via = segmentChangeTracker.consume()
                 LoggingService.shared.logEvent("home_feed_segment_changed", parameters: [
                     "segment": newSegment.analyticsValue,
+                    "via": via.rawValue,
                 ])
                 // 「あなた向け」は初回選択時に遅延読み込み（未使用時のクエリコストを避ける）⭐️ PR-7
+                // ⚠️ PR-H: ページの onAppear で読みに行く形にはしない。TabView の page は隣のページを
+                //    先に作ることがあり、「すべて」を見ているだけで「あなた向け」を読んでしまう（遅延読み込みの意味が消える）。
                 if newSegment == .forYou, forYouViewModel.posts.isEmpty, !forYouViewModel.isLoading {
                     Task {
                         await forYouViewModel.fetchPosts()
+                        // 初回の読み込みが終わった＝ここからは VM の状態どおりに出す ⭐️ PR-H
+                        hasLoadedForYouFeedOnce = true
                         await likeManager.checkLikeStatus(for: forYouViewModel.posts)
                         await favoriteManager.checkFavoriteStatus(for: forYouViewModel.posts)
                     }
@@ -198,6 +208,10 @@ struct HomeView: View {
                 PostDetailView(post: post)
                     .environmentObject(likeManager)
                     .environmentObject(favoriteManager)
+                    // カードの写真から広がって開く（ズーム遷移・iOS 18 以上）⭐️ PR-H
+                    // 目印が nil（今日のおすすめから開いた）か iOS 16・17 のときは何も付けない＝今までどおり下から出る。
+                    // シートの中身のいちばん外側に付ける（Apple の説明で、VStack などの入れ物の外側に付けることになっているため）。
+                    .modifier(DetailZoomTransitionModifier(sourceID: detailZoomSourceID, namespace: detailZoomNamespace))
             }
             // ハッシュタグ → タグ詳細画面 ⭐️
             // HomeView は NavigationView（NavigationStack ではない）ため
@@ -238,14 +252,139 @@ struct HomeView: View {
         .navigationViewStyle(.stack)
     }
 
+    // MARK: - Feed Pages ⭐️ PR-H
+
+    /// フィードのページ（すべて⇄あなた向けを左右にめくって切り替える）⭐️ PR-H
+    ///
+    /// - ログイン中: `TabView` の page 形式で 2 ページ。選択は上の Picker と同じ `selectedSegment` を共有するので、
+    ///   タップでもめくりでも切り替わる（どちらも `onChange(of: selectedSegment)` を通る）。
+    ///   どちらで切り替えたか（計装の via）は Picker にだけ包んだ Binding で見分けるので、ここは生の `$selectedSegment` のまま渡す。
+    /// - ゲスト（未ログイン）: 「あなた向け」が成り立たない（publicProfiles を読めない）ので、
+    ///   TabView に入れず「すべて」の 1 ページだけを今までどおり出す（めくれない）。
+    ///   判定は Picker と同じ `viewModel.currentUserId`（ゲストには Picker も出していない）。
+    /// - Note: カードを横に引く操作（DragGesture の自作・List 化）はしない。
+    ///   指の動きの検知はスクロールとぶつかる（下の CardButtonStyle の記録）ため、ページ送りは TabView に任せる。
+    @ViewBuilder
+    private var feedPages: some View {
+        if viewModel.currentUserId != nil {
+            TabView(selection: $selectedSegment) {
+                ForEach(HomeFeedSegment.allCases) { segment in
+                    feedPage(for: segment)
+                        .tag(segment)
+                }
+            }
+            // ページの印（点）は出さない＝今どちらのページかは上の Picker が示す
+            .tabViewStyle(.page(indexDisplayMode: .never))
+        } else {
+            feedPage(for: .all)
+        }
+    }
+
+    /// 1 ページ分の中身（読み込み中／エラー／空／一覧）⭐️ PR-H
+    ///
+    /// 以前は body で `activeViewModel`（選択中のセグメントの VM）1 つを見て出し分けていた。
+    /// めくっている途中は 2 ページが同時に見えるので、ページ自身のセグメントの VM で出し分ける。
+    /// - Parameter segment: このページのセグメント
+    @ViewBuilder
+    private func feedPage(for segment: HomeFeedSegment) -> some View {
+        let pageViewModel = feedViewModel(for: segment)
+        ZStack {
+            if segment == .forYou, !hasLoadedForYouFeedOnce {
+                // 「あなた向け」をまだ一度も読み終えていない（遅延読み込みの前・最中）⭐️ PR-H
+                // めくる途中に隣のページとして見えても「投稿はまだありません」と誤って見せない
+                // ⭐️ PR-H 光は「このページが選ばれているときだけ」脈打たせる（下の初回読み込み中も同じ）。
+                //    めくり切り替えでは選ばれていないページも生きていて、そこの光が裏で回り続けるのを防ぐ。
+                //    選ばれた時点（selectedSegment が変わった時点）で動き始める。
+                LoadingStateView(type: .initial, pulses: selectedSegment == segment)
+            } else if pageViewModel.isLoading, pageViewModel.posts.isEmpty {
+                // 初回読み込み中 ☁️
+                // ⭐️ PR-H 上と同じ理由で、選ばれているページだけ光を脈打たせる
+                //    （片方だけだと、「すべて」の初回読み込み中にあなた向けへめくった場合に裏で回り続ける）
+                LoadingStateView(type: .initial, pulses: selectedSegment == segment)
+            } else if let error = pageViewModel.lastError, pageViewModel.posts.isEmpty {
+                // エラー発生時（投稿が空の場合）☁️
+                ErrorStateView(
+                    error: error,
+                    retryAction: {
+                        await pageViewModel.refresh()
+                    },
+                    secondaryAction: nil,
+                    secondaryActionTitle: nil
+                )
+            } else if pageViewModel.posts.isEmpty {
+                if segment == .forYou {
+                    // あなた向けの投稿がない場合（フォロー0・タグ0など）⭐️ PR-7
+                    EmptyStateView(type: .custom(
+                        icon: "person.2",
+                        title: "あなた向けの投稿はまだありません",
+                        description: "ユーザーやタグをフォローすると、その新着がここに流れます",
+                        actionTitle: nil
+                    ))
+                } else {
+                    // 投稿がない場合 ☁️
+                    EmptyStateView(type: .posts) {
+                        // 投稿タブに切り替える（TabViewの切り替えはMainTabViewで管理）
+                    }
+                }
+            } else {
+                // フィード表示
+                feedView(segment: segment, pageViewModel: pageViewModel)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 引っ張って更新（1 ページ分）⭐️ PR-H で外側から各ページの ScrollView へ移した
+    ///
+    /// 対象の VM とセグメントは、引っ張ったページのものを引数で受ける。
+    /// 以前（外側に 1 つ）は「await 中にセグメントが切り替わっても、更新対象といいね照合対象を
+    /// 同じ VM に固定する」ため、最初の await の前に定数へ取っていた（activeViewModel は computed のため
+    /// 再評価されうる。レビュー D6）。引数で受ければ途中でめくっても対象は変わらないので、その意図は形のうえで保たれる。
+    /// - Note: 読み込み中／エラー／空の表示には ScrollView が無いので、引っ張って更新が効くのは一覧のときだけ
+    ///   （外側に付けていた以前も同じ）。
+    /// - Parameters:
+    ///   - segment: 引っ張ったページのセグメント
+    ///   - pageViewModel: 引っ張ったページの VM
+    private func refreshPage(segment: HomeFeedSegment, pageViewModel: HomeViewModel) async {
+        await pageViewModel.refresh()
+        await likeManager.checkLikeStatus(for: pageViewModel.posts)
+        await favoriteManager.checkFavoriteStatus(for: pageViewModel.posts)
+        // 今日のおすすめは「すべて」のページで引っ張ったときだけ読み直す ⭐️
+        if segment == .all {
+            await dailyPickViewModel.load(viewerId: viewModel.currentUserId, force: true)
+        }
+    }
+
+    /// 写真を 2 回タップしたときのいいね（付けるだけ）⭐️ PR-H
+    ///
+    /// Instagram と同じく、付いていても外さない（2 回タップを重ねても「付けた→外れた」にならない）。
+    /// - ⚠️ 判定は Task の中（toggleLike を呼ぶ直前）で行う。LikeManager は @MainActor で、
+    ///   楽観更新（likedPostIds への追加）は toggleLike の最初の await より前に入るため、
+    ///   「確かめてから呼ぶ」の間に別のいいね操作が割り込まない。
+    /// - LikeManager は書き込み中の投稿への呼び出しを捨てる（inFlightPostIds）ので、
+    ///   通信中に 2 回タップを重ねても 2 回トグルされることはない（ここで別の守りは足さない）。
+    /// - ゲスト（未ログイン）には呼び出し側（feedView）で 2 回タップを付けない（onDoubleTapLike を nil にする）ので、
+    ///   ここには来ない。
+    /// - Parameter post: 2 回タップされた投稿
+    private func addLikeFromDoubleTap(_ post: Post) {
+        Task {
+            guard !likeManager.isLiked(post.id) else { return }
+            await likeManager.toggleLike(post: post, source: "home_card", method: .doubleTap)
+        }
+    }
+
     // MARK: - Feed View ☀️
 
-    private var feedView: some View {
+    /// 1 ページ分の一覧 ⭐️ PR-H で引数つきに変えた（選択中のセグメントでなく、そのページの VM とセグメントを見る）
+    /// - Parameters:
+    ///   - segment: このページのセグメント（ストリーク・今日のおすすめ・On This Day を出すか）
+    ///   - pageViewModel: このページの VM（一覧・ページ送り・引っ張って更新の対象）
+    private func feedView(segment: HomeFeedSegment, pageViewModel: HomeViewModel) -> some View {
         ScrollView(showsIndicators: false) {
             LazyVStack(spacing: DesignTokens.Spacing.lg) {
                 // ストリークチップ・On This Day は「すべて」セグメントのみ表示 ⭐️ PR-7
                 // （あなた向けは「フォロー由来の投稿だけが流れる場所」として純度を保つ）
-                if selectedSegment == .all {
+                if segment == .all {
                     // ストリークチップ（🔥◯日連続）— 継続中のみ表示、タップで図鑑へ ⭐️
                     SkyStreakChipView(streak: onThisDayViewModel.streak) {
                         LoggingService.shared.logEvent("streak_chip_tapped", parameters: [
@@ -260,6 +399,11 @@ struct HomeView: View {
                         let impact = UIImpactFeedbackGenerator(style: .light)
                         impact.impactOccurred()
                         dailyPickViewModel.recordTapped()
+                        // ズームせず、今までどおり下から出す ⭐️ PR-H
+                        // 今日のおすすめのカードは、ズームの出どころ（PostCard の写真）ではないため。
+                        // 目印はシートを閉じても消えないので、直前にカードから開いた目印が残っていると、
+                        // そのカードの写真から広がってしまう。`selectedPost` を入れる**前**に消しておく。
+                        detailZoomSourceID = nil
                         selectedPost = post
                     }
 
@@ -268,16 +412,16 @@ struct HomeView: View {
                     OnThisDayCardView(viewModel: onThisDayViewModel)
                 }
 
-                ForEach(Array(activeViewModel.posts.enumerated()), id: \.element.id) { index, post in
+                ForEach(Array(pageViewModel.posts.enumerated()), id: \.element.id) { index, post in
                     PostCard(
                         post: post,
-                        author: activeViewModel.authorsByUserId[post.userId],
+                        author: pageViewModel.authorsByUserId[post.userId],
                         isLiked: likeManager.isLiked(post.id),
                         likeCount: likeManager.likeCount(for: post),
                         isFavorited: favoriteManager.isFavorited(post.id),
                         onLikeTapped: {
                             Task {
-                                await likeManager.toggleLike(post: post)
+                                await likeManager.toggleLike(post: post, source: "home_card", method: .button)
                             }
                         },
                         onFavoriteTapped: {
@@ -288,12 +432,16 @@ struct HomeView: View {
                         onCardTapped: {
                             let impact = UIImpactFeedbackGenerator(style: .light)
                             impact.impactOccurred()
+                            // 詳細をこのカードの写真から広げて開くための目印 ⭐️ PR-H（iOS 18 以上で効く）
+                            // `selectedPost` を入れる**前**に入れる＝シートの中身を作る時点で、どの写真から広がるかが決まっているように。
+                            // ページ名も混ぜた値なので、同じ投稿が両方のページに出ていても、今触ったページの写真から広がる。
+                            detailZoomSourceID = HomeDetailZoom.sourceID(segment: segment, postID: post.id)
                             selectedPost = post
                         },
                         onAuthorTapped: {
                             // 自分の投稿の場合はプロフィールタブへの遷移を促すか
                             // 既存仕様に任せる。ここでは他ユーザーであれば UserProfileView を開く
-                            if let currentUserId = activeViewModel.currentUserId,
+                            if let currentUserId = pageViewModel.currentUserId,
                                currentUserId == post.userId
                             {
                                 // 自分の投稿: プロフィールタブで見るほうが自然なので何もしない
@@ -303,28 +451,47 @@ struct HomeView: View {
                         },
                         onHashtagTapped: { tag in
                             selectedTag = tag
-                        }
+                        },
+                        // 写真を 2 回タップでいいね（付けるだけ）⭐️ PR-H
+                        // ゲスト（未ログイン）には付けない（nil）＝写真の 1 回タップも遅れない。
+                        // 理由: toggleLike はゲストだと showLoginPrompt を立てて戻るだけで、その旗を読む画面がまだ無い。
+                        // 付けるとハートと触覚は出るのにいいねされず、誤解を招く（2026-10-28 利用者の決定）。
+                        // 判定は Picker・feedPages と同じ `viewModel.currentUserId`。
+                        onDoubleTapLike: viewModel.currentUserId == nil ? nil : { addLikeFromDoubleTap(post) },
+                        shareSource: "home_card",
+                        // 詳細を開くとき、このカードの写真から広がる（ズーム遷移・iOS 18 以上）⭐️ PR-H
+                        // 目印は onCardTapped で detailZoomSourceID に入れる値と同じ式（ページ名＋投稿 ID）にする。
+                        // 2 つがずれると、写真と詳細が結び付かず写真から広がらない。
+                        zoomTransition: PostCardZoomTransition(
+                            sourceID: HomeDetailZoom.sourceID(segment: segment, postID: post.id),
+                            namespace: detailZoomNamespace
+                        )
                     )
                     // スタガードアニメーション（改善）
+                    // ⭐️ PR-H: 「視差効果を減らす」ON のときは下からの移動と拡大をやめ、順にふわっと出るだけにする。
+                    // 画面の動きで気分が悪くなる原因（移動・拡大）を含めないため（PostCard の 2 回タップのハートと同じ考え方）。
+                    // `Motion.animation` は ON のとき nil（動かさない）を返すので、ON のときの出方は fastEase に差し替える。
+                    // 順番の遅れ（stagger）は ON でも残す（薄く出る順番がずれるだけで、移動・拡大は含まないため）。
                     .opacity(animateCards ? 1 : 0)
-                    .offset(y: animateCards ? 0 : 30)
-                    .scaleEffect(animateCards ? 1 : 0.95)
+                    .offset(y: reduceMotion || animateCards ? 0 : 30)
+                    .scaleEffect(reduceMotion || animateCards ? 1 : 0.95)
                     .animation(
-                        DesignTokens.Animation.smoothSpring
+                        (Motion.animation(DesignTokens.Animation.smoothSpring, reduceMotion: reduceMotion) ?? DesignTokens.Animation.fastEase)
                             .delay(Double(index) * DesignTokens.Animation.staggerDelay),
                         value: animateCards
                     )
                     .onAppear {
                         // ページネーション: 最後の投稿が表示されたら次のページを読み込む ☁️
                         // 重複リクエスト防止: 読み込み中の場合はスキップ
-                        if post.id == activeViewModel.posts.last?.id,
-                           !activeViewModel.isLoadingMore,
-                           activeViewModel.hasMorePosts
+                        if post.id == pageViewModel.posts.last?.id,
+                           !pageViewModel.isLoadingMore,
+                           pageViewModel.hasMorePosts
                         {
                             Task {
                                 // await 中のセグメント切替で件数計算と照合対象の VM が
                                 // 食い違わないよう、処理全体を同じ参照で完結させる（レビュー D6）
-                                let targetViewModel = activeViewModel
+                                // ⭐️ PR-H: 引数で受けたこのページの VM なので、途中でめくっても参照は変わらない
+                                let targetViewModel = pageViewModel
                                 let previousCount = targetViewModel.posts.count
                                 await targetViewModel.loadMorePosts()
                                 // 新しく読み込んだ投稿のいいね状態をチェック
@@ -337,7 +504,7 @@ struct HomeView: View {
                 }
 
                 // 追加読み込み中のインジケーター
-                if activeViewModel.isLoadingMore {
+                if pageViewModel.isLoadingMore {
                     HStack(spacing: DesignTokens.Spacing.sm) {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -350,7 +517,7 @@ struct HomeView: View {
                 }
 
                 // これ以上投稿がない場合
-                if !activeViewModel.hasMorePosts, !activeViewModel.posts.isEmpty {
+                if !pageViewModel.hasMorePosts, !pageViewModel.posts.isEmpty {
                     VStack(spacing: DesignTokens.Spacing.sm) {
                         Image(systemName: "checkmark.circle")
                             .font(.system(size: 24))
@@ -369,6 +536,10 @@ struct HomeView: View {
             }
             .padding(.horizontal, DesignTokens.Spacing.screenMargin)
             .padding(.top, DesignTokens.Spacing.sm)
+        }
+        // 引っ張って更新 — このページの VM とセグメントに固定する ⭐️ PR-H（理由は refreshPage の説明）
+        .refreshable {
+            await refreshPage(segment: segment, pageViewModel: pageViewModel)
         }
     }
 }
@@ -394,6 +565,30 @@ struct PostCard: View {
     /// ハッシュタグをタップしたときのハンドラ（タグ詳細へ遷移）⭐️
     /// nil の場合はチップが表示のみになる（タグ詳細画面内の再帰的な遷移を避けるため）。
     var onHashtagTapped: ((String) -> Void)?
+    /// 写真を 2 回タップしたときのハンドラ（いいねを付ける）⭐️ PR-H
+    /// nil のときは 2 回タップを付けない＝1 回タップが遅れない（SearchView・TagDetailView・ProfileView は今のまま）。
+    /// 渡したときだけ、写真の 2 回タップ・ハートの演出・触覚・読み上げの「いいね」操作が付く。
+    /// 付けるかどうか（付いていたら何もしない）は渡す側（HomeView）が決める。
+    var onDoubleTapLike: (() -> Void)?
+    /// シェアのボタンの計装 post_share_sheet_opened の source ⭐️ PR-H
+    /// いいねの source と同じ値（"home_card" / "tag_detail" / "profile_list"）。
+    /// 検索（SearchView）は渡していない＝source なしの記録が検索のカード。
+    /// SearchView は未整形のファイルで今回は触らないため（search_card は別 PR で足す）。
+    /// メンバーごとの init の引数は宣言順なので、後ろのほう（zoomTransition の前）に置いて呼び出し側は末尾に足すだけで済むようにしている。
+    var shareSource: String?
+    /// 詳細をこのカードの写真から広げて開くための材料（ズーム遷移・iOS 18 以上）⭐️ PR-H
+    /// 渡すのはホームだけ。渡さない画面（検索・タグ詳細・プロフィール）は nil＝今までどおり詳細は下から出る。
+    /// メンバーごとの init の引数は宣言順なので、shareSource の後ろ（一番最後）に置き、
+    /// 他の 3 画面の呼び出しは変えずに済むようにしている。
+    var zoomTransition: PostCardZoomTransition?
+
+    /// 2 回タップのハートが見えているか ⭐️ PR-H
+    @State private var isDoubleTapHeartVisible = false
+    /// ハートを消す予約の番号 ⭐️ PR-H
+    /// 続けて 2 回タップしたとき、前の「消す」予約が新しく出したハートを早く消さないよう、最後の予約だけを効かせる。
+    @State private var doubleTapHeartToken = 0
+    /// 「視差効果を減らす」が ON か ⭐️ PR-H（ON のときハートは拡大せず、ふわっと出て消えるだけ）
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -434,12 +629,18 @@ struct PostCard: View {
                     .padding(DesignTokens.Spacing.sm)
                 }
             }
+            // この写真を、詳細へ広がるズーム遷移の出どころにする ⭐️ PR-H（iOS 18 以上・zoomTransition を渡した画面だけ）
+            // 写真の ZStack の直後（ハートの overlay やタップより前）に付け、広がり始める枠をカード全体でなく写真の部分にする
+            .modifier(PostCardZoomSourceModifier(zoom: zoomTransition))
             .contentShape(Rectangle())
-            .onTapGesture {
-                let impact = UIImpactFeedbackGenerator(style: .light)
-                impact.impactOccurred()
-                onCardTapped?()
-            }
+            // 2 回タップで写真の中央に出るハート ⭐️ PR-H（onDoubleTapLike が無い画面では描かない）
+            .overlay { doubleTapHeart }
+            // 1 回タップ＝詳細へ／2 回タップ＝いいね ⭐️ PR-H
+            // 2 回タップは onDoubleTapLike があるときだけ付ける（無い画面は 1 回タップだけ＝今までと同じ動き）
+            .modifier(PostCardPhotoTapModifier(
+                onSingleTap: { openDetailFromPhoto() },
+                onDoubleTap: onDoubleTapLike == nil ? nil : { handleDoubleTapLike() }
+            ))
 
             // 投稿情報
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
@@ -500,23 +701,14 @@ struct PostCard: View {
 
                 // アクション行（ボタンが独立してタップ可能）
                 HStack(spacing: DesignTokens.Spacing.lg) {
-                    // いいねボタン
-                    Button {
-                        let impact = UIImpactFeedbackGenerator(style: .light)
-                        impact.impactOccurred()
-                        onLikeTapped?()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: isLiked ? "heart.fill" : "heart")
-                                .font(.system(size: 16, weight: .medium))
-                                .animation(.easeInOut(duration: 0.2), value: isLiked)
-                            Text("\(likeCount ?? post.likesCount)")
-                                // Dynamic Type 対応: .caption はユーザーの文字サイズ設定に追従
-                                .font(.system(.caption, design: .rounded, weight: .semibold))
-                        }
-                        .foregroundColor(isLiked ? DesignTokens.Colors.softPink : DesignTokens.Colors.textTertiary)
-                    }
-                    .buttonStyle(.plain)
+                    // いいねボタン — 共通部品（触覚・弾み・数字の入れ替わりは部品の中）⭐️ PR-H
+                    // 検索の画面は onLikeTapped が nil＝押すと軽い触覚だけで何も起きない（今までと同じ）
+                    PostLikeButton(
+                        isLiked: isLiked,
+                        count: likeCount ?? post.likesCount,
+                        style: .card,
+                        action: onLikeTapped
+                    )
 
                     // コメントボタン — タップで詳細画面へ遷移
                     Button {
@@ -535,29 +727,21 @@ struct PostCard: View {
 
                     // お気に入り（🔖）ボタン ⭐️
                     // ❤️と違い件数は出さない（自分だけのプライベート保存なので公開する数がない）。
+                    // 共通部品（触覚・弾み・読み上げのラベルは部品の中）⭐️ PR-H
                     if let onFavoriteTapped {
-                        Button {
-                            let impact = UIImpactFeedbackGenerator(style: .light)
-                            impact.impactOccurred()
-                            onFavoriteTapped()
-                        } label: {
-                            Image(systemName: isFavorited ? "bookmark.fill" : "bookmark")
-                                .font(.system(size: 16, weight: .medium))
-                                .animation(.easeInOut(duration: 0.2), value: isFavorited)
-                                .foregroundColor(isFavorited
-                                    ? DesignTokens.Colors.goldenHour
-                                    : DesignTokens.Colors.textTertiary)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(isFavorited ? "お気に入りから外す" : "お気に入りに追加")
+                        PostFavoriteButton(
+                            isFavorited: isFavorited,
+                            style: .card,
+                            action: onFavoriteTapped
+                        )
                     }
 
                     Spacer()
 
-                    // シェアボタン
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(DesignTokens.Colors.textTertiary)
+                    // シェアボタン — 共通部品（詳細の「共有」と同じ処理: 1 枚目を取ってきて共有シートを出す）⭐️ PR-H
+                    // このカードを使う 4 画面（ホーム・検索・タグ詳細・プロフィール）すべてで動く。
+                    // 計装の source は shareSource（検索は渡していない＝source なし）
+                    PostShareButton(post: post, source: shareSource)
                 }
             }
             .padding(DesignTokens.Spacing.cardPadding)
@@ -583,6 +767,78 @@ struct PostCard: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.xl))
         .shadow(DesignTokens.Shadow.card)
+        // 読み上げ（VoiceOver）の「いいね」操作 ⭐️ PR-H
+        // 読み上げ中は 2 回タップ＝「開く」になり、写真の 2 回タップのいいねが使えないため、
+        // onDoubleTapLike があるときだけ操作の一覧に「いいね」を足す（動きは 2 回タップと同じ「付けるだけ」）
+        .modifier(PostCardLikeAccessibilityActionModifier(
+            onLike: onDoubleTapLike == nil ? nil : { handleDoubleTapLike() }
+        ))
+    }
+
+    // MARK: - Double Tap Like ⭐️ PR-H
+
+    /// 写真を 1 回タップ → 詳細へ
+    /// PR-H で body の `.onTapGesture` から関数へ切り出しただけ（中身は今までと同じ・触覚の直書きも今回は移さない）。
+    /// 2 回タップの有無で付けるジェスチャーを分ける（PostCardPhotoTapModifier）ため、両方から同じ処理を呼べる形にした。
+    private func openDetailFromPhoto() {
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+        onCardTapped?()
+    }
+
+    /// 写真を 2 回タップ（または読み上げの「いいね」操作）→ いいねを付ける
+    ///
+    /// 見た目（ハート）と触覚はここ（カード）で出し、付けるかどうか（付いていたら何もしない）は
+    /// 渡されたハンドラ（HomeView）が決める。ハートと触覚は毎回出す
+    /// （付いている投稿でも「受け付けた」ことを返す・Instagram と同じ）。
+    private func handleDoubleTapLike() {
+        Haptics.play(.likeOn)
+        showDoubleTapHeart()
+        onDoubleTapLike?()
+    }
+
+    /// 写真の中央にハートを出して、少し置いてから消す
+    ///
+    /// - 「視差効果を減らす」OFF: 小さい所からばねで広がって出る → 縮みながら薄れて消える。
+    /// - ON: 大きさは変えず（拡大しない）、薄く出て薄れて消えるだけ。
+    ///   `Motion.animation` は ON のとき nil（動かさない）を返すので、ON のときの出方は「ふわっと（fastEase）」に差し替える。
+    ///   薄く出る・消えるだけの動きは、画面の動きで気分が悪くなる原因（拡大・移動）を含まないため。
+    ///   大きさを変えないのは `doubleTapHeart` の scaleEffect 側（ON のときはいつも等倍）。
+    private func showDoubleTapHeart() {
+        doubleTapHeartToken += 1
+        let token = doubleTapHeartToken
+        withAnimation(
+            Motion.animation(DesignTokens.Animation.bouncySpring, reduceMotion: reduceMotion)
+                ?? DesignTokens.Animation.fastEase
+        ) {
+            isDoubleTapHeartVisible = true
+        }
+        // 少し見せてから消す（続けて 2 回タップしたときは、最後の予約だけが消す）
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard token == doubleTapHeartToken else { return }
+            withAnimation(DesignTokens.Animation.fadeOut) {
+                isDoubleTapHeartVisible = false
+            }
+        }
+    }
+
+    /// 2 回タップで写真の中央に出るハート
+    /// onDoubleTapLike が無い画面では描かない。タップは下の写真が受ける（allowsHitTesting(false)）・読み上げには出さない。
+    @ViewBuilder
+    private var doubleTapHeart: some View {
+        if onDoubleTapLike != nil {
+            Image(systemName: "heart.fill")
+                .font(.system(size: 80, weight: .semibold))
+                // 写真の上に出す白（画像数インジケーターと同じ）＋影で、明るい空の写真の上でも見えるようにする
+                .foregroundColor(.white)
+                .shadow(DesignTokens.Shadow.medium)
+                // 「視差効果を減らす」ON のときは拡大しない（いつも等倍で、薄く出て消えるだけ）
+                .scaleEffect(reduceMotion || isDoubleTapHeartVisible ? 1 : 0.5)
+                .opacity(isDoubleTapHeartVisible ? 1 : 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 
     // MARK: - Author Header ⭐️ Issue #2
@@ -653,6 +909,109 @@ struct PostCard: View {
                     .font(.system(size: 14))
                     .foregroundColor(.white.opacity(0.7))
             )
+    }
+}
+
+// MARK: - Post Card Photo Tap ⭐️ PR-H
+
+/// カードの写真のタップ（1 回＝詳細へ／2 回＝いいね）⭐️ PR-H
+///
+/// 2 回タップのハンドラが nil の画面（検索・タグ詳細・プロフィール）は、1 回タップだけを付ける＝今までと全く同じ動き。
+/// 2 回タップを付けると、1 回タップは「2 回目が来ないこと」を確かめてから確定するので 0.2〜0.3 秒ほど遅れる
+/// （Instagram と同じ・利用者は了解済み）。その遅れを nil の画面へ広げないための分岐。
+/// - Note: `exclusively(before:)` は先に書いた方（2 回タップ）を優先し、成り立たなかったときだけ 1 回タップにする。
+///   指の動き（DragGesture）は使わないので、ScrollView のスクロールやページのめくりとはぶつからない。
+private struct PostCardPhotoTapModifier: ViewModifier {
+    /// 1 回タップ（詳細へ）
+    let onSingleTap: () -> Void
+    /// 2 回タップ（いいね）。nil なら付けない
+    let onDoubleTap: (() -> Void)?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let onDoubleTap {
+            content.gesture(
+                TapGesture(count: 2)
+                    .onEnded { onDoubleTap() }
+                    .exclusively(before: TapGesture().onEnded { onSingleTap() })
+            )
+        } else {
+            content.onTapGesture {
+                onSingleTap()
+            }
+        }
+    }
+}
+
+/// 読み上げ（VoiceOver）の「いいね」操作 ⭐️ PR-H
+///
+/// `.accessibilityAction` は条件つきで外せないので、ハンドラがあるときだけ付ける分岐をここにまとめる。
+/// ハンドラが nil の画面は何も足さない（今までと同じ読み上げ）。
+private struct PostCardLikeAccessibilityActionModifier: ViewModifier {
+    /// 「いいね」を選んだときの処理。nil なら操作を足さない
+    let onLike: (() -> Void)?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let onLike {
+            content.accessibilityAction(named: "いいね") {
+                onLike()
+            }
+        } else {
+            content
+        }
+    }
+}
+
+// MARK: - Post Card Zoom Transition ⭐️ PR-H
+
+/// カードの写真から詳細へ広がるズーム遷移（iOS 18 以上）のために、カードへ渡す材料 ⭐️ PR-H
+///
+/// 目印（sourceID）と名前空間（namespace）は、開く側（HomeView のシート）の `navigationTransition(.zoom)` と
+/// 同じ組でないと結び付かない。2 つを 1 つの型にまとめて渡し、片方だけ渡し忘れることが起きないようにしている。
+/// `Namespace.ID` 自体は iOS 16 でも使えるので、この型は iOS 18 の分岐の外に置ける（ズームの API だけが iOS 18 から）。
+struct PostCardZoomTransition {
+    /// ズーム遷移の目印（`HomeDetailZoom.sourceID` の値）
+    let sourceID: String
+    /// 開く側と共有する名前空間（HomeView の `detailZoomNamespace`）
+    let namespace: Namespace.ID
+}
+
+/// カードの写真を、詳細へのズーム遷移の出どころにする ⭐️ PR-H
+///
+/// `matchedTransitionSource` は iOS 18 からなので `#available` で分ける。
+/// iOS 16・17 のとき、または zoom が nil の画面（検索・タグ詳細・プロフィール）は何も付けない＝今までと同じ。
+private struct PostCardZoomSourceModifier: ViewModifier {
+    /// 出どころの目印と名前空間。nil なら何も付けない
+    let zoom: PostCardZoomTransition?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), let zoom {
+            content.matchedTransitionSource(id: zoom.sourceID, in: zoom.namespace)
+        } else {
+            content
+        }
+    }
+}
+
+/// 詳細（シートの中身）を、目印の写真から広がって開くようにする ⭐️ PR-H
+///
+/// `navigationTransition(.zoom)` は iOS 18 からなので `#available` で分ける。
+/// iOS 16・17 のとき、または目印が nil（今日のおすすめから開いた）ときは何も付けない＝今までどおり下から出る。
+private struct DetailZoomTransitionModifier: ViewModifier {
+    /// 出どころの目印（カードに渡した `PostCardZoomTransition.sourceID` と同じ値）。nil ならズームしない
+    let sourceID: String?
+    /// カードと共有する名前空間（HomeView の `detailZoomNamespace`）
+    let namespace: Namespace.ID
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), let sourceID {
+            content.navigationTransition(.zoom(sourceID: sourceID, in: namespace))
+        } else {
+            content
+        }
     }
 }
 
@@ -768,6 +1127,8 @@ struct PostDetailView: View {
     @State private var isPreparingReEdit = false
     /// おすすめの空の追加 / 外すの結果（non-nil でアラートを出す）⭐️
     @State private var recommendationOutcome: RecommendationManager.Outcome?
+    /// 全画面のビューアで開いている写真（non-nil で PostPhotoViewer を全画面で出す）⭐️ PR-H 5b
+    @State private var photoViewerItem: PostPhotoViewerItem?
 
     private let downloadService: ImageDownloadServiceProtocol = ImageDownloadService.shared
 
@@ -1002,13 +1363,29 @@ struct PostDetailView: View {
     private func multiImageCarousel(images: [ImageInfo]) -> some View {
         let aspect = carouselAspectRatio(for: images)
         TabView {
-            ForEach(Array(images.enumerated()), id: \.offset) { _, info in
+            ForEach(Array(images.enumerated()), id: \.offset) { index, info in
+                // 読める写真か（読めない写真は灰色の枠なので、タップしても開かない＝ボタンとして読み上げない）
+                let isReadable = PostImageSource.resolve(info, prefersThumbnail: false) != .unavailable
                 PostDetailImageView(imageInfo: info)
+                    // 写真の枠全体でタップを受ける ⭐️ PR-H 5b
+                    .contentShape(Rectangle())
+                    // 1 回タップで、この 1 枚を全画面のビューアで開く ⭐️ PR-H 5b
+                    .onTapGesture {
+                        openPhotoViewer(index: index, imageInfo: info, imageCount: images.count)
+                    }
+                    // VoiceOver: 読める写真だけ「ボタン」と「全画面で表示します」を足す ⭐️ PR-H 5b
+                    .accessibilityAddTraits(isReadable ? .isButton : [])
+                    .accessibilityHint(isReadable ? "全画面で表示します" : "")
             }
         }
         .tabViewStyle(.page(indexDisplayMode: images.count > 1 ? .always : .never))
         .indexViewStyle(.page(backgroundDisplayMode: .always))
         .aspectRatio(aspect, contentMode: .fit)
+        // 全画面の写真ビューア ⭐️ PR-H 5b
+        // ⚠️ body の修飾子チェーンに足すと Xcode 27 の型チェックが重くなる（#123）ため、カルーセルに付ける
+        .fullScreenCover(item: $photoViewerItem) { item in
+            PostPhotoViewer(imageInfo: item.imageInfo)
+        }
     }
 
     /// 画像配列の中で最も縦長なアスペクト比（width / height）を返す。
@@ -1020,6 +1397,23 @@ struct PostDetailView: View {
             return CGFloat(info.width) / CGFloat(info.height)
         }
         return ratios.min() ?? 1.0
+    }
+
+    /// 写真を全画面のビューアで開き、開いたことを計装する ⭐️ PR-H 5b
+    ///
+    /// 読めない写真（`PostImageSource` が `.unavailable`＝灰色の枠）は、開いても何も見えないので何もしない（計装も送らない）。
+    /// 計装 `post_photo_viewer_opened` は、何枚目（0 始まり）と全部で何枚かだけを送る（UID は送らない・利用者の決定 2026-10-28）。
+    /// - Parameters:
+    ///   - index: カルーセルの何ページ目か（0 始まり）
+    ///   - imageInfo: 開く写真
+    ///   - imageCount: 投稿の写真の枚数
+    private func openPhotoViewer(index: Int, imageInfo: ImageInfo, imageCount: Int) {
+        guard PostImageSource.resolve(imageInfo, prefersThumbnail: false) != .unavailable else { return }
+        photoViewerItem = PostPhotoViewerItem(id: index, imageInfo: imageInfo)
+        LoggingService.shared.logEvent(
+            "post_photo_viewer_opened",
+            parameters: PostPhotoViewerMath.openedEventParameters(imageIndex: index, imageCount: imageCount)
+        )
     }
 
     private var postInfoSection: some View {
@@ -1070,20 +1464,15 @@ struct PostDetailView: View {
             }
             // いいね・コメント数
             HStack(spacing: 24) {
-                Button {
-                    let impact = UIImpactFeedbackGenerator(style: .light)
-                    impact.impactOccurred()
-                    Task { await likeManager.toggleLike(post: post) }
-                } label: {
-                    Label(
-                        "\(likeManager.likeCount(for: post))",
-                        systemImage: likeManager.isLiked(post.id) ? "heart.fill" : "heart"
-                    )
-                    .font(.headline)
-                    .foregroundColor(likeManager.isLiked(post.id) ? DesignTokens.Colors.softPink : DesignTokens.Colors.textSecondary)
-                    .animation(.easeInOut(duration: 0.2), value: likeManager.isLiked(post.id))
-                }
-                .buttonStyle(.plain)
+                // いいね — 共通部品（触覚・弾み・数字の入れ替わりは部品の中）⭐️ PR-H
+                PostLikeButton(
+                    isLiked: likeManager.isLiked(post.id),
+                    count: likeManager.likeCount(for: post),
+                    style: .detail,
+                    action: {
+                        Task { await likeManager.toggleLike(post: post, source: "post_detail", method: .button) }
+                    }
+                )
 
                 Label("\(post.commentsCount)", systemImage: "bubble.right.fill")
                     .font(.headline)
@@ -1092,20 +1481,14 @@ struct PostDetailView: View {
                 Spacer()
 
                 // お気に入り（🔖）ボタン ⭐️ 件数は出さない（自分だけのプライベート保存）
-                Button {
-                    let impact = UIImpactFeedbackGenerator(style: .light)
-                    impact.impactOccurred()
-                    Task { await favoriteManager.toggleFavorite(post: post, source: "post_detail") }
-                } label: {
-                    Image(systemName: favoriteManager.isFavorited(post.id) ? "bookmark.fill" : "bookmark")
-                        .font(.headline)
-                        .foregroundColor(favoriteManager.isFavorited(post.id)
-                            ? DesignTokens.Colors.goldenHour
-                            : DesignTokens.Colors.textSecondary)
-                        .animation(.easeInOut(duration: 0.2), value: favoriteManager.isFavorited(post.id))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(favoriteManager.isFavorited(post.id) ? "お気に入りから外す" : "お気に入りに追加")
+                // 共通部品（触覚・弾み・読み上げのラベルは部品の中）⭐️ PR-H
+                PostFavoriteButton(
+                    isFavorited: favoriteManager.isFavorited(post.id),
+                    style: .detail,
+                    action: {
+                        Task { await favoriteManager.toggleFavorite(post: post, source: "post_detail") }
+                    }
+                )
             }
 
             // コメントセクション
@@ -1384,9 +1767,25 @@ struct PostDetailImageView: View {
 // MARK: - App Title View
 
 struct AppTitleView: View {
+    /// 見出しのロゴ画像のアセット名（Assets.xcassets の SoramoyouLogo.imageset）
+    ///
+    /// 最低 iOS 16 なので、アセットから自動で作られる名前付きの参照（生成シンボル `Image(.xxx)`。iOS 17〜）が使えない。
+    /// そのため文字列で引く。名前を打ち間違えてもビルドは通ってしまうので、
+    /// 打ち間違いは HomeToolbarImageAssetTests で拾う
+    static let logoAssetName = "SoramoyouLogo"
+
     var body: some View {
         VStack(spacing: 2) {
-            GradientTitleView(title: "そらもよう", fontSize: 28)
+            // ⭐️ PR-H: 文字の題をロゴ画像に替えた（利用者の決定 2026-10-24）。副題は文字のまま
+            //    （ロゴの絵の副題は 30pt の高さだと約 6pt になって読めないので、絵からは切り落としてある）
+            Image(Self.logoAssetName)
+                // ツールバーの中の画像は、何もしないと単色（テンプレート）に塗られることがあるので元の色で描く
+                .renderingMode(.original)
+                .resizable()
+                .scaledToFit()
+                .frame(height: 30)
+                // 画像の名前でなく、前の文字の題と同じ「そらもよう」と読み上げる
+                .accessibilityLabel("そらもよう")
             Text("空を撮る、空を集める")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundColor(.secondary)
@@ -1467,5 +1866,71 @@ enum HomeFeedSegment: String, CaseIterable, Identifiable {
         case .all: "all"
         case .forYou: "for_you"
         }
+    }
+}
+
+// MARK: - Home Feed Segment Change Via ⭐️ PR-H
+
+/// ホームのフィード切り替えが、上の切り替え（Picker）のタップか、左右のめくり（TabView）かの区別 ⭐️ PR-H
+///
+/// 計装（home_feed_segment_changed）の `via` に rawValue をそのまま送る。
+/// PostHog で集計する文字なので、名前を変えると過去の記録と分かれてしまう（テストで文字を固定している）。
+enum HomeFeedSegmentChangeVia: String {
+    /// 上の切り替え（Picker）をタップした
+    case tap
+    /// 左右にめくった（TabView のページ送り）
+    case swipe
+}
+
+/// 「次の切り替えは上のタップから来た」の印を持ち、onChange で 1 回だけ読み出す ⭐️ PR-H
+///
+/// Picker と TabView は同じ `selectedSegment` を共有しているので、`onChange(of: selectedSegment)` だけでは
+/// どちらで切り替わったか分からない。そこで Picker の Binding の set（タップのときだけ通る）で印を立て、
+/// onChange で読み出して下ろす。印が無いまま onChange が来たら、めくり（TabView が直接書いた）と見なす。
+struct HomeFeedSegmentChangeTracker {
+    /// 上のタップから来た切り替えを、まだ onChange で読み出していないか
+    private(set) var isTapPending = false
+
+    /// Picker の Binding の set から呼ぶ（タップで選ばれた値を受ける）
+    ///
+    /// 今と同じ値を選び直しただけのときは印を立てない。値が変わらないと onChange が来ず印が残り、
+    /// 次のめくりが tap と記録されてしまうため。
+    /// - Parameters:
+    ///   - current: 今選ばれているセグメント（代入する前の値）
+    ///   - newValue: タップで選ばれたセグメント
+    mutating func noteTap(from current: HomeFeedSegment, to newValue: HomeFeedSegment) {
+        guard newValue != current else { return }
+        isTapPending = true
+    }
+
+    /// onChange から呼ぶ。印があれば tap、無ければ swipe を返し、印を下ろす
+    /// - Returns: この切り替えがどちらから来たか
+    mutating func consume() -> HomeFeedSegmentChangeVia {
+        let via: HomeFeedSegmentChangeVia = isTapPending ? .tap : .swipe
+        // 印は 1 回の切り替えにつき 1 回だけ使う（次の切り替えに持ち越さない）
+        isTapPending = false
+        return via
+    }
+}
+
+// MARK: - Home Detail Zoom ⭐️ PR-H
+
+/// ホームのカードの写真から詳細へ広がるズーム遷移（iOS 18 以上）の目印を作る ⭐️ PR-H
+///
+/// 画面に依存しない純粋な関数にしておき、目印の文字の形をテスト（HomeDetailZoomTests）で固定している。
+enum HomeDetailZoom {
+    /// ズーム遷移の目印（matchedTransitionSource と navigationTransition(.zoom) で同じ値を使う）
+    ///
+    /// 投稿 ID だけでなく、ページ名（`HomeFeedSegment` の rawValue）も混ぜる。
+    /// ホームは「すべて」と「あなた向け」の 2 ページを左右にめくる作り（page 形式の TabView）で、
+    /// 隣のページも同時に作られて生きているうえ、同じ投稿が両方のページに出うる。
+    /// 投稿 ID だけだと 2 枚のカードの写真が同じ目印を持って衝突し、どちらの写真から広がるかが定まらない。
+    /// ページ名を混ぜれば、今触ったページのカードの写真だけが出どころになる。
+    /// - Parameters:
+    ///   - segment: カードが出ているページ
+    ///   - postID: 投稿の ID
+    /// - Returns: 目印の文字（例 "all-p1"・"forYou-p1"）
+    static func sourceID(segment: HomeFeedSegment, postID: String) -> String {
+        "\(segment.rawValue)-\(postID)"
     }
 }

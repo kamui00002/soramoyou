@@ -35,9 +35,20 @@ enum LoadingType {
 struct LoadingStateView: View {
     let type: LoadingType
     var progress: Double? // 0.0 ~ 1.0（オプション）
+    /// ⭐️ PR-H 後ろの光を脈打たせてよいか（呼び出し側からの許可。既定は true＝今までの呼び出しは何も変わらない）。
+    /// ホームは TabView の page 形式で 2 ページが両方生きているので、選ばれていない側に出ている
+    /// この表示の光が裏で回り続けないよう、ホームは「選ばれているときだけ true」を渡す。
+    var pulses: Bool = true
     @State private var isAnimating = false
     /// 端末の「視差効果を減らす」。ON のときは後ろの光を脈打たせない（等倍＝始点で止めた絵にする）
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// ⭐️ PR-H 光を脈打たせてよいか＝呼び出し側の許可（`pulses`）かつ「視差効果を減らす」が OFF。
+    /// 止める理由が 2 つあるので 1 つの Bool にまとめ、`.id`・onAppear・onChange はすべてこの値を見る
+    /// （片方だけを見ると、もう片方の理由では止まらないのにビルドは通ってしまう）。
+    private var shouldPulse: Bool {
+        pulses && !reduceMotion
+    }
 
     var body: some View {
         VStack(spacing: DesignTokens.Spacing.lg) {
@@ -59,9 +70,10 @@ struct LoadingStateView: View {
                     .frame(width: 100, height: 100)
                     .blur(radius: 8)
                     .scaleEffect(isAnimating ? 1.2 : 1.0)
-                    // 「視差効果を減らす」を途中で切り替えたら光を作り直し、走っている繰り返しの動きを確実に捨てる
+                    // 「視差効果を減らす」の切り替えや、選ばれていないページになったときに光を作り直し、
+                    // 走っている繰り返しの動きを確実に捨てる（キーは止める理由をまとめた `shouldPulse`）
                     // （SwiftUI は値を始点へ戻しただけでは repeatForever の動きを捨てないことがあるため）
-                    .id(reduceMotion)
+                    .id(shouldPulse)
 
                 if let progress {
                     // プログレスリング
@@ -112,17 +124,18 @@ struct LoadingStateView: View {
         }
         .padding(DesignTokens.Spacing.xl)
         .onAppear {
-            // 「視差効果を減らす」ON のときは光を脈打たせない（始点＝等倍のまま止めた絵。画面に出た最初の絵と同じ）
-            if !reduceMotion {
+            // 「視差効果を減らす」ON、または選ばれていないページのときは光を脈打たせない
+            // （始点＝等倍のまま止めた絵。画面に出た最初の絵と同じ）
+            if shouldPulse {
                 startGlowPulse()
             }
         }
-        .onChange(of: reduceMotion) { reduce in
-            // 画面を出している途中で設定が変わったとき: ON → 始点に戻して止める／OFF → 脈打ち始める
-            if reduce {
-                isAnimating = false
-            } else {
+        .onChange(of: shouldPulse) { pulse in
+            // 途中で設定やページの選択が変わったとき: 脈打ってよい → 脈打ち始める／ダメ → 始点に戻して止める
+            if pulse {
                 startGlowPulse()
+            } else {
+                isAnimating = false
             }
         }
     }
@@ -130,7 +143,7 @@ struct LoadingStateView: View {
     // MARK: - Private Methods
 
     /// 後ろの光をゆっくり大きく・小さくし続ける（ずっと動く）
-    /// 「視差効果を減らす」ON のときは呼ばない
+    /// 「視差効果を減らす」ON のときと、選ばれていないページ（`pulses` が false）のときは呼ばない
     private func startGlowPulse() {
         withAnimation(Animation.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
             isAnimating = true

@@ -8,6 +8,27 @@
 
 import Foundation
 
+// MARK: - 計装の差し替え口 ⭐️ PR-H
+
+/// いいねの計装の送り先（テストでは記録するだけの偽物を渡す）
+///
+/// DailyPickViewModel の `DailyPickEventLogging` と同じ形。
+/// FavoriteManager のように `LoggingService.shared` を直に呼ぶと、送ったかどうかをテストで確かめられないため。
+protocol LikeEventLogging: AnyObject {
+    func logEvent(_ name: String, parameters: [String: Any]?)
+}
+
+/// 本番は LoggingService（PostHog・Firebase Analytics の両方に送る）。署名はそのまま合う
+extension LoggingService: LikeEventLogging {}
+
+/// いいねをどの操作で押したか（`like_toggled` の `method` に rawValue を送る）⭐️ PR-H
+enum LikeToggleMethod: String {
+    /// ハートのボタン
+    case button
+    /// 写真の 2 回タップ（読み上げの「いいね」操作もここに数える）
+    case doubleTap = "double_tap"
+}
+
 /// いいね状態を一元管理するViewModel
 ///
 /// オプティミスティックUIでタップ即座に反映し、エラー時にリバートする。
@@ -47,11 +68,16 @@ class LikeManager: ObservableObject {
 
     private let firestoreService: FirestoreServiceProtocol
     private let authService: AuthServiceProtocol
+    /// 計装の送り先（本番は LoggingService.shared・テストは記録するだけの偽物）⭐️ PR-H
+    private let logger: LikeEventLogging
 
     init(firestoreService: FirestoreServiceProtocol = FirestoreService(),
-         authService: AuthServiceProtocol = AuthService()) {
+         authService: AuthServiceProtocol = AuthService(),
+         logger: LikeEventLogging = LoggingService.shared)
+    {
         self.firestoreService = firestoreService
         self.authService = authService
+        self.logger = logger
     }
 
     /// いいね済みかどうかを判定
@@ -70,7 +96,11 @@ class LikeManager: ObservableObject {
     }
 
     /// いいねをトグル（オプティミスティックUI）
-    func toggleLike(post: Post) async {
+    /// - Parameters:
+    ///   - post: 対象の投稿
+    ///   - source: 計装用の発生源（"home_card" / "post_detail" / "gallery_detail" / "profile_list" / "tag_detail"）
+    ///   - method: 計装用の押し方（ハートのボタン／写真の 2 回タップ）⭐️ PR-H
+    func toggleLike(post: Post, source: String, method: LikeToggleMethod) async {
         guard let userId = authService.currentUser()?.id else {
             showLoginPrompt = true
             return
@@ -110,6 +140,18 @@ class LikeManager: ObservableObject {
             //    今のユーザーの画面へ書き戻さない（clearOnSignOut で消した状態が復活する・#147）。
             //    FavoriteManager.toggleFavorite と同じガード。
             guard authService.currentUser()?.id == userId else { return }
+            // 計装 `like_toggled` ⭐️ PR-H — 書き込みに成功し、アカウントも変わっていないときだけ送る。
+            // ・これは利用者の操作（押して受け付けられた回数）の数で、実際のいいねの増減の数ではない。
+            //   既にその状態でサーバーが書かなかったときも送る（下の「楽観的な ±1 をサーバーの数字で置き換える」のコメントのとおり）。
+            // ・書き込みの失敗（画面は元に戻る）は操作が通らなかったので送らない。
+            // ・書き込みの最中にサインアウト／アカウント切り替えが挟まったときに送らないのは、
+            //   今のユーザーの識別で送ると、前のユーザーの操作を別の人の操作として数えてしまうため。
+            logger.logEvent("like_toggled", parameters: [
+                "is_liked": willLike,
+                "method": method.rawValue,
+                "source": source,
+                "is_own_post": post.userId == userId,
+            ])
             // 成功した時点でサーバーは「押した意図どおり」の状態。途中で状態の読み直しが挟まっても、ここでそろえる。
             if willLike {
                 likedPostIds.insert(postId)
