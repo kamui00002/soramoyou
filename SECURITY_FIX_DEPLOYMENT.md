@@ -36,10 +36,13 @@ Firestoreセキュリティルールを更新し、デプロイしました。
 npm install firebase-admin
 ```
 
-2. サービスアカウントキーをダウンロード:
-   - Firebase Console > Project Settings > Service Accounts
-   - "Generate New Private Key" をクリック
-   - ダウンロードしたJSONファイルを `serviceAccountKey.json` として保存
+2. 認証の準備（ADC＝自分のGoogleアカウントのログイン。鍵ファイルは作らない）:
+```bash
+gcloud auth application-default login
+# quota project を求められたら
+gcloud auth application-default set-quota-project soramoyou-ios
+```
+   - ⚠️ 今の `migrate-public-profiles.js` は鍵ファイル（`serviceAccountKey.json`）を読む作りのままで、ADCでは動かない。実行する前に、初期化を `scripts/follows-cleanup.js` などと同じADCの形に直す（接続先は `soramoyou-ios` に固定。`.firebaserc` が空のためADCの既定に頼らない）
 
 3. スクリプトを実行:
 ```bash
@@ -160,8 +163,8 @@ Soramoyou/Soramoyou/Models/PublicProfile.swift
 - Xcodeを再起動
 
 ### 移行スクリプトエラー: "serviceAccountKey.json not found"
-- Firebase Consoleからサービスアカウントキーをダウンロード
-- プロジェクトルートに `serviceAccountKey.json` として保存
+- スクリプトが鍵ファイルを読む作りのままなので出る。鍵ファイルを作って置く方法では直さない
+- 初期化をADCに直してから、「2.」のログインをして実行する
 
 ### プロフィール表示エラー
 - Firestoreルールが正しくデプロイされているか確認
