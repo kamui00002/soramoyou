@@ -220,4 +220,29 @@ final class StorageImageURLTests: XCTestCase {
         // テストは Emulator の接続情報で動く（FirebaseEmulatorSwitch）ので、live は Emulator の決まり
         XCTAssertEqual(StorageImageURL.live, emulator)
     }
+
+    // MARK: - 今の決まり（live）で確かめる版（アイコンなど）
+
+    func testLiveVersionAcceptsEmulatorURLDuringTests() {
+        // テスト中の live は Emulator の決まりなので、Emulator の形をそのままの値で通す
+        XCTAssertEqual(
+            StorageImageURL.url(
+                from: "http://127.0.0.1:9199/v0/b/demo-soramoyou-security.appspot.com/o/profile_images%2Fu1%2Fprofile.jpg?alt=media&token=t4"
+            )?.absoluteString,
+            "http://127.0.0.1:9199/v0/b/demo-soramoyou-security.appspot.com/o/profile_images%2Fu1%2Fprofile.jpg?alt=media&token=t4"
+        )
+    }
+
+    func testLiveVersionAcceptsOnlyLivePolicy() {
+        // live の決まりに合わない URL は通さない（テスト中は本番の形も通さない）
+        XCTAssertNil(StorageImageURL.url(from: "https://example.com/v0/b/demo-soramoyou-security.appspot.com/o/a.jpg"))
+        XCTAssertNil(StorageImageURL.url(from: "http://127.0.0.1:9199/v0/b/other-bucket.appspot.com/o/a.jpg"))
+        XCTAssertNil(StorageImageURL.url(from: productionURLWith443))
+    }
+
+    func testLiveVersionAcceptsNothingForEmptyInput() {
+        // 値が無い・空の文字列は通さない
+        XCTAssertNil(StorageImageURL.url(from: nil))
+        XCTAssertNil(StorageImageURL.url(from: ""))
+    }
 }

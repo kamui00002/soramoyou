@@ -392,7 +392,7 @@ struct CommentRow: View {
     /// アバター（プロフィール写真があれば KFImage、無ければ頭文字 / person アイコン）
     @ViewBuilder
     private var avatarView: some View {
-        if let urlString = comment.authorPhotoURL, let url = URL(string: urlString) {
+        if let url = StorageImageURL.url(from: comment.authorPhotoURL) {
             KFImage(url)
                 .placeholder { avatarFallback }
                 .resizable()

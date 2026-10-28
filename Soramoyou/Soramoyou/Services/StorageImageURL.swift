@@ -94,4 +94,13 @@ enum StorageImageURL {
 
         return url
     }
+
+    /// 今の Firebase の接続情報から作った決まり（`live`）に合う Storage の画像の URL だけを URL にする
+    ///
+    /// 読み方（PostImageSource）を通さない画像（アイコンなど）の URL を読む直前に使う。
+    /// - Parameter string: Firestore から読んだ URL の文字列
+    /// - Returns: 通せば URL、通さなければ nil
+    static func url(from string: String?) -> URL? {
+        url(from: string, policy: live)
+    }
 }

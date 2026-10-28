@@ -183,7 +183,7 @@ struct UserProfileView: View {
 
     @ViewBuilder
     private var avatarView: some View {
-        if let urlString = viewModel.publicProfile?.photoURL, let url = URL(string: urlString) {
+        if let url = StorageImageURL.url(from: viewModel.publicProfile?.photoURL) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case let .success(image):

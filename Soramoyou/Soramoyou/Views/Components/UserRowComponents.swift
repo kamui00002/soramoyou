@@ -26,7 +26,7 @@ struct UserAvatarView: View {
     var size: CGFloat = 44
 
     var body: some View {
-        if let urlString = photoURL, let url = URL(string: urlString) {
+        if let url = StorageImageURL.url(from: photoURL) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case let .success(image):
