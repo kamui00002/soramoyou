@@ -11,7 +11,6 @@
 		B05705100000000000000003 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = B05705100000000000000002 /* PostHog */; };
 		5CA0000000000000000001 /* SkyCamera in Frameworks */ = {isa = PBXBuildFile; productRef = 5CA0000000000000000002 /* SkyCamera */; };
 		5CA0000000000000000003 /* SkyCamera in Frameworks */ = {isa = PBXBuildFile; productRef = 5CA0000000000000000004 /* SkyCamera */; };
-		E051CA452EE49ACB00CC78AB /* FirebaseAI in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA442EE49ACB00CC78AB /* FirebaseAI */; };
 		E051CA472EE49ACB00CC78AB /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA462EE49ACB00CC78AB /* FirebaseAnalytics */; };
 		E051CA492EE49ACB00CC78AB /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA482EE49ACB00CC78AB /* FirebaseAuth */; };
 		E051CA4B2EE49ACB00CC78AB /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = E051CA4A2EE49ACB00CC78AB /* FirebaseCrashlytics */; };
@@ -144,7 +143,6 @@
 				E051CA4B2EE49ACB00CC78AB /* FirebaseCrashlytics in Frameworks */,
 				E051CA492EE49ACB00CC78AB /* FirebaseAuth in Frameworks */,
 				E051CA4D2EE49ACB00CC78AB /* FirebaseFirestore in Frameworks */,
-				E051CA452EE49ACB00CC78AB /* FirebaseAI in Frameworks */,
 				E051CA532EE49B3400CC78AB /* GoogleMobileAds in Frameworks */,
 				E051CA542EE49B3500CC78AB /* FirebaseStorage in Frameworks */,
 				50F7A0010000000000000001 /* FirebaseFunctions in Frameworks */,
@@ -238,7 +236,6 @@
 			);
 			name = Soramoyou;
 			packageProductDependencies = (
-				E051CA442EE49ACB00CC78AB /* FirebaseAI */,
 				E051CA462EE49ACB00CC78AB /* FirebaseAnalytics */,
 				E051CA482EE49ACB00CC78AB /* FirebaseAuth */,
 				E051CA4A2EE49ACB00CC78AB /* FirebaseCrashlytics */,
@@ -951,11 +948,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5146A8BEE2068F396EF810AA /* XCRemoteSwiftPackageReference "opencv-spm" */;
 			productName = OpenCV;
-		};
-		E051CA442EE49ACB00CC78AB /* FirebaseAI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E051CA432EE49ACB00CC78AB /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAI;
 		};
 		E051CA462EE49ACB00CC78AB /* FirebaseAnalytics */ = {
 			isa = XCSwiftPackageProductDependency;
