@@ -431,7 +431,8 @@ struct HomeView: View {
                         // 理由: toggleLike はゲストだと showLoginPrompt を立てて戻るだけで、その旗を読む画面がまだ無い。
                         // 付けるとハートと触覚は出るのにいいねされず、誤解を招く（2026-10-28 利用者の決定）。
                         // 判定は Picker・feedPages と同じ `viewModel.currentUserId`。
-                        onDoubleTapLike: viewModel.currentUserId == nil ? nil : { addLikeFromDoubleTap(post) }
+                        onDoubleTapLike: viewModel.currentUserId == nil ? nil : { addLikeFromDoubleTap(post) },
+                        shareSource: "home_card"
                     )
                     // スタガードアニメーション（改善）
                     // ⭐️ PR-H: 「視差効果を減らす」ON のときは下からの移動と拡大をやめ、順にふわっと出るだけにする。
@@ -536,6 +537,12 @@ struct PostCard: View {
     /// 渡したときだけ、写真の 2 回タップ・ハートの演出・触覚・読み上げの「いいね」操作が付く。
     /// 付けるかどうか（付いていたら何もしない）は渡す側（HomeView）が決める。
     var onDoubleTapLike: (() -> Void)?
+    /// シェアのボタンの計装 post_share_sheet_opened の source ⭐️ PR-H
+    /// いいねの source と同じ値（"home_card" / "tag_detail" / "profile_list"）。
+    /// 検索（SearchView）は渡していない＝source なしの記録が検索のカード。
+    /// SearchView は未整形のファイルで今回は触らないため（search_card は別 PR で足す）。
+    /// メンバーごとの init の引数は宣言順なので、一番最後に置いて呼び出し側は末尾に足すだけで済むようにしている。
+    var shareSource: String?
 
     /// 2 回タップのハートが見えているか ⭐️ PR-H
     @State private var isDoubleTapHeartVisible = false
@@ -690,10 +697,10 @@ struct PostCard: View {
 
                     Spacer()
 
-                    // シェアボタン
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(DesignTokens.Colors.textTertiary)
+                    // シェアボタン — 共通部品（詳細の「共有」と同じ処理: 1 枚目を取ってきて共有シートを出す）⭐️ PR-H
+                    // このカードを使う 4 画面（ホーム・検索・タグ詳細・プロフィール）すべてで動く。
+                    // 計装の source は shareSource（検索は渡していない＝source なし）
+                    PostShareButton(post: post, source: shareSource)
                 }
             }
             .padding(DesignTokens.Spacing.cardPadding)

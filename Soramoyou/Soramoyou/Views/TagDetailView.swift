@@ -246,7 +246,8 @@ struct TagDetailView: View {
                     return
                 }
                 selectedAuthorUserId = post.userId
-            }
+            },
+            shareSource: "tag_detail"
         )
     }
 

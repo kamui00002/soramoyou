@@ -672,7 +672,8 @@ struct ProfileView: View {
                             },
                             onCardTapped: {
                                 selectedPost = post
-                            }
+                            },
+                            shareSource: "profile_list"
                         )
                         .onAppear { loadMorePostsIfLast(post) }
                         .contextMenu {
