@@ -28,6 +28,11 @@ struct HomeView: View {
     @State private var animateCards = false // フィードアニメーション用 ☀️
     /// ホームフィードの表示セグメント（すべて / あなた向け）⭐️ PR-7
     @State private var selectedSegment: HomeFeedSegment = .all
+    /// 切り替えが上のタップか左右のめくりかを見分ける印（home_feed_segment_changed の via）⭐️ PR-H
+    ///
+    /// Picker と TabView は同じ `selectedSegment` を共有するので、onChange だけではどちらで切り替わったか分からない。
+    /// Picker の Binding の set（タップのときだけ通る）で印を立て、`onChange(of: selectedSegment)` で読み出して下ろす。
+    @State private var segmentChangeTracker = HomeFeedSegmentChangeTracker()
     /// 「あなた向け」の初回の読み込みが終わったか ⭐️ PR-H
     ///
     /// めくって切り替える TabView は、隣の「あなた向け」のページを指の動きに合わせて先に見せる。
@@ -39,6 +44,8 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// アプリが前に出たか（今日のおすすめを、日をまたいで開いたままでも今日の分に読み直すため）⭐️
     @Environment(\.scenePhase) private var scenePhase
+    /// 端末の「視差効果を減らす」が ON か（フィードのカードの登場の動きを合わせる）⭐️ PR-H
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// 現在のセグメントに対応する ViewModel ⭐️ PR-7
     /// ForYouFeedViewModel は HomeViewModel のサブクラスなので、この1本の参照で扱える
@@ -72,7 +79,16 @@ struct HomeView: View {
                     // フィード切り替え（すべて / あなた向け）⭐️ PR-7
                     // ゲスト（未認証）は publicProfiles を読めず「あなた向け」が成立しないため出さない
                     if viewModel.currentUserId != nil {
-                        Picker("フィード", selection: $selectedSegment) {
+                        // ⭐️ PR-H: Picker にだけ、タップの印を立てる Binding を渡す（via の tap / swipe を分けるため）。
+                        // 下の TabView は生の `$selectedSegment` のまま（あちらも包むと、めくりまで tap と記録される）。
+                        // set では代入より先に印を立てる（代入で onChange が来たときに、印が読めるように）。
+                        Picker("フィード", selection: Binding(
+                            get: { selectedSegment },
+                            set: { newValue in
+                                segmentChangeTracker.noteTap(from: selectedSegment, to: newValue)
+                                selectedSegment = newValue
+                            }
+                        )) {
                             ForEach(HomeFeedSegment.allCases) { segment in
                                 Text(segment.title).tag(segment)
                             }
@@ -134,8 +150,12 @@ struct HomeView: View {
                 // 切り替わった手ごたえ ⭐️ PR-H
                 // 上の Picker のタップも、TabView を左右にめくったのも、どちらもここを通るので 1 か所で鳴らす
                 Haptics.play(.selection)
+                // どちらで切り替わったか（via）⭐️ PR-H: Picker の set で印が立っていれば tap、無ければめくり（swipe）。
+                // 印はここで 1 回読んだら下ろす（次の切り替えに持ち越さない）
+                let via = segmentChangeTracker.consume()
                 LoggingService.shared.logEvent("home_feed_segment_changed", parameters: [
                     "segment": newSegment.analyticsValue,
+                    "via": via.rawValue,
                 ])
                 // 「あなた向け」は初回選択時に遅延読み込み（未使用時のクエリコストを避ける）⭐️ PR-7
                 // ⚠️ PR-H: ページの onAppear で読みに行く形にはしない。TabView の page は隣のページを
@@ -226,6 +246,7 @@ struct HomeView: View {
     ///
     /// - ログイン中: `TabView` の page 形式で 2 ページ。選択は上の Picker と同じ `selectedSegment` を共有するので、
     ///   タップでもめくりでも切り替わる（どちらも `onChange(of: selectedSegment)` を通る）。
+    ///   どちらで切り替えたか（計装の via）は Picker にだけ包んだ Binding で見分けるので、ここは生の `$selectedSegment` のまま渡す。
     /// - ゲスト（未ログイン）: 「あなた向け」が成り立たない（publicProfiles を読めない）ので、
     ///   TabView に入れず「すべて」の 1 ページだけを今までどおり出す（めくれない）。
     ///   判定は Picker と同じ `viewModel.currentUserId`（ゲストには Picker も出していない）。
@@ -413,11 +434,15 @@ struct HomeView: View {
                         onDoubleTapLike: viewModel.currentUserId == nil ? nil : { addLikeFromDoubleTap(post) }
                     )
                     // スタガードアニメーション（改善）
+                    // ⭐️ PR-H: 「視差効果を減らす」ON のときは下からの移動と拡大をやめ、順にふわっと出るだけにする。
+                    // 画面の動きで気分が悪くなる原因（移動・拡大）を含めないため（PostCard の 2 回タップのハートと同じ考え方）。
+                    // `Motion.animation` は ON のとき nil（動かさない）を返すので、ON のときの出方は fastEase に差し替える。
+                    // 順番の遅れ（stagger）は ON でも残す（薄く出る順番がずれるだけで、移動・拡大は含まないため）。
                     .opacity(animateCards ? 1 : 0)
-                    .offset(y: animateCards ? 0 : 30)
-                    .scaleEffect(animateCards ? 1 : 0.95)
+                    .offset(y: reduceMotion || animateCards ? 0 : 30)
+                    .scaleEffect(reduceMotion || animateCards ? 1 : 0.95)
                     .animation(
-                        DesignTokens.Animation.smoothSpring
+                        (Motion.animation(DesignTokens.Animation.smoothSpring, reduceMotion: reduceMotion) ?? DesignTokens.Animation.fastEase)
                             .delay(Double(index) * DesignTokens.Animation.staggerDelay),
                         value: animateCards
                     )
@@ -1690,5 +1715,49 @@ enum HomeFeedSegment: String, CaseIterable, Identifiable {
         case .all: "all"
         case .forYou: "for_you"
         }
+    }
+}
+
+// MARK: - Home Feed Segment Change Via ⭐️ PR-H
+
+/// ホームのフィード切り替えが、上の切り替え（Picker）のタップか、左右のめくり（TabView）かの区別 ⭐️ PR-H
+///
+/// 計装（home_feed_segment_changed）の `via` に rawValue をそのまま送る。
+/// PostHog で集計する文字なので、名前を変えると過去の記録と分かれてしまう（テストで文字を固定している）。
+enum HomeFeedSegmentChangeVia: String {
+    /// 上の切り替え（Picker）をタップした
+    case tap
+    /// 左右にめくった（TabView のページ送り）
+    case swipe
+}
+
+/// 「次の切り替えは上のタップから来た」の印を持ち、onChange で 1 回だけ読み出す ⭐️ PR-H
+///
+/// Picker と TabView は同じ `selectedSegment` を共有しているので、`onChange(of: selectedSegment)` だけでは
+/// どちらで切り替わったか分からない。そこで Picker の Binding の set（タップのときだけ通る）で印を立て、
+/// onChange で読み出して下ろす。印が無いまま onChange が来たら、めくり（TabView が直接書いた）と見なす。
+struct HomeFeedSegmentChangeTracker {
+    /// 上のタップから来た切り替えを、まだ onChange で読み出していないか
+    private(set) var isTapPending = false
+
+    /// Picker の Binding の set から呼ぶ（タップで選ばれた値を受ける）
+    ///
+    /// 今と同じ値を選び直しただけのときは印を立てない。値が変わらないと onChange が来ず印が残り、
+    /// 次のめくりが tap と記録されてしまうため。
+    /// - Parameters:
+    ///   - current: 今選ばれているセグメント（代入する前の値）
+    ///   - newValue: タップで選ばれたセグメント
+    mutating func noteTap(from current: HomeFeedSegment, to newValue: HomeFeedSegment) {
+        guard newValue != current else { return }
+        isTapPending = true
+    }
+
+    /// onChange から呼ぶ。印があれば tap、無ければ swipe を返し、印を下ろす
+    /// - Returns: この切り替えがどちらから来たか
+    mutating func consume() -> HomeFeedSegmentChangeVia {
+        let via: HomeFeedSegmentChangeVia = isTapPending ? .tap : .swipe
+        // 印は 1 回の切り替えにつき 1 回だけ使う（次の切り替えに持ち越さない）
+        isTapPending = false
+        return via
     }
 }
