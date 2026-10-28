@@ -160,7 +160,12 @@ struct PostShareButton: View {
         // 取ってきている間は押せない（2 回目を捨てる本体は PostShareModel の guard。ここは見た目と手ごたえのため）
         .disabled(model.isPreparing)
         .accessibilityLabel("共有")
-        .sheet(isPresented: $model.isShareSheetPresented) {
+        // ⭐️ PR-H 閉じたら画像を手放す: カード 1 枚ごとに StateObject（PostShareModel）があり、
+        //    shareImages に本体画質の UIImage（展開後 1 枚 13〜17MB 程度）を持ったままになる。
+        //    一覧に何枚もカードが並ぶので、共有シートを閉じた時点で空にしてメモリを返す。
+        .sheet(isPresented: $model.isShareSheetPresented, onDismiss: {
+            model.shareImages = []
+        }) {
             ImageShareSheet(images: model.shareImages)
         }
         // 詳細の「共有」の失敗と同じ形（タイトルに文、OK だけ）
