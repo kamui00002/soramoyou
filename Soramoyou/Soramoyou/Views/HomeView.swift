@@ -19,6 +19,14 @@ struct HomeView: View {
     @EnvironmentObject private var likeManager: LikeManager
     @EnvironmentObject private var favoriteManager: FavoriteManager
     @State private var selectedPost: Post?
+    /// 詳細をカードの写真から広げて開く（ズーム遷移・iOS 18 以上）ための名前空間 ⭐️ PR-H
+    /// カードの写真（matchedTransitionSource）と詳細（navigationTransition(.zoom)）で同じ名前空間を使い、
+    /// 同じ目印どうしを結び付ける。iOS 16・17 では使われない（詳細は今までどおり下から出る）。
+    @Namespace private var detailZoomNamespace
+    /// 詳細を開くときの出どころの目印（`HomeDetailZoom.sourceID` の値）⭐️ PR-H
+    /// カードから開くときは `selectedPost` を入れる前に入れ、今日のおすすめから開くときは nil にする（ズームしない）。
+    /// シートを閉じても消さない（次に開くときに必ず入れ直すので、残っていても使われない）。
+    @State private var detailZoomSourceID: String?
     /// 他ユーザープロフィール画面表示用 ⭐️ Issue #2
     @State private var selectedAuthorUserId: String?
     /// タップされたハッシュタグ。non-nil でタグ詳細画面を全画面提示する ⭐️
@@ -200,6 +208,10 @@ struct HomeView: View {
                 PostDetailView(post: post)
                     .environmentObject(likeManager)
                     .environmentObject(favoriteManager)
+                    // カードの写真から広がって開く（ズーム遷移・iOS 18 以上）⭐️ PR-H
+                    // 目印が nil（今日のおすすめから開いた）か iOS 16・17 のときは何も付けない＝今までどおり下から出る。
+                    // シートの中身のいちばん外側に付ける（Apple の説明で、VStack などの入れ物の外側に付けることになっているため）。
+                    .modifier(DetailZoomTransitionModifier(sourceID: detailZoomSourceID, namespace: detailZoomNamespace))
             }
             // ハッシュタグ → タグ詳細画面 ⭐️
             // HomeView は NavigationView（NavigationStack ではない）ため
@@ -382,6 +394,11 @@ struct HomeView: View {
                         let impact = UIImpactFeedbackGenerator(style: .light)
                         impact.impactOccurred()
                         dailyPickViewModel.recordTapped()
+                        // ズームせず、今までどおり下から出す ⭐️ PR-H
+                        // 今日のおすすめのカードは、ズームの出どころ（PostCard の写真）ではないため。
+                        // 目印はシートを閉じても消えないので、直前にカードから開いた目印が残っていると、
+                        // そのカードの写真から広がってしまう。`selectedPost` を入れる**前**に消しておく。
+                        detailZoomSourceID = nil
                         selectedPost = post
                     }
 
@@ -410,6 +427,10 @@ struct HomeView: View {
                         onCardTapped: {
                             let impact = UIImpactFeedbackGenerator(style: .light)
                             impact.impactOccurred()
+                            // 詳細をこのカードの写真から広げて開くための目印 ⭐️ PR-H（iOS 18 以上で効く）
+                            // `selectedPost` を入れる**前**に入れる＝シートの中身を作る時点で、どの写真から広がるかが決まっているように。
+                            // ページ名も混ぜた値なので、同じ投稿が両方のページに出ていても、今触ったページの写真から広がる。
+                            detailZoomSourceID = HomeDetailZoom.sourceID(segment: segment, postID: post.id)
                             selectedPost = post
                         },
                         onAuthorTapped: {
@@ -432,7 +453,14 @@ struct HomeView: View {
                         // 付けるとハートと触覚は出るのにいいねされず、誤解を招く（2026-10-28 利用者の決定）。
                         // 判定は Picker・feedPages と同じ `viewModel.currentUserId`。
                         onDoubleTapLike: viewModel.currentUserId == nil ? nil : { addLikeFromDoubleTap(post) },
-                        shareSource: "home_card"
+                        shareSource: "home_card",
+                        // 詳細を開くとき、このカードの写真から広がる（ズーム遷移・iOS 18 以上）⭐️ PR-H
+                        // 目印は onCardTapped で detailZoomSourceID に入れる値と同じ式（ページ名＋投稿 ID）にする。
+                        // 2 つがずれると、写真と詳細が結び付かず写真から広がらない。
+                        zoomTransition: PostCardZoomTransition(
+                            sourceID: HomeDetailZoom.sourceID(segment: segment, postID: post.id),
+                            namespace: detailZoomNamespace
+                        )
                     )
                     // スタガードアニメーション（改善）
                     // ⭐️ PR-H: 「視差効果を減らす」ON のときは下からの移動と拡大をやめ、順にふわっと出るだけにする。
@@ -541,8 +569,13 @@ struct PostCard: View {
     /// いいねの source と同じ値（"home_card" / "tag_detail" / "profile_list"）。
     /// 検索（SearchView）は渡していない＝source なしの記録が検索のカード。
     /// SearchView は未整形のファイルで今回は触らないため（search_card は別 PR で足す）。
-    /// メンバーごとの init の引数は宣言順なので、一番最後に置いて呼び出し側は末尾に足すだけで済むようにしている。
+    /// メンバーごとの init の引数は宣言順なので、後ろのほう（zoomTransition の前）に置いて呼び出し側は末尾に足すだけで済むようにしている。
     var shareSource: String?
+    /// 詳細をこのカードの写真から広げて開くための材料（ズーム遷移・iOS 18 以上）⭐️ PR-H
+    /// 渡すのはホームだけ。渡さない画面（検索・タグ詳細・プロフィール）は nil＝今までどおり詳細は下から出る。
+    /// メンバーごとの init の引数は宣言順なので、shareSource の後ろ（一番最後）に置き、
+    /// 他の 3 画面の呼び出しは変えずに済むようにしている。
+    var zoomTransition: PostCardZoomTransition?
 
     /// 2 回タップのハートが見えているか ⭐️ PR-H
     @State private var isDoubleTapHeartVisible = false
@@ -591,6 +624,9 @@ struct PostCard: View {
                     .padding(DesignTokens.Spacing.sm)
                 }
             }
+            // この写真を、詳細へ広がるズーム遷移の出どころにする ⭐️ PR-H（iOS 18 以上・zoomTransition を渡した画面だけ）
+            // 写真の ZStack の直後（ハートの overlay やタップより前）に付け、広がり始める枠をカード全体でなく写真の部分にする
+            .modifier(PostCardZoomSourceModifier(zoom: zoomTransition))
             .contentShape(Rectangle())
             // 2 回タップで写真の中央に出るハート ⭐️ PR-H（onDoubleTapLike が無い画面では描かない）
             .overlay { doubleTapHeart }
@@ -916,6 +952,58 @@ private struct PostCardLikeAccessibilityActionModifier: ViewModifier {
             content.accessibilityAction(named: "いいね") {
                 onLike()
             }
+        } else {
+            content
+        }
+    }
+}
+
+// MARK: - Post Card Zoom Transition ⭐️ PR-H
+
+/// カードの写真から詳細へ広がるズーム遷移（iOS 18 以上）のために、カードへ渡す材料 ⭐️ PR-H
+///
+/// 目印（sourceID）と名前空間（namespace）は、開く側（HomeView のシート）の `navigationTransition(.zoom)` と
+/// 同じ組でないと結び付かない。2 つを 1 つの型にまとめて渡し、片方だけ渡し忘れることが起きないようにしている。
+/// `Namespace.ID` 自体は iOS 16 でも使えるので、この型は iOS 18 の分岐の外に置ける（ズームの API だけが iOS 18 から）。
+struct PostCardZoomTransition {
+    /// ズーム遷移の目印（`HomeDetailZoom.sourceID` の値）
+    let sourceID: String
+    /// 開く側と共有する名前空間（HomeView の `detailZoomNamespace`）
+    let namespace: Namespace.ID
+}
+
+/// カードの写真を、詳細へのズーム遷移の出どころにする ⭐️ PR-H
+///
+/// `matchedTransitionSource` は iOS 18 からなので `#available` で分ける。
+/// iOS 16・17 のとき、または zoom が nil の画面（検索・タグ詳細・プロフィール）は何も付けない＝今までと同じ。
+private struct PostCardZoomSourceModifier: ViewModifier {
+    /// 出どころの目印と名前空間。nil なら何も付けない
+    let zoom: PostCardZoomTransition?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), let zoom {
+            content.matchedTransitionSource(id: zoom.sourceID, in: zoom.namespace)
+        } else {
+            content
+        }
+    }
+}
+
+/// 詳細（シートの中身）を、目印の写真から広がって開くようにする ⭐️ PR-H
+///
+/// `navigationTransition(.zoom)` は iOS 18 からなので `#available` で分ける。
+/// iOS 16・17 のとき、または目印が nil（今日のおすすめから開いた）ときは何も付けない＝今までどおり下から出る。
+private struct DetailZoomTransitionModifier: ViewModifier {
+    /// 出どころの目印（カードに渡した `PostCardZoomTransition.sourceID` と同じ値）。nil ならズームしない
+    let sourceID: String?
+    /// カードと共有する名前空間（HomeView の `detailZoomNamespace`）
+    let namespace: Namespace.ID
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), let sourceID {
+            content.navigationTransition(.zoom(sourceID: sourceID, in: namespace))
         } else {
             content
         }
@@ -1766,5 +1854,27 @@ struct HomeFeedSegmentChangeTracker {
         // 印は 1 回の切り替えにつき 1 回だけ使う（次の切り替えに持ち越さない）
         isTapPending = false
         return via
+    }
+}
+
+// MARK: - Home Detail Zoom ⭐️ PR-H
+
+/// ホームのカードの写真から詳細へ広がるズーム遷移（iOS 18 以上）の目印を作る ⭐️ PR-H
+///
+/// 画面に依存しない純粋な関数にしておき、目印の文字の形をテスト（HomeDetailZoomTests）で固定している。
+enum HomeDetailZoom {
+    /// ズーム遷移の目印（matchedTransitionSource と navigationTransition(.zoom) で同じ値を使う）
+    ///
+    /// 投稿 ID だけでなく、ページ名（`HomeFeedSegment` の rawValue）も混ぜる。
+    /// ホームは「すべて」と「あなた向け」の 2 ページを左右にめくる作り（page 形式の TabView）で、
+    /// 隣のページも同時に作られて生きているうえ、同じ投稿が両方のページに出うる。
+    /// 投稿 ID だけだと 2 枚のカードの写真が同じ目印を持って衝突し、どちらの写真から広がるかが定まらない。
+    /// ページ名を混ぜれば、今触ったページのカードの写真だけが出どころになる。
+    /// - Parameters:
+    ///   - segment: カードが出ているページ
+    ///   - postID: 投稿の ID
+    /// - Returns: 目印の文字（例 "all-p1"・"forYou-p1"）
+    static func sourceID(segment: HomeFeedSegment, postID: String) -> String {
+        "\(segment.rawValue)-\(postID)"
     }
 }
