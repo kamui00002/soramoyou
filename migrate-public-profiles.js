@@ -10,36 +10,36 @@
  * 1. Firebase Admin SDK の設定:
  *    npm install firebase-admin
  *
- * 2. サービスアカウントキーをダウンロード:
- *    Firebase Console > Project Settings > Service Accounts
- *    > Generate New Private Key
- *    ダウンロードしたJSONファイルを serviceAccountKey.json として保存
+ * 2. 認証の準備（ADC＝自分のGoogleアカウントのログイン。鍵ファイルは作らない）:
+ *    gcloud auth application-default login
+ *    quota project を求められたら: gcloud auth application-default set-quota-project soramoyou-ios
+ *    接続先は EXPECTED_PROJECT_ID（soramoyou-ios）に固定している（.firebaserc が空のため。ADCの既定に頼らない）
  *
  * 3. 実行:
  *    node migrate-public-profiles.js
  */
 
-const admin = require('firebase-admin');
-const path = require('path');
+// firebase-admin のモジュール API（scripts/follows-cleanup.js と同じ形）。
+// firebase-admin 14 には admin.credential・admin.firestore() などの名前空間 API が無いため、こちらを使う
+const { initializeApp, applicationDefault } = require('firebase-admin/app');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 
-// サービスアカウントキーのパス
-const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
+// 接続先として唯一許可する Firebase プロジェクト（.firebaserc が空のため、ここで固定する。scripts/follows-cleanup.js と同じ）
+const EXPECTED_PROJECT_ID = 'soramoyou-ios';
 
-// Firebase Admin SDK初期化
+// Firebase Admin SDK初期化（ADC＝Application Default Credentials。鍵ファイルは読まない）
+let app;
 try {
-  const serviceAccount = require(serviceAccountPath);
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
-  console.log('✅ Firebase Admin SDK initialized');
+  app = initializeApp({ credential: applicationDefault(), projectId: EXPECTED_PROJECT_ID });
+  console.log(`✅ Firebase Admin SDK initialized (project: ${EXPECTED_PROJECT_ID})`);
 } catch (error) {
-  console.error('❌ Error: serviceAccountKey.json not found');
-  console.error('Please download service account key from Firebase Console');
-  console.error('Project Settings > Service Accounts > Generate New Private Key');
+  console.error('❌ Error: Failed to initialize Firebase Admin SDK with Application Default Credentials (ADC)');
+  console.error('Log in first: gcloud auth application-default login');
+  console.error(`If asked for a quota project: gcloud auth application-default set-quota-project ${EXPECTED_PROJECT_ID}`);
   process.exit(1);
 }
 
-const db = admin.firestore();
+const db = getFirestore(app);
 
 /**
  * Userドキュメントから公開プロフィールデータを抽出
@@ -55,8 +55,8 @@ function extractPublicProfile(userId, userData) {
     followersCount: userData.followersCount || 0,
     followingCount: userData.followingCount || 0,
     postsCount: userData.postsCount || 0,
-    createdAt: userData.createdAt || admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: userData.updatedAt || admin.firestore.FieldValue.serverTimestamp()
+    createdAt: userData.createdAt || FieldValue.serverTimestamp(),
+    updatedAt: userData.updatedAt || FieldValue.serverTimestamp()
   };
 }
 
@@ -79,7 +79,8 @@ async function migratePublicProfiles() {
 
     let successCount = 0;
     let errorCount = 0;
-    const batch = db.batch();
+    // コミット済みの batch には書き足せないため、500 件ごとに作り直す（let にしている理由）
+    let batch = db.batch();
     let batchCount = 0;
     const BATCH_SIZE = 500; // Firestoreのバッチ制限
 
@@ -103,6 +104,7 @@ async function migratePublicProfiles() {
         if (batchCount >= BATCH_SIZE) {
           await batch.commit();
           console.log(`\n💾 Committed batch of ${batchCount} documents\n`);
+          batch = db.batch();
           batchCount = 0;
         }
 
