@@ -887,7 +887,7 @@ struct PostCard: View {
 
     @ViewBuilder
     private var authorAvatar: some View {
-        if let urlString = author?.photoURL, let url = URL(string: urlString) {
+        if let url = StorageImageURL.url(from: author?.photoURL) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case let .success(image):
@@ -1694,7 +1694,7 @@ struct PostDetailView: View {
     private func authorSection(user: PublicProfile?) -> some View {
         HStack(spacing: 12) {
             // プロフィール画像
-            if let photoURL = user?.photoURL, let url = URL(string: photoURL) {
+            if let url = StorageImageURL.url(from: user?.photoURL) {
                 KFImage(url)
                     .placeholder {
                         Circle()

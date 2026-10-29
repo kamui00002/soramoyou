@@ -6,8 +6,8 @@
 //  モダンなグラスモーフィズムデザインでアプリ全体のトーンに統一
 //
 
-import SwiftUI
 import Kingfisher
+import SwiftUI
 
 /// コメントセクション（一覧 + 入力欄）
 struct CommentSection: View {
@@ -78,7 +78,7 @@ struct CommentSection: View {
                 // テキスト入力
                 TextField("空の感想を書こう...", text: $commentText, axis: .vertical)
                     .font(.system(size: 15, design: .rounded))
-                    .lineLimit(1...4)
+                    .lineLimit(1 ... 4)
                     .disabled(commentViewModel.isSending)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -91,7 +91,7 @@ struct CommentSection: View {
                                         LinearGradient(
                                             colors: [
                                                 DesignTokens.Colors.skyBlue.opacity(commentText.isEmpty ? 0.2 : 0.5),
-                                                DesignTokens.Colors.selectionAccent.opacity(commentText.isEmpty ? 0.1 : 0.3)
+                                                DesignTokens.Colors.selectionAccent.opacity(commentText.isEmpty ? 0.1 : 0.3),
                                             ],
                                             startPoint: .leading,
                                             endPoint: .trailing
@@ -121,8 +121,8 @@ struct CommentSection: View {
                         Circle()
                             .fill(
                                 commentText.isEmpty
-                                ? LinearGradient(colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                                : LinearGradient(colors: [DesignTokens.Colors.skyBlue, DesignTokens.Colors.selectionAccent], startPoint: .topLeading, endPoint: .bottomTrailing)
+                                    ? LinearGradient(colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                                    : LinearGradient(colors: [DesignTokens.Colors.skyBlue, DesignTokens.Colors.selectionAccent], startPoint: .topLeading, endPoint: .bottomTrailing)
                             )
                     )
                     .scaleEffect(sendScale)
@@ -245,7 +245,7 @@ struct CommentSection: View {
                                 colors: [
                                     DesignTokens.Colors.skyBlue.opacity(0.1),
                                     DesignTokens.Colors.selectionAccent.opacity(0.15),
-                                    DesignTokens.Colors.skyBlue.opacity(0.1)
+                                    DesignTokens.Colors.skyBlue.opacity(0.1),
                                 ],
                                 startPoint: .leading,
                                 endPoint: .trailing
@@ -392,7 +392,7 @@ struct CommentRow: View {
     /// アバター（プロフィール写真があれば KFImage、無ければ頭文字 / person アイコン）
     @ViewBuilder
     private var avatarView: some View {
-        if let urlString = comment.authorPhotoURL, let url = URL(string: urlString) {
+        if let url = StorageImageURL.url(from: comment.authorPhotoURL) {
             KFImage(url)
                 .placeholder { avatarFallback }
                 .resizable()

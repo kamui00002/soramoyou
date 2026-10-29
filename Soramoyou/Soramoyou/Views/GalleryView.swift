@@ -6,8 +6,8 @@
 //
 //  AsyncContentViewを使用してエラー/ロード状態を統一的に表示する
 
-import SwiftUI
 import Kingfisher
+import SwiftUI
 
 struct GalleryView: View {
     @StateObject private var viewModel = GalleryViewModel()
@@ -25,11 +25,11 @@ struct GalleryView: View {
     /// デバイス向き・サイズに応じた列数
     private var columnCount: Int {
         if horizontalSizeClass == .regular {
-            return 5           // iPad
+            5 // iPad
         } else if verticalSizeClass == .compact {
-            return 4           // ランドスケープiPhone
+            4 // ランドスケープiPhone
         } else {
-            return 3           // ポートレートiPhone
+            3 // ポートレートiPhone
         }
     }
 
@@ -79,7 +79,7 @@ struct GalleryView: View {
                     colors: [
                         Color(red: 0.68, green: 0.85, blue: 0.90),
                         Color(red: 0.53, green: 0.81, blue: 0.98),
-                        Color(red: 0.39, green: 0.58, blue: 0.93)
+                        Color(red: 0.39, green: 0.58, blue: 0.93),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -224,7 +224,7 @@ struct GalleryView: View {
             }
 
             // これ以上投稿がない場合
-            if !viewModel.hasMorePosts && !viewModel.posts.isEmpty {
+            if !viewModel.hasMorePosts, !viewModel.posts.isEmpty {
                 Text(viewModel.isRankingMode ? "ランキングは上位\(RankingService.rankingLimit)件までです" : "すべての投稿を表示しました")
                     .font(.caption)
                     .foregroundColor(DesignTokens.Colors.textTertiary)
@@ -296,7 +296,7 @@ struct GalleryView: View {
     }
 
     /// グリッド／モザイク共通のセル（タップで詳細・長押しで保存・ページネーション）
-    private func galleryCell<CellLabel: View>(post: Post, @ViewBuilder label: () -> CellLabel) -> some View {
+    private func galleryCell(post: Post, @ViewBuilder label: () -> some View) -> some View {
         Button {
             selectedPost = post
         } label: {
@@ -331,22 +331,9 @@ struct GalleryGridItem: View {
             ZStack(alignment: .bottomLeading) {
                 // サムネイル画像
                 if let firstImage = post.images.first {
-                    if let thumbnailURL = firstImage.thumbnail, let url = URL(string: thumbnailURL) {
-                        KFImage(url)
-                            .placeholder {
-                                Rectangle()
-                                    .fill(Color.gray.opacity(0.3))
-                                    .overlay(
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    )
-                            }
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: geometry.size.width, height: geometry.size.width)
-                            .clipped()
-                    } else if let imageURL = URL(string: firstImage.url) {
-                        KFImage(imageURL)
+                    // サムネイル（無ければ本体）を読み方（PostImageSource）で読む
+                    if let image = KFImage.post(PostImageSource.resolve(firstImage, prefersThumbnail: true)) {
+                        image
                             .placeholder {
                                 Rectangle()
                                     .fill(Color.gray.opacity(0.3))
@@ -406,8 +393,9 @@ struct GalleryMosaicItem: View {
         ZStack(alignment: .bottomLeading) {
             // サムネイル画像（比率を保って角丸フレームいっぱいに敷く）
             if let firstImage = post.images.first,
-               let url = URL(string: firstImage.thumbnail ?? firstImage.url) {
-                KFImage(url)
+               let image = KFImage.post(PostImageSource.resolve(firstImage, prefersThumbnail: true))
+            {
+                image
                     .placeholder {
                         Rectangle()
                             .fill(Color.gray.opacity(0.3))

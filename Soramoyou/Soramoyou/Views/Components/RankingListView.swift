@@ -435,8 +435,11 @@ struct RankingPhoto: View {
     // MARK: - Body
 
     var body: some View {
-        if let firstImage = post.images.first, let url = displayURL(for: firstImage) {
-            KFImage(url)
+        // 原寸を出すカードは本体、それ以外はサムネイル（無ければ本体）を読み方（PostImageSource）で読む
+        if let firstImage = post.images.first,
+           let image = KFImage.post(PostImageSource.resolve(firstImage, prefersThumbnail: !prefersFullResolution))
+        {
+            image
                 .placeholder {
                     placeholder(for: firstImage)
                 }
@@ -457,22 +460,16 @@ struct RankingPhoto: View {
 
     // MARK: - Private
 
-    /// 表示に使う URL（原寸 or サムネイル。サムネイルが無い・壊れている旧投稿は原寸に落とす）
-    private func displayURL(for image: ImageInfo) -> URL? {
-        if !prefersFullResolution, let thumbnail = image.thumbnail, let url = URL(string: thumbnail) {
-            return url
-        }
-        return URL(string: image.url)
-    }
-
     /// 読み込み中の表示
     ///
     /// 原寸を読むときは、ギャラリーで既にキャッシュされていることが多いサムネイルを先に出して
     /// 「灰色の大きな枠がしばらく続く」状態を避ける。
     @ViewBuilder
     private func placeholder(for image: ImageInfo) -> some View {
-        if prefersFullResolution, let thumbnail = image.thumbnail, let url = URL(string: thumbnail) {
-            KFImage(url)
+        if prefersFullResolution, image.thumbnail != nil,
+           let thumbnail = KFImage.post(PostImageSource.resolve(image, prefersThumbnail: true))
+        {
+            thumbnail
                 .placeholder {
                     loadingPlaceholder
                 }
