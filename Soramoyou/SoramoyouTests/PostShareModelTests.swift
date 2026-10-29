@@ -47,7 +47,7 @@ final class PostShareModelTests: XCTestCase {
         let logger = PostShareEventLoggerStub()
         let model = PostShareModel(downloader: downloader, logger: logger)
         let post = makePost(image: ImageInfo(
-            url: "https://example.com/public-full.jpg",
+            url: "http://127.0.0.1:9199/v0/b/demo-soramoyou-security.appspot.com/o/posts%2Fu1%2Fpublic%2Fa.jpg?alt=media&token=t1",
             thumbnail: "https://example.com/public-thumb.jpg",
             width: 100,
             height: 100,
@@ -60,7 +60,7 @@ final class PostShareModelTests: XCTestCase {
 
         XCTAssertEqual(
             downloader.receivedSources,
-            [.remote(URL(string: "https://example.com/public-full.jpg")!)],
+            [.remote(URL(string: "http://127.0.0.1:9199/v0/b/demo-soramoyou-security.appspot.com/o/posts%2Fu1%2Fpublic%2Fa.jpg?alt=media&token=t1")!)],
             "公開の画像は本体の URL で 1 回だけ取る（サムネイルの URL ではない）"
         )
         XCTAssertEqual(model.shareImages.count, 1)
