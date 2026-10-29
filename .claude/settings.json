@@ -1,9 +1,16 @@
 {
   "permissions": {
     "deny": [
-      "Write(README.md)",
-      "Write(./README.md)",
-      "Write(CHANGELOG.md)"
+      "Edit(README.md)",
+      "Edit(./README.md)",
+      "Edit(CHANGELOG.md)",
+      "Read(**/DerivedData/**)",
+      "Read(**/build/**)",
+      "Read(**/*.xcuserstate)",
+      "Read(**/xcuserdata/**)",
+      "Read(**/.DS_Store)",
+      "Read(**/*.ipa)",
+      "Read(**/*.dSYM/**)"
     ]
   }
 }
