@@ -22,7 +22,7 @@
  *
  * 実行順序（このスクリプトは一連のリリース手順の最後）:
  *   1. --dry-run で差分と「No publicProfile」の件数を確認する
- *   2. 「No publicProfile」のユーザーが居たら、先に scripts/migrate-public-profiles.js で
+ *   2. 「No publicProfile」のユーザーが居たら、先にリポジトリ直下の migrate-public-profiles.js で
  *      publicProfiles を作る（作らないと、そのユーザーは本スクリプトからも Functions からも
  *      永久にスキップされ続ける）
  *   3. Cloud Functions（onFollowCreated / onFollowDeleted）をデプロイする
