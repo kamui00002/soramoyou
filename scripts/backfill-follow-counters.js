@@ -29,14 +29,13 @@
  *   4. 本スクリプトを本実行する（以後のズレは Functions が面倒を見る）
  *
  * 実行方法:
- * 1. Firebase Admin SDK の設定:
- *    npm install firebase-admin
+ * 1. firebase-admin は functions/ の依存を借りる（functions で npm install 済みであること。
+ *    scripts/follows-cleanup.js と同じ。リポジトリ直下の package.json は ^12 で、functions の 14 とずれるため使わない）
  *
- * 2. サービスアカウントキーをダウンロード:
- *    Firebase Console > Project Settings > Service Accounts
- *    > Generate New Private Key
- *    ダウンロードした JSON をリポジトリ直下に serviceAccountKey.json として保存
- *    （または環境変数 GOOGLE_APPLICATION_CREDENTIALS にパスを設定）
+ * 2. 認証の準備（ADC＝自分の Google アカウントのログイン。鍵ファイルは作らない）:
+ *    gcloud auth application-default login
+ *    quota project を求められたら: gcloud auth application-default set-quota-project <EXPECTED_PROJECT_ID の値>
+ *    接続先は EXPECTED_PROJECT_ID に固定している（.firebaserc が空のため。ADC の既定に頼らない）
  *
  * 3. まず dry-run で差分を確認（1 件も書き込みません）:
  *    node scripts/backfill-follow-counters.js --dry-run
@@ -44,10 +43,17 @@
  * 4. 内容に納得したら本実行:
  *    node scripts/backfill-follow-counters.js
  *    （確認プロンプトを飛ばしたい場合は --yes を付ける）
+ *
+ * テスト（本番には触れない）:
+ *   scripts/backfill-follow-counters.emulator.test.js の冒頭を参照（functions/ の npm run test:emulator に登録）
  */
 
-const admin = require('firebase-admin');
 const path = require('path');
+const { createRequire } = require('module');
+
+// firebase-admin は functions/ を起点に読む（scripts/follows-cleanup.js の 121 行目と同じ）。
+// リポジトリ直下には firebase-admin が入っていないため、素の require では見つからない
+const functionsRequire = createRequire(path.join(__dirname, '..', 'functions', 'package.json'));
 
 // コマンドライン引数
 const args = process.argv.slice(2);
@@ -56,59 +62,8 @@ const SKIP_CONFIRM = args.includes('--yes');
 
 // 書き込み先として唯一許可する Firebase プロジェクト。
 // ⚠️ このリポジトリは .firebaserc が空で「default project が無い」運用のため、
-//    資格情報の取り違え（別プロジェクトの鍵・ADC）に気づく仕組みがスクリプト側に必要。
-//    本番一発書き込みスクリプトなので、接続先をここで固定して照合する。
+//    ADC の既定に頼らず、initializeApp に projectId として渡して接続先を固定する（migrate-public-profiles.js と同じ）。
 const EXPECTED_PROJECT_ID = 'soramoyou-ios';
-
-// サービスアカウントキーのパス
-// ⚠️ このスクリプトは scripts/ 配下にあるため、__dirname はリポジトリ直下ではない。
-//    リポジトリ直下の serviceAccountKey.json を見るよう '..' を挟む。
-const serviceAccountPath = path.join(__dirname, '..', 'serviceAccountKey.json');
-
-// Firebase Admin SDK初期化
-// resolvedProjectId: 実際に接続するプロジェクト ID。特定できなければ null のまま（後段のガードで停止する）。
-let resolvedProjectId = null;
-try {
-  const serviceAccount = require(serviceAccountPath);
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
-  resolvedProjectId = serviceAccount.project_id || null;
-  console.log('✅ Firebase Admin SDK initialized (serviceAccountKey.json)');
-} catch (error) {
-  // 鍵ファイルが無い場合は GOOGLE_APPLICATION_CREDENTIALS 等の既定資格情報にフォールバックする。
-  try {
-    admin.initializeApp({ credential: admin.credential.applicationDefault() });
-    // ADC は鍵ファイルと違って接続先が暗黙的に決まるため、環境変数等から特定できた場合のみ採用する。
-    resolvedProjectId =
-      process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || admin.app().options.projectId || null;
-    console.log('✅ Firebase Admin SDK initialized (application default credentials)');
-  } catch (fallbackError) {
-    console.error('❌ Error: 認証情報が見つかりません');
-    console.error('serviceAccountKey.json をリポジトリ直下に置くか、');
-    console.error('GOOGLE_APPLICATION_CREDENTIALS を設定してください');
-    process.exit(1);
-  }
-}
-
-const db = admin.firestore();
-
-/**
- * 接続先プロジェクトの表示と期待値ガード
- *
- * ⚠️ 実行の最初（確認プロンプトより前）に必ず呼ぶ。別プロジェクトの鍵や ADC のまま
- *    本番書き込みが走る事故を、接続先の照合で止める。
- *    接続先を特定できない（null）場合も安全側に倒して停止する。
- */
-function assertExpectedProject() {
-  console.log(`🔌 接続先 Firebase プロジェクト: ${resolvedProjectId || '(特定できませんでした)'}`);
-  if (resolvedProjectId !== EXPECTED_PROJECT_ID) {
-    console.error(`❌ Error: 接続先が期待値 (${EXPECTED_PROJECT_ID}) と一致しません`);
-    console.error('   serviceAccountKey.json / GOOGLE_APPLICATION_CREDENTIALS が');
-    console.error('   別プロジェクトの資格情報になっていないか確認してください');
-    process.exit(1);
-  }
-}
 
 /**
  * 1 ユーザー分のフォローカウンタを follows から数える
@@ -116,7 +71,7 @@ function assertExpectedProject() {
  * count() は集計クエリなので、ドキュメント本体を読まずに件数だけを取得できる
  * （読み取り課金・実行時間ともに有利）。
  */
-async function countFollowsFor(userId) {
+async function countFollowsFor(db, userId) {
   const [followersAgg, followingAgg] = await Promise.all([
     db.collection('follows').where('followeeId', '==', userId).count().get(),
     db.collection('follows').where('followerId', '==', userId).count().get()
@@ -135,15 +90,18 @@ async function countFollowsFor(userId) {
  *   2. 1 件の失敗を局所化でき、どのユーザーで失敗したかログに残せる
  *   （batch を使うなら、500 件ごとに新しい batch を作り直す手当てが要る。移行スクリプト
  *     migrate-public-profiles.js は以前これが無く、500 件を超えると落ちていた）
+ *
+ * db は差し込む（main は本番の db、テストは demo- の Emulator の db を渡す）。
+ * @returns 件数のまとめ { changed, unchanged, missingProfile, failed, total }
  */
-async function backfillFollowCounters() {
+async function backfill(db, { dryRun = false } = {}) {
   console.log('🚀 Starting backfill...\n');
 
   const usersSnapshot = await db.collection('users').get();
 
   if (usersSnapshot.empty) {
     console.log('⚠️  No users found in database');
-    return;
+    return { changed: 0, unchanged: 0, missingProfile: 0, failed: 0, total: 0 };
   }
 
   console.log(`📊 Found ${usersSnapshot.size} users\n`);
@@ -157,7 +115,7 @@ async function backfillFollowCounters() {
     const userId = doc.id;
     try {
       const userData = doc.data();
-      const counters = await countFollowsFor(userId);
+      const counters = await countFollowsFor(db, userId);
 
       const beforeFollowers = userData.followersCount || 0;
       const beforeFollowing = userData.followingCount || 0;
@@ -189,7 +147,7 @@ async function backfillFollowCounters() {
           ? ` (publicProfiles 側: ${publicData.followersCount || 0}/${publicData.followingCount || 0} → 要更新)`
           : '');
 
-      if (DRY_RUN) {
+      if (dryRun) {
         console.log(`${changed ? '📝' : '✓ '} [dry-run] ${label}`);
         if (!publicSnap.exists) {
           console.log(`   ⚠️  publicProfiles/${userId} が存在しないため書き込み対象外`);
@@ -218,7 +176,7 @@ async function backfillFollowCounters() {
 
   // 結果サマリー
   console.log('\n' + '='.repeat(50));
-  console.log(`📈 Backfill Summary${DRY_RUN ? ' (dry-run / 書き込みなし)' : ''}:`);
+  console.log(`📈 Backfill Summary${dryRun ? ' (dry-run / 書き込みなし)' : ''}:`);
   console.log('='.repeat(50));
   console.log(`📝 Changed:            ${updatedCount}`);
   console.log(`✅ Already correct:    ${unchangedCount}`);
@@ -228,10 +186,18 @@ async function backfillFollowCounters() {
   console.log('='.repeat(50) + '\n');
 
   if (errorCount === 0) {
-    console.log(DRY_RUN ? '🎉 Dry-run completed (何も書き込んでいません)' : '🎉 Backfill completed successfully!');
+    console.log(dryRun ? '🎉 Dry-run completed (何も書き込んでいません)' : '🎉 Backfill completed successfully!');
   } else {
     console.log('⚠️  Backfill completed with some errors');
   }
+
+  return {
+    changed: updatedCount,
+    unchanged: unchangedCount,
+    missingProfile: missingProfileCount,
+    failed: errorCount,
+    total: usersSnapshot.size
+  };
 }
 
 /**
@@ -272,16 +238,37 @@ async function main() {
     console.log('🧪 DRY-RUN モード: 1 件も書き込みません\n');
   }
 
-  // dry-run でも読み取り先が別プロジェクトだと差分表示ごと嘘になるため、常にガードを通す。
-  assertExpectedProject();
+  // Firebase Admin SDK 初期化（ADC＝Application Default Credentials。鍵ファイルは読まない）。
+  // ⚠️ firebase-admin の読み込みと初期化はここでだけ行う（テストが require しただけでは本番につながないため）
+  const { initializeApp, applicationDefault } = functionsRequire('firebase-admin/app');
+  const { getFirestore } = functionsRequire('firebase-admin/firestore');
+  let app;
+  try {
+    app = initializeApp({ credential: applicationDefault(), projectId: EXPECTED_PROJECT_ID });
+    console.log(`✅ Firebase Admin SDK initialized (project: ${EXPECTED_PROJECT_ID})`);
+  } catch (error) {
+    console.error('❌ Error: Failed to initialize Firebase Admin SDK with Application Default Credentials (ADC)');
+    console.error('Log in first: gcloud auth application-default login');
+    console.error(`If asked for a quota project: gcloud auth application-default set-quota-project ${EXPECTED_PROJECT_ID}`);
+    process.exit(1);
+  }
+  const db = getFirestore(app);
+
+  // 接続先は initializeApp で固定している。確認の前に、どこへつなぐかを 1 行出す（scripts/follows-cleanup.js と同じ）
+  console.log(`🔌 接続先 Firebase プロジェクト: ${EXPECTED_PROJECT_ID}`);
   await confirmBeforeWrite();
-  await backfillFollowCounters();
+  await backfill(db, { dryRun: DRY_RUN });
 
   process.exit(0);
 }
 
-// 実行
-main().catch((error) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+// テストから本体（backfill）だけを使えるようにする。main は export しない（テストから本番に繋ぐ口を作らない）
+module.exports = { backfill, countFollowsFor };
+
+// 実行（node で直接起こしたときだけ。require されたときは何もしない）
+if (require.main === module) {
+  main().catch((error) => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
+}
