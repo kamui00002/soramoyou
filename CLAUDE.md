@@ -109,6 +109,12 @@ git push -u origin [ブランチ名]
 - ✅ 画像は JPEG 80-90%、最大 5MB に圧縮
 - ✅ `.gitignore` に必要ファイルを追加（詳細は docs/build-deploy.md）
 
+### 公開リポジトリとしての制約（auto mode の判定にも使う）
+- このリポジトリは **PUBLIC**（github.com/kamui00002/soramoyou）。秘密情報・内部 URL・個人情報・Firebase の設定値をコミット・PR・issue に書かない
+- force push は禁止。feature ブランチ + PR のみ
+- `firebase deploy`（Auth / Firestore / Storage / Functions / Hosting）は本番反映。実行前に対象と範囲をユーザーに確認する
+- 信頼する remote は origin（kamui00002/soramoyou）だけ。他の remote へ push しない
+
 ### ビルドエラー・テスト失敗時
 1. エラーメッセージを正確に確認
 2. 関連コードを特定
