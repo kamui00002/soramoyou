@@ -162,6 +162,22 @@
 - email・表示名などの PII は保存しない（userId のみ）。
 - 副作用: ドキュメント作成で Cloud Functions `notifyFeedbackToDiscord`（`functions/index.js`）が発火し、開発者の Discord へ Webhook 通知する。Webhook URL は Secret Manager `DISCORD_WEBHOOK_URL`（コードに実値なし）。デプロイには Blaze ＋ `firebase functions:secrets:set DISCORD_WEBHOOK_URL` が必要。
 
+## reports コレクション（投稿の通報）☁️
+```json
+{
+  "reportId": "string (ドキュメントID・自動採番)",
+  "postId": "string",                // 通報された投稿（アプリは post.id が nil のとき "" を送る）
+  "reporterId": "string",            // 通報した人（auth.uid と一致が必須）
+  "reportedUserId": "string",        // 投稿者（通報した人の端末が送った値。正は posts/{postId}.userId）
+  "reason": "string",                // inappropriate/spam/harassment/copyright/other（iOS ReportReason）
+  "createdAt": "timestamp"           // serverTimestamp
+}
+```
+- 書き込み: `FirestoreService.reportPost`（ホーム・ギャラリー詳細の通報メニュー）。
+- セキュリティ: 作成は認証済みユーザーが自分のIDでのみ（rules `hasAll(['postId','reporterId','reportedUserId','reason','createdAt'])`）。**読み取り・更新・削除は不可**（管理者が Firebase コンソールで閲覧）。
+- 副作用: ドキュメント作成で Cloud Functions `notifyReportToDiscord`（`functions/index.js`・本文は `functions/reportDiscord.js`）が発火し、**そらともの通報（`soratomoReports`）と同じ通報専用の Discord チャンネル**へ赤い「🚨 投稿が通報されました」を送る。通報された投稿のキャプション・サムネイル・公開範囲と、投稿者の表示名（`publicProfiles`）も載せる。投稿が既に無いときは「見つかりません」と出す。Webhook は Secret Manager `DISCORD_REPORT_WEBHOOK_URL`（`functions/soratomo.js` と同じ秘密・コードに実値なし）。
+- 目的: App Store ガイドライン 1.2（UGC）の「通報に 24 時間以内に対応」に気付ける経路。⚠️ 通報理由の文言を変えるときは iOS `ReportReason.displayName` と `functions/reportDiscord.js` の `REPORT_REASON_LABELS` を両方直す（テストが食い違いを検出する）。
+
 ## livingSkyJobs コレクション（「空を動かす」β・Kling版）
 ```json
 {

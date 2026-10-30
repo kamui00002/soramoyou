@@ -11,6 +11,7 @@
 //   - onPublicProfileUpdated  publicProfiles/{uid}→ 「おすすめの空」に新しく入った投稿の投稿者へ「選ばれました」
 //   - publishDailyPick        毎朝 7:00（JST）    → 公開投稿から「今日のおすすめのそらもよう」を選び、選ばれた投稿者へ通知
 //   - notifyFeedbackToDiscord feedback/{id}       → 開発者の Discord へ「ご意見・ご要望が届いた」（Webhook）
+//   - notifyReportToDiscord   reports/{id}        → 開発者の Discord へ「投稿が通報された」（Webhook・ガイドライン 1.2）
 //
 // 設計メモ:
 //   - 配信プレフは users/{uid} の notifyReactions / notifyNewPostsFromFollowing /
@@ -617,6 +618,93 @@ exports.notifyFeedbackToDiscord = onDocumentCreated(
       logger.info("Discord 通知に成功しました", { feedbackId });
     } catch (err) {
       logger.error("Discord 通知中に例外が発生しました", { feedbackId, error: err.message });
+      throw err;
+    }
+  }
+);
+
+// MARK: - 通報 → Discord 通知（開発者向け）⭐️☁️
+//
+// アプリの「通報」が reports コレクションに作成されたら、開発者の Discord へ即時通知する。
+// App Store ガイドライン 1.2（UGC）は通報に 24 時間以内の対応を求めるため、気付ける経路が必要。
+// 届け先はそらともの通報（soratomo.js の soratomoReports）と同じ、通報専用のチャンネル（DISCORD_REPORT_WEBHOOK_URL）。
+// 本文の組み立ては純粋関数（functions/reportDiscord.js）に分け、node:test で検証している。
+
+const { buildReportPayload, POST_LOOKUP } = require("./reportDiscord");
+
+/**
+ * 通報の送り先（Discord の Webhook URL）。フィードバックの送り先（上の DISCORD_WEBHOOK_URL）とは別の秘密の値で、
+ * soratomo.js の DISCORD_REPORT_WEBHOOK_URL と同じもの（同じ名前で定義すると firebase-functions は 1 つにまとめる）。
+ * 値は `firebase functions:secrets:set DISCORD_REPORT_WEBHOOK_URL` の対話の入力で設定し、リポジトリとログに置かない。
+ */
+const DISCORD_REPORT_WEBHOOK_URL = defineSecret("DISCORD_REPORT_WEBHOOK_URL");
+
+exports.notifyReportToDiscord = onDocumentCreated(
+  { document: "reports/{reportId}", secrets: [DISCORD_REPORT_WEBHOOK_URL] },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) {
+      logger.warn("通報のスナップショットが空でした");
+      return;
+    }
+
+    const report = snapshot.data() || {};
+    const reportId = event.params.reportId;
+
+    // 通報された投稿を読む。読めなくても通報そのものは必ず届けたいので、失敗は記録して先へ進む。
+    const postId = typeof report.postId === "string" ? report.postId.trim() : "";
+    let post = null;
+    let postLookup = POST_LOOKUP.noId;
+    if (postId) {
+      try {
+        const postSnap = await db.collection("posts").doc(postId).get();
+        if (postSnap.exists) {
+          post = postSnap.data() || {};
+          postLookup = POST_LOOKUP.found;
+        } else {
+          postLookup = POST_LOOKUP.missing;
+        }
+      } catch (err) {
+        postLookup = POST_LOOKUP.error;
+        logger.warn("通報された投稿の読み取りに失敗", { reportId, postId, error: String(err && err.message) });
+      }
+    }
+
+    // 投稿者の表示名（publicProfiles）。投稿があれば投稿の持ち主、無ければ通報データの投稿者 ID で引く。
+    const authorId =
+      (post && typeof post.userId === "string" && post.userId) ||
+      (typeof report.reportedUserId === "string" && report.reportedUserId) ||
+      "";
+    let authorName = null;
+    if (authorId) {
+      try {
+        const profileSnap = await db.collection("publicProfiles").doc(authorId).get();
+        if (profileSnap.exists) {
+          authorName = (profileSnap.data() || {}).displayName || null;
+        }
+      } catch (err) {
+        logger.warn("投稿者の表示名の読み取りに失敗", { reportId, authorId, error: String(err && err.message) });
+      }
+    }
+
+    const payload = buildReportPayload({ reportId, report, post, postLookup, authorName, now: new Date() });
+
+    // 送信と失敗時の扱いはフィードバック通知と同じ（失敗は throw でメトリクスに出す・既定ではリトライされない）。
+    const webhookUrl = DISCORD_REPORT_WEBHOOK_URL.value();
+    try {
+      const res = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        logger.error("通報の Discord 通知に失敗しました", { status: res.status, body, reportId });
+        throw new Error(`Discord webhook responded ${res.status}`);
+      }
+      logger.info("通報の Discord 通知に成功しました", { reportId, postLookup });
+    } catch (err) {
+      logger.error("通報の Discord 通知中に例外が発生しました", { reportId, error: err.message });
       throw err;
     }
   }
