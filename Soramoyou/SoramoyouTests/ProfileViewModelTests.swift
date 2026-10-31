@@ -259,6 +259,32 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.user?.bio, "Updated Bio")
     }
 
+    /// 自己紹介文を空にして保存したら、「空にした」ことが Firestore への書き込みに載ること。
+    /// nil にすると toFirestoreData が bio のキーを書かず、users は setData(merge: true)・
+    /// publicProfiles は「nil は書かない」なので古い自己紹介文が残り、読み込み直すと戻ってしまう
+    /// （2026-10-31 アプリ内のご意見で報告）。
+    func testUpdateProfile_自己紹介文を空にして保存すると空が書かれる() async {
+        // Given: 自己紹介文（"Test bio"）が保存済みのユーザー
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+        viewModel.editingBio = ""
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then: users への書き込み内容に空の bio が載る（キーが無いと merge で古い値が残る）
+        XCTAssertEqual(viewModel.user?.toFirestoreData()["bio"] as? String, "")
+        // Then: 公開プロフィールにも空の bio を渡す（nil は「書かない＝古い値が残る」の意味になる）
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.count, 1)
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.first?.bio, "")
+    }
+
     /// プロフィール編集を保存せずに閉じたら、入力（表示名・自己紹介・画像・画像削除の指定）が
     /// 保存済みの値に戻ること。戻さないと次に開いたとき入力途中の値が残る（2026-10-07 シミュレータで実測）。
     func testResetProfileEdit_保存せずに閉じたら入力が保存済みの値に戻る() {

@@ -340,8 +340,8 @@ struct ProfileView: View {
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
 
-            // 自己紹介
-            if let bio = user.bio {
+            // 自己紹介（空文字＝自己紹介を消した状態なので出さない）
+            if let bio = user.bio, !bio.isEmpty {
                 Text(bio)
                     .font(.body)
                     .foregroundColor(DesignTokens.Colors.textSecondary)

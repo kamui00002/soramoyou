@@ -557,7 +557,11 @@ class ProfileViewModel: ObservableObject {
 
             // ユーザー情報を更新
             updatedUser.displayName = editingDisplayName.isEmpty ? nil : editingDisplayName
-            updatedUser.bio = editingBio.isEmpty ? nil : editingBio
+            // 自己紹介は空でも nil にせず空文字のまま書く。
+            // ⚠️ nil にすると toFirestoreData が bio のキーを書かず、users の setData(merge: true) と
+            //    publicProfiles の updatePublicProfileFields（nil は書かない）で古い自己紹介文が残り、
+            //    読み込み直すと戻ってしまう（2026-10-31 アプリ内のご意見で報告・本番で再現）。
+            updatedUser.bio = editingBio
             updatedUser.photoURL = photoURL
             updatedUser.updatedAt = Date()
 
