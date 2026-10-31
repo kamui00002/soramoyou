@@ -285,6 +285,105 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.first?.bio, "")
     }
 
+    /// 表示名を空にして保存したら、users と公開プロフィールの両方で表示名を「消す」と指定すること。
+    /// nil だけだと toFirestoreData が displayName のキーを書かず、users は setData(merge: true)・
+    /// 公開プロフィールは「nil は書かない」なので古い表示名が残る（自己紹介文と同じ穴・2026-11-01 にコードで確認）。
+    func testUpdateProfile_表示名を空にして保存すると表示名を消す() async {
+        // Given: 表示名（"Test User"）が保存済みのユーザー
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+        viewModel.editingDisplayName = ""
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then: 手元の表示名は消え（画面は「ユーザー」になる）、users と公開プロフィールの両方へ「消す」を渡す
+        XCTAssertNil(viewModel.user?.displayName)
+        XCTAssertEqual(mockFirestoreService.updateUserClearingCalls, [[.displayName]])
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.count, 1)
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.first?.clearing, [.displayName])
+    }
+
+    /// 表示名がスペースだけ（半角・全角）のときも、空と同じく消すこと。
+    /// 画面では空欄に見えるのに「ユーザー」にならないため（Android もスペースだけは空として扱う）。
+    func testUpdateProfile_表示名がスペースだけなら空と同じく消す() async {
+        // Given
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+        viewModel.editingDisplayName = " 　 "
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then
+        XCTAssertNil(viewModel.user?.displayName)
+        XCTAssertEqual(mockFirestoreService.updateUserClearingCalls, [[.displayName]])
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.first?.clearing, [.displayName])
+    }
+
+    /// 表示名を入れて保存したときは何も消さず、入れた値をそのまま書くこと（前後の空白も変えない）。
+    func testUpdateProfile_表示名を入れて保存したときは消さない() async {
+        // Given
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+        viewModel.editingDisplayName = " 空の人 "
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then
+        XCTAssertEqual(viewModel.user?.displayName, " 空の人 ")
+        XCTAssertEqual(mockFirestoreService.updateUserClearingCalls, [[]])
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.first?.displayName, " 空の人 ")
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.first?.clearing, [])
+    }
+
+    /// アイコンを削除して保存したら、users と公開プロフィールの両方でアイコンを「消す」と指定すること。
+    /// nil だけだと古い photoURL（Storage では先に消した写真）が残り、壊れた画像を指したままになる。
+    func testUpdateProfile_アイコンを削除して保存するとアイコンを消す() async {
+        // Given: アイコン（photoURL）が保存済みのユーザー
+        let testUser = createTestUser()
+        mockFirestoreService.user = testUser
+        viewModel = ProfileViewModel(
+            userId: testUser.id,
+            firestoreService: mockFirestoreService,
+            storageService: mockStorageService
+        )
+        await viewModel.loadProfile()
+        // テストでは自分のプロフィール扱いにならず loadProfile が入力欄を埋めないので、
+        // 画面と同じく保存済みの表示名を入れておく（入れないと表示名まで「消す」になる）
+        viewModel.editingDisplayName = testUser.displayName ?? ""
+        viewModel.shouldDeleteProfileImage = true
+
+        // When
+        await viewModel.updateProfile()
+
+        // Then: 手元のアイコンは消え、users と公開プロフィールの両方へ「消す」を渡す（表示名は消さない）
+        XCTAssertNil(viewModel.user?.photoURL)
+        XCTAssertEqual(viewModel.user?.displayName, "Test User")
+        XCTAssertEqual(mockFirestoreService.updateUserClearingCalls, [[.photoURL]])
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.count, 1)
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.first?.clearing, [.photoURL])
+    }
+
     /// プロフィール編集を保存せずに閉じたら、入力（表示名・自己紹介・画像・画像削除の指定）が
     /// 保存済みの値に戻ること。戻さないと次に開いたとき入力途中の値が残る（2026-10-07 シミュレータで実測）。
     func testResetProfileEdit_保存せずに閉じたら入力が保存済みの値に戻る() {
@@ -1041,7 +1140,9 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
     var userPosts: [Post] = []
     var updateEditToolsCalled = false
     /// ターゲット更新（updatePublicProfileFields）に渡された引数の記録 ⭐️
-    var updatePublicProfileFieldsCalls: [(userId: String, displayName: String?, photoURL: String?, bio: String?)] = []
+    var updatePublicProfileFieldsCalls: [(userId: String, displayName: String?, photoURL: String?, bio: String?, clearing: Set<ProfileClearableField>)] = []
+    /// updateUser(_:clearing:) に渡された「消す項目」の記録（呼ばれた順）⭐️
+    var updateUserClearingCalls: [Set<ProfileClearableField>] = []
     /// updatePublicProfileFields が投げるエラー（notFound フォールバック検証用） ⭐️
     var updatePublicProfileFieldsError: Error?
     /// createPublicProfile が呼ばれたか（フォールバック検証用） ⭐️
@@ -1070,6 +1171,11 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
 
     func updateUser(_ user: User) async throws -> User {
         user
+    }
+
+    func updateUser(_ user: User, clearing fields: Set<ProfileClearableField>) async throws -> User {
+        updateUserClearingCalls.append(fields)
+        return user
     }
 
     func updateEditTools(userId _: String, tools _: [EditTool], order _: [String]) async throws {
@@ -1138,8 +1244,8 @@ class MockFirestoreServiceForProfile: FirestoreServiceProtocol {
         throw fetchPublicProfileError ?? FirestoreServiceError.notFound
     }
 
-    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
-        updatePublicProfileFieldsCalls.append((userId: userId, displayName: displayName, photoURL: photoURL, bio: bio))
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?, clearing fields: Set<ProfileClearableField>) async throws {
+        updatePublicProfileFieldsCalls.append((userId: userId, displayName: displayName, photoURL: photoURL, bio: bio, clearing: fields))
         if let error = updatePublicProfileFieldsError {
             throw error
         }

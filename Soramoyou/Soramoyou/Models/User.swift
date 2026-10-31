@@ -249,6 +249,38 @@ extension User {
     }
 }
 
+// MARK: - プロフィール編集で消す項目 ⭐️
+
+/// プロフィール編集で「消す」（Firestore のキーごと消す）ことのできる項目
+///
+/// ⚠️ 書き込みでは nil は「書かない＝前の値のまま」の意味になる（`toFirestoreData` は nil のキーを入れず、
+///    users は `setData(merge: true)`・publicProfiles は `updateData`）。そのため表示名を空にしても、
+///    アイコンを削除しても古い値が残っていた（自己紹介文と同じ穴・2026-11-01 にコードで確認）。
+///    消したいときはこの型で明示し、`FieldValue.delete()` でキーごと消す。
+///    読む側は「キーが無い」を新規ユーザーと同じく「ユーザー」と人型の印で出す（Android も同じ消し方）。
+/// - Note: rawValue は users と publicProfiles の両方で同じキー名。
+enum ProfileClearableField: String, CaseIterable {
+    case displayName
+    case photoURL
+
+    /// 書き込む内容に「消す」印（`FieldValue.delete()`）を足す
+    ///
+    /// ⚠️ merge の `setData` と `updateData` でだけ使うこと。merge なしの `setData`
+    ///    （`createPublicProfile` など）に `FieldValue.delete()` を入れると Firestore が受け付けない。
+    /// - Parameters:
+    ///   - fields: 消す項目
+    ///   - data: 書き込む内容
+    /// - Returns: 消す項目に `FieldValue.delete()` を入れた内容。値が入っている項目は消さない（値を優先する）
+    static func applyingDeletes(_ fields: Set<ProfileClearableField>, to data: [String: Any]) -> [String: Any] {
+        var result = data
+        // 値が入っている項目は消さない（同じ書き込みで「値を書く」と「消す」がぶつからないように）
+        for field in fields where result[field.rawValue] == nil {
+            result[field.rawValue] = FieldValue.delete()
+        }
+        return result
+    }
+}
+
 // MARK: - UserModelError
 
 enum UserModelError: Error {

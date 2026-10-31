@@ -50,6 +50,9 @@ protocol FirestoreServiceProtocol {
     // Users (機密情報含む - 所有者のみ)
     func fetchUser(userId: String) async throws -> User
     func updateUser(_ user: User) async throws -> User
+    /// プロフィール編集の保存用。`fields` の項目はキーごと消す ⭐️
+    /// （nil は「書かない＝前の値のまま」の意味なので、消すときはここで明示する。`ProfileClearableField` 参照）
+    func updateUser(_ user: User, clearing fields: Set<ProfileClearableField>) async throws -> User
     func updateEditTools(userId: String, tools: [EditTool], order: [String]) async throws
     /// 通知の配信プレフ3つ（＋updatedAt）だけを更新するターゲット更新。
     /// User 全体を書く updateUser と違い、followersCount 等の他フィールドを古い値で巻き戻さない。
@@ -70,7 +73,8 @@ protocol FirestoreServiceProtocol {
     /// PublicProfile 全体を書くと followersCount / followingCount
     /// （Cloud Functions が真値を代入する）を古い値で潰すため、
     /// 公開プロフィールの更新経路はこのメソッドに限定する。
-    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws
+    /// `fields` の項目はキーごと消す（nil は「書かない」の意味なので、消すときは明示する）⭐️
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?, clearing fields: Set<ProfileClearableField>) async throws
     func createPublicProfile(from user: User) async throws
     /// プロフィールの見せる/見せない を、渡した欄だけ書く ⭐️
     /// - `publicProfiles/{userId}` に「渡した欄の項目＋updatedAt」だけを updateData する（他の項目には触らない）
@@ -591,8 +595,17 @@ class FirestoreService: FirestoreServiceProtocol {
     }
 
     func updateUser(_ user: User) async throws -> User {
+        try await updateUser(user, clearing: [])
+    }
+
+    /// ユーザー情報を書き、`fields` の項目はキーごと消す ⭐️
+    ///
+    /// nil の項目は `toFirestoreData` がキーを入れない＝merge で前の値のまま残る。
+    /// 消すのはプロフィール編集で明示されたときだけにする（サインアップなど他の呼び出しでは、
+    /// まだ持っていないだけの nil を「消す」と読まない）。
+    func updateUser(_ user: User, clearing fields: Set<ProfileClearableField>) async throws -> User {
         do {
-            let data = user.toFirestoreData()
+            let data = ProfileClearableField.applyingDeletes(fields, to: user.toFirestoreData())
             let docRef = usersCollection.document(user.id)
 
             try await docRef.setData(data, merge: true)
@@ -1305,6 +1318,8 @@ class FirestoreService: FirestoreServiceProtocol {
     /// - Note: nil のフィールドは「書き込まない」＝既存値を維持する。
     ///   従来の `setData(merge: true)` + `toFirestoreData()`（nil キーを省略）と
     ///   同じ挙動に揃えてあり、本 PR では意図的に変更していない。
+    ///   消したい項目は `fields` で渡し、`FieldValue.delete()` でキーごと消す ⭐️
+    ///   （表示名を空にしても・アイコンを削除しても古い値が残っていたため。`ProfileClearableField` 参照）。
     /// - Throws: 更新に失敗したときは `publicProfiles/{userId}` の存在を get で確認し、
     ///   不在なら `FirestoreServiceError.notFound`（呼び出し側が `createPublicProfile`
     ///   にフォールバックできるようにするため）、存在するなら
@@ -1313,7 +1328,7 @@ class FirestoreService: FirestoreServiceProtocol {
     ///   `resource.data.id` を参照するため、ドキュメント不在時に NOT_FOUND ではなく
     ///   PERMISSION_DENIED が返りうる。存在確認を経由することで rules の評価順序に
     ///   依存しない判定にしてある。
-    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?) async throws {
+    func updatePublicProfileFields(userId: String, displayName: String?, photoURL: String?, bio: String?, clearing fields: Set<ProfileClearableField>) async throws {
         // updatedAt は常に更新し、値がある項目だけを追加する
         var data: [String: Any] = ["updatedAt": Timestamp(date: Date())]
 
@@ -1326,6 +1341,8 @@ class FirestoreService: FirestoreServiceProtocol {
         if let bio {
             data["bio"] = bio
         }
+        // 消すと指定された項目はキーごと消す（updateData なので FieldValue.delete() が使える）
+        data = ProfileClearableField.applyingDeletes(fields, to: data)
 
         do {
             try await publicProfilesCollection.document(userId).updateData(data)

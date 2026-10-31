@@ -556,7 +556,11 @@ class ProfileViewModel: ObservableObject {
             }
 
             // ユーザー情報を更新
-            updatedUser.displayName = editingDisplayName.isEmpty ? nil : editingDisplayName
+            // 表示名が空、またはスペースだけ（全角を含む）なら「消した」とみなす。
+            // 画面では空欄に見えるのに「ユーザー」にならないのを防ぐため（Android もスペースだけは空として扱う）。
+            // trim は判定にだけ使い、中身のある名前は前後の空白も変えずにそのまま書く。
+            let isDisplayNameCleared = editingDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            updatedUser.displayName = isDisplayNameCleared ? nil : editingDisplayName
             // 自己紹介は空でも nil にせず空文字のまま書く。
             // ⚠️ nil にすると toFirestoreData が bio のキーを書かず、users の setData(merge: true) と
             //    publicProfiles の updatePublicProfileFields（nil は書かない）で古い自己紹介文が残り、
@@ -565,9 +569,20 @@ class ProfileViewModel: ObservableObject {
             updatedUser.photoURL = photoURL
             updatedUser.updatedAt = Date()
 
+            // 消す項目（nil だけでは「書かない＝前の値のまま」になるので明示する）
+            // ⚠️ 表示名・アイコンは "" でなくキーごと消す。読む側は全画面で「キーが無い」を新規ユーザーと同じく
+            //    「ユーザー」と人型の印で出すが、"" だと名前が空欄になり、写真が無いのに「画像を削除」が出る。
+            var clearedFields: Set<ProfileClearableField> = []
+            if isDisplayNameCleared {
+                clearedFields.insert(.displayName)
+            }
+            if shouldDeleteProfileImage {
+                clearedFields.insert(.photoURL)
+            }
+
             // Firestoreに更新（リトライ可能）
             let savedUser = try await RetryableOperation.executeIfRetryable { [self] in
-                try await firestoreService.updateUser(updatedUser)
+                try await firestoreService.updateUser(updatedUser, clearing: clearedFields)
             }
             user = savedUser
 
@@ -582,7 +597,8 @@ class ProfileViewModel: ObservableObject {
                         userId: savedUser.id,
                         displayName: savedUser.displayName,
                         photoURL: savedUser.photoURL,
-                        bio: savedUser.bio
+                        bio: savedUser.bio,
+                        clearing: clearedFields
                     )
                 }
             } catch FirestoreServiceError.notFound {
