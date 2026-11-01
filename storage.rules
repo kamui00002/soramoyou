@@ -66,9 +66,12 @@ service firebase.storage {
     }
 
     // Post images - followers only
-    // 読み取り（get）は本人とフォロワーだけ（canReadFollowersImage）。一覧（list）は誰にも許さない（アプリは listAll を使っていない）
+    // 読み取り（get）は本人とフォロワーだけ（canReadFollowersImage）。一覧（list）は本人だけ
+    // （Android の退会が、投稿の文書から拾えなかった残りの画像を listAll で探して消す。フォロワー・他人は一覧できない）
+    // 3 か所とも allow get と allow list の 2 行は、Rules test API のテストが文字列で狙うので、間に行を挟まない
     match /posts/{userId}/followers/{imageId} {
       allow get: if canReadFollowersImage(userId);
+      allow list: if isOwner(userId);
 
       // Only the owner can upload followers-only images
       allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
@@ -117,9 +120,10 @@ service firebase.storage {
     }
 
     // Thumbnail images - followers only
-    // 読み取り（get）は本人とフォロワーだけ（canReadFollowersImage）。一覧（list）は誰にも許さない
+    // 読み取り（get）は本人とフォロワーだけ（canReadFollowersImage）。一覧（list）は本人だけ（posts と同じ）
     match /thumbnails/{userId}/followers/{imageId} {
       allow get: if canReadFollowersImage(userId);
+      allow list: if isOwner(userId);
 
       // Only the owner can upload followers-only thumbnails
       allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
@@ -156,9 +160,10 @@ service firebase.storage {
     }
 
     // Original images (unedited) - followers only
-    // 読み取り（get）は本人とフォロワーだけ（canReadFollowersImage）。一覧（list）は誰にも許さない
+    // 読み取り（get）は本人とフォロワーだけ（canReadFollowersImage）。一覧（list）は本人だけ（posts と同じ）
     match /originals/{userId}/followers/{imageId} {
       allow get: if canReadFollowersImage(userId);
+      allow list: if isOwner(userId);
 
       // Only the owner can upload followers-only original images
       allow create, update: if isOwner(userId) && isImageFile() && isValidSize();
