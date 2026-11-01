@@ -1315,10 +1315,9 @@ class FirestoreService: FirestoreServiceProtocol {
     /// updateData で対象フィールドだけを書けばこの経路は断てる
     /// （`updateNotificationPreferences` と同じ理由・同じ形）。
     ///
-    /// - Note: nil のフィールドは「書き込まない」＝既存値を維持する。
-    ///   従来の `setData(merge: true)` + `toFirestoreData()`（nil キーを省略）と
-    ///   同じ挙動に揃えてあり、本 PR では意図的に変更していない。
-    ///   消したい項目は `fields` で渡し、`FieldValue.delete()` でキーごと消す ⭐️
+    /// - Note: nil のフィールドは「書き込まない」＝既存値を維持する
+    ///   （`setData(merge: true)` + `toFirestoreData()`（nil キーを省略）と同じ挙動）。
+    ///   消すのは `fields` で渡した項目だけで、`FieldValue.delete()` でキーごと消す ⭐️
     ///   （表示名を空にしても・アイコンを削除しても古い値が残っていたため。`ProfileClearableField` 参照）。
     /// - Throws: 更新に失敗したときは `publicProfiles/{userId}` の存在を get で確認し、
     ///   不在なら `FirestoreServiceError.notFound`（呼び出し側が `createPublicProfile`

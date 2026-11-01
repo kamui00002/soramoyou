@@ -259,14 +259,15 @@ extension User {
 ///    消したいときはこの型で明示し、`FieldValue.delete()` でキーごと消す。
 ///    読む側は「キーが無い」を新規ユーザーと同じく「ユーザー」と人型の印で出す（Android も同じ消し方）。
 /// - Note: rawValue は users と publicProfiles の両方で同じキー名。
-enum ProfileClearableField: String, CaseIterable {
+enum ProfileClearableField: String {
     case displayName
     case photoURL
 
     /// 書き込む内容に「消す」印（`FieldValue.delete()`）を足す
     ///
     /// ⚠️ merge の `setData` と `updateData` でだけ使うこと。merge なしの `setData`
-    ///    （`createPublicProfile` など）に `FieldValue.delete()` を入れると Firestore が受け付けない。
+    ///    （`createPublicProfile` など）に `FieldValue.delete()` を入れると、SDK が NSException を投げる。
+    ///    Swift の do/catch では捕まえられず、その場でアプリが落ちる。
     /// - Parameters:
     ///   - fields: 消す項目
     ///   - data: 書き込む内容

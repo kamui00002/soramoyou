@@ -289,16 +289,19 @@ final class ProfileViewModelTests: XCTestCase {
     /// nil だけだと toFirestoreData が displayName のキーを書かず、users は setData(merge: true)・
     /// 公開プロフィールは「nil は書かない」なので古い表示名が残る（自己紹介文と同じ穴・2026-11-01 にコードで確認）。
     func testUpdateProfile_表示名を空にして保存すると表示名を消す() async {
-        // Given: 表示名（"Test User"）が保存済みのユーザー
-        let testUser = createTestUser()
-        mockFirestoreService.user = testUser
-        viewModel = ProfileViewModel(
-            userId: testUser.id,
-            firestoreService: mockFirestoreService,
-            storageService: mockStorageService
-        )
+        // Given: 表示名（"Test User"）が保存済みの自分のプロフィール。
+        // 画面と同じく loadProfile が入力欄を保存済みの表示名で埋めてから、空にする
+        let testUser = setUpOwnProfile()
         await viewModel.loadProfile()
+        XCTAssertEqual(viewModel.editingDisplayName, "Test User", "前提: 入力欄が保存済みの表示名で埋まっている")
         viewModel.editingDisplayName = ""
+
+        // そらとも（SoratomoProfileStore）は通知に表示名のキーが無いと覚えを消す＝消した表示名がそらともにも届く
+        let notified = expectation(forNotification: .profileUpdated, object: nil) { notification in
+            let userInfo = notification.userInfo
+            return userInfo?[Notification.profileUpdatedUserIdKey] as? String == testUser.id
+                && userInfo?[Notification.profileUpdatedDisplayNameKey] == nil
+        }
 
         // When
         await viewModel.updateProfile()
@@ -308,19 +311,14 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(mockFirestoreService.updateUserClearingCalls, [[.displayName]])
         XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.count, 1)
         XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.first?.clearing, [.displayName])
+        await fulfillment(of: [notified], timeout: 1)
     }
 
     /// 表示名がスペースだけ（半角・全角）のときも、空と同じく消すこと。
     /// 画面では空欄に見えるのに「ユーザー」にならないため（Android もスペースだけは空として扱う）。
     func testUpdateProfile_表示名がスペースだけなら空と同じく消す() async {
         // Given
-        let testUser = createTestUser()
-        mockFirestoreService.user = testUser
-        viewModel = ProfileViewModel(
-            userId: testUser.id,
-            firestoreService: mockFirestoreService,
-            storageService: mockStorageService
-        )
+        setUpOwnProfile()
         await viewModel.loadProfile()
         viewModel.editingDisplayName = " 　 "
 
@@ -336,13 +334,7 @@ final class ProfileViewModelTests: XCTestCase {
     /// 表示名を入れて保存したときは何も消さず、入れた値をそのまま書くこと（前後の空白も変えない）。
     func testUpdateProfile_表示名を入れて保存したときは消さない() async {
         // Given
-        let testUser = createTestUser()
-        mockFirestoreService.user = testUser
-        viewModel = ProfileViewModel(
-            userId: testUser.id,
-            firestoreService: mockFirestoreService,
-            storageService: mockStorageService
-        )
+        setUpOwnProfile()
         await viewModel.loadProfile()
         viewModel.editingDisplayName = " 空の人 "
 
@@ -359,19 +351,17 @@ final class ProfileViewModelTests: XCTestCase {
     /// アイコンを削除して保存したら、users と公開プロフィールの両方でアイコンを「消す」と指定すること。
     /// nil だけだと古い photoURL（Storage では先に消した写真）が残り、壊れた画像を指したままになる。
     func testUpdateProfile_アイコンを削除して保存するとアイコンを消す() async {
-        // Given: アイコン（photoURL）が保存済みのユーザー
-        let testUser = createTestUser()
-        mockFirestoreService.user = testUser
-        viewModel = ProfileViewModel(
-            userId: testUser.id,
-            firestoreService: mockFirestoreService,
-            storageService: mockStorageService
-        )
+        // Given: アイコン（photoURL）が保存済みの自分のプロフィール（入力欄は loadProfile が埋める）
+        let testUser = setUpOwnProfile()
         await viewModel.loadProfile()
-        // テストでは自分のプロフィール扱いにならず loadProfile が入力欄を埋めないので、
-        // 画面と同じく保存済みの表示名を入れておく（入れないと表示名まで「消す」になる）
-        viewModel.editingDisplayName = testUser.displayName ?? ""
         viewModel.shouldDeleteProfileImage = true
+
+        // そらともは通知にアイコンのキーが無いと覚えを消す＝消したアイコンがそらともにも届く
+        let notified = expectation(forNotification: .profileUpdated, object: nil) { notification in
+            let userInfo = notification.userInfo
+            return userInfo?[Notification.profileUpdatedUserIdKey] as? String == testUser.id
+                && userInfo?[Notification.profileUpdatedPhotoURLKey] == nil
+        }
 
         // When
         await viewModel.updateProfile()
@@ -382,6 +372,36 @@ final class ProfileViewModelTests: XCTestCase {
         XCTAssertEqual(mockFirestoreService.updateUserClearingCalls, [[.photoURL]])
         XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.count, 1)
         XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.first?.clearing, [.photoURL])
+        await fulfillment(of: [notified], timeout: 1)
+    }
+
+    /// アイコンの削除で、公開プロフィールの保存だけ失敗して編集画面を閉じても、次の保存でアイコンを消し直すこと。
+    /// 「削除する」の印（shouldDeleteProfileImage）は閉じると下り、手元に写真が無いので「画像を削除」も出ない。
+    /// 印で決めると公開プロフィールに古い photoURL（Storage では消した写真）が残り、画面から直せなくなる。
+    func testUpdateProfile_公開プロフィールだけ失敗して閉じても次の保存でアイコンを消し直す() async {
+        // Given: アイコンを削除して保存 → users は書けたが公開プロフィールの保存が失敗した
+        setUpOwnProfile()
+        await viewModel.loadProfile()
+        viewModel.shouldDeleteProfileImage = true
+        mockFirestoreService.updatePublicProfileFieldsError = FirestoreServiceError.updateFailed(
+            NSError(domain: "FIRFirestoreErrorDomain", code: 7)
+        )
+        await viewModel.updateProfile()
+        XCTAssertNotNil(viewModel.errorMessage, "前提: 公開プロフィールの保存が失敗している")
+        XCTAssertNil(viewModel.user?.photoURL, "前提: users は書けて手元のアイコンは消えている")
+
+        // 保存し直さずに閉じる（閉じると入力が保存済みの値に戻り、「削除する」の印も下りる）
+        viewModel.resetProfileEdit()
+        XCTAssertFalse(viewModel.shouldDeleteProfileImage)
+        mockFirestoreService.updatePublicProfileFieldsError = nil
+
+        // When: 開き直して、アイコンには触らずに保存する
+        await viewModel.updateProfile()
+
+        // Then: users と公開プロフィールの両方へ、もう一度アイコンを「消す」を渡す
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(mockFirestoreService.updateUserClearingCalls.last, [.photoURL])
+        XCTAssertEqual(mockFirestoreService.updatePublicProfileFieldsCalls.last?.clearing, [.photoURL])
     }
 
     /// プロフィール編集を保存せずに閉じたら、入力（表示名・自己紹介・画像・画像削除の指定）が

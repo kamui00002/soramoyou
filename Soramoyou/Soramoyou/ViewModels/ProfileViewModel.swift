@@ -572,11 +572,16 @@ class ProfileViewModel: ObservableObject {
             // 消す項目（nil だけでは「書かない＝前の値のまま」になるので明示する）
             // ⚠️ 表示名・アイコンは "" でなくキーごと消す。読む側は全画面で「キーが無い」を新規ユーザーと同じく
             //    「ユーザー」と人型の印で出すが、"" だと名前が空欄になり、写真が無いのに「画像を削除」が出る。
+            // ⚠️ アイコンも表示名と同じく「保存する値が nil なら消す」で決める（「削除する」の印では決めない）。
+            //    印は編集画面を閉じると下りる。公開プロフィールの保存だけ失敗して閉じると、手元には写真が無く
+            //    「画像を削除」も出ないので、印で決めると公開プロフィールに古い photoURL（Storage では消した写真）が
+            //    残ったまま画面から直せなくなる。もともとアイコンが無い人に送っても何も変わらない。
+            //    別の端末で付けたアイコンを古い画面から保存すると消すが、表示名・自己紹介文も同じ扱い（古い画面の値で書く）。
             var clearedFields: Set<ProfileClearableField> = []
             if isDisplayNameCleared {
                 clearedFields.insert(.displayName)
             }
-            if shouldDeleteProfileImage {
+            if updatedUser.photoURL == nil {
                 clearedFields.insert(.photoURL)
             }
 
