@@ -112,6 +112,10 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.updateUser は未実装です")
     }
 
+    func updateUser(_: User, clearing _: Set<ProfileClearableField>) async throws -> User {
+        fatalError("MockFirestoreService.updateUser(_:clearing:) は未実装です")
+    }
+
     func updateEditTools(userId _: String, tools _: [EditTool], order _: [String]) async throws {
         fatalError("MockFirestoreService.updateEditTools は未実装です")
     }
@@ -138,7 +142,7 @@ extension FirestoreServiceProtocol {
         fatalError("MockFirestoreService.fetchPublicProfile は未実装です")
     }
 
-    func updatePublicProfileFields(userId _: String, displayName _: String?, photoURL _: String?, bio _: String?) async throws {
+    func updatePublicProfileFields(userId _: String, displayName _: String?, photoURL _: String?, bio _: String?, clearing _: Set<ProfileClearableField>) async throws {
         fatalError("MockFirestoreService.updatePublicProfileFields は未実装です")
     }
 

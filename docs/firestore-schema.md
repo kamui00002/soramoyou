@@ -5,8 +5,8 @@
 {
   "userId": "string (ドキュメントID)",
   "email": "string",
-  "displayName": "string",
-  "photoURL": "string",
+  "displayName": "string",            // 消すとキー無し（"" は書かない。読む側は新規ユーザーと同じく「ユーザー」と表示）
+  "photoURL": "string",               // 消すとキー無し（"" は書かない。読む側は新規ユーザーと同じく人型の印を表示）
   "bio": "string",
   "createdAt": "timestamp",
   "updatedAt": "timestamp",
@@ -289,6 +289,7 @@
 
 - **`followersCount` / `followingCount` はクライアント書き込み対象外**。正典はCloud Functions（`onFollowCreated` / `onFollowDeleted`）が `follows` を `count()` した結果を代入する値。
 - クライアントからプロフィールを更新するときは `updatePublicProfileFields`（`displayName` / `photoURL` / `bio` のみを `updateData`）を使う。`PublicProfile` 全体を書くとクライアントが持つ古いカウンタでサーバーの真値を潰す。
+- `updatePublicProfileFields` と `updateUser` に渡す nil は「書かない（前の値のまま）」の意味。表示名・アイコンを消すときは `clearing:` に `displayName` / `photoURL` を渡し、`FieldValue.delete()` でキーごと消す（users・publicProfiles とも）。merge なしの `setData`（`createPublicProfile`）には `FieldValue.delete()` を入れない（SDK が例外を投げてアプリが落ちる）。
 - プロフィールに見せる欄の 3 項目（`showsRecommendedSkies` / `showsSkyCalendar` / `showsFavorites`）は `updatePublicProfileFields` ではなく `updateProfileSectionVisibility` で書く（下の「publicProfiles の見せる/見せない」節）。
 - 更新失敗時は `publicProfiles/{userId}` の存在を `get` で確認して分岐する（不在＝新規作成、存在＝更新失敗）。`update` ルールが `resource.data.id` を参照するため、ドキュメント不在でも `NOT_FOUND` ではなく `PERMISSION_DENIED` が返りうるので、**エラーコードで不在判定してはいけない**。
 
