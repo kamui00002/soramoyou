@@ -18,7 +18,8 @@ Emulator の同じ内容のテストは functions/postsFollowersStorage.emulator
 確かめる約束:
   - 読み取り（get）は「本人」か「持ち主をフォローしている人」だけ。
     フォローしている＝follows/{読む人}_{持ち主} の文書がある（firestore.rules の isFollowing と同じ条件）
-  - 一覧（list）は誰にも許さない。保存・削除・public・private は今までどおり
+  - 一覧（list）は本人だけ（Android の退会が、投稿の文書から拾えなかった残りの画像を listAll で探して消す）。
+    フォロワー・他人は一覧できない。保存・削除・public・private は今までどおり
 
 ルールの書き方の約束（MUTANTS が文字列で狙うので、ルールはこの形で書く）:
   - 判定はトップレベルの関数 1 つにまとめる（3 か所に同じ式を書かない）:
@@ -28,6 +29,9 @@ Emulator の同じ内容のテストは functions/postsFollowersStorage.emulator
                      && firestore.exists(/databases/(default)/documents/follows/$(request.auth.uid + '_' + userId)));
         }
   - 3 つの match の直後の行に `allow get: if canReadFollowersImage(userId);` を置く（コメントは match の上に書く）
+  - その次の行に `allow list: if isOwner(userId);` を、空行やコメントを挟まず同じ字下げ（6 スペース）で置く
+    （GET_AND_LIST が「match の直後の allow get と、続く allow list」の 2 行を 1 つの文字列で狙うため。
+    back_to_old と「フォロワーにも一覧を許す」がこれを使う）
 
 テストの書き方の約束（rules_test_storage_soratomo.py と同じ）:
   - Firestore の読み取りは functionMocks の関数名 "firestore.exists" でモックする。引数は文書のパスの文字列。
@@ -92,7 +96,7 @@ for d in FOLLOWERS_DIRS:
         case(f"{d} 未ログインで読む", DENY, None, "get", img),
         case(f"{d} 他人が一覧", DENY, STRANGER, "list", img),
         case(f"{d} フォロワーが一覧", DENY, FOLLOWER, "list", img),
-        case(f"{d} 本人が一覧", DENY, OWNER, "list", img),
+        case(f"{d} 本人が一覧", ALLOW, OWNER, "list", img),
     ]
 CASES += [
     # --- 変えていないルール（posts だけで代表して見る）---
@@ -111,12 +115,16 @@ CASES += [
 FOLLOWS_ID = "$(request.auth.uid + '_' + userId)"
 FOLLOWS_EXISTS = "firestore.exists(/databases/(default)/documents/follows/" + FOLLOWS_ID + ")"
 ALLOW_GET = "allow get: if canReadFollowersImage(userId);"
+ALLOW_LIST = "allow list: if isOwner(userId);"
+# allow read は get と list を含み、同じ match に allow list と重ねて書けない（公式の rules-language）ので、
+# allow read に置き換える壊し方は、get と list の 2 行をまとめて置き換える
+GET_AND_LIST = ALLOW_GET + "\n      " + ALLOW_LIST
 
 
 def back_to_old(d):
-    """その場所だけ、直す前のルール（ログインしていれば誰でも読める）に戻す"""
+    """その場所だけ、#189 の前のルール（ログインしていれば誰でも読める・一覧できる）に戻す"""
     head = "match /" + d + "/{userId}/followers/{imageId} {\n      "
-    return (f"{d} だけ直す前のルールに戻す", [(head + ALLOW_GET, head + "allow read: if isAuthenticated();")])
+    return (f"{d} だけ直す前のルールに戻す", [(head + GET_AND_LIST, head + "allow read: if isAuthenticated();")])
 
 
 MUTANTS = [
@@ -127,7 +135,9 @@ MUTANTS = [
     # 未ログインでは request.auth が null なので、uid の読み取りがエラーで拒否されて見つかる
     ("ログインの確認を外す", [("|| (isAuthenticated()\n", "|| (true\n")]),
     ("読み取りを全員に許す", [("return isOwner(userId)", "return true || isOwner(userId)")]),
-    ("一覧も許す（get を read に）", [(ALLOW_GET, ALLOW_GET.replace("allow get", "allow read"), 3)]),
+    ("フォロワーにも一覧を許す（get と list を read に）", [(GET_AND_LIST, ALLOW_GET.replace("allow get", "allow read"), 3)]),
+    ("本人の一覧を外す", [(ALLOW_LIST, "allow list: if false;", 3)]),
+    ("一覧をログインした全員に許す", [(ALLOW_LIST, "allow list: if isAuthenticated();", 3)]),
 ] + [back_to_old(d) for d in FOLLOWERS_DIRS]
 
 

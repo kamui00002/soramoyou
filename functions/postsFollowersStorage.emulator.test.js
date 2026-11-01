@@ -9,7 +9,8 @@
 // ■ 何を確かめるか
 //   - 読み取り（get）は「本人」か「持ち主をフォローしている人」だけ。
 //     フォローしている＝Firestore に follows/{読む人}_{持ち主} の文書がある（firestore.rules の isFollowing と同じ条件）
-//   - 一覧（list）は誰にも許さない（アプリは listAll を使っていない）
+//   - 一覧（list）は本人だけ（Android の退会が、投稿の文書から拾えなかった残りの画像を listAll で探して消す）。
+//     フォロワー・他人は一覧できない
 //   - 保存・削除・public・private のルールは変わっていない
 //
 // ■ 書き方の約束
@@ -125,6 +126,16 @@ async function listStatus(prefix, who) {
   return res.status;
 }
 
+/** フォルダの中身の一覧で返ったファイル名（items の name）。一覧できないときはテストを止める */
+async function listNames(prefix, who) {
+  const res = await fetch(`${STORAGE}?${new URLSearchParams({ prefix, delimiter: "/" })}`, {
+    headers: authHeader(who),
+  });
+  assert.equal(res.status, 200, `一覧できない: ${prefix}`);
+  const body = await res.json();
+  return (body.items ?? []).map((item) => item.name);
+}
+
 /** 画像を削除する。HTTP の状態を返す */
 async function deleteStatus(path, who) {
   const res = await fetch(`${STORAGE}/${encodeURIComponent(path)}`, { method: "DELETE", headers: authHeader(who) });
@@ -222,8 +233,15 @@ for (const dir of FOLLOWERS_DIRS) {
     assert.equal(await listStatus(prefix, FOLLOWER), 403);
   });
 
-  test(`${dir}: 本人も一覧できない（アプリは listAll を使っていない）`, async () => {
-    assert.equal(await listStatus(prefix, OWNER), 403);
+  test(`${dir}: 本人は一覧できる（Android の退会が残りの画像を探す）`, async () => {
+    assert.equal(await listStatus(prefix, OWNER), 200);
+  });
+
+  // 退会に要るのは名前が返ること（空の 200 では残りの画像を消せない）
+  test(`${dir}: 本人の一覧に置いた画像の名前が出る`, async () => {
+    const names = await listNames(prefix, OWNER);
+    assert.ok(names.includes(`${prefix}p1.jpg`), `p1.jpg が無い: ${JSON.stringify(names)}`);
+    assert.ok(names.includes(`${prefix}p2.jpg`), `p2.jpg が無い: ${JSON.stringify(names)}`);
   });
 }
 
