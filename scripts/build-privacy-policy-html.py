@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""アプリ内プライバシーポリシー本文から、ホスティング用の HTML を生成する。☁️
+"""アプリ内のプライバシーポリシーと利用規約の本文から、ホスティング用の HTML を生成する。☁️
 
 なぜ生成するのか:
   App Store Connect は「ホストされたプライバシーポリシーURL」を要求するが、
   アプリ内にも同じ本文がある。**2箇所で手書きすると必ずドリフトする**ので、
   `SettingsView.swift` の `privacyPolicyText` を唯一の原本とし、
   HTML はここから機械的に生成する。
+  利用規約も同じ考え方で、`termsOfServiceText` を唯一の原本とする
+  （Android 版は利用規約の本文をアプリ内に持たず、このページ <site>/terms/ を開く）。
 
 使い方:
-  python3 scripts/build-privacy-policy-html.py
+  python3 scripts/build-privacy-policy-html.py   （プライバシーポリシーと利用規約の 2 つを作り直す）
   firebase deploy --only hosting --project soramoyou-ios
 
 出力先は Firebase Hosting の公開ディレクトリ `hosting/`（firebase.json の hosting.public）。
@@ -21,19 +23,38 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "Soramoyou/Soramoyou/Views/SettingsView.swift"
-# Firebase Hosting の公開ディレクトリ配下。ASC に登録するURLは <site>/privacy/ になる。
-OUT = ROOT / "hosting/privacy/index.html"
+# 生成する文書の表。出力先は Firebase Hosting の公開ディレクトリ配下。
+# ASC に登録するURLは <site>/privacy/、Android から開く利用規約は <site>/terms/ になる。
+# numbered_heading: 「1. 」で始まる行を見出し(<h3>)にするか。プライバシーポリシーは小見出しだが、
+#   利用規約の「1. 」は条文の本文や禁止事項の列挙なので、見出しにせず段落のまま出す。
+DOCUMENTS = [
+    {
+        "var_name": "privacyPolicyText",
+        "out": ROOT / "hosting/privacy/index.html",
+        "page_title": "プライバシーポリシー — そらもよう",
+        "description": "アプリ「そらもよう」（iOS 版・Android 版）のプライバシーポリシー",
+        "numbered_heading": True,
+    },
+    {
+        "var_name": "termsOfServiceText",
+        "out": ROOT / "hosting/terms/index.html",
+        "page_title": "利用規約 — そらもよう",
+        # 本文に機種の言及が無いので「iOS 版・Android 版」とは書かない。
+        "description": "アプリ「そらもよう」の利用規約",
+        "numbered_heading": False,
+    },
+]
 
 
-def extract_policy_text() -> str:
-    """`privacyPolicyText` の複数行文字列リテラルを取り出し、共通インデントを除去する。"""
+def extract_text(var_name: str) -> str:
+    """`var_name` の複数行文字列リテラルを取り出し、共通インデントを除去する。"""
     src = SOURCE.read_text()
-    start = src.find("private var privacyPolicyText")
+    start = src.find(f"private var {var_name}")
     if start < 0:
-        sys.exit("privacyPolicyText が見つかりません（SettingsView.swift の構造が変わった？）")
-    m = re.search(r'"""\n(.*?)\n\s*"""', src[start:], re.S)
+        sys.exit(f"{var_name} が見つかりません（SettingsView.swift の構造が変わった？）")
+    m = re.search(r'"""\n(.*?)\n\s*"""', src[start:], re.DOTALL)
     if not m:
-        sys.exit("privacyPolicyText の複数行リテラルを取り出せません")
+        sys.exit(f"{var_name} の複数行リテラルを取り出せません")
     body = m.group(1)
     # Swift の複数行リテラルは閉じ """ のインデントぶんが各行から除かれる。ここでは8スペース固定。
     text = "\n".join(l[8:] if l.startswith(" " * 8) else l.lstrip() for l in body.split("\n"))
@@ -58,8 +79,11 @@ def resolve_interpolations(text: str) -> str:
     return text
 
 
-def to_html_body(text: str) -> str:
-    """プレーンテキストを、見出し/箇条書き/リンクを解釈した HTML に変換する。"""
+def to_html_body(text: str, numbered_heading: bool = True) -> str:
+    """プレーンテキストを、見出し/箇条書き/リンクを解釈した HTML に変換する。
+
+    numbered_heading が False のときは、「1. 」で始まる行を見出しにせず段落として出す。
+    """
     out = []
     in_list = False
 
@@ -88,7 +112,7 @@ def to_html_body(text: str) -> str:
                 out.append("<ul>")
                 in_list = True
             out.append(f"<li>{esc[2:]}</li>")
-        elif re.match(r"^\d+\. ", line):
+        elif numbered_heading and re.match(r"^\d+\. ", line):
             close_list()
             out.append(f"<h3>{esc}</h3>")
         elif line.startswith("最終更新日"):
@@ -106,8 +130,8 @@ TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>プライバシーポリシー — そらもよう</title>
-<meta name="description" content="アプリ「そらもよう」（iOS 版・Android 版）のプライバシーポリシー">
+<title>{page_title}</title>
+<meta name="description" content="{description}">
 <style>
   :root {{ --bg:#fff; --fg:#1c1c1e; --muted:#6b7280; --accent:#3b82f6; --line:#e5e7eb; --card:#f7f8fa; }}
   @media (prefers-color-scheme: dark) {{
@@ -144,12 +168,21 @@ TEMPLATE = """<!DOCTYPE html>
 
 
 def main():
-    text = extract_policy_text()
-    title = text.split("\n")[0].strip()
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(TEMPLATE.format(title=html.escape(title), body=to_html_body(text)))
-    print(f"生成: {OUT}")
-    print(f"  原本: {SOURCE.relative_to(ROOT)} の privacyPolicyText（{len(text)} 文字）")
+    for doc in DOCUMENTS:
+        text = extract_text(doc["var_name"])
+        title = text.split("\n")[0].strip()
+        out = doc["out"]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            TEMPLATE.format(
+                page_title=html.escape(doc["page_title"]),
+                description=html.escape(doc["description"]),
+                title=html.escape(title),
+                body=to_html_body(text, doc["numbered_heading"]),
+            )
+        )
+        print(f"生成: {out}")
+        print(f"  原本: {SOURCE.relative_to(ROOT)} の {doc['var_name']}（{len(text)} 文字）")
     print("  ⚠️ アプリ内の本文を変えたらこのスクリプトを再実行してホスト側も更新すること")
 
 
