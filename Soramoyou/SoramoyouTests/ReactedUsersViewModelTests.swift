@@ -202,6 +202,33 @@ final class ReactedUsersViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.lastError, "ErrorStateView には切り替えない")
     }
 
+    /// 【回帰】フォロー中集合の 1 ページ目に壊れたドキュメントがあっても、2 ページ目まで読む
+    ///
+    /// Repository は壊れたフォロードキュメントを 1 件ずつ飛ばすため、満杯に読んだページでも
+    /// 返る件数は 1 ページ分に届かない。件数で「続きなし」と決めると 2 ページ目の相手が
+    /// 「フォロー」と誤表示される。
+    func testフォロー中集合に壊れたドキュメントがあっても続きを読む() async {
+        let firestore = MockFirestoreServiceForReacted()
+        firestore.stubbedUserPosts = [makePost("p1")]
+        firestore.stubbedLikes = [makeLike(user: "userB", post: "p1", t: 100)]
+        let repository = MockFollowRepositoryForReacted()
+        // 1ページ目は 2 件読んで 1 件が壊れていた（返るのは userA だけ）。2ページ目に userB
+        repository.stubbedFollowingPages = [["userA"], ["userB"]]
+        repository.stubbedFollowingSkippedCounts = [1, 0]
+        let viewModel = ReactedUsersViewModel(
+            ownUserId: "me",
+            firestoreService: firestore,
+            followRepository: repository,
+            followingPageSize: 2
+        )
+
+        await viewModel.load()
+
+        XCTAssertTrue(viewModel.isFollowingUser("userB"), "2ページ目のフォロー中の相手もフォロー中と判定される")
+        XCTAssertEqual(viewModel.followButtonTitle(for: "userB"), "フォロー中")
+        XCTAssertEqual(repository.fetchFollowingCallCount, 2, "読んだ件数が足りない 2ページ目で止まる")
+    }
+
     /// フォローすると状態が変わる（楽観的更新をしない＝成功後に変わる）
     func testフォローで状態が変わる() async {
         let firestore = MockFirestoreServiceForReacted()
@@ -382,6 +409,11 @@ final class MockFirestoreServiceForReacted: FirestoreServiceProtocol, @unchecked
 /// フォロー操作と「自分のフォロー中一覧」だけを扱う最小 Mock
 final class MockFollowRepositoryForReacted: FollowRepositoryProtocol, @unchecked Sendable {
     var stubbedFollowing: [String] = []
+    /// 呼び出しごとに順番に返すフォロー中のページ（尽きたら空配列）。
+    /// 空のときは `stubbedFollowing` の固定値を返す（複数ページにまたがる集合の検証用）。
+    var stubbedFollowingPages: [[String]] = []
+    /// `stubbedFollowingPages` の各ページで「読んだが壊れていて飛ばした」ドキュメントの件数（省略時は 0）
+    var stubbedFollowingSkippedCounts: [Int] = []
     /// `fetchFollowing`（一覧読み込み）で投げるエラー
     var stubbedError: Error?
     /// `follow` / `unfollow`（ボタン操作）で投げるエラー
@@ -399,6 +431,22 @@ final class MockFollowRepositoryForReacted: FollowRepositoryProtocol, @unchecked
     var capturedUnfollows: [(target: String, owner: String)] {
         lock.lock(); defer { lock.unlock() }
         return _capturedUnfollows
+    }
+
+    private var _fetchFollowingCallCount = 0
+
+    /// `fetchFollowing` が呼ばれた回数（ページング打ち切りの検証用）
+    var fetchFollowingCallCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _fetchFollowingCallCount
+    }
+
+    /// 呼び出し回数を数え、今回が何ページ目か（0 始まり）を返す
+    private func recordFetchFollowing() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        let index = _fetchFollowingCallCount
+        _fetchFollowingCallCount += 1
+        return index
     }
 
     // 同上（async から直接 lock を触らないための同期ヘルパー）
@@ -428,19 +476,28 @@ final class MockFollowRepositoryForReacted: FollowRepositoryProtocol, @unchecked
 
     func fetchFollowers(
         of _: String, limit _: Int, lastDocument _: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+    ) async throws -> FollowPage {
         fatalError("MockFollowRepositoryForReacted.fetchFollowers は未実装です")
     }
 
     func fetchFollowing(
-        of ownUserId: String, limit _: Int, lastDocument _: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+        of ownUserId: String, limit: Int, lastDocument _: DocumentSnapshot?
+    ) async throws -> FollowPage {
+        let pageIndex = recordFetchFollowing()
         if let stubbedError { throw stubbedError }
-        let follows = stubbedFollowing.map {
+        let followeeIds: [String] = if stubbedFollowingPages.isEmpty {
+            stubbedFollowing
+        } else {
+            pageIndex < stubbedFollowingPages.count ? stubbedFollowingPages[pageIndex] : []
+        }
+        let skipped = pageIndex < stubbedFollowingSkippedCounts.count ? stubbedFollowingSkippedCounts[pageIndex] : 0
+        let follows = followeeIds.map {
             Follow(id: Follow.makeId(followerId: ownUserId, followeeId: $0),
                    followerId: ownUserId, followeeId: $0)
         }
-        return (follows: follows, lastDocument: nil)
+        // 本番の FollowPage と同じ規則（実際に読んだ件数 = 返す件数 + 飛ばした件数 < limit なら読み切り）。
+        // DocumentSnapshot はテストで生成できないため lastDocument は常に nil。
+        return FollowPage(follows: follows, lastDocument: nil, isExhausted: follows.count + skipped < limit)
     }
 
     func removeFollower(_: String, from _: String) async throws {

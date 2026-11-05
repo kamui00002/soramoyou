@@ -162,9 +162,9 @@ final class ForYouFeedSourceBuilder: ForYouFeedSourceBuilderProtocol {
             )
             ids.append(contentsOf: result.follows.map(\.followeeId))
             cursor = result.lastDocument
-            // 取得件数がページサイズ未満なら残りは無い（デコードスキップで僅かに
-            // 少なく見える可能性はあるが、既存の一覧と同じ振る舞いとして許容）
-            if result.follows.count < pageLimit || cursor == nil {
+            // 読み切ったら残りは無い。件数（result.follows.count）で判定すると、
+            // 壊れたドキュメントを飛ばしたページで続きがあるのに止まってしまう（FollowPage 参照）
+            if result.isExhausted {
                 break
             }
         }

@@ -262,7 +262,9 @@ final class ReactedUsersViewModel: ObservableObject {
                 )
                 ids.formUnion(page.follows.map(\.followeeId))
                 cursor = page.lastDocument
-                if page.follows.count < followingPageSize || cursor == nil { break }
+                // 件数ではなく「読み切ったか」で止める（壊れたドキュメントを飛ばしたページでも続きを読む）。
+                // 読み切っていなければ lastDocument は必ずあるので、cursor の nil 判定は要らない（FollowPage 参照）
+                if page.isExhausted { break }
             }
             followingUserIds = ids
         } catch {

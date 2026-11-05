@@ -19,7 +19,7 @@ extension FollowRepositoryProtocol {
         of _: String,
         limit _: Int,
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+    ) async throws -> FollowPage {
         fatalError("MockFollowRepository.fetchFollowers は未実装です")
     }
 
@@ -27,7 +27,7 @@ extension FollowRepositoryProtocol {
         of _: String,
         limit _: Int,
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+    ) async throws -> FollowPage {
         fatalError("MockFollowRepository.fetchFollowing は未実装です")
     }
 

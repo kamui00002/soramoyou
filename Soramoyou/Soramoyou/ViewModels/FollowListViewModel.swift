@@ -170,8 +170,9 @@ final class FollowListViewModel: ObservableObject {
             let page = try await fetchPage(after: nil)
             follows = page.follows
             lastDocument = page.lastDocument
-            // 1 ページに満たなければ末尾（PaginatedPostsViewModel と同じ判定）
-            hasMore = page.follows.count >= pageSize
+            // ⚠️ follows.count で判定しない。壊れたドキュメントを飛ばすと満杯のページでも
+            //    件数が pageSize を割り、続きがあるのに「末尾」と誤判定する（FollowPage 参照）
+            hasMore = !page.isExhausted
             await fetchMissingProfiles()
             // フォローバック表示のため、自分のフォロー中集合も取り直す
             await loadOwnFollowingIds()
@@ -204,7 +205,7 @@ final class FollowListViewModel: ObservableObject {
             let existingIds = Set(follows.map(\.id))
             follows.append(contentsOf: page.follows.filter { !existingIds.contains($0.id) })
             lastDocument = page.lastDocument
-            hasMore = page.follows.count >= pageSize
+            hasMore = !page.isExhausted
             // 自分のフォロー中一覧は「表示中の行 = 自分のフォロー中集合」なので追加ページも取り込む。
             // ⚠️ このガードは必須。外して呼ぶと、フォロワー一覧では followeeId（＝一覧の主＝自分）が、
             //    他人のフォロー中一覧では他人のフォロー先が、自分の集合に混入する。
@@ -227,7 +228,7 @@ final class FollowListViewModel: ObservableObject {
     /// 種別に応じた follows のページを取得する
     private func fetchPage(
         after lastDocument: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+    ) async throws -> FollowPage {
         switch listType {
         case .followers:
             try await followRepository.fetchFollowers(
@@ -289,7 +290,9 @@ final class FollowListViewModel: ObservableObject {
                 )
                 ids.formUnion(page.follows.map(\.followeeId))
                 cursor = page.lastDocument
-                if page.follows.count < pageSize || cursor == nil { break }
+                // 件数ではなく「読み切ったか」で止める（壊れたドキュメントを飛ばしたページでも続きを読む）。
+                // 読み切っていなければ lastDocument は必ずあるので、cursor の nil 判定は要らない（FollowPage 参照）
+                if page.isExhausted { break }
             }
             followingUserIds = ids
         } catch {
