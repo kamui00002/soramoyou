@@ -58,6 +58,7 @@
         （`~/.claude/rules/mvp-prelaunch.md`「不具合がある状態でレビュー誘導を出すと逆効果」と同じ構造）
 - [ ] 新規ユーザー（オンボ）にも案内が要るか判断したか（What's New は新規ユーザーには出ない）
 - [ ] App Store 審査提出は `scripts/appstore-release.sh`（prepare→GO確認→submit）で行う。手順は `docs/appstore-release-automation.md` 参照
+- [ ] 提出したコミットのタグとバンドル（`docs/appstore-release-automation.md` §3 の手順 7・8）
 
 ---
 
