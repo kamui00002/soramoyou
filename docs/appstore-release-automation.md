@@ -3,7 +3,7 @@
 TestFlight アップロード**より先**の工程（App Store 版作成・新機能欄記入・審査提出）を自動化する仕組みのリファレンス。
 `fastlane/Fastfile` と、その薄いラッパー `scripts/appstore-release.sh` の2点構成。
 
-> 使い方: リリース作業（build番号を上げて審査提出するまで）の際に、該当セクションを上から順に確認する。
+> 使い方: リリース作業（build番号を上げて審査提出とその後の控えまで）の際に、該当セクションを上から順に確認する。
 > 関連: `docs/pre-release-checklist.md`「4. 提出メカニクス」/ `~/.claude/scripts/xcode-testflight-upload.sh`（TestFlight アップロード担当・本ドキュメントの対象外）
 
 ---
@@ -71,6 +71,24 @@ TestFlight アップロードが完了し、Apple 側のビルド処理（proces
    scripts/appstore-release.sh submit --version 1.9.3 --build 73 --yes
    ```
    - `submit` は直前の `prepare` が書き出したマニフェストと version/build/リリースノートの SHA-256 を照合し、不一致なら「再度 prepare からやり直して」と表示して停止する（prepare→ASCで内容確認→submit の間に release_notes.txt 等が変わっていないことを保証するため）
+7. 提出したコミットにタグを付ける
+   ```bash
+   git show <コミット>:Soramoyou/Soramoyou.xcodeproj/project.pbxproj | grep -E "(MARKETING_VERSION|CURRENT_PROJECT_VERSION) =" | sort -u
+   git tag ios-1.9.3-build73 <コミット>
+   ```
+   - `<コミット>` は、手順1 で TestFlight にアップロードしたビルドを作ったコミット
+   - タグ名は `ios-<版>-build<番号>`（例: 1.9.3 / build 73 なら `ios-1.9.3-build73`）
+   - 1 行目の出力に `MARKETING_VERSION = 1.9.3;` と `CURRENT_PROJECT_VERSION = 73;` があることを確かめてからタグを付ける（`1.0` / `1` はテストターゲットの値なので無視してよい）
+   - タグは手元だけに置く。origin へは送らない（`git push --tags` / `--follow-tags` も使わない）
+8. そのタグを含むバンドルを WorkSSD に取り、`git bundle verify` で確かめる
+   ```bash
+   ls /Volumes/WorkSSD/backup
+   git bundle create /Volumes/WorkSSD/backup/ios-1.9.3-build73.bundle ios-1.9.3-build73
+   git bundle verify /Volumes/WorkSSD/backup/ios-1.9.3-build73.bundle
+   ```
+   - 先に `ls` で WorkSSD がつながっていることを確かめる
+   - ファイル名はタグ名＋`.bundle`。バンドルに入れる ref はそのタグ 1 本
+   - verify の出力に `… is okay`、`<手順7 のコミットのハッシュ> refs/tags/ios-1.9.3-build73`、`The bundle records a complete history.` の 3 つが出れば完了
 
 ---
 
