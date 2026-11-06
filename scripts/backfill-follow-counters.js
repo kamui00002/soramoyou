@@ -22,9 +22,8 @@
  *
  * 実行順序（このスクリプトは一連のリリース手順の最後）:
  *   1. --dry-run で差分と「No publicProfile」の件数を確認する
- *   2. 「No publicProfile」のユーザーが居たら、先にリポジトリ直下の migrate-public-profiles.js で
- *      publicProfiles を作る（作らないと、そのユーザーは本スクリプトからも Functions からも
- *      永久にスキップされ続ける）
+ *   2. 「No publicProfile」のユーザーが居たら、本実行の前に、その人の publicProfiles の作り方を決める
+ *      （作らないと、そのユーザーは本スクリプトからも Functions からも永久にスキップされ続ける）
  *   3. Cloud Functions（onFollowCreated / onFollowDeleted）をデプロイする
  *   4. 本スクリプトを本実行する（以後のズレは Functions が面倒を見る）
  *
@@ -62,7 +61,7 @@ const SKIP_CONFIRM = args.includes('--yes');
 
 // 書き込み先として唯一許可する Firebase プロジェクト。
 // ⚠️ このリポジトリは .firebaserc が空で「default project が無い」運用のため、
-//    ADC の既定に頼らず、initializeApp に projectId として渡して接続先を固定する（migrate-public-profiles.js と同じ）。
+//    ADC の既定に頼らず、initializeApp に projectId として渡して接続先を固定する（scripts/follows-cleanup.js と同じ）。
 const EXPECTED_PROJECT_ID = 'soramoyou-ios';
 
 /**
@@ -88,8 +87,7 @@ async function countFollowsFor(db, userId) {
  * ⚠️ WriteBatch はあえて使わず、ユーザーごとに逐次 await している。理由は 2 つ:
  *   1. 対象が数百件規模で、バッチ化の速度メリットが小さい
  *   2. 1 件の失敗を局所化でき、どのユーザーで失敗したかログに残せる
- *   （batch を使うなら、500 件ごとに新しい batch を作り直す手当てが要る。移行スクリプト
- *     migrate-public-profiles.js は以前これが無く、500 件を超えると落ちていた）
+ *   （batch を使うなら、500 件ごとに新しい batch を作り直す手当てが要る）
  *
  * db は差し込む（main は本番の db、テストは demo- の Emulator の db を渡す）。
  * @returns 件数のまとめ { changed, unchanged, missingProfile, failed, total }

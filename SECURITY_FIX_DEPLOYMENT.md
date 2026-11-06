@@ -3,7 +3,7 @@
 ## 完了済みタスク ✅
 
 ### 1. Firestoreセキュリティルールのデプロイ
-**ステータス**: ✅ 完了
+**ステータス**: ✅ 完了。
 
 Firestoreセキュリティルールを更新し、デプロイしました。
 
@@ -19,41 +19,9 @@ Firestoreセキュリティルールを更新し、デプロイしました。
 ```
 
 ### 2. データ移行スクリプトの作成
-**ステータス**: ✅ 完了
+**ステータス**: 削除済み。
 
-`migrate-public-profiles.js` スクリプトを作成しました。
-
-**機能**:
-- 既存の `users` コレクションから公開プロフィール情報を抽出
-- `publicProfiles` コレクションに保存
-- バッチ処理で500件ずつ効率的に移行
-- エラーハンドリングと進捗表示
-
-**実行方法**:
-
-1. Firebase Admin SDKをインストール:
-```bash
-npm install firebase-admin
-```
-
-2. 認証の準備（ADC＝自分のGoogleアカウントのログイン。鍵ファイルは作らない）:
-```bash
-gcloud auth application-default login
-# quota project を求められたら
-gcloud auth application-default set-quota-project soramoyou-ios
-```
-   - ⚠️ `migrate-public-profiles.js` はこのADCで初期化し、接続先は `soramoyou-ios`（本番）に固定している（`scripts/follows-cleanup.js` と同じ形。`.firebaserc` が空のためADCの既定に頼らない）。鍵ファイル（`serviceAccountKey.json`）は読まないので、作って置かない
-
-3. スクリプトを実行:
-```bash
-node migrate-public-profiles.js
-```
-
-4. 確認プロンプトで `yes` を入力して実行
-
-**注意**:
-- 既存の `publicProfiles` コレクションにデータがある場合は上書きされます
-- 実行前にバックアップを推奨します
+既存の `users` コレクションから `publicProfiles` コレクションを作る一度きりの移行スクリプトを作っていたが、使わなくなったため削除した。今のリポジトリには無い。
 
 ---
 
@@ -99,16 +67,16 @@ Soramoyou/Soramoyou/Models/PublicProfile.swift
 ### セキュリティ脆弱性
 **重大度**: HIGH
 **タイプ**: Authorization Bypass
-**影響範囲**: PII（個人識別情報）の露出
+**影響範囲**: PII（個人識別情報）の露出。
 
 ### 修正アプローチ
-公開情報と機密情報を別コレクションに分離:
+公開情報と機密情報を別コレクションに分離。
 
-**機密情報** (`users` コレクション - 所有者のみアクセス):
+**機密情報** (`users` コレクション - 所有者のみアクセス)。
 - email
 - blockedUserIds
 
-**公開情報** (`publicProfiles` コレクション - 認証済みユーザーがアクセス):
+**公開情報** (`publicProfiles` コレクション - 認証済みユーザーがアクセス)。
 - id
 - displayName
 - photoURL
@@ -137,10 +105,7 @@ Soramoyou/Soramoyou/Models/PublicProfile.swift
 
 2. ⚠️ **XcodeでPublicProfile.swiftを追加** (上記手順参照)
 
-3. ⚠️ **データ移行スクリプトを実行** (既存ユーザーがいる場合)
-   ```bash
-   node migrate-public-profiles.js
-   ```
+3. （データ移行スクリプトの実行：スクリプトは削除済みのため、この手順は無い）
 
 4. ⚠️ **アプリをビルド＆テスト**
    - 新規ユーザー登録が正常に動作するか
@@ -162,10 +127,6 @@ Soramoyou/Soramoyou/Models/PublicProfile.swift
 - Pod installを実行: `cd Soramoyou && pod install`
 - Xcodeを再起動
 
-### 移行スクリプトエラー: "Could not load the default credentials"
-- 「2.」のADCのログインがまだ（または切れている）ときに出る。`✅ Firebase Admin SDK initialized` の行が出た後でも、Firestore を読むところでこのエラーになる（ログインが無いことは、初期化ではなく最初に Firestore を読むときに分かるため）
-- 「2.」の `gcloud auth application-default login` をしてから、もう一度実行する。鍵ファイルを作って置く方法では直さない
-
 ### プロフィール表示エラー
 - Firestoreルールが正しくデプロイされているか確認
 - Firebase Consoleで `publicProfiles` コレクションにデータが存在するか確認
@@ -176,13 +137,13 @@ Soramoyou/Soramoyou/Models/PublicProfile.swift
 ## 完了確認チェックリスト
 
 - [x] Firestoreセキュリティルールのデプロイ
-- [x] データ移行スクリプトの作成
+- [x] データ移行スクリプトの作成（後に削除済み）
 - [ ] XcodeプロジェクトへのPublicProfile.swift追加
-- [ ] データ移行スクリプトの実行（既存ユーザーがいる場合）
+- データ移行スクリプトの実行：スクリプトは削除済みのため、この項目は無い
 - [ ] アプリのビルド＆動作確認
 - [ ] コミット＆プッシュ
 
 ---
 
 **作成日**: 2026-02-16
-**対応PR**: 機能-AppStore申請準備
+**対応PR**: 機能-AppStore申請準備。
