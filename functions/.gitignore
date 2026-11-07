@@ -1,6 +1,6 @@
 node_modules/
 *.log
 .firebase/
-# package-lock.json は初回 npm install で生成される（このリポには未コミット）。
-# 生成後にコミットしたい場合はこの行を削除して package-lock.json を add すること。
-package-lock.json
+# ルートの .gitignore は全階層の package-lock.json を無視している。functions の lock だけは追跡に戻す
+# （Cloud Build の npm ci と CI の npm ci がこの lock どおりに入れるため）。
+!package-lock.json
