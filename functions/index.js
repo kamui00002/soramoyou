@@ -410,7 +410,6 @@ exports.onUserBlockListChanged = onDocumentWritten("users/{userId}", async (even
 //   - 配信プレフは いいね / コメント と同じ notifyReactions に相乗りする（新しい設定項目は増やさない）。
 //   - 自分の投稿を自分で選んだときは通知しない。公開投稿以外は通知しない（アプリも公開投稿しか選ばせない）。
 //   - 同じ人が同じ投稿を外して入れ直しても、通知は最初の1回だけ（recommendationNotices に既読マーカー）。
-//     外す→入れるを繰り返して相手に通知を連打できないようにするため。
 //   - publicProfiles は表示名の編集・フォロー数の整合などでも更新されるが、
 //     おすすめ欄に新しい投稿が入っていなければ何も読まずに抜ける。
 

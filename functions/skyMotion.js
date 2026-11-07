@@ -690,17 +690,12 @@ async function pollOneJob(doc, now, falKeyValue) {
  * ジョブを失敗にし、予約を返金し、入力ファイルを削除し、失敗プッシュ通知を送る。
  *
  * 🔴 **返金＋failed遷移は単一トランザクション**（`reserveAndClaimJob` の対称）。
- *    旧実装は「返金トランザクション → 素の status 更新」の2段階で、間で失敗すると
- *    job が submitted のまま残り、次周期のポーラーが再度 failJob を呼んで**二重返金**
- *    しえた（paid 側の balance には上限が無いため実質無限に水増しされうる）。
- *    トランザクション内で `core.isRefundableJob`（submitting/submitted のみ true）を
- *    ライブ読み取り判定することで、二重呼び出し・completed の failed への巻き戻り・
- *    二重通知をすべて no-op に落とす。
+ *    トランザクション内で job をライブで読み、`core.isRefundableJob`（submitting/submitted
+ *    のみ true）が false なら何も書かずに `transitioned: false` を返す。
+ *    そのときは入力ファイル削除も失敗通知もせず、ログだけ残して抜ける。
  *
- * 🔴 **bucket は呼び出し元が渡す**（A-4）。呼び出し元は `claim.bucket` / `job.chargedBucket`
- *    を既にメモリに持っているのに、旧実装はここで job を読み直し、読み取り失敗時に
- *    "free" フォールバックしていた——paid ジョブでそれが起きると購入クレジットが
- *    永久に戻らない。既知の値を渡せばこの再読み取りリスクごと消える。
+ * 🔴 **bucket は呼び出し元が渡す**（A-4）。返金先の bucket は、トランザクションで読む job
+ *    からではなく、引数（呼び出し元の `claim.bucket` / `job.chargedBucket`）から取る。
  *
  * 通知・入力ファイル削除は best-effort（失敗しても job 状態には影響させない）。
  * ⚠️ 通知条件はトランザクションの transitioned 結果を使う。`decideRefund` の
