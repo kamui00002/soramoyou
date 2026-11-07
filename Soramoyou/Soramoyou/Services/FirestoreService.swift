@@ -1036,8 +1036,8 @@ class FirestoreService: FirestoreServiceProtocol {
     ///    `exists == false` はまず返らない（rules の評価規則からの推論・未実測。返っても段 A で正しく扱う）。
     ///    ① 投稿が既に削除されている ② 他人の非公開（private）投稿
     ///    ③ フォロワー限定投稿（手順 2 で自分の follows を消した後なので、もう読めない）
-    ///    ②③ は投稿が存在し、posts の update rule（`isCountOnlyUpdate`）は公開範囲を見ないので
-    ///    段 B の -1 が通る。① は段 B が失敗して段 C に落ちる（消えた投稿のカウンタは直す対象が無い）。
+    ///    ②③ は投稿が存在するので、段 B の -1 が通る。
+    ///    ① は段 B が失敗して段 C に落ちる（消えた投稿のカウンタは直す対象が無い）。
     ///    段 B では 0 以下かどうかを確かめられないが、いいね/コメントが残っている以上カウンタは
     ///    1 以上のはずなので、減らさずにズレを残すより減らす側を選んでいる。
     ///
@@ -1210,8 +1210,7 @@ class FirestoreService: FirestoreServiceProtocol {
             //    ⚠️ `limit` は「非常弁」であって「正確な上位 N 件」ではない。
             //       `order(by:)` を付けていないので、上限に達した場合に切り捨てられるのは
             //       ドキュメント ID 順の後ろ側で、新しい順の上位が残る保証はない。
-            //       `likes` の rules は read が `isAuthenticated()` のみで list 上限を強制しないため、
-            //       人気投稿が窓に入ったときに読み取り量とメモリが青天井になるのを防ぐのが目的。
+            //       1 回に読むのは `Self.likesFetchLimit`（500 件）まで。
             let snapshot = try await likesCollection
                 .whereField("postId", in: targetIds)
                 .limit(to: Self.likesFetchLimit)

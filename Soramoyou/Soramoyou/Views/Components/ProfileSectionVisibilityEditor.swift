@@ -118,8 +118,7 @@ struct ProfileSectionVisibilityEditor: View {
 
     /// スイッチの下の 1 行の説明（下書き・利用者の承認待ち）
     ///
-    /// ⚠️ 空カレンダーの「フォロワーだけ」は見せ方の制限で、壁ではない（公開の投稿は今も誰でも読める）。
-    ///    「フォロワー以外には見えません」のように過剰に約束しない（計画書「firestore.rules」の 🟡）。
+    /// 3 つとも「誰に・何が見えるか」を 1 文で書く。
     private func description(for section: ProfileSection) -> String {
         switch section {
         case .recommendedSkies: "プロフィールを見た人に、選んだおすすめの空を表示します"

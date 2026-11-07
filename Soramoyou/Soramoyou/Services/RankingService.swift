@@ -69,8 +69,7 @@ final class RankingService: RankingServiceProtocol {
     }
 
     func fetchRanking(period: RankingPeriod, blockedUserIds: Set<String>, now: Date) async throws -> RankingResult {
-        // ⚠️ 上限を now にしているのは、端末時計で createdAt を未来にしたいいねが
-        //    ずっと窓に居座るのを防ぐため（likes の createdAt はクライアント時刻で書かれる）。
+        // 読むのは `period.windowStart(now:)` から `now` までのいいね（期間の上限は now）。
         let likes = try await firestoreService.fetchLikes(
             from: period.windowStart(now: now),
             to: now,
