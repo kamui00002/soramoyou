@@ -399,11 +399,11 @@ function isClaimableJob(jobData) {
  * 予約が成立している状態は2つ:
  *   - "submitting": `reserveAndClaimJob` が claim した直後（onSkyMotionJobCreated の submit 失敗経路）
  *   - "submitted" : fal へ submit 済み（pollSkyMotionJobs の各失敗経路）
- * ⚠️ **どちらか片方だけをガードにすると、もう片方の経路の返金が漏れる**（Fable調査で指摘）。
+ * この 2 つのどちらでも true を返す（どちらの経路でも返金と failed への遷移を進める）。
  *
- * terminal（completed/failed）は false ＝ `failJob` を二重に呼んでも no-op になり、
- * **二重返金・completed の failed への巻き戻り・二重通知をすべて防ぐ**。
- * "pending" も false（予約前なので返す物がない。誤って通しても安全側に倒れる）。
+ * terminal（completed/failed）は false。このとき `failJob` は返金・failed への遷移・通知の
+ * どれも行わない。
+ * "pending" も false（予約前なので返す物がない）。
  * @param {{status?: string}|null|undefined} jobData トランザクション内で読んだ最新の job データ
  * @returns {boolean} true なら返金＋failed遷移を進めてよい
  */

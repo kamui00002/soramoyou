@@ -228,9 +228,8 @@ async function deleteJobInputFiles(uid, jobId) {
   );
 }
 
-// （旧 refundUsage は failJob に統合した。返金と failed 遷移を別トランザクションに分けると、
-//   間で失敗したとき job が submitted のまま残り、次周期のポーラーが再度 failJob を呼んで
-//   **二重返金**する穴があった。詳細は failJob のコメント参照。）
+// （旧 refundUsage は failJob に統合した。返金と failed 遷移は failJob の中で
+//   1 つのトランザクションとして行う。詳細は failJob のコメント参照。）
 
 /** fal.ai へ submit する（成功したら request_id を返す。失敗したら throw する）。 */
 async function submitToFal(payload, falKeyValue) {
@@ -754,7 +753,7 @@ async function failJob(jobRef, uid, bucket, errorCode, errorMessage) {
   });
 
   if (!transitioned) {
-    logger.info("空を動かす: failJob no-op（既に終端状態・二重返金防止）", {
+    logger.info("空を動かす: failJob は返金できない状態のため何もしなかった", {
       jobId: jobRef.id, uid, errorCode,
     });
     return;
