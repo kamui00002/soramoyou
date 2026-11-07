@@ -46,6 +46,7 @@
 > **そらとも（友達グループ・1.15.0 で一般公開）で新しい種類は増えない。**
 > 通報の理由は 5 つの固定の選択肢（`functions/soratomoCore.js` の `REPORT_REASONS`）で、自由記述は無い。
 > 運営の Discord へ転送するのは内部ID・理由・時刻だけ（`buildReportForwardPayload`）。
+> 本体の通報（`reports`）で運営の Discord へ送るのは、理由と投稿の内部IDと Firebase コンソールへのリンクだけ（`functions/reportDiscord.js` の `buildReportPayload`）。
 > 表と `PrivacyInfo.xcprivacy` は 9 種類のまま（2026-10-12 に開発者が承認・soratomo-public-launch tasks 10.4）。
 >
 > **そらとものリアクション（リアクションを含む版）でも新しい種類は増えない。**

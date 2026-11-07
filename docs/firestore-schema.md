@@ -175,7 +175,7 @@
 ```
 - 書き込み: `FirestoreService.reportPost`（ホーム・ギャラリー詳細の通報メニュー）。
 - セキュリティ: 作成は認証済みユーザーが自分のIDでのみ（rules `hasAll(['postId','reporterId','reportedUserId','reason','createdAt'])`）。**読み取り・更新・削除は不可**（管理者が Firebase コンソールで閲覧）。
-- 副作用: ドキュメント作成で Cloud Functions `notifyReportToDiscord`（`functions/index.js`・本文は `functions/reportDiscord.js`）が発火し、**そらともの通報（`soratomoReports`）と同じ通報専用の Discord チャンネル**へ赤い「🚨 投稿が通報されました」を送る。通報された投稿のキャプション・サムネイル・公開範囲と、投稿者の表示名（`publicProfiles`）も載せる。投稿が既に無いときは「見つかりません」と出す。Webhook は Secret Manager `DISCORD_REPORT_WEBHOOK_URL`（`functions/soratomo.js` と同じ秘密・コードに実値なし）。
+- 副作用: ドキュメント作成で Cloud Functions `notifyReportToDiscord`（`functions/index.js`・本文は `functions/reportDiscord.js`）が発火し、**そらともの通報（`soratomoReports`）と同じ通報専用の Discord チャンネル**へ赤い「🚨 投稿が通報されました」を送る。載せるのは理由・投稿ID・Firebase コンソールの投稿の文書へのリンクだけで、キャプション・写真・公開範囲・表示名・通報した人と投稿した人の ID・時刻は送らない（`posts` と `publicProfiles` も読まない）。5 種類以外の理由は「不明」と出し、形の合わない投稿 ID は載せずにリンクを `reports` の一覧へ向ける。Webhook は Secret Manager `DISCORD_REPORT_WEBHOOK_URL`（`functions/soratomo.js` と同じ秘密・コードに実値なし）。
 - 目的: App Store ガイドライン 1.2（UGC）の「通報に 24 時間以内に対応」に気付ける経路。⚠️ 通報理由の文言を変えるときは iOS `ReportReason.displayName` と `functions/reportDiscord.js` の `REPORT_REASON_LABELS` を両方直す（テストが食い違いを検出する）。
 
 ## livingSkyJobs コレクション（「空を動かす」β・Kling版）
