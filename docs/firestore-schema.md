@@ -84,7 +84,7 @@
 
 - **他人の update は `likesCount` / `commentsCount` の ±1 だけ**（`FieldValue.increment` 単独）。`isCountOnlyUpdate` が `affectedKeys().hasOnly` で強制するので、`updatedAt` など別のフィールドを同時に書くと permission-denied になる。いいね・コメントの処理にフィールドを足すときは rules も一緒に直すこと。
 - 持ち主の update は `isValidPostUpdate`（カウント 2 つは据え置き）。
-- 他人のカウント更新は公開範囲を見ない。退会処理の段 B（`FirestoreService.deleteUserData`）がこれに依存している。
+- 退会処理の段 B（`FirestoreService.deleteUserData`）は、いいね/コメントの削除とカウントの -1 を 1 つの batch で書く。カウントの update の rules を変えるときは、段 B も一緒に確かめること。
 - ただし**いいね**（`FirestoreService.setLike`・#145 から）は、書き込み後の likesCount を返すためにトランザクションの中で投稿も読む。そのため posts の**読み取り権限（公開範囲）も要る**。読めない投稿（フォローを外した後のフォロワー限定投稿など）へのいいね・取り消しは permission-denied になる。
 
 ## drafts コレクション
@@ -131,8 +131,8 @@
   `publicProfiles/{持ち主}.showsFavorites == true`」**（1.18.0〜・既定 OFF）。
   フォロワーの list は `limit <= 30` のときだけ（⚠️ `FavoritesViewModel` の pageSize と一致させる）。
   **write（create / update / delete）は今どおり持ち主だけ**。
-  - ⚠️ 文書 ID は投稿 ID なので、ON にした人のフォロワーには、フォロワー限定・非公開の投稿の ID と、
-    お気に入りにした日時も読める（投稿の中身は `posts` のルールで守られる）。
+  - 文書 ID は投稿 ID で、項目は `postId` と `createdAt` だけ（`Favorite.toFirestoreData()`）。投稿の中身は `posts` から 1 件ずつ読み、
+    他人のお気に入りの画面に出すのは公開の投稿だけ（`FavoritesViewModel.isShownToViewer`）。
   - テスト: `functions/profileVisibilityRules.emulator.test.js`（エミュレーターで本物の要求として評価する）
 - **複合インデックス不要**: 一覧は `order(by: createdAt, descending: true)` の 1 本だけ。
   サブコレクションにしたのはこのためで、2026-06-15 のコメント不具合（index 欠落で
@@ -168,7 +168,7 @@
   "reportId": "string (ドキュメントID・自動採番)",
   "postId": "string",                // 通報された投稿（アプリは post.id が nil のとき "" を送る）
   "reporterId": "string",            // 通報した人（auth.uid と一致が必須）
-  "reportedUserId": "string",        // 投稿者（通報した人の端末が送った値。正は posts/{postId}.userId）
+  "reportedUserId": "string",        // 投稿者（アプリが通報する投稿の post.userId を入れる）
   "reason": "string",                // inappropriate/spam/harassment/copyright/other（iOS ReportReason）
   "createdAt": "timestamp"           // serverTimestamp
 }
@@ -204,7 +204,7 @@
 ```
 - クライアントが書けるのは **画像3枚のアップロード**（Storage）と **status="pending" の初期ドキュメント作成のみ**。以降の状態遷移は Cloud Functions（Admin SDK）専用（`update`/`delete` は client から一律禁止）。
 - **アクセス制御**: custom claim `skyMotionBeta == true`（allowlist）が create に必須。Cloud Functions側でも Admin SDK 経由で再検証する（多層防御）。到達範囲は DEBUG ビルド＋Release/TestFlight の claim 保有者。
-- 失敗時の返金は `chargedBucket` の側だけを戻す。返金＋failed遷移は1トランザクション（`isRefundableJob`=submitting/submittedのみ許可）で、二重返金・completed巻き戻りを防ぐ。
+- 失敗時の返金は `chargedBucket` の側だけを戻す。返金＋failed遷移は1トランザクション（`isRefundableJob`=submitting/submittedのみ許可）で行い、それ以外の状態では何もしない。
 - 詳細な契約・rules条件・状態遷移図は `docs/sky-motion-design.md` 参照。
 
 ## livingSkyUsage コレクション（「空を動かす」・1日あたりの利用回数カウンタ）
@@ -213,7 +213,7 @@
   "uid": "string (ドキュメントID)",
   "day": "string",              // JST "YYYY-MM-DD"（lazy reset。日次cronは使わない）
   "freeUsedToday": "number",    // 当日の無料枠使用数（上限: 一般1回/β3回。reserve-on-create + refund-on-failure）
-  "paidUsedToday": "number",    // 当日の購入枠使用数（上限20回=乗っ取り時の被害上限）
+  "paidUsedToday": "number",    // 当日の購入枠使用数（上限20回・skyMotionCore.PAID_DAILY_LIMIT）
   "freeLimit": "number",        // 当日の無料枠上限（サーバーが書く。clientの「あとN回」表示の真実源＝二重管理しない）
   "reservedCount": "number",    // 【旧・後方互換】β時代の単一カウンタ。新規書き込みなし。読み取り時はfreeUsedTodayとして解釈
   "updatedAt": "timestamp"
@@ -272,7 +272,7 @@
 ```
 - `#` を含まない**生の文字列**で持ち、**正規化（小文字化・トリム）はしない**。`arrayContains` は完全一致でしか当たらないため、正規化すると既存投稿（`posts.hashtags` は `extractHashtags` が保存した生の単語）にマッチしなくなる。
 - 書き込みは `followTag` / `unfollowTag`（`arrayUnion` / `arrayRemove`）**専用**。クライアントの `updateUser`（User 全体の setData merge）では書かない — キャッシュ済みの旧配列でサーバーの最新値を巻き戻すため。
-- 上限 30 件のチェックは書き込み前にクライアント側で行う（`arrayUnion` は配列長を見ない）。判定は必ずサーバーから取り直した最新値に対して行うこと。
+- 上限 30 件のチェックは書き込み前にクライアント側（`TagDetailViewModel`）で行う。判定は必ずサーバーから取り直した最新値に対して行うこと。
 - 旧ユーザーはフィールド自体が存在しない（＝欠落）。読み込み側は Optional で扱う。
 
 ## users への追加フィールド（そらとも通知）⭐️（2026-10-04）
@@ -315,7 +315,7 @@
 - 表示時は **1 件ずつ `fetchPost`** で解決する（お気に入りと同じ理由: posts の read rule は visibility 依存で、
   `documentID in [...]` だと 1 件でも読めない投稿が混ざるとクエリ全体が denied になる）。
   公開（`public`）以外・削除済みは出さず、持ち主には「表示できない空が N 枚」と整理を促す。
-- アプリは公開投稿しか追加させないが、rules は配列の中身（postId が実在・公開か）までは検査できない。
+- アプリが追加するのは公開投稿だけ（`RecommendationManager.add` が `visibility == .public` のときだけ書く）。
   読む側（アプリの表示・Functions の通知）で必ず visibility を確認すること。
 
 ### publicProfiles の見せる/見せない（プロフィールに表示するもの）⭐️（2026-10-25・1.18.0）
@@ -337,8 +337,8 @@
 - rules: 3 項目は「フィールド無し」または「bool」のみ許可。
   `users/{uid}/favorites` の get は「持ち主」か「フォロワー かつ `showsFavorites == true`」、list は加えて `limit <= 30`
   （⚠️ iOS `FavoritesViewModel` の `pageSize` 30 と一致させること）。
-- ⚠️ 空カレンダーの「フォロワーだけ」は**見せ方の制限で壁ではない**（公開投稿はもともと誰でも読める・rules は投稿の visibility だけを見る）。
-  アプリの文言でも「フォロワー以外には見えません」と約束しない。
+- 空カレンダーの入口は、持ち主が `showsSkyCalendar` を ON にしていて、見る人がフォロー中のときだけ開く（`UserProfileViewModel.entryState`。持ち主が ON のとき、フォローしていない人とゲストには入口の代わりにフォローを促す 1 行を出す）。
+  設定画面の文言は「フォロワーがあなたのプロフィールから空カレンダーを見られます」（`ProfileSectionVisibilityEditor`）。
 
 ## recommendationNotices コレクション（「おすすめの空に選ばれました」通知の既読マーカー）⭐️（2026-09-24）
 
@@ -355,14 +355,14 @@
 
 - **Cloud Functions（`onPublicProfileUpdated`）だけが Admin SDK で書く**。rules はクライアントの read / write をすべて拒否。
 - `create()` は既に存在すると失敗する＝「同じ人が同じ投稿を外して入れ直しても通知は最初の 1 回だけ」を原子的に守る
-  （外す→入れるの繰り返しで相手に通知を連打できないようにするため）。
+  （`notifyRecommended` は印を作れたときだけ通知を送り、印が既にあれば何もせずに抜ける）。
 - 通知の条件: 他の人の**公開**投稿が新しく入ったとき／自分の投稿は通知しない／投稿者の `notifyReactions` が ON／
   投稿者がおすすめした人をブロックしていない。配信プレフはいいね・コメントと同じ `notifyReactions` に相乗り。
 - 並べ替え・外しただけ・他フィールド（表示名・フォロー数など）の更新では、何も読まずに抜ける。
 - アカウント削除時にクライアントからは消せない（rules で全拒否）。誰が誰の空を選んだかの記録を残し続けないよう、
   `expireAt` に **TTL ポリシー**を設定して自動削除する（未設定だと消えない）:
   `gcloud firestore fields ttls update expireAt --collection-group=recommendationNotices --enable-ttl --project=soramoyou-ios`
-  期限後は同じ組でも再び通知されうる（1 年に 1 回までなら連打にはならない）。
+  印が消えた後に同じ組がまた入ると、印を作り直して通知の対象になる（期限は作成から 365 日・`recommendationCore.NOTICE_RETENTION_DAYS`）。
 
 ## dailyPicks / dailyPickLog / dailyPickConfig コレクション（今日のおすすめのそらもよう）⭐️（2026-10-24）
 
@@ -423,9 +423,9 @@
   - `notifyClaimedAt` はあるのに `notifyResult` が無い＝送る権利を取った後に落ちた回。通知は届いたかもしれないし、送れていないかもしれない（再試行しても送らない＝多くて 1 回を優先した取りこぼし）。
   - 送る権利を取るトランザクションそのものが失敗した回は、関数が例外を投げ、定期実行の再試行（2 回）でやり直す（再試行の回も印を見るので、送るのは多くて 1 回）。
 - 過去 30 日分の `candidates[0].userId` を読んで「最近主役になった投稿者」を避ける（足りなければ主役になった日が古い順に緩める）。
-- TTL: `expireAt` に **TTL ポリシー**を設定して自動削除する（未設定だと消えない。**本番ではまだ有効化していない**）:
+- TTL: `expireAt`（作成から 90 日・`dailyPickCore.LOG_TTL_DAYS`）は TTL ポリシー用の項目。有効にするコマンド:
   `gcloud firestore fields ttls update expireAt --collection-group=dailyPickLog --enable-ttl --project=soramoyou-ios`
-  ⚠️ 有効化するまでは、90 日を過ぎた記録も消えない。選び方には影響しない（「過去 30 日」は日付の鍵で 30 件を直接引くため、古い記録は読まれない）が、候補の投稿者 uid を持つ記録が溜まり続ける。
+  「過去 30 日」は日付の鍵 30 件（`previousDateKeys`・`RECENT_DAYS`）を `getAll` で直接引くので、それより古い記録は読まない。
 
 ### dailyPickConfig/settings（設定・誰も読めない）
 
@@ -445,7 +445,7 @@
 - 公開投稿の読み出しは `posts` の `visibility == public` の等式だけ（`orderBy` なし）なので、**複合インデックスは要らない**。
   ⚠️ `orderBy` を足すと複合インデックスが要るようになる。
 - 公開投稿が 50000 件を超えると、`orderBy` が無いので文書 ID 順の先頭 50000 件だけを読む＝毎日同じ一部から選ぶ（ID が後ろの投稿は候補にならない）。そうなったら `truncated` が true になり警告ログが出る。
-- 通報（`reports`）は上限なしで全部読む（通報された投稿を確実に外すため。`limit` を付けると通報済みの投稿がすり抜ける）。通報の作成には件数の制限が無いので、件数は `dailyPickLog.reportedCount` で見張る（急に増えたら、毎朝の読み取りの量とメモリが増える）。
+- 通報（`reports`）は `limit` を付けずに `postId` だけを全部読み、通報された投稿を候補から外す。重複を除いた件数は、選んだ日の `dailyPickLog.reportedCount` に書く。
 
 ### いざというとき: ふさわしくない投稿が選ばれたら
 
@@ -480,7 +480,7 @@ Firebase コンソールで `dailyPicks/{その日の鍵}` の `postIds` から�
 - 画像は Storage の `soratomo/{groupId}/{authorId}/{skyId}/display.jpg` と `thumb.jpg`。パスは iOS の `SoratomoImagePaths` だけが作る。`skies` には画像のパスや URL の項目を持たない（`soratomoCreateSky` の入力検査が書かせない）。公開前ゲートでも Storage のパスの形と `storage.rules` は変えていない。退会と利用停止では、その人の画像を共通の削除（`functions/soratomoDeletion.js`）が消す。
 - 抜ける（Callable の `soratomoLeaveGroup`・leave-group spec）では、抜けた人のそのグループの投稿と画像・通知の間引き（`notifyState`）・所属の写し（`soratomoUsers/{uid}/groups/{groupId}`）を共通の削除（`functions/soratomoDeletion.js` の `leaveSoratomoGroup`）が消す。最後の 1 人が抜けるときはグループごと消える。ほかのグループと通報の記録（`soratomoReports`）には触れない。片づけが終わるまで `soratomoPendingLeaves` の印が残り、その間の同じグループへの参加は `leave_pending` で断る。
 - 抜ける・退会・利用停止では、本人が付けたリアクション（ほかの人の投稿の `reactions.{uid}` と `reactorIds` から本人）と、通知の印 `reactionNotices` の中の本人も消す（共通の削除の手順 2b）。リアクションの通知の間引き `reactionNotifyState/{uid}` は手順 3 で消す。投稿の削除では、削除トリガー `onSoratomoSkyDeleted` が `reactionNotices/{skyId}` を消す。リアクションの付いた投稿は、`authorId` だけを見る既存のルールのまま投稿者が削除できる（soratomo-reactions spec）。
-- 投稿の作成は `firestore.rules` で閉じた（`allow create: if false`）。項目・キャプション・幅と高さの検査は `functions/soratomoCore.js` の `validateSkyInput`、利用停止・メンバー・NG ワードの検査は `soratomoStore.js` の `createSkyTx` が行う。アプリから直接書けると、利用停止と NG ワードの検査を飛ばせるため（release-gate 要件 11.5）。
+- 投稿の作成は `firestore.rules` で閉じた（`allow create: if false`）。項目・キャプション・幅と高さの検査は `functions/soratomoCore.js` の `validateSkyInput`、利用停止・メンバー・NG ワードの検査は `soratomoStore.js` の `createSkyTx` が行い、どちらも Callable の `soratomoCreateSky` の中で順に呼ばれる（release-gate 要件 11.5）。
 - 利用者の記録（`soratomoUsers/{uid}`）は本人だけが読める（同意と利用停止の項目を含む）。書き込みはルールで拒否（release-gate 要件 8.9・10.14）。
 - 通報の記録（`soratomoReports`）と語のリスト（`soratomoConfig`）は、ルールで誰にも読み書きさせない（通報者本人も読めない・release-gate 要件 6.10・11.10）。語のリストのファイルはリポジトリに置かない（投入スクリプトがリポジトリと Git の作業ツリーの中のファイルを拒否する）。Functions は 5 分キャッシュして読む。
 - ⚠️ **G5（プライバシーポリシーとプライバシーラベル）への引き継ぎ**: 通報の記録は、通報者または投稿者が退会しても消さない（release-gate 要件 6.11）。通報が届くと、通報の記録・投稿・グループ・投稿者・通報者の**内部 ID** と理由と受け付けた時刻を、開発者の Discord（フィードバックとは別の通報専用のチャンネル）へ送る（キャプション・グループ名・表示名・招待コード・画像は送らない・要件 7.2）。ポリシーとラベルに、この保持と第三者（Discord）への送信を書く必要がある。
@@ -582,8 +582,7 @@ rules の followers 枝（`isFollowing(resource.data.userId)`）は `userId in [
 - 集計ルール（`Services/RankingAggregator.swift`・純関数でテスト済み）:
   - 投稿者本人のいいねは数えない／公開投稿だけ／閲覧者がブロックしている人の投稿は除いて順位を詰める
   - 同数は同順位（1, 2, 2, 4）。並びは同数なら「最新のいいねが新しい順」→ postId
-- 上限を `今` にしているのは、端末時計で `createdAt` を未来にしたいいね（likes の createdAt はクライアント時刻）が
-  ずっと窓に居座るのを防ぐため。
+- 期間の上限は `今`（`RankingService.fetchRanking` が `to: now` で `fetchLikes` を呼ぶ）。
 - ⚠️ 手順 1 に `postId` などの等値フィルタを足すと複合インデックスが要る（deploy が必要になる）。
 - ⚠️ 読み取り量はいいねの件数に比例する。`ranking_loaded` イベントの `like_count` / `is_truncated` を見て、
   `is_truncated=true` が出始めたら（＝期間の古い側を数え漏らしている）Cloud Functions の定期集計へ切り替える。
@@ -611,8 +610,7 @@ rules の followers 枝（`isFollowing(resource.data.userId)`）は `userId in [
 
 その代わり `limit(to: 500)` は「**非常弁であって正確な上位 N 件ではない**」。
 `order(by:)` が無いため、上限に達したときに切り捨てられるのはドキュメント ID 順の後ろ側で、
-新しい順の上位が残る保証はない。`likes` の rules は read が `isAuthenticated()` のみで
-list 上限を強制しないため、人気投稿が窓に入ったときに読み取り量が青天井になるのを防ぐのが目的。
+新しい順の上位が残る保証はない。1 回に読むのは 500 件まで（`FirestoreService.likesFetchLimit`）。
 
 ⚠️ **上限に張り付くと表示件数が過小になる**。切り捨てられるのは末尾ではなく
 ドキュメント ID 順の任意の部分集合なので、全員の「N件のいいね」が同時に目減りし、
