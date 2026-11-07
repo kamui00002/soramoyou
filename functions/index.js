@@ -628,9 +628,14 @@ exports.notifyFeedbackToDiscord = onDocumentCreated(
 // アプリの「通報」が reports コレクションに作成されたら、開発者の Discord へ即時通知する。
 // App Store ガイドライン 1.2（UGC）は通報に 24 時間以内の対応を求めるため、気付ける経路が必要。
 // 届け先はそらともの通報（soratomo.js の soratomoReports）と同じ、通報専用のチャンネル（DISCORD_REPORT_WEBHOOK_URL）。
+// Discord へ送るのは「通報があったこと・理由・投稿の ID・Firebase コンソールへのリンク」だけ。
+// 投稿のキャプション・写真・投稿者の表示名は送らないので、posts と publicProfiles は読まない（中身はリンク先で確かめる）。
 // 本文の組み立ては純粋関数（functions/reportDiscord.js）に分け、node:test で検証している。
 
-const { buildReportPayload, POST_LOOKUP } = require("./reportDiscord");
+const { buildReportPayload } = require("./reportDiscord");
+
+/** 通報の知らせに載せる Firebase コンソールのリンクのプロジェクト ID（scripts/*.js の EXPECTED_PROJECT_ID と同じ値）。 */
+const REPORT_CONSOLE_PROJECT_ID = "soramoyou-ios";
 
 /**
  * 通報の送り先（Discord の Webhook URL）。フィードバックの送り先（上の DISCORD_WEBHOOK_URL）とは別の秘密の値で、
@@ -651,43 +656,8 @@ exports.notifyReportToDiscord = onDocumentCreated(
     const report = snapshot.data() || {};
     const reportId = event.params.reportId;
 
-    // 通報された投稿を読む。読めなくても通報そのものは必ず届けたいので、失敗は記録して先へ進む。
-    const postId = typeof report.postId === "string" ? report.postId.trim() : "";
-    let post = null;
-    let postLookup = POST_LOOKUP.noId;
-    if (postId) {
-      try {
-        const postSnap = await db.collection("posts").doc(postId).get();
-        if (postSnap.exists) {
-          post = postSnap.data() || {};
-          postLookup = POST_LOOKUP.found;
-        } else {
-          postLookup = POST_LOOKUP.missing;
-        }
-      } catch (err) {
-        postLookup = POST_LOOKUP.error;
-        logger.warn("通報された投稿の読み取りに失敗", { reportId, postId, error: String(err && err.message) });
-      }
-    }
-
-    // 投稿者の表示名（publicProfiles）。投稿があれば投稿の持ち主、無ければ通報データの投稿者 ID で引く。
-    const authorId =
-      (post && typeof post.userId === "string" && post.userId) ||
-      (typeof report.reportedUserId === "string" && report.reportedUserId) ||
-      "";
-    let authorName = null;
-    if (authorId) {
-      try {
-        const profileSnap = await db.collection("publicProfiles").doc(authorId).get();
-        if (profileSnap.exists) {
-          authorName = (profileSnap.data() || {}).displayName || null;
-        }
-      } catch (err) {
-        logger.warn("投稿者の表示名の読み取りに失敗", { reportId, authorId, error: String(err && err.message) });
-      }
-    }
-
-    const payload = buildReportPayload({ reportId, report, post, postLookup, authorName, now: new Date() });
+    // 本文は通報データの理由と投稿 ID だけで作る（投稿や投稿者の情報は読まない・渡さない）。
+    const payload = buildReportPayload({ report, projectId: REPORT_CONSOLE_PROJECT_ID });
 
     // 送信と失敗時の扱いはフィードバック通知と同じ（失敗は throw でメトリクスに出す・既定ではリトライされない）。
     const webhookUrl = DISCORD_REPORT_WEBHOOK_URL.value();
@@ -702,7 +672,7 @@ exports.notifyReportToDiscord = onDocumentCreated(
         logger.error("通報の Discord 通知に失敗しました", { status: res.status, body, reportId });
         throw new Error(`Discord webhook responded ${res.status}`);
       }
-      logger.info("通報の Discord 通知に成功しました", { reportId, postLookup });
+      logger.info("通報の Discord 通知に成功しました", { reportId });
     } catch (err) {
       logger.error("通報の Discord 通知中に例外が発生しました", { reportId, error: err.message });
       throw err;

@@ -4,8 +4,12 @@
 // アプリの「通報」は reports コレクションに書き込まれる（FirestoreService.reportPost）。
 // App Store ガイドライン 1.2（UGC）は「通報に 24 時間以内に対応する」ことを求めるため、
 // 届いた通報を開発者の Discord へ即時に流す（index.js の notifyReportToDiscord）。
-// 開発者が Discord を見ただけで「消すべきか」を判断できるよう、通報された投稿の
-// キャプション・サムネイル・公開範囲・投稿者の表示名まで載せる。
+// Discord は外部のサービスなので、送るのは「通報があったこと・理由・投稿の ID・Firebase コンソールへのリンク」だけにする。
+// 投稿のキャプション・写真（サムネイル）・公開範囲・投稿者の表示名・通報した人や投稿した人の ID・時刻は送らない。
+// 投稿の中身は、リンクから Firebase コンソール（開発者のログインが要る）を開いて確かめる。
+//
+// 理由は決まった 5 種類だけを表示名にして、それ以外は「不明」にする。
+// 投稿 ID は形を確かめてから載せ、形が合わないときは載せずに、リンクを reports の一覧へ向ける。
 //
 // ここには firebase-admin / firebase-functions に触れない純粋関数だけを置き、node:test で検証する。
 //
@@ -24,30 +28,20 @@ const REPORT_REASON_LABELS = {
   other: "その他",
 };
 
-/** 公開範囲 rawValue → 日本語表示名（posts.visibility）。 */
-const VISIBILITY_LABELS = {
-  public: "公開",
-  followers: "フォロワー限定",
-  private: "非公開",
-};
+/** 理由が入っていないときの表示。 */
+const MISSING_REASON_LABEL = "未指定";
+
+/** 理由が決まった 5 種類のどれでもないときの表示（そらともの通報の UNKNOWN_LABEL と同じ文字）。 */
+const UNKNOWN_REASON_LABEL = "不明";
 
 /**
- * 投稿の取得結果。index.js が posts/{postId} を読んだ結果をこの 4 つのどれかで渡す。
- * - found:   投稿があった
- * - missing: 投稿が無かった（通報のあとに削除された可能性）
- * - noId:    通報に postId が入っていなかった（アプリは post.id が nil のとき "" を送る）
- * - error:   読み取りに失敗した
+ * Discord に載せてよい投稿 ID の形。アプリの投稿 ID は Firestore の自動 ID（英数字 20 文字）なので、
+ * 英数字・ハイフン・アンダースコアの 128 文字までに限る。これに合わない ID は載せない（コンソールの URL にも同じ ID を使う）。
  */
-const POST_LOOKUP = Object.freeze({
-  found: "found",
-  missing: "missing",
-  noId: "noId",
-  error: "error",
-});
+const POST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
-// Discord Embed の上限: description 4096 文字・field.value 1024 文字。どちらも空文字は不可。
-const MAX_DESCRIPTION = 1000;
-const MAX_FIELD = 1000;
+/** Firebase のプロジェクト ID の形（英小文字・数字・ハイフン）。URL に入れる前に確かめる。 */
+const PROJECT_ID_PATTERN = /^[a-z0-9-]{1,64}$/;
 
 /**
  * 値を「空でない文字列」に正規化する。文字列以外・空白だけの文字列は null。
@@ -61,121 +55,82 @@ function nonEmptyString(value) {
 }
 
 /**
- * 投稿の画像のうち、表示順（order）がいちばん小さい 1 枚のサムネイル URL を返す。
- * Discord は https の画像しか表示しないので、それ以外は null。
- * @param {unknown} images posts.images
- * @returns {string | null}
- */
-function firstThumbnailUrl(images) {
-  if (!Array.isArray(images) || images.length === 0) return null;
-  const sorted = images
-    .filter((img) => img && typeof img === "object")
-    .slice()
-    .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
-  for (const img of sorted) {
-    const url = nonEmptyString(img.thumbnail) || nonEmptyString(img.url);
-    if (url && url.startsWith("https://")) return url;
-  }
-  return null;
-}
-
-/**
- * createdAt（Firestore Timestamp）を ISO 文字列にする。無い・壊れているときは now を使う。
- * @param {unknown} createdAt
- * @param {Date} now
+ * Firebase コンソールの Firestore の画面の URL を作る。
+ * コンソールは URL の中の「/」を「~2F」と書く（例: posts/abc → ~2Fposts~2Fabc）。
+ * @param {string} projectId 形を確かめ済みのプロジェクト ID
+ * @param {string[]} segments ["posts", "<投稿ID>"] や ["reports"]。どれも形を確かめ済みの文字列
  * @returns {string}
  */
-function toIsoTimestamp(createdAt, now) {
-  try {
-    if (createdAt && typeof createdAt.toDate === "function") {
-      return createdAt.toDate().toISOString();
-    }
-  } catch (_e) {
-    // 下の now にフォールバックする
-  }
-  return now.toISOString();
+function firestoreConsoleUrl(projectId, segments) {
+  const dataPath = segments.map((s) => `~2F${s}`).join("");
+  return `https://console.firebase.google.com/project/${projectId}/firestore/databases/-default-/data/${dataPath}`;
 }
 
 /**
  * 通報 1 件ぶんの Discord Webhook ペイロードを組み立てる。
+ * 引数に投稿や投稿者の情報を受け取らない（＝渡しようがない）ことで、それらが Discord へ出ないことを保証する。
  * @param {object} args
- * @param {string} args.reportId reports のドキュメント ID
- * @param {object} args.report reports/{reportId} のデータ（postId / reporterId / reportedUserId / reason / createdAt）
- * @param {object | null} args.post posts/{postId} のデータ（postLookup が found のときだけ）
- * @param {string} args.postLookup POST_LOOKUP のどれか
- * @param {string | null} args.authorName 投稿者の表示名（publicProfiles/{uid}.displayName）。取れなければ null
- * @param {Date} args.now createdAt が無いときの時刻（テストで固定するため外から渡す）
+ * @param {object} args.report reports/{reportId} のデータ。使うのは postId と reason だけ
+ * @param {string} args.projectId コンソールのリンクに使う Firebase のプロジェクト ID
  * @returns {object} Discord Webhook の JSON 本文
  */
-function buildReportPayload({ reportId, report, post, postLookup, authorName, now }) {
+function buildReportPayload({ report, projectId }) {
   const data = report && typeof report === "object" ? report : {};
 
-  // 理由: 既知なら日本語、未知の値はそのまま、無ければ「未指定」。
+  // 理由: 決まった 5 種類なら日本語、それ以外は「不明」、無ければ「未指定」。
   const reasonRaw = nonEmptyString(data.reason);
-  const reason = reasonRaw ? REPORT_REASON_LABELS[reasonRaw] || reasonRaw : "未指定";
-
-  const postId = nonEmptyString(data.postId) || "(なし)";
-  const reporterId = nonEmptyString(data.reporterId) || "不明";
-  const reportedUserId = nonEmptyString(data.reportedUserId);
-
-  // 投稿者: 投稿があれば投稿側の userId を正とする（通報データの reportedUserId は通報者の端末が送った値）。
-  const found = postLookup === POST_LOOKUP.found && post && typeof post === "object";
-  const authorId = (found && nonEmptyString(post.userId)) || reportedUserId || "不明";
-  const name = nonEmptyString(authorName) || "（表示名なし）";
-  let authorValue = `${name}\n${authorId}`;
-  if (found && reportedUserId && nonEmptyString(post.userId) && reportedUserId !== post.userId) {
-    // 通報データの投稿者 ID と、実際の投稿の持ち主が食い違う（改ざん・古い端末の可能性）。
-    authorValue += `\n⚠️ 通報データ上の投稿者ID: ${reportedUserId}`;
-  }
-
-  // 本文（description）: 投稿のキャプション。投稿が取れなかったときは理由を書く。
-  let description;
-  if (found) {
-    description = nonEmptyString(post.caption) || "（キャプションなし）";
-  } else if (postLookup === POST_LOOKUP.missing) {
-    description = "⚠️ 投稿が見つかりません（通報のあとに削除された可能性があります）";
-  } else if (postLookup === POST_LOOKUP.noId) {
-    description = "⚠️ 通報に投稿IDが入っていません";
+  let reason;
+  if (!reasonRaw) {
+    reason = MISSING_REASON_LABEL;
+  } else if (Object.prototype.hasOwnProperty.call(REPORT_REASON_LABELS, reasonRaw)) {
+    reason = REPORT_REASON_LABELS[reasonRaw];
   } else {
-    description = "⚠️ 投稿の読み取りに失敗しました（Functions のログを確認してください）";
+    reason = UNKNOWN_REASON_LABEL;
   }
 
-  const visibilityRaw = found ? nonEmptyString(post.visibility) : null;
-  const visibility = visibilityRaw ? VISIBILITY_LABELS[visibilityRaw] || visibilityRaw : "不明";
+  // 投稿 ID: 形が合うものだけを載せる。合わないものは中身を載せずに、合わなかったことだけを書く。
+  const postIdRaw = nonEmptyString(data.postId);
+  const postId = postIdRaw && POST_ID_PATTERN.test(postIdRaw) ? postIdRaw : null;
+  let postIdValue;
+  if (postId) {
+    postIdValue = postId;
+  } else if (postIdRaw) {
+    postIdValue = "(形が正しくありません)";
+  } else {
+    postIdValue = "(なし)";
+  }
+
+  // コンソールのリンク: 投稿 ID があれば投稿の文書、無ければ reports の一覧（新しい通報を探す）。
+  const project = nonEmptyString(projectId);
+  let consoleValue;
+  if (!project || !PROJECT_ID_PATTERN.test(project)) {
+    consoleValue = "（プロジェクト ID が無いため、リンクを作れませんでした）";
+  } else if (postId) {
+    consoleValue = firestoreConsoleUrl(project, ["posts", postId]);
+  } else {
+    consoleValue = `通報の一覧（投稿 ID が使えないため）\n${firestoreConsoleUrl(project, ["reports"])}`;
+  }
 
   const embed = {
     title: "🚨 投稿が通報されました",
-    description: description.slice(0, MAX_DESCRIPTION),
     color: 0xd94a4a, // 通報はフィードバック（空色）と見分けがつくよう赤
     fields: [
-      { name: "理由", value: reason.slice(0, MAX_FIELD), inline: true },
-      { name: "公開範囲", value: visibility, inline: true },
-      { name: "投稿者", value: authorValue.slice(0, MAX_FIELD), inline: false },
-      { name: "投稿ID", value: postId.slice(0, MAX_FIELD), inline: false },
-      { name: "通報した人", value: reporterId.slice(0, MAX_FIELD), inline: false },
+      { name: "理由", value: reason, inline: true },
+      { name: "投稿ID", value: postIdValue, inline: true },
+      { name: "Firebase コンソール", value: consoleValue, inline: false },
     ],
-    footer: { text: `reportId: ${reportId} ・ 24 時間以内に確認（ガイドライン 1.2）` },
-    timestamp: toIsoTimestamp(data.createdAt, now),
+    footer: { text: "24 時間以内に確認（ガイドライン 1.2）" },
   };
-
-  const thumbnail = found ? firstThumbnailUrl(post.images) : null;
-  if (thumbnail) {
-    embed.image = { url: thumbnail };
-  }
 
   return {
     username: "そらもよう 通報",
     embeds: [embed],
-    // キャプションはユーザーが自由に書ける文字列。`@everyone` などが入っていても誰にも通知が飛ばないよう、
-    // メンションの解釈をすべて止める（Embed 内のメンションは元々鳴らないが、念のための二重の守り）。
+    // メンションの解釈をすべて止める。
     allowed_mentions: { parse: [] },
   };
 }
 
 module.exports = {
   REPORT_REASON_LABELS,
-  VISIBILITY_LABELS,
-  POST_LOOKUP,
   buildReportPayload,
-  firstThumbnailUrl,
 };
