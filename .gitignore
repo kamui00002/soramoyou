@@ -126,6 +126,12 @@ package-lock.json
 # .claude は settings.json / commands/ などチーム共有したい設定を含むため選択的に除外
 .claude/debug.log
 .claude/settings.local.json
+# handoffs は引き継ぎメモ(.md)を追跡するが、データのバックアップは入れない。
+# 2026-09-27 の backup-orphan-publicProfiles は本番ユーザー16人分の
+# displayName / photoURL / UID を含んでいた。git 履歴に個人情報を入れると
+# 取り消しに履歴改変(filter-repo 等)が要るので、最初から入れない。
+# 保存が必要なら git ではない場所へ置くこと。
+.claude/handoffs/backup-*
 # 一般ログ（debug.log, build.log など）を全階層で除外
 *.log
 
