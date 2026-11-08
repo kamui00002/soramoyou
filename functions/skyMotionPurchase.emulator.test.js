@@ -113,8 +113,8 @@ const TX = "2000000123456789"; // 購入 doc の ID ＝ JWS の transactionId
 const CLAIMED = "uid-claimed"; // 購入 doc を作った人（userId）
 const OWNER = "uid-owner"; // JWS の token を users に持っている人
 const OWNER_2 = "uid-owner-2"; // ⑤ で同じ token を持つもう 1 人
-const TOKEN_A = "0f8fad5b-d9cb-469f-a165-70867728950e"; // JWS に入っている token
-const TOKEN_B = "7c9e6679-7425-40de-944b-e07fc1f90ae7"; // 申告者の users に入っている token
+const TOKEN_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // JWS に入っている token
+const TOKEN_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"; // 申告者の users に入っている token
 
 /** users/{uid} を置く（id はアプリの users と同じく uid）。token は iapAccountToken（小文字で保存する規約）。 */
 async function putUser(uid, iapAccountToken) {

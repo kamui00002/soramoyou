@@ -598,8 +598,8 @@ test("isRefundableJob: terminal状態と未予約は false（二重返金・comp
 
 const CLAIMED_UID = "uid-claimed";
 const OWNER_UID = "uid-owner";
-const TOKEN_A = "0f8fad5b-d9cb-469f-a165-70867728950e";
-const TOKEN_B = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+const TOKEN_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const TOKEN_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 test("needsTokenOwnerLookup: JWS に token が無い → false", () => {
   assert.equal(core.needsTokenOwnerLookup(null, TOKEN_A), false);
