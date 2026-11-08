@@ -270,6 +270,43 @@ function decidePurchaseCredit(purchaseData, balanceData, packCredits) {
   return { credit: true, credits, newBalance: balance + credits, reason: null };
 }
 
+/**
+ * 付与先を決める前に、users を appAccountToken で逆引きするかどうか（純関数）。
+ * JWS に token があり、申告者（userId）の users.iapAccountToken と違うときだけ true。
+ *
+ * 引数はどちらも**小文字にそろえた値**（無ければ null）。小文字化は呼び出し側（skyMotionPurchase.js）が行う。
+ *
+ * @param {string|null} jwsToken 検証済み JWS の appAccountToken
+ * @param {string|null} claimedToken 申告者の users.iapAccountToken
+ * @returns {boolean}
+ */
+function needsTokenOwnerLookup(jwsToken, claimedToken) {
+  return Boolean(jwsToken) && jwsToken !== claimedToken;
+}
+
+/**
+ * 購入の付与先（creditUid）と、その決め方（creditedUidBasis）を返す（純関数）。
+ *
+ * creditedUidBasis の値:
+ *   - "no_token"              JWS に appAccountToken が無い → 申告者
+ *   - "token_match"           JWS の token と申告者の users.iapAccountToken が同じ → 申告者
+ *   - "token_owner"           違う・逆引きで token の持ち主が見つかった → 持ち主
+ *   - "token_owner_not_found" 違う・逆引きで持ち主が見つからなかった → 申告者
+ *
+ * @param {{claimedUid: string, jwsToken: string|null, claimedToken: string|null, ownerUid: string|null}} input
+ *   token は needsTokenOwnerLookup と同じく小文字にそろえた値。
+ *   ownerUid は needsTokenOwnerLookup が true のときに逆引きした結果（見つからなければ null）。
+ * @returns {{creditUid: string, creditedUidBasis: string}}
+ */
+function decideCreditRecipient({ claimedUid, jwsToken, claimedToken, ownerUid }) {
+  if (!jwsToken) return { creditUid: claimedUid, creditedUidBasis: "no_token" };
+  if (!needsTokenOwnerLookup(jwsToken, claimedToken)) {
+    return { creditUid: claimedUid, creditedUidBasis: "token_match" };
+  }
+  if (ownerUid) return { creditUid: ownerUid, creditedUidBasis: "token_owner" };
+  return { creditUid: claimedUid, creditedUidBasis: "token_owner_not_found" };
+}
+
 // ============================================================
 // fal.ai リクエスト組み立て（PoC generate.py の build_arguments と同一仕様）
 // ============================================================
@@ -488,6 +525,8 @@ module.exports = {
   PACK_CREDITS,
   readBalance,
   decidePurchaseCredit,
+  needsTokenOwnerLookup,
+  decideCreditRecipient,
   LOOP_XFADE_DURATION,
   LOOP_SLOW_FACTOR_MAX,
   LOOP_DURATION_FACTORS,

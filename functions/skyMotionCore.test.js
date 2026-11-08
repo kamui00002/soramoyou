@@ -591,3 +591,81 @@ test("isRefundableJob: terminal状態と未予約は false（二重返金・comp
   assert.equal(core.isRefundableJob(null), false);
   assert.equal(core.isRefundableJob(undefined), false);
 });
+
+// ============================================================
+// needsTokenOwnerLookup / decideCreditRecipient（購入の付与先と、その決め方）
+// ============================================================
+
+const CLAIMED_UID = "uid-claimed";
+const OWNER_UID = "uid-owner";
+const TOKEN_A = "0f8fad5b-d9cb-469f-a165-70867728950e";
+const TOKEN_B = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+
+test("needsTokenOwnerLookup: JWS に token が無い → false", () => {
+  assert.equal(core.needsTokenOwnerLookup(null, TOKEN_A), false);
+});
+
+test("needsTokenOwnerLookup: JWS の token が空文字 → false", () => {
+  assert.equal(core.needsTokenOwnerLookup("", TOKEN_A), false);
+});
+
+test("needsTokenOwnerLookup: 申告者の token と同じ → false", () => {
+  assert.equal(core.needsTokenOwnerLookup(TOKEN_A, TOKEN_A), false);
+});
+
+test("needsTokenOwnerLookup: 申告者の token と違う → true", () => {
+  assert.equal(core.needsTokenOwnerLookup(TOKEN_A, TOKEN_B), true);
+});
+
+test("needsTokenOwnerLookup: 申告者の users に token が無い → true", () => {
+  assert.equal(core.needsTokenOwnerLookup(TOKEN_A, null), true);
+});
+
+test("decideCreditRecipient: ① JWS に token が無い → 申告者・no_token", () => {
+  const r = core.decideCreditRecipient({
+    claimedUid: CLAIMED_UID, jwsToken: null, claimedToken: TOKEN_A, ownerUid: null,
+  });
+  assert.deepEqual(r, { creditUid: CLAIMED_UID, creditedUidBasis: "no_token" });
+});
+
+test("decideCreditRecipient: ① JWS に token が無いときは ownerUid が来ても申告者・no_token", () => {
+  const r = core.decideCreditRecipient({
+    claimedUid: CLAIMED_UID, jwsToken: null, claimedToken: null, ownerUid: OWNER_UID,
+  });
+  assert.deepEqual(r, { creditUid: CLAIMED_UID, creditedUidBasis: "no_token" });
+});
+
+test("decideCreditRecipient: ② token が申告者の users と同じ → 申告者・token_match", () => {
+  const r = core.decideCreditRecipient({
+    claimedUid: CLAIMED_UID, jwsToken: TOKEN_A, claimedToken: TOKEN_A, ownerUid: null,
+  });
+  assert.deepEqual(r, { creditUid: CLAIMED_UID, creditedUidBasis: "token_match" });
+});
+
+test("decideCreditRecipient: ③ token が違い、持ち主が見つかった → 持ち主・token_owner", () => {
+  const r = core.decideCreditRecipient({
+    claimedUid: CLAIMED_UID, jwsToken: TOKEN_A, claimedToken: TOKEN_B, ownerUid: OWNER_UID,
+  });
+  assert.deepEqual(r, { creditUid: OWNER_UID, creditedUidBasis: "token_owner" });
+});
+
+test("decideCreditRecipient: ③ 申告者の users に token が無く、持ち主が見つかった → 持ち主・token_owner", () => {
+  const r = core.decideCreditRecipient({
+    claimedUid: CLAIMED_UID, jwsToken: TOKEN_A, claimedToken: null, ownerUid: OWNER_UID,
+  });
+  assert.deepEqual(r, { creditUid: OWNER_UID, creditedUidBasis: "token_owner" });
+});
+
+test("decideCreditRecipient: ④ token が違い、持ち主が見つからない → 申告者・token_owner_not_found", () => {
+  const r = core.decideCreditRecipient({
+    claimedUid: CLAIMED_UID, jwsToken: TOKEN_A, claimedToken: TOKEN_B, ownerUid: null,
+  });
+  assert.deepEqual(r, { creditUid: CLAIMED_UID, creditedUidBasis: "token_owner_not_found" });
+});
+
+test("decideCreditRecipient: ④ 申告者の users に token が無く、持ち主も見つからない → 申告者・token_owner_not_found", () => {
+  const r = core.decideCreditRecipient({
+    claimedUid: CLAIMED_UID, jwsToken: TOKEN_A, claimedToken: null, ownerUid: null,
+  });
+  assert.deepEqual(r, { creditUid: CLAIMED_UID, creditedUidBasis: "token_owner_not_found" });
+});

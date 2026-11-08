@@ -125,23 +125,24 @@ async function verifyAndCredit(ref, data, transactionId) {
     const claimedTokenRaw = claimedUserSnap.exists ? claimedUserSnap.data().iapAccountToken : null;
     const claimedToken = typeof claimedTokenRaw === "string" ? claimedTokenRaw.toLowerCase() : null;
 
-    let creditUid = uid;
-    let reassigned = false;
-    if (jwsToken && jwsToken !== claimedToken) {
+    let ownerUid = null;
+    if (core.needsTokenOwnerLookup(jwsToken, claimedToken)) {
       // 逆引きは保存規約（小文字）に合わせた完全一致で行う。
       const ownerQuery = db.collection("users")
         .where("iapAccountToken", "==", jwsToken)
         .limit(1);
       const ownerSnap = await t.get(ownerQuery);
       if (!ownerSnap.empty) {
-        creditUid = ownerSnap.docs[0].id;
-        reassigned = true;
+        ownerUid = ownerSnap.docs[0].id;
       } else {
         logger.error("回数パック: appAccountToken不一致だが本来の購入者を特定できず（自己申告uidへ付与・要監査）", {
-          transactionId, uid, jwsToken,
+          transactionId, uid, claimedTokenPresent: claimedToken !== null,
         });
       }
     }
+    const { creditUid, creditedUidBasis } = core.decideCreditRecipient({
+      claimedUid: uid, jwsToken, claimedToken, ownerUid,
+    });
 
     const balanceRef = db.collection("skyMotionBalance").doc(creditUid);
     const balanceSnap = await t.get(balanceRef);
@@ -151,7 +152,7 @@ async function verifyAndCredit(ref, data, transactionId) {
       { ...(purchaseData || {}), productId: tx.productId },
       balanceSnap.exists ? balanceSnap.data() : null
     );
-    if (!decision.credit) return { ...decision, creditUid, reassigned };
+    if (!decision.credit) return { ...decision, creditUid, creditedUidBasis };
 
     t.set(
       balanceRef,
@@ -164,10 +165,12 @@ async function verifyAndCredit(ref, data, transactionId) {
       creditedCount: decision.credits,
       // 監査用: userId（自己申告）と creditedUid（実際の付与先）を区別できるようにする
       creditedUid: creditUid,
+      // creditedUid をどう決めたか（値は skyMotionCore.decideCreditRecipient の JSDoc を参照）
+      creditedUidBasis,
       environment: verified.environment,
       updatedAt: FieldValue.serverTimestamp(),
     });
-    return { ...decision, creditUid, reassigned };
+    return { ...decision, creditUid, creditedUidBasis };
   });
 
   if (!result.credit) {
@@ -182,7 +185,7 @@ async function verifyAndCredit(ref, data, transactionId) {
     return "failed";
   }
 
-  if (result.reassigned) {
+  if (result.creditedUidBasis === "token_owner") {
     logger.warn("回数パック: appAccountToken不一致→本来の購入者へ付け替え", {
       transactionId, claimedUid: uid, creditUid: result.creditUid,
     });
