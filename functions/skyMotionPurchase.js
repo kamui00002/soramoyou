@@ -216,10 +216,9 @@ const onSkyMotionPurchaseCreated = onDocumentCreated(
 /**
  * B. pending 詰まりのリコンサイラ（5分毎）
  *
- * onDocumentCreated は**作成イベントに対して一度きり**しか発火しない。関数のタイムアウト・
- * クラッシュ・JWS検証の一時的失敗（A-1）などで終端状態を書けずに終わると、doc は pending の
- * まま永久に残る。client は既存doc検知で再送しないし、rules は update を禁止しているため、
- * **サーバー側で拾い直す仕組みが無いと「課金したのに一生増えない」が固定化する**。
+ * 作成から RECONCILE_MIN_AGE_MS 以上たった pending の購入 doc について、verifyAttempts を
+ * 1 増やして verifyAndCredit をやり直す。MAX_VERIFY_ATTEMPTS を超えた doc は failPurchase で
+ * failed にする。
  *
  * `pollSkyMotionJobs`（ジョブ側のポーラー）と同じ思想の、購入側の対称物。
  */
@@ -248,8 +247,8 @@ const reconcilePendingSkyMotionPurchases = onSchedule(
 
       const attempts = (typeof data.verifyAttempts === "number" ? data.verifyAttempts : 0) + 1;
       if (attempts > MAX_VERIFY_ATTEMPTS) {
-        // 🔴 ここまで粘って確定できないものだけを恒久失敗にする（≒50分以上）。
-        //    failed はクライアントに finish を許すシグナルなので、安易に出さない。
+        // 再試行回数が MAX_VERIFY_ATTEMPTS を超えた購入を恒久失敗にする（≒50分以上）。
+        // failed を見たクライアントは finish する。
         await failPurchase(doc.ref, "verification_timeout", "検証を規定回数再試行しましたが確定できませんでした");
         logger.error("回数パック: 再試行上限に達し恒久失敗化", { transactionId: doc.id, attempts });
         continue;
