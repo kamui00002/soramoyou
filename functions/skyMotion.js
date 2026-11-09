@@ -697,9 +697,9 @@ async function pollOneJob(doc, now, falKeyValue) {
  *    からではなく、引数（呼び出し元の `claim.bucket` / `job.chargedBucket`）から取る。
  *
  * 通知・入力ファイル削除は best-effort（失敗しても job 状態には影響させない）。
- * ⚠️ 通知条件はトランザクションの transitioned 結果を使う。`decideRefund` の
- *    `balanceChanged` から導いてはいけない（free 返金は常に balanceChanged=false のため、
- *    最頻経路の通知とファイル削除が丸ごとスキップされる）。
+ * ⚠️ 通知・入力ファイル削除をするかどうかはトランザクションの transitioned 結果で決める。
+ *    `decideRefund` の `balanceChanged` は balance を書くかどうかにだけ使う
+ *    （free の返金は balanceChanged=false だが、transitioned=true なら通知と削除を行う）。
  *
  * @param {FirebaseFirestore.DocumentReference} jobRef
  * @param {string} uid

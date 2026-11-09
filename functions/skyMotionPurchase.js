@@ -4,19 +4,16 @@
 // 設計の一次情報: docs/sky-motion-billing-plan.md
 // JWS検証そのものは skyMotionPurchaseVerify.js（firebase-admin非依存＝単体テスト可）に分離。
 //
-// ■ この関数群が守る不変条件（＝ユーザーの金を落とさないための約束）
-//   1. **検証はサーバーで行う**。クライアントの「買いました」を信用しない。
-//   2. **付与数は必ず JWS 側の productId から引く**（client申告だと自己申告が通る）。
+// ■ この関数群が守る不変条件
+//   1. **検証はサーバーで行う**。クライアントが送った JWS をここで検証してから付与する。
+//   2. **付与数は必ず JWS 側の productId から引く**。
 //   3. **冪等**。doc ID = StoreKit の transactionId ＋ status=credited なら no-op。
 //   4. クライアントは **credited を観測してから transaction.finish()** する。
-//   5. 🔴 **`status="failed"` は「クライアントに finish() させる」ことと等価**。
-//      finish された購入は Apple 側からも消え、再送経路が完全に断たれる。
-//      よって「恒久的に無効」と確信できない限り failed に到達させてはならない:
+//   5. 🔴 **クライアントは `status="failed"` を観測したときも transaction.finish() する**。
+//      failed にするのは恒久失敗と判断したときだけ:
 //      - JWS検証の**一時的**失敗（OCSP失効確認のネットワーク不調等）→ pending のまま残す
 //      - pending のまま詰まった購入は reconcilePendingSkyMotionPurchases が拾い直す
-//   6. 🔴 **付与先はJWSの appAccountToken で確定する**。userId（client申告）だけを信じると、
-//      「Aが購入 → finish前にアプリ落ち → 同じ端末でBがログイン → 起動時の未完了再送が
-//      その時点のuid=Bで購入docを作る」経路でBに誤付与される（共有端末で現実に起こる）。
+//   6. 🔴 **付与先はJWSの appAccountToken で確定する**（購入 doc の userId との突き合わせは verifyAndCredit の 3) を参照）。
 //
 
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
@@ -40,9 +37,7 @@ const RECONCILE_BATCH_LIMIT = 50;
  * 購入ドキュメントを恒久失敗にする（クレジットは付与しない）。
  *
  * ⚠️ **トランザクションで「まだ pending のときだけ」書く。**
- *    リコンサイラと onDocumentCreated が同じ doc を同時に処理しうるため、
- *    素の update だと「片方が credited にした直後にもう片方が failed で上書き」
- *    という credited 消し事故が起こる（Fable調査で特定）。
+ *    トランザクションの中で doc を読み、doc が無いか status が pending 以外なら何も書かない。
  */
 async function failPurchase(ref, errorCode, message) {
   await db.runTransaction(async (tx) => {
@@ -93,7 +88,7 @@ async function verifyAndCredit(ref, data, transactionId) {
   const tx = verified.transaction;
 
   // 2) doc ID（＝冪等キー）と JWS の transactionId の一致確認。
-  //    ズレていると「別の購入のJWSを使い回して何度も加算」が成立してしまう。
+  //    一致しなければ transaction_id_mismatch で failed にする。
   if (String(tx.transactionId) !== String(transactionId)) {
     logger.error("回数パック: transactionId 不一致", {
       transactionId, uid, jwsTransactionId: String(tx.transactionId),
@@ -111,13 +106,11 @@ async function verifyAndCredit(ref, data, transactionId) {
     ]);
     const purchaseData = purchaseSnap.exists ? purchaseSnap.data() : null;
 
-    // 🔴 付与先の確定（不変条件6）。JWSの appAccountToken が「本当の購入者」を指す。
+    // 🔴 付与先の確定（不変条件6）。JWSの appAccountToken と、自己申告uidの iapAccountToken を比べる。
     //    - token無し: 旧クライアント/βの既存トランザクション互換 → 自己申告uidへ付与
     //    - token一致: 自己申告どおり
     //    - token不一致: 本来の購入者を iapAccountToken の逆引きで探して**付け替える**。
-    //      ⚠️ ここで failed にしてはいけない（真の購入者Aの金を破壊する）。
-    //      逆引きで見つからない場合も failed にせず自己申告uidへ付与し、監査ログを残す
-    //      （「誰にも付与しない」より「取れる形で付与して後から監査で気づける」を優先）。
+    //      逆引きで見つからない場合は自己申告uidへ付与し、ログを残す（どちらの場合も failed にはしない）。
     // ⚠️ UUID の大文字小文字: Swift の `UUID().uuidString` は大文字、JWS の appAccountToken は
     //    小文字で返ることがある。client 側は **小文字で保存する規約**（resolveAppAccountToken）
     //    とし、サーバーは両辺を小文字化して比較・逆引きする。
