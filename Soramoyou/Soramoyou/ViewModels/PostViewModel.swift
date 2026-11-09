@@ -80,7 +80,9 @@ class PostViewModel: ObservableObject {
 
     private var uploadedImageURLs: [String] = []
     private var uploadedThumbnailURLs: [String] = []
-    private var uploadedOriginalImageURLs: [String] = [] // オリジナル画像のパス
+    /// `private(set)`（private でない）なのは、再編集で原画像を移したとき、写した先だけが
+    /// 後片付け（rollbackUploadedImages）の対象に入ることをテストから確かめるため（@testable import・URL 側の E）
+    private(set) var uploadedOriginalImageURLs: [String] = [] // オリジナル画像のパス
 
     init(
         userId: String? = nil,
@@ -552,8 +554,16 @@ class PostViewModel: ObservableObject {
                 }
             }
 
+            // 2. 再編集で原画像があれば、新しい公開範囲のフォルダへ移す（URL 側の E）。
+            //    写した先は後片付けの対象に入る。移す前の原画像は、投稿の更新が成り立った後に消す
+            let relocatedOriginals = try await relocateOriginalImagesForEditing()
+
             // 3. Firestoreに投稿データを保存
-            let post = try await createPost(imageURLs: imageURLs, originalImageURLs: originalImageURLs)
+            let post = try await createPost(
+                imageURLs: imageURLs,
+                originalImageURLs: originalImageURLs,
+                editingOriginalImages: relocatedOriginals?.images
+            )
 
             // 3. 投稿を保存 or 更新（リトライ可能）。再編集モードは既存 doc を上書き更新する。
             if let editing = editingContext {
@@ -562,11 +572,10 @@ class PostViewModel: ObservableObject {
                 ) { [self] in
                     try await firestoreService.updatePost(post)
                 }
-                // 更新成功後、旧 Storage の孤児ファイルをベストエフォート削除（失敗は無視＝投稿更新は成立済み）。
+                // 更新成功後、旧 Storage の孤児ファイルをベストエフォート削除（失敗はログに残す＝投稿更新は成立済み）。
                 // 再アップロードで画像 URL は変わるため Kingfisher の URL キャッシュは自然に更新される。
-                for path in editing.oldStoragePaths {
-                    try? await storageService.deleteImage(path: path)
-                }
+                // 原画像を別のフォルダへ移したときは、移す前の原画像もここで消す（URL 側の E）
+                await deleteReplacedFiles(editing.oldStoragePaths + (relocatedOriginals?.oldPathsToDelete ?? []))
             } else {
                 _ = try await RetryableOperation.executeIfRetryable(
                     operationName: "PostViewModel.createPost"
@@ -696,7 +705,9 @@ class PostViewModel: ObservableObject {
     /// 🔧 2026-04-24 修正 (ultrareview bug_002):
     /// アップロード時の Storage パスを返すようにし、Post.images[].storagePath として
     /// Firestore に永続化する。投稿削除時に URL から不正なパスを組み立てる問題を解消。
-    private func uploadImages(_ imagesToUpload: [UIImage]) async throws -> [UploadedImage] {
+    /// 公開以外（フォロワー限定・非公開）は URL を取らずに上げ、url を ""・thumbnail を nil で返す（置き場は返す・URL 側の C-3）。
+    /// `internal`（private でない）なのは公開範囲ごとの URL の書き方の検証テストから直接呼ぶため（@testable import・URL 側の C-3）。
+    func uploadImages(_ imagesToUpload: [UIImage]) async throws -> [UploadedImage] {
         guard let userId else {
             throw PostViewModelError.userNotAuthenticated
         }
@@ -714,6 +725,9 @@ class PostViewModel: ObservableObject {
             "private"
         }
 
+        // URL を Firestore に書くのは公開だけ（URL 側の C-3）。置き場のサブパスと同じ時点の visibility で決める
+        let writesDownloadURL = visibility == .public
+
         for (index, image) in imagesToUpload.enumerated() {
             // 画像を圧縮・リサイズ
             let resizedImage = try await imageService.resizeImage(
@@ -727,19 +741,32 @@ class PostViewModel: ObservableObject {
             // 画像をアップロード（storage.rules のパス形式: posts/{userId}/{visibility}/{imageId}）
             let imageId = UUID().uuidString
             let imagePath = "posts/\(userId)/\(visibilityPath)/\(imageId).jpg"
-            let imageURL = try await storageService.uploadImage(resizedImage, path: imagePath)
+            try await storageService.uploadImageWithoutURL(resizedImage, path: imagePath)
             uploadedImageURLs.append(imagePath)
 
             // サムネイルをアップロード（storage.rules のパス形式: thumbnails/{userId}/{visibility}/{imageId}）
             let thumbnailBasePath = "\(userId)/\(visibilityPath)/\(imageId)_thumb.jpg"
             let thumbnailFullPath = "thumbnails/\(thumbnailBasePath)"
-            let thumbnailURL = try await storageService.uploadThumbnail(resizedImage, path: thumbnailBasePath)
+            try await storageService.uploadThumbnailWithoutURL(resizedImage, path: thumbnailBasePath)
             uploadedThumbnailURLs.append(thumbnailFullPath)
+
+            // 公開のときだけ URL を取って Firestore に書く（URL 側の C-3）。
+            // 公開以外は url を ""・サムネイルを nil にし、読む側は storagePath / thumbnailStoragePath を使う（C-1・C-2）
+            let imageURL: String
+            let thumbnailURL: String?
+            if writesDownloadURL {
+                imageURL = try await storageService.downloadURL(path: imagePath).absoluteString
+                // サムネイルの URL は thumbnails/ 付きの置き場で取る（uploadThumbnailWithoutURL に渡した thumbnailBasePath ではない）
+                thumbnailURL = try await storageService.downloadURL(path: thumbnailFullPath).absoluteString
+            } else {
+                imageURL = ""
+                thumbnailURL = nil
+            }
 
             // サイズはリサイズ後の実サイズを記録する（アップロードされる画像と一致させる）
             uploaded.append(UploadedImage(
-                url: imageURL.absoluteString,
-                thumbnail: thumbnailURL.absoluteString,
+                url: imageURL,
+                thumbnail: thumbnailURL,
                 width: Int(resizedImage.size.width),
                 height: Int(resizedImage.size.height),
                 storagePath: imagePath,
@@ -755,7 +782,9 @@ class PostViewModel: ObservableObject {
     }
 
     /// オリジナル画像をアップロード
-    private func uploadOriginalImages() async throws -> [UploadedOriginalImage] {
+    /// 公開以外（フォロワー限定・非公開）は URL を取らずに上げ、url を "" で返す（置き場は返す・URL 側の C-3）。
+    /// `internal`（private でない）なのは公開範囲ごとの URL の書き方の検証テストから直接呼ぶため（@testable import・URL 側の C-3）。
+    func uploadOriginalImages() async throws -> [UploadedOriginalImage] {
         guard let userId else {
             throw PostViewModelError.userNotAuthenticated
         }
@@ -776,6 +805,9 @@ class PostViewModel: ObservableObject {
             "private"
         }
 
+        // URL を Firestore に書くのは公開だけ（URL 側の C-3）。置き場のサブパスと同じ時点の visibility で決める
+        let writesDownloadURL = visibility == .public
+
         for (index, image) in imagesToUpload.enumerated() {
             // オリジナル画像を圧縮・リサイズ
             let resizedImage = try await imageService.resizeImage(
@@ -786,12 +818,19 @@ class PostViewModel: ObservableObject {
             // オリジナル画像をアップロード（storage.rules のパス形式: originals/{userId}/{visibility}/{imageId}）
             let imageId = UUID().uuidString
             let imagePath = "originals/\(userId)/\(visibilityPath)/\(imageId).jpg"
-            let imageURL = try await storageService.uploadImage(resizedImage, path: imagePath)
+            try await storageService.uploadImageWithoutURL(resizedImage, path: imagePath)
             uploadedOriginalImageURLs.append(imagePath)
+
+            // 公開のときだけ URL を取って Firestore に書く（URL 側の C-3）。公開以外は url を ""（読む側は storagePath を使う）
+            let imageURL = if writesDownloadURL {
+                try await storageService.downloadURL(path: imagePath).absoluteString
+            } else {
+                ""
+            }
 
             // サイズはリサイズ後の実サイズを記録する（アップロードされる画像と一致させる）
             uploaded.append(UploadedOriginalImage(
-                url: imageURL.absoluteString,
+                url: imageURL,
                 width: Int(resizedImage.size.width),
                 height: Int(resizedImage.size.height),
                 storagePath: imagePath
@@ -804,12 +843,114 @@ class PostViewModel: ObservableObject {
         return uploaded
     }
 
+    /// 再編集で、原画像を新しい公開範囲のフォルダへ移す（URL 側の E）。
+    /// - 今のフォルダは置き場（`originals/{uid}/{公開範囲}/{ファイル名}`）の 3 つ目で判定する。元の公開範囲では判定しない
+    ///   （E より前に公開範囲を変えた投稿は、置き場と公開範囲がずれたまま残っているため）
+    /// - 違えば同じファイル名で新しいフォルダへ中身のまま写し（やり直しても孤児が増えない）、写した先を後片付けの対象に入れる。
+    ///   移す前の置き場は `oldPathsToDelete` で返し、投稿の更新が成り立った後に消す（先に消すと、更新の失敗で原画像を失う）
+    /// - 公開になるときだけ URL を取り、それ以外は url を ""。同じフォルダのままなら写さず、URL だけ公開範囲に合わせる
+    /// - 置き場が分からない・形が違う・持ち主が違う原画像は触らない
+    /// - Returns: nil＝再編集でない・原画像が無い・合成投稿（createPost は今までどおり）
+    /// `internal`（private でない）なのはテストから直接呼ぶため（@testable import）。
+    /// savePost を丸ごと通すと、テストの土台のアプリから post_completed が送られてしまう
+    func relocateOriginalImagesForEditing() async throws -> RelocatedOriginalImages? {
+        // 合成投稿は原画像を残さない（createPost で nil になる）ので、写すと孤児になる＝移さない
+        guard !postKind.isComposite, let originals = editingContext?.originalImages else { return nil }
+        guard let userId else {
+            throw PostViewModelError.userNotAuthenticated
+        }
+
+        // 置き場のフォルダ名は Visibility の rawValue と同じ（public / followers / private・storage.rules に合わせる）
+        let newFolder = visibility.rawValue
+        // URL を Firestore に書くのは公開だけ（URL 側の C-3）
+        let writesDownloadURL = visibility == .public
+
+        var images: [ImageInfo] = []
+        var oldPathsToDelete: [String] = []
+        for original in originals {
+            // 置き場を解決する（storagePath が無い旧データは URL から取り出す）。形と持ち主が合わなければ触らない
+            guard let path = StorageService.resolveStoragePath(for: original) else {
+                images.append(original)
+                continue
+            }
+            let components = path.components(separatedBy: "/")
+            guard components.count == 4,
+                  components[0] == "originals",
+                  components[1] == userId,
+                  Visibility(rawValue: components[2]) != nil
+            else {
+                images.append(original)
+                continue
+            }
+
+            if components[2] == newFolder {
+                // 同じフォルダのまま：写さない。URL だけ公開範囲に合わせる（合っていればそのまま）
+                if writesDownloadURL, original.url.isEmpty {
+                    let url = try await storageService.downloadURL(path: path).absoluteString
+                    images.append(Self.originalImage(original, url: url, storagePath: path))
+                } else if !writesDownloadURL, !original.url.isEmpty {
+                    // E より前に書かれた古い URL を消す。読む側が困らないよう置き場は必ず入れる（旧データは URL から取り出した値）
+                    images.append(Self.originalImage(original, url: "", storagePath: path))
+                } else {
+                    images.append(original)
+                }
+                continue
+            }
+
+            // 違うフォルダ：同じファイル名で新しいフォルダへ中身のまま写す（JPEG にし直さない＝画質を落とさない）
+            let newPath = "originals/\(userId)/\(newFolder)/\(components[3])"
+            let data = try await storageService.downloadData(path: path)
+            try await storageService.uploadDataWithoutURL(data, path: newPath)
+            // 投稿の更新が失敗したら後片付け（rollbackUploadedImages）で消えるよう、写した先を登録する（移す前のものは登録しない）
+            uploadedOriginalImageURLs.append(newPath)
+            let url = if writesDownloadURL {
+                try await storageService.downloadURL(path: newPath).absoluteString
+            } else {
+                ""
+            }
+            images.append(Self.originalImage(original, url: url, storagePath: newPath))
+            oldPathsToDelete.append(path)
+        }
+        return RelocatedOriginalImages(images: images, oldPathsToDelete: oldPathsToDelete)
+    }
+
+    /// 原画像の url と置き場だけを差し替えた ImageInfo（ほかの値はそのまま）
+    private static func originalImage(_ image: ImageInfo, url: String, storagePath: String) -> ImageInfo {
+        ImageInfo(
+            url: url,
+            thumbnail: image.thumbnail,
+            width: image.width,
+            height: image.height,
+            order: image.order,
+            storagePath: storagePath,
+            thumbnailStoragePath: image.thumbnailStoragePath,
+            externalEditInfo: image.externalEditInfo
+        )
+    }
+
+    /// 投稿の更新が成り立った後に、使わなくなった Storage のファイルを消す（ベストエフォート・URL 側の E）。
+    /// 失敗しても投稿の更新は成り立っているので投げない（外の catch に入ると、写した原画像まで後片付けで消してしまう）。
+    /// 残ったファイル（孤児）に気づけるよう、失敗はログに残す。
+    /// `internal`（private でない）なのはテストから直接呼ぶため（@testable import）
+    func deleteReplacedFiles(_ paths: [String]) async {
+        for path in paths {
+            do {
+                try await storageService.deleteImage(path: path)
+            } catch {
+                ErrorHandler.logError(error, context: "PostViewModel.deleteReplacedFiles path=\(path)", userId: userId)
+            }
+        }
+    }
+
     /// 投稿データを作成
     /// アップロード済み URL から Post を構築する（純粋・副作用なし）。
     /// `internal`（private でない）なのは collage 分岐の検証テストから直接呼ぶため（@testable import）。
+    /// - Parameter editingOriginalImages: 再編集で新しい公開範囲のフォルダへ移した後の原画像
+    ///   （relocateOriginalImagesForEditing の結果・URL 側の E）。nil なら元投稿の原画像をそのまま使う
     func createPost(
         imageURLs: [UploadedImage],
-        originalImageURLs: [UploadedOriginalImage]? = nil
+        originalImageURLs: [UploadedOriginalImage]? = nil,
+        editingOriginalImages: [ImageInfo]? = nil
     ) throws -> Post {
         guard let userId else {
             throw PostViewModelError.userNotAuthenticated
@@ -861,9 +1002,10 @@ class PostViewModel: ObservableObject {
         let trimmedFrameCaption = frameCaption.trimmingCharacters(in: .whitespacesAndNewlines)
         // 再編集モード（既存投稿の上書き）では ID・カウント・作成日時・抽出メタを元投稿から保持する。
         let editing = editingContext
-        // 原画像は再編集で変わらない＝元投稿のものをそのまま引き継ぐ（再アップロードしない）。
+        // 原画像の中身は再編集で変わらない＝再アップロードしない。公開範囲に合わせて別のフォルダへ移した後のもの
+        // （editingOriginalImages・URL 側の E）があればそれを、無ければ元投稿のものをそのまま引き継ぐ。
         // 新規投稿時のみ、ユーザーが保存を選んだ場合に今回アップロードした原画像を使う。
-        let finalOriginalImages = editing?.originalImages ?? originalImageInfos
+        let finalOriginalImages = editingOriginalImages ?? editing?.originalImages ?? originalImageInfos
 
         // 配置写真(collage)は「合成済み1枚」を保存する特別扱い:
         // - 原画像(素材N枚)は残さない（images=1枚との非対称・再編集破綻を防ぐ。広角合成 panorama も同様）
@@ -1089,7 +1231,7 @@ struct ExtractedImageInfo {
     /// 既定 `.none` なので、出所を持たない既存の生成箇所（テスト等）は無改修で通る。
     var capturedAtSource: CapturedAtSource = .none
     /// 空マスクの被覆率 0...1（計装 `post_completed.sky_coverage` 用）。マスクを生成できなかったときは nil。
-    var skyCoverage: Double? = nil
+    var skyCoverage: Double?
     /// `skyColors` / `colorTemperature` を空の部分から求めたか（計装 `post_completed.colors_from_sky` 用）。
     /// false は画像全体から求めた（空が少ない・確信が低い・マスク生成に失敗した）ことを表す。
     var colorsFromSky: Bool = false
@@ -1114,6 +1256,14 @@ struct UploadedOriginalImage {
     let width: Int
     let height: Int
     let storagePath: String
+}
+
+/// 再編集で原画像を新しい公開範囲のフォルダへ移した結果（URL 側の E）。
+struct RelocatedOriginalImages {
+    /// Firestore に書く原画像（移した分は新しい置き場。公開以外は url を ""）
+    let images: [ImageInfo]
+    /// 投稿の更新が成り立った後に消す、移す前の置き場
+    let oldPathsToDelete: [String]
 }
 
 // MARK: - PostViewModelError
