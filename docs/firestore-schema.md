@@ -233,6 +233,7 @@
   "productId": "string",             // サーバーが検証済みJWSの値で上書き（client申告は信用しない）
   "creditedCount": "number",         // function専用。付与したクレジット数
   "creditedUid": "string",           // function専用。実際の付与先（appAccountToken不一致時はuserIdと異なりうる・監査用）
+  "creditedUidBasis": "string",      // function専用。creditedUid の決め方: no_token/token_match/token_owner/token_owner_not_found（skyMotionCore.decideCreditRecipient）
   "environment": "string",           // function専用。"Production"/"Sandbox"（検証が通った環境）
   "verifyAttempts": "number",        // function専用。リコンサイラの再試行回数（上限10で verification_timeout）
   "errorCode": "string",             // verification_failed/transaction_id_mismatch/unknown_product/verification_timeout 等
