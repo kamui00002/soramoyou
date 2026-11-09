@@ -30,14 +30,14 @@
 //    demo- で始まらないときは、firebase-admin を読む前に終了コード 1 で止める。skip にはしない
 //    （skip は「何も確かめていない緑」に化けるため）。followBlock.emulator.test.js の柵と同じ型。
 //
-// ⚠️ 陽性対照（実施日を書く）: 先に skyMotionPurchase.js の写しをわざと壊して赤になるのを確かめてから通す。
-//    【未実施】エミュレーターで流す日に行い、結果をここに書く。予定している壊し方と、赤になるはずのテスト:
+// ⚠️ 陽性対照（2026-11-10 実施）: skyMotionPurchase.js の写しをわざと壊して、skyMotionCore.test.js と合わせた 87 本を流した。
+//    壊さない写しは 87 本すべて緑。次の 3 通りの壊し方は、どれも予想どおりのテストだけ赤になった:
 //    ① t.update から creditedUidBasis を外す
-//       （赤になるはず: 「購入 doc は …」の 6 件と、⑤「creditedUidBasis は token_owner …」）
-//    ② :140 の error の項目に jwsToken を戻す
-//       （赤になるはず: ④「error は 1 回で …」・④「申告者の users が無く …」の 2 件）
+//       （赤: 「購入 doc は …」の 6 件と、⑤「creditedUidBasis は token_owner …」）
+//    ② 持ち主が見つからないときの error の項目を前の形に戻す
+//       （赤: ④「error は 1 回で …」・④「申告者の users が無く …」の 2 件）
 //    ③ 逆引きの結果を使わない（ownerUid を常に null にする）
-//       （赤になるはず: ③ の 4 件と ⑤ の 2 件）
+//       （赤: ③ の 4 件と ⑤ の 2 件）
 //
 
 "use strict";

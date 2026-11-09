@@ -39,8 +39,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: firebase-tools（手元で試した版に固定）
-        run: npm install -g firebase-tools@15.0.0 --ignore-scripts --no-audit --no-fund
+      - name: firebase-tools（版を固定する）
+        run: npm install -g firebase-tools@15.35.0 --ignore-scripts --no-audit --no-fund
       - name: 依存を入れる（入れるときに動くスクリプトは止める）
         # functions/package-lock.json どおりに入れる。package.json と lock が食い違うと、ここで止まる
         run: npm ci --ignore-scripts --no-audit --no-fund
