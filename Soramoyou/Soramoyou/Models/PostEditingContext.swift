@@ -16,6 +16,7 @@ struct PostEditingContext {
     let postId: String
 
     // MARK: - 編集可能（エディタ/投稿情報で書き換わる）
+
     let caption: String?
     let frameCaption: String?
     let frameTextColorHex: String?
@@ -26,7 +27,9 @@ struct PostEditingContext {
     let hashtags: [String]
 
     // MARK: - 保持メタ（再編集では変えない。Firestore ルール要件＋一貫性のため）
-    /// 既存の原画像（再編集では原画像自体は変わらない＝そのまま引き継ぐ）。
+
+    /// 既存の原画像（再編集で原画像の中身は変わらない＝引き継ぐ）。
+    /// 公開範囲を変えたときだけ、保存時に新しい公開範囲のフォルダへ写し直す（PostViewModel.relocateOriginalImagesForEditing・URL 側の E）。
     /// これを保持しないと上書き更新(setData全置換)で originalImages が消え、
     /// 次回以降の再編集や「編集前/編集後」トグルが壊れる（＝元画像 data-loss）。
     let originalImages: [ImageInfo]?
@@ -45,34 +48,35 @@ struct PostEditingContext {
     let oldStoragePaths: [String]
 
     init(post: Post) {
-        self.postId = post.id
-        self.caption = post.caption
-        self.frameCaption = post.frameCaption
-        self.frameTextColorHex = post.frameTextColorHex
-        self.frameFontStyle = post.frameFontStyle
-        self.mood = post.mood
-        self.frameStyle = Self.parseStyle(from: post.frameId)
-        self.visibility = post.visibility
-        self.hashtags = post.hashtags ?? []
-        self.likesCount = post.likesCount
-        self.commentsCount = post.commentsCount
-        self.createdAt = post.createdAt
-        self.skyColors = post.skyColors
-        self.capturedAt = post.capturedAt
-        self.timeOfDay = post.timeOfDay
-        self.skyType = post.skyType
-        self.colorTemperature = post.colorTemperature
-        self.location = post.location
-        self.originalImages = post.originalImages
+        postId = post.id
+        caption = post.caption
+        frameCaption = post.frameCaption
+        frameTextColorHex = post.frameTextColorHex
+        frameFontStyle = post.frameFontStyle
+        mood = post.mood
+        frameStyle = Self.parseStyle(from: post.frameId)
+        visibility = post.visibility
+        hashtags = post.hashtags ?? []
+        likesCount = post.likesCount
+        commentsCount = post.commentsCount
+        createdAt = post.createdAt
+        skyColors = post.skyColors
+        capturedAt = post.capturedAt
+        timeOfDay = post.timeOfDay
+        skyType = post.skyType
+        colorTemperature = post.colorTemperature
+        location = post.location
+        originalImages = post.originalImages
 
         // 削除対象は「置換される編集済み画像（＋サムネ）」のみ。原画像は保持して引き継ぐので
-        // 削除しない（原画像 blob を消すと再編集不可になる＝C1 data-loss の原因だった）。
+        // ここには入れない（原画像 blob を消すと再編集不可になる＝C1 data-loss の原因だった）。
+        // 公開範囲を変えて原画像を写し直したときの移す前の原画像は、写し終えて投稿を更新した後に PostViewModel が別に消す（URL 側の E）。
         var paths: [String] = []
         for img in post.images {
             if let p = img.storagePath { paths.append(p) }
             if let t = img.thumbnailStoragePath { paths.append(t) }
         }
-        self.oldStoragePaths = paths
+        oldStoragePaths = paths
     }
 
     /// frameId "mood_style"（例 "calm_matte"）の末尾から枠スタイルを復元する。
