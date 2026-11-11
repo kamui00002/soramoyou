@@ -158,7 +158,7 @@ struct GalleryDetailView: View {
 
                     Divider()
 
-                    // 自分の投稿の場合のみ編集・削除を表示
+                    // 自分の投稿には編集・削除を、他人の投稿には通報・ブロックを表示する
                     if viewModel.isOwnPost(post) {
                         // 再編集: 元画像(originalImages)を持つ投稿のみ。
                         // 旧投稿(元画像なし)は再編集すると焼き込み済み画像を再び焼く＝二重焼きになるため非表示。
@@ -176,18 +176,18 @@ struct GalleryDetailView: View {
                         } label: {
                             Label("投稿を削除", systemImage: "trash")
                         }
-                        Divider()
-                    }
-                    Button(role: .destructive) {
-                        showingReportSheet = true
-                    } label: {
-                        Label("この投稿を通報", systemImage: "flag")
-                    }
+                    } else {
+                        Button(role: .destructive) {
+                            showingReportSheet = true
+                        } label: {
+                            Label("この投稿を通報", systemImage: "flag")
+                        }
 
-                    Button(role: .destructive) {
-                        showingBlockConfirmation = true
-                    } label: {
-                        Label("このユーザーをブロック", systemImage: "hand.raised")
+                        Button(role: .destructive) {
+                            showingBlockConfirmation = true
+                        } label: {
+                            Label("このユーザーをブロック", systemImage: "hand.raised")
+                        }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
