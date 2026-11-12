@@ -12,8 +12,8 @@ final class SettingsViewDeleteAccountMessageTests: XCTestCase {
     /// そらともを使える人に足す 1 文（release-gate 9.4 の文。ここが変わったら、審査メモと G5 の文も見直す）
     private let soratomoSentence = "そらともの投稿（写真を含む）とグループへの参加も削除されます。"
 
-    /// 今までの文（そらともに関係なく出す部分）
-    private let baseSentence = "アカウントを削除すると、すべての投稿・下書き・プロフィール情報が完全に削除されます。この操作は取り消せません。"
+    /// そらともに関係なく出す部分（投稿の写真とアイコン画像も消えることを伝える）
+    private let baseSentence = "アカウントを削除すると、投稿（写真を含む）・下書き・プロフィール情報（アイコン画像を含む）が削除されます。この操作は取り消せません。"
 
     func testEnabledAddsSoratomoSentence() {
         // そらともを使える（登録済みでログイン）なら、そらとものデータも消えることを 1 文足す
