@@ -28,7 +28,8 @@ class PostDetailViewModel: ObservableObject {
 
     init(firestoreService: FirestoreServiceProtocol = FirestoreService(),
          authService: AuthServiceProtocol = AuthService(),
-         storageService: StorageServiceProtocol = StorageService()) {
+         storageService: StorageServiceProtocol = StorageService())
+    {
         self.firestoreService = firestoreService
         self.authService = authService
         self.storageService = storageService
@@ -79,9 +80,28 @@ class PostDetailViewModel: ObservableObject {
 
     // MARK: - Report & Block
 
-    /// 通報を送信
-    func submitReport(post: Post, reason: ReportReason) async {
-        guard let reporterId = authService.currentUser()?.id else { return }
+    /// ログインしているか（uid があるか）⭐️
+    ///
+    /// ゲスト（ログインしていない人）は通報もブロックも送れない（`firestore.rules` の reports の create は
+    /// 認証済みだけ）。画面はこれが false のとき、通報理由の選択やブロックの確認に進まずに
+    /// 「ログインが必要です」の案内を出す。
+    /// 判定の基準は下の `submitReport` / `blockPostAuthor` の guard と同じ「uid があるか」にそろえる
+    /// （`AuthViewModel.isGuest` は見ない。ログイン中に uid が取れないときも、送れないので同じ扱いにするため）。
+    var isSignedIn: Bool {
+        authService.currentUser()?.id != nil
+    }
+
+    /// 通報を送信する
+    ///
+    /// ⚠️ 成功の表示（「通報しました」）は、この返り値だけで決めること。以前は画面が
+    ///    「reportError が空＝送れた」と判定していたため、ゲストが通報すると下の guard で何も送らずに抜けても
+    ///    reportError が空のままで、送っていないのに「通報しました」が出ていた。
+    /// - Returns: 送れたら true。ゲスト（uid が無い）は送らずに false（reportError は空のまま。案内は画面が
+    ///   `isSignedIn` を見て先に出す）。送信に失敗したら false で、reportError に理由を入れる。
+    func submitReport(post: Post, reason: ReportReason) async -> Bool {
+        // 前の失敗の理由を先に消す。残したままだと、今回の結果と前回の失敗が混ざって見える
+        reportError = nil
+        guard let reporterId = authService.currentUser()?.id else { return false }
 
         do {
             try await firestoreService.reportPost(
@@ -90,15 +110,24 @@ class PostDetailViewModel: ObservableObject {
                 reportedUserId: post.userId,
                 reason: reason.rawValue
             )
+            return true
         } catch {
             ErrorHandler.logError(error, context: "PostDetailViewModel.submitReport", userId: reporterId)
             reportError = error.userFriendlyMessage
+            return false
         }
     }
 
     /// 投稿者をブロック
-    func blockPostAuthor(post: Post) async {
-        guard let currentUserId = authService.currentUser()?.id else { return }
+    ///
+    /// ⚠️ 画面を閉じるかどうかは、この返り値だけで決めること（通報と同じ理由。以前はゲストが押すと
+    ///    何も保存せずに、ブロックできたように画面が閉じていた）。
+    /// - Returns: 保存できたら true。ゲスト（uid が無い）は保存せずに false（reportError は空のまま）。
+    ///   保存に失敗したら false で、reportError に理由を入れる。
+    func blockPostAuthor(post: Post) async -> Bool {
+        // 前の失敗の理由を先に消す（通報と同じ）
+        reportError = nil
+        guard let currentUserId = authService.currentUser()?.id else { return false }
 
         do {
             try await firestoreService.blockUser(userId: currentUserId, blockedUserId: post.userId)
@@ -111,9 +140,11 @@ class PostDetailViewModel: ObservableObject {
                 object: nil,
                 userInfo: [Notification.blockedUserIdKey: post.userId]
             )
+            return true
         } catch {
             ErrorHandler.logError(error, context: "PostDetailViewModel.blockPostAuthor", userId: currentUserId)
             reportError = error.userFriendlyMessage
+            return false
         }
     }
 
@@ -150,7 +181,6 @@ class PostDetailViewModel: ObservableObject {
             return false
         }
     }
-
 }
 
 // MARK: - ブロック通知 ☁️

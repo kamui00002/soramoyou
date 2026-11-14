@@ -1110,6 +1110,8 @@ struct PostDetailView: View {
     @State private var showingReportSheet = false
     @State private var showingBlockConfirmation = false
     @State private var showingReportConfirmation = false
+    /// ゲスト（ログインしていない人）が通報・ブロックを押したときの「ログインが必要です」を出しているか ⭐️
+    @State private var showingLoginRequired = false
     @State private var selectedReportReason: ReportReason?
     @State private var showingDeleteConfirmation = false
     @State private var showingSaveOptions = false
@@ -1358,6 +1360,23 @@ struct PostDetailView: View {
         // おすすめの空の結果アラート ⭐️
         // ⚠️ body の修飾子チェーンに足すと Xcode 27 の型チェックが重くなる（#123）ため、ここに付ける
         .recommendationOutcomeAlert($recommendationOutcome)
+        // ゲストが通報・ブロックを押したときの案内 ⭐️（「おすすめの空」のログインが必要なときと同じ形）
+        // ⚠️ body の修飾子チェーンに置くと型チェックが時間切れになった（上のおすすめの空と同じ理由）ため、ここに付ける
+        .alert("ログインが必要です", isPresented: $showingLoginRequired) {
+            Button("OK") {}
+        } message: {
+            Text("ログインすると、投稿の通報とユーザーのブロックができます。")
+        }
+        // 通報・ブロックの失敗 ⭐️（以前は reportError を出す所が無く、失敗しても何も出なかった）
+        // 見出しはプロフィールのブロックの失敗と同じ「エラー」
+        .alert("エラー", isPresented: Binding(
+            get: { viewModel.reportError != nil },
+            set: { if !$0 { viewModel.reportError = nil } }
+        )) {
+            Button("OK") { viewModel.reportError = nil }
+        } message: {
+            Text(viewModel.reportError ?? "")
+        }
     }
 
     // MARK: - Multi Image Carousel ⭐️
@@ -1558,13 +1577,24 @@ struct PostDetailView: View {
                         Label("投稿を削除", systemImage: "trash")
                     }
                 } else {
+                    // ゲスト（ログインしていない人）は送れないので、選ぶ画面や確認に進まずに
+                    // 「ログインが必要です」を出す ⭐️（以前は送らずに「通報しました」が出ていた・
+                    // ブロックは保存せずに、できたように画面が閉じていた）
                     Button(role: .destructive) {
-                        showingReportSheet = true
+                        if viewModel.isSignedIn {
+                            showingReportSheet = true
+                        } else {
+                            showingLoginRequired = true
+                        }
                     } label: {
                         Label("この投稿を通報", systemImage: "flag")
                     }
                     Button(role: .destructive) {
-                        showingBlockConfirmation = true
+                        if viewModel.isSignedIn {
+                            showingBlockConfirmation = true
+                        } else {
+                            showingLoginRequired = true
+                        }
                     } label: {
                         Label("このユーザーをブロック", systemImage: "hand.raised")
                     }
@@ -1679,17 +1709,18 @@ struct PostDetailView: View {
     }
 
     /// 通報を送信（ViewModelに委譲）
+    /// 送れたときだけ「通報しました」を出す。失敗は viewModel.reportError に入り、「エラー」のアラートで出る。
+    /// ⚠️「reportError が空＝送れた」で判定しないこと（ゲストは何も送らずに空のまま抜けるため）
     private func submitReport(reason: ReportReason) async {
-        await viewModel.submitReport(post: post, reason: reason)
-        if viewModel.reportError == nil {
+        if await viewModel.submitReport(post: post, reason: reason) {
             showingReportConfirmation = true
         }
     }
 
     /// 投稿者をブロック（ViewModelに委譲）
+    /// 保存できたときだけ画面を閉じる。失敗は「エラー」のアラートで出て、画面は残す（もう一度操作できる）
     private func blockPostAuthor() async {
-        await viewModel.blockPostAuthor(post: post)
-        if viewModel.reportError == nil {
+        if await viewModel.blockPostAuthor(post: post) {
             dismiss()
         }
     }
