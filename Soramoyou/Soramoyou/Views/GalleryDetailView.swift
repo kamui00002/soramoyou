@@ -261,8 +261,9 @@ struct GalleryDetailView: View {
                 ForEach(ReportReason.allCases, id: \.self) { reason in
                     Button(reason.displayName) {
                         Task {
-                            await viewModel.submitReport(post: post, reason: reason)
-                            if viewModel.reportError == nil {
+                            // 送れたときだけ「通報しました」を出す（失敗は下の「エラー」のアラート）。
+                            // ⚠️「reportError が空＝送れた」で判定しないこと（ゲストは何も送らずに空のまま抜けるため）
+                            if await viewModel.submitReport(post: post, reason: reason) {
                                 showingReportConfirmation = true
                             }
                         }
@@ -275,8 +276,8 @@ struct GalleryDetailView: View {
                 Button("キャンセル", role: .cancel) {}
                 Button("ブロック", role: .destructive) {
                     Task {
-                        await viewModel.blockPostAuthor(post: post)
-                        if viewModel.reportError == nil {
+                        // 保存できたときだけ閉じる（失敗は下の「エラー」のアラートで出て、画面は残す）
+                        if await viewModel.blockPostAuthor(post: post) {
                             dismiss()
                         }
                     }
@@ -290,6 +291,17 @@ struct GalleryDetailView: View {
                 Button("OK") {}
             } message: {
                 Text("ご報告ありがとうございます。内容を確認いたします。")
+            }
+            // 通報・ブロックの失敗 ⭐️（以前は reportError を出す所が無く、失敗しても何も出なかった）
+            // 見出しはプロフィールのブロックの失敗と同じ「エラー」。
+            // ゲストの「ログインが必要です」は付けない（この画面の開き元はログイン後の MainTabView のギャラリーだけ）
+            .alert("エラー", isPresented: Binding(
+                get: { viewModel.reportError != nil },
+                set: { if !$0 { viewModel.reportError = nil } }
+            )) {
+                Button("OK") { viewModel.reportError = nil }
+            } message: {
+                Text(viewModel.reportError ?? "")
             }
             // 保存オプション選択
             .confirmationDialog("保存オプション", isPresented: $showingSaveOptions) {

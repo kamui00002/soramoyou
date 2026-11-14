@@ -12,13 +12,12 @@
 //  テストが即座にクラッシュして気付ける構成にしている。
 //
 
-import XCTest
-@testable import Soramoyou
 import FirebaseFirestore
+@testable import Soramoyou
+import XCTest
 
 @MainActor
 final class PostDetailViewModelTests: XCTestCase {
-
     func testRefreshPostReturnsLatestPostFromFirestore() async {
         // Arrange: Firestore 側は再編集後の新しい画像URL・非公開設定を返す
         let mock = MockFirestoreServiceForPostDetail()
@@ -107,9 +106,10 @@ final class PostDetailViewModelTests: XCTestCase {
             notification.userInfo?[Notification.blockedUserIdKey] as? String == "blocked-user"
         }
 
-        await viewModel.blockPostAuthor(post: post)
+        let blocked = await viewModel.blockPostAuthor(post: post)
 
         await fulfillment(of: [notified], timeout: 1)
+        XCTAssertTrue(blocked, "保存できたら true（画面はこれを見て閉じる）")
         XCTAssertEqual(mock.blockedUserIds, ["blocked-user"])
     }
 
@@ -122,13 +122,111 @@ final class PostDetailViewModelTests: XCTestCase {
         let notified = expectation(forNotification: .userBlocked, object: nil)
         notified.isInverted = true
 
-        await viewModel.blockPostAuthor(post: post)
+        let blocked = await viewModel.blockPostAuthor(post: post)
 
         await fulfillment(of: [notified], timeout: 0.3)
+        XCTAssertFalse(blocked, "保存できなかったら false（画面を閉じない）")
         XCTAssertNotNil(viewModel.reportError, "失敗はエラーとして画面に出す")
     }
 
-    /// ログイン済みの認証サービス（ログインしていないとブロック処理は何もしない）
+    /// ゲスト（ログインしていない人）がブロックしても保存せずに false を返す ⭐️
+    /// 以前は何もせずに抜けても、画面が「エラーが無い＝できた」と見て閉じていた
+    func testBlockPostAuthor_ゲストは保存せずにfalseを返す() async {
+        let mock = MockFirestoreServiceForPostDetail()
+        let viewModel = PostDetailViewModel(firestoreService: mock, authService: MockAuthService())
+        let post = Post(id: "post1", userId: "blocked-user", images: [], visibility: .public)
+        let notified = expectation(forNotification: .userBlocked, object: nil)
+        notified.isInverted = true
+
+        let blocked = await viewModel.blockPostAuthor(post: post)
+
+        await fulfillment(of: [notified], timeout: 0.3)
+        XCTAssertFalse(blocked, "ゲストは保存できないので false（画面を閉じない）")
+        XCTAssertEqual(mock.blockedUserIds, [], "ゲストは保存しに行かない")
+    }
+
+    // MARK: - 通報 ⭐️（ゲストに「通報しました」が出ていた不具合）
+
+    /// ゲストが通報しても送らずに false を返す。reportError も立てない
+    /// （ゲストへの案内は、画面が isSignedIn を見て先に「ログインが必要です」で出す）
+    func testSubmitReport_ゲストは送らずにfalseを返す() async {
+        let mock = MockFirestoreServiceForPostDetail()
+        let viewModel = PostDetailViewModel(firestoreService: mock, authService: MockAuthService())
+        let post = Post(id: "post1", userId: "author", images: [], visibility: .public)
+
+        let reported = await viewModel.submitReport(post: post, reason: .spam)
+
+        XCTAssertFalse(reported, "ゲストは送れないので false（「通報しました」を出さない）")
+        XCTAssertEqual(mock.reportedPosts, [], "ゲストは送りに行かない")
+        XCTAssertNil(viewModel.reportError, "ゲストの案内は画面の「ログインが必要です」で出すので、エラーは立てない")
+    }
+
+    /// ログインした人の通報は、自分の uid で送られて true を返す
+    /// （Apple の審査で求められる通報の仕組みが、ログインした人には今までどおり使えることを守る）
+    func testSubmitReport_ログインした人は自分のIDで送ってtrueを返す() async {
+        let mock = MockFirestoreServiceForPostDetail()
+        let viewModel = PostDetailViewModel(firestoreService: mock, authService: makeSignedInAuthService())
+        let post = Post(id: "post1", userId: "author", images: [], visibility: .public)
+
+        let reported = await viewModel.submitReport(post: post, reason: .spam)
+
+        XCTAssertTrue(reported, "送れたら true（画面はこれを見て「通報しました」を出す）")
+        XCTAssertEqual(mock.reportedPosts, [
+            MockFirestoreServiceForPostDetail.ReportedPost(
+                postId: "post1",
+                reporterId: "current-user",
+                reportedUserId: "author",
+                reason: "spam"
+            ),
+        ])
+        XCTAssertNil(viewModel.reportError)
+    }
+
+    /// 送信に失敗したら false を返し、理由を reportError に入れる（画面の「エラー」のアラートが出す）
+    func testSubmitReport_失敗したらfalseでエラーを立てる() async {
+        let mock = MockFirestoreServiceForPostDetail()
+        mock.stubbedReportPostError = FirestoreServiceError.notFound
+        let viewModel = PostDetailViewModel(firestoreService: mock, authService: makeSignedInAuthService())
+        let post = Post(id: "post1", userId: "author", images: [], visibility: .public)
+
+        let reported = await viewModel.submitReport(post: post, reason: .spam)
+
+        XCTAssertFalse(reported, "送れなかったら false（「通報しました」を出さない）")
+        XCTAssertNotNil(viewModel.reportError, "失敗はエラーとして画面に出す")
+    }
+
+    /// 一度失敗したあとに成功したら、前の失敗の理由が消えている
+    /// （以前は reportError がどこでも消されず、前の失敗が残ったままになっていた）
+    func testSubmitReport_失敗のあとに成功したら前のエラーが消える() async {
+        let mock = MockFirestoreServiceForPostDetail()
+        mock.stubbedReportPostError = FirestoreServiceError.notFound
+        let viewModel = PostDetailViewModel(firestoreService: mock, authService: makeSignedInAuthService())
+        let post = Post(id: "post1", userId: "author", images: [], visibility: .public)
+        let firstReported = await viewModel.submitReport(post: post, reason: .spam)
+        XCTAssertFalse(firstReported, "前提: 1 回目は失敗している")
+        XCTAssertNotNil(viewModel.reportError, "前提: 1 回目の失敗の理由が入っている")
+
+        mock.stubbedReportPostError = nil
+        let reported = await viewModel.submitReport(post: post, reason: .spam)
+
+        XCTAssertTrue(reported)
+        XCTAssertNil(viewModel.reportError, "前の失敗の理由が残っていると、成功したのに「エラー」のアラートが出てしまう")
+    }
+
+    // MARK: - isSignedIn ⭐️
+
+    /// 画面が「ログインが必要です」を出すかの判定は、uid の有無で決まる
+    func testIsSignedIn_ゲストはfalseでログインした人はtrue() {
+        let mock = MockFirestoreServiceForPostDetail()
+
+        let guestViewModel = PostDetailViewModel(firestoreService: mock, authService: MockAuthService())
+        let signedInViewModel = PostDetailViewModel(firestoreService: mock, authService: makeSignedInAuthService())
+
+        XCTAssertFalse(guestViewModel.isSignedIn, "ゲストは uid が無いので false")
+        XCTAssertTrue(signedInViewModel.isSignedIn, "ログインした人は uid があるので true")
+    }
+
+    /// ログイン済みの認証サービス（ログインしていないと通報・ブロックは何もしない）
     private func makeSignedInAuthService() -> MockAuthService {
         let authService = MockAuthService()
         authService.currentUserValue = User(id: "current-user", email: "test@example.com")
@@ -178,5 +276,25 @@ final class MockFirestoreServiceForPostDetail: FirestoreServiceProtocol {
     func blockUser(userId _: String, blockedUserId: String) async throws {
         if let stubbedBlockUserError { throw stubbedBlockUserError }
         blockedUserIds.append(blockedUserId)
+    }
+
+    // MARK: 通報（ゲストに「通報しました」が出ていた不具合のテスト用）⭐️
+
+    /// reportPost に渡された中身
+    struct ReportedPost: Equatable {
+        let postId: String
+        let reporterId: String
+        let reportedUserId: String
+        let reason: String
+    }
+
+    /// reportPost を失敗させたいときに設定する
+    var stubbedReportPostError: Error?
+    /// reportPost に渡された中身（呼ばれた回数もこれで数える。失敗させたときも、呼ばれたことは残す）
+    private(set) var reportedPosts: [ReportedPost] = []
+
+    func reportPost(postId: String, reporterId: String, reportedUserId: String, reason: String) async throws {
+        reportedPosts.append(ReportedPost(postId: postId, reporterId: reporterId, reportedUserId: reportedUserId, reason: reason))
+        if let stubbedReportPostError { throw stubbedReportPostError }
     }
 }
