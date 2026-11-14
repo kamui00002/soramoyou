@@ -343,13 +343,16 @@ final class AppStoreReviewUITests: XCTestCase {
         XCTAssertEqual(try UITestEmulatorSeeder.reportCount(reporterId: seeded.testerUid), 1, "通報が保存されていない")
     }
 
-    /// 通報理由が全て表示されることを確認（選ばずにキャンセルするので、ゲストのままでよい）
+    /// 通報理由が全て表示されることを確認（選ばずに閉じるので、通報は送らない）
+    ///
+    /// ログインして見る。ゲストが通報を押すと、理由の一覧でなく「ログインが必要です」が出る（HomeView.swift）。
+    /// アカウントは Emulator に種まきしたもの（本番のアカウントは使わない）。
     func testReportReasonSelection() throws {
-        // ゲストモードで開始
-        enterAsGuest()
+        // 種まきしたアカウントでログイン
+        performLogin(UITestEmulatorSeeder.tester)
 
         // ホームタブ → 投稿詳細 → メニュー → 通報
-        tabButton("ホーム").tap()
+        tapAfterClearingSavePasswordSheet(tabButton("ホーム"))
         openFirstPostDetail()
         app.buttons["PostMenuButton"].tap()
 
@@ -377,6 +380,37 @@ final class AppStoreReviewUITests: XCTestCase {
         }
         // どちらの閉じ方でも、理由のボタンが消えたことで閉じたと確かめる（閉じなければここで落ちる）
         XCTAssertTrue(app.buttons["不適切なコンテンツ"].waitForNonExistence(timeout: 3), "通報理由の選択が閉じない")
+    }
+
+    /// ゲストが通報・ブロックを押すと「ログインが必要です」が出て、通報理由やブロックの確認へは進まないことを確認
+    ///
+    /// ゲストは通報もブロックも送れない。押したら案内を出す作り（HomeView.swift の .alert("ログインが必要です")）。
+    func testGuestReportAndBlockRequireLogin() throws {
+        // ゲストモードで開始
+        enterAsGuest()
+
+        // ホームタブ → 投稿詳細
+        tabButton("ホーム").tap()
+        openFirstPostDetail()
+
+        let loginRequiredAlert = app.alerts["ログインが必要です"]
+        for item in ["この投稿を通報", "このユーザーをブロック"] {
+            // 「…」メニュー → 通報（2 周目はブロック）
+            app.buttons["PostMenuButton"].tap()
+            let menuItem = app.buttons[item]
+            XCTAssertTrue(menuItem.waitForExistence(timeout: 3), "メニューに「\(item)」が表示されない")
+            menuItem.tap()
+
+            // 案内が出る
+            XCTAssertTrue(loginRequiredAlert.waitForExistence(timeout: 5), "ゲストが「\(item)」を押しても「ログインが必要です」が出ない")
+            // 先へは進んでいない（通報理由の一覧も、ブロックの確認も出ていない）
+            XCTAssertFalse(app.buttons["不適切なコンテンツ"].exists, "ゲストなのに通報理由の一覧が出ている")
+            XCTAssertFalse(app.alerts["ユーザーをブロック"].exists, "ゲストなのにブロックの確認が出ている")
+
+            // OK で閉じる（次の周でメニューを開き直せるように、閉じたことまで見る）
+            loginRequiredAlert.buttons["OK"].tap()
+            XCTAssertTrue(loginRequiredAlert.waitForNonExistence(timeout: 3), "「ログインが必要です」が閉じない")
+        }
     }
 
     // MARK: - 5. ブロック機能テスト
