@@ -773,6 +773,12 @@ struct PostCard: View {
         .modifier(PostCardLikeAccessibilityActionModifier(
             onLike: onDoubleTapLike == nil ? nil : { handleDoubleTapLike() }
         ))
+        // UI テスト（AppStoreReviewUITests）がカードを 1 枚ずつ見つけて数えるための目印。
+        // 入れ物に識別子だけを付けると中の部品に移ってしまうので、カード全体を「中身を持つ入れ物」にしてから付ける。
+        // .contain は中の部品をそのまま読み上げの対象に残す（入れ物自体は読み上げで止まらない）。
+        // 「いいね」の読み上げ操作より外側に置き、その付き方を変えない
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("PostCard")
     }
 
     // MARK: - Double Tap Like ⭐️ PR-H
@@ -1566,6 +1572,8 @@ struct PostDetailView: View {
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
+            // UI テスト（AppStoreReviewUITests）が「…」メニューを見つけるための目印。見た目と読み上げは変わらない
+            .accessibilityIdentifier("PostMenuButton")
         }
     }
 
