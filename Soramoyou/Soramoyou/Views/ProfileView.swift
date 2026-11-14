@@ -141,6 +141,9 @@ struct ProfileView: View {
                             Image(systemName: "ellipsis.circle")
                                 .foregroundColor(.white)
                         }
+                        // UI テスト（AppStoreReviewUITests）が自分のプロフィールの「…」メニュー（設定の入口）を
+                        // 見つけるための目印。見た目と読み上げは変わらない
+                        .accessibilityIdentifier("ProfileMenuButton")
                     } else {
                         // 他ユーザーのプロフィールの場合、表示モード切り替えのみ
                         Menu {
@@ -325,6 +328,9 @@ struct ProfileView: View {
         VStack(spacing: DesignTokens.Spacing.md) {
             // プロフィール画像
             profileImageView(photoURL: user.photoURL)
+                // UI テスト（AppStoreReviewUITests）がアイコンの表示を確かめるための目印。
+                // 中身は写真か仮の絵のどちらか 1 枚の画像なので、その画像に付く。見た目と読み上げは変わらない
+                .accessibilityIdentifier("profileImage")
 
             // 表示名
             if let displayName = user.displayName {

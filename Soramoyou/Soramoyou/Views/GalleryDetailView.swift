@@ -192,6 +192,8 @@ struct GalleryDetailView: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
+                // UI テスト（AppStoreReviewUITests）が「…」メニューを見つけるための目印。見た目と読み上げは変わらない
+                .accessibilityIdentifier("PostMenuButton")
             }
         }
         .onAppear {
