@@ -4,8 +4,8 @@
 //
 //  投稿の公開設定の説明文のテスト ⭐️（C 項目 4）
 //
-//  投稿情報画面で「フォロワーのみ」を選んだときだけ、誰の画面に表示されるかの説明を出す。
-//  文は 10/19 ユーザー承認。アプリの画面で表示される相手のことだけを書き、言い切りはしない。
+//  投稿情報画面で「フォロワーのみ」「非公開」を選んだときに、誰の画面に表示されるかの説明を出す。
+//  文はフォロワーのみが 10/19、非公開が 11/19 のユーザー承認。アプリの画面で表示される相手のことだけを書き、言い切りはしない。
 //
 
 @testable import Soramoyou
@@ -20,10 +20,17 @@ final class VisibilityTests: XCTestCase {
         )
     }
 
-    func testPublicAndPrivateHaveNoNote() {
-        // 公開・非公開では説明を出さない
+    func testPrivateNoteIsTheApprovedText() {
+        // 画面に出る文（11/19 ユーザー承認・文末の句点なし）
+        XCTAssertEqual(
+            Visibility.private.selectionNote,
+            "あなただけに表示されます。ほかの人の画面には表示されません"
+        )
+    }
+
+    func testPublicHasNoNote() {
+        // 公開では説明を出さない
         XCTAssertNil(Visibility.public.selectionNote)
-        XCTAssertNil(Visibility.private.selectionNote)
     }
 
     func testRawValuesAndDisplayNamesAreUnchanged() {

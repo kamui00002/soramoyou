@@ -117,6 +117,9 @@ struct PostInfoView: View {
                         // キャプション入力
                         captionSection
 
+                        // 公開設定（見つけやすいようキャプションのすぐ後に置く。非公開を選べることが伝わっていなかったため）
+                        visibilitySection
+
                         // 機能1: 配置写真モードはレイアウト＋ラベル、それ以外は気分(mood)選択（排他）
                         if viewModel.postKind == .collage {
                             collageArrangeSection
@@ -135,9 +138,6 @@ struct PostInfoView: View {
 
                         // 自動抽出された情報
                         extractedInfoSection
-
-                        // 公開設定
-                        visibilitySection
 
                         // オリジナル画像保存オプション
                         originalImagesSaveSection
@@ -772,7 +772,7 @@ struct PostInfoView: View {
                     .fill(.white.opacity(0.2))
             )
 
-            // 「フォロワーのみ」を選んだときだけ、誰の画面に表示されるかを書く ⭐️（C 項目 4）
+            // 「フォロワーのみ」「非公開」を選んだときに、誰の画面に表示されるかを書く（公開では出さない）⭐️（C 項目 4）
             // 文は Visibility.selectionNote に置く（テストで文を固定するため）。
             // lineLimit は付けない（文字を大きくしても切らずに折り返す）
             if let note = viewModel.visibility.selectionNote {
