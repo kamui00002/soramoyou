@@ -240,6 +240,29 @@ final class FollowListViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.followButtonTitle(for: "userC"), "フォロー中")
     }
 
+    /// 【回帰】自分のフォロー中集合の 1 ページ目に壊れたドキュメントがあっても、2 ページ目まで読む
+    ///
+    /// 読み切れないと、2 ページ目にいる相互フォローの相手に「フォローバック」が誤表示される。
+    func test自分のフォロー中集合に壊れたドキュメントがあっても続きを読む() async {
+        // Arrange: pageSize=2。自分のフォロー中の 1ページ目は 2 件読んで 1 件が壊れていた。2ページ目に userX
+        let repository = MockFollowListRepository()
+        repository.stubbedPages = [[makeFollow(follower: "userX", followee: "me")]]
+        repository.stubbedOwnFollowingPages = [
+            [makeFollow(follower: "me", followee: "userA")],
+            [makeFollow(follower: "me", followee: "userX")],
+        ]
+        repository.stubbedOwnFollowingSkippedCounts = [1, 0]
+        let viewModel = makeViewModel(listType: .followers, repository: repository, pageSize: 2)
+
+        // Act
+        await viewModel.fetchFirstPage()
+
+        // Assert
+        XCTAssertTrue(viewModel.isFollowingUser("userX"), "2ページ目のフォロー中の相手もフォロー中と判定される")
+        XCTAssertEqual(viewModel.followButtonTitle(for: "userX"), "フォロー中")
+        XCTAssertEqual(repository.capturedFollowingTargets, ["me", "me"], "読んだ件数が足りない 2ページ目で止まる")
+    }
+
     // MARK: - ボタン文言 ⭐️
 
     /// 「フォローバック」は自分のフォロワー一覧でだけ出す（レビュー D1）
@@ -356,6 +379,61 @@ final class FollowListViewModelTests: XCTestCase {
         // Assert: 3 件になり、末尾判定で hasMore が落ちる
         XCTAssertEqual(viewModel.follows.map { viewModel.displayUserId(for: $0) },
                        ["userA", "userB", "userC"])
+        XCTAssertFalse(viewModel.hasMore)
+    }
+
+    /// 【回帰】1 ページ目に壊れたドキュメントが混ざって件数が減っても、続きがあれば読み続ける
+    ///
+    /// Repository は壊れたフォロードキュメントを 1 件ずつ飛ばすため、満杯（pageSize 件）読んだ
+    /// ページでも返る件数は pageSize 未満になる。件数で「続きなし」と決めると一覧がそこで止まる。
+    func test1ページ目に壊れたドキュメントがあっても続きを読む() async {
+        // Arrange: pageSize=3。1ページ目は 3 件読んで 1 件が壊れていた（返るのは 2 件）。2ページ目に userC
+        let repository = MockFollowListRepository()
+        repository.stubbedPages = [
+            [
+                makeFollow(follower: "userA", followee: "me"),
+                makeFollow(follower: "userB", followee: "me"),
+            ],
+            [makeFollow(follower: "userC", followee: "me")],
+        ]
+        repository.stubbedSkippedCounts = [1, 0]
+        let viewModel = makeViewModel(listType: .followers, repository: repository, pageSize: 3)
+
+        // Act
+        await viewModel.fetchFirstPage()
+        XCTAssertTrue(viewModel.hasMore, "満杯に読んだページなので続きがある")
+        await viewModel.loadMore()
+
+        // Assert: 2ページ目まで読めていて、2ページ目は読んだ件数が足りないので末尾
+        XCTAssertEqual(viewModel.follows.map { viewModel.displayUserId(for: $0) },
+                       ["userA", "userB", "userC"])
+        XCTAssertFalse(viewModel.hasMore)
+    }
+
+    /// 【回帰】追加ページに壊れたドキュメントが混ざって件数が減っても、続きがあれば読み続ける
+    func test追加ページに壊れたドキュメントがあっても続きを読む() async {
+        // Arrange: pageSize=2。1ページ目は満杯、2ページ目は 2 件読んで 1 件が壊れていた。3ページ目に userD
+        let repository = MockFollowListRepository()
+        repository.stubbedPages = [
+            [
+                makeFollow(follower: "userA", followee: "me"),
+                makeFollow(follower: "userB", followee: "me"),
+            ],
+            [makeFollow(follower: "userC", followee: "me")],
+            [makeFollow(follower: "userD", followee: "me")],
+        ]
+        repository.stubbedSkippedCounts = [0, 1, 0]
+        let viewModel = makeViewModel(listType: .followers, repository: repository, pageSize: 2)
+        await viewModel.fetchFirstPage()
+
+        // Act
+        await viewModel.loadMore()
+        XCTAssertTrue(viewModel.hasMore, "満杯に読んだページなので続きがある")
+        await viewModel.loadMore()
+
+        // Assert
+        XCTAssertEqual(viewModel.follows.map { viewModel.displayUserId(for: $0) },
+                       ["userA", "userB", "userC", "userD"])
         XCTAssertFalse(viewModel.hasMore)
     }
 
@@ -517,6 +595,10 @@ final class FollowListViewModelTests: XCTestCase {
 final class MockFollowListRepository: FollowRepositoryProtocol, @unchecked Sendable {
     /// 呼び出しごとに順番に返すページ（尽きたら空配列）
     var stubbedPages: [[Follow]] = []
+    /// 各ページで「読んだが壊れていて飛ばした」ドキュメントの件数（`stubbedPages` と同じ並び・省略時は 0）。
+    /// 本番の Repository は壊れたフォロードキュメントを 1 件ずつ飛ばすので、
+    /// 返す件数が実際に読んだ件数より少ないページを再現するのに使う。
+    var stubbedSkippedCounts: [Int] = []
     var stubbedFetchError: Error?
     var stubbedRemoveError: Error?
 
@@ -530,6 +612,11 @@ final class MockFollowListRepository: FollowRepositoryProtocol, @unchecked Senda
     /// 「この uid のフォロー中一覧」として返す固定値（フォローバック表示の判定用）。
     /// 自分のフォロー中集合として扱われた `fetchFollowing` は `stubbedPages` を消費しない。
     var stubbedFollowingByUser: [String: [Follow]] = [:]
+    /// 「自分のフォロー中集合」の取得で呼び出しごとに順番に返すページ（尽きたら空配列）。
+    /// 空のときは `stubbedFollowingByUser` の固定値を返す（複数ページにまたがる集合の検証用）。
+    var stubbedOwnFollowingPages: [[Follow]] = []
+    /// `stubbedOwnFollowingPages` の各ページで飛ばしたドキュメントの件数（省略時は 0）
+    var stubbedOwnFollowingSkippedCounts: [Int] = []
     /// 検証対象の一覧の種別（makeViewModel が設定する）。
     /// フォロワー一覧では `fetchFollowing` は必ず「自分のフォロー中集合」の取得になる。
     var listTypeForStub: FollowListType?
@@ -545,6 +632,7 @@ final class MockFollowListRepository: FollowRepositoryProtocol, @unchecked Senda
     var stubbedFollowError: Error?
 
     private var pageIndex = 0
+    private var ownFollowingPageIndex = 0
 
     func follow(_ targetUserId: String, by ownUserId: String) async throws {
         if let stubbedFollowError { throw stubbedFollowError }
@@ -562,18 +650,18 @@ final class MockFollowListRepository: FollowRepositoryProtocol, @unchecked Senda
 
     func fetchFollowers(
         of _: String,
-        limit _: Int,
+        limit: Int,
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+    ) async throws -> FollowPage {
         fetchFollowersCallCount += 1
-        return try nextPage()
+        return try nextPage(limit: limit)
     }
 
     func fetchFollowing(
         of userId: String,
-        limit _: Int,
+        limit: Int,
         lastDocument _: DocumentSnapshot?
-    ) async throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+    ) async throws -> FollowPage {
         capturedFollowingTargets.append(userId)
         // 「自分のフォロー中集合」の取得は固定値を返し、一覧本体用の stubbedPages を消費しない。
         // ・フォロワー一覧では fetchFollowing が一覧本体に使われることはない
@@ -583,10 +671,17 @@ final class MockFollowListRepository: FollowRepositoryProtocol, @unchecked Senda
         if isOwnFollowingFetch {
             if let stubbedOwnFollowingError { throw stubbedOwnFollowingError }
             if let stubbedFetchError { throw stubbedFetchError }
-            return (follows: stubbedFollowingByUser[userId] ?? [], lastDocument: nil)
+            if !stubbedOwnFollowingPages.isEmpty {
+                let index = ownFollowingPageIndex
+                ownFollowingPageIndex += 1
+                let follows = index < stubbedOwnFollowingPages.count ? stubbedOwnFollowingPages[index] : []
+                let skipped = index < stubbedOwnFollowingSkippedCounts.count ? stubbedOwnFollowingSkippedCounts[index] : 0
+                return Self.makePage(follows, skipped: skipped, limit: limit)
+            }
+            return Self.makePage(stubbedFollowingByUser[userId] ?? [], skipped: 0, limit: limit)
         }
         fetchFollowingCallCount += 1
-        return try nextPage()
+        return try nextPage(limit: limit)
     }
 
     func removeFollower(_ followerUserId: String, from ownUserId: String) async throws {
@@ -594,16 +689,24 @@ final class MockFollowListRepository: FollowRepositoryProtocol, @unchecked Senda
         capturedRemovals.append((follower: followerUserId, owner: ownUserId))
     }
 
-    private func nextPage() throws -> (follows: [Follow], lastDocument: DocumentSnapshot?) {
+    private func nextPage(limit: Int) throws -> FollowPage {
         if let stubbedFetchError { throw stubbedFetchError }
         guard pageIndex < stubbedPages.count else {
-            return (follows: [], lastDocument: nil)
+            return Self.makePage([], skipped: 0, limit: limit)
         }
-        let page = stubbedPages[pageIndex]
+        let index = pageIndex
         pageIndex += 1
-        // DocumentSnapshot はテストで生成できないため常に nil を返す。
-        // ViewModel の hasMore 判定は件数ベースなので支障ない。
-        return (follows: page, lastDocument: nil)
+        let skipped = index < stubbedSkippedCounts.count ? stubbedSkippedCounts[index] : 0
+        return Self.makePage(stubbedPages[index], skipped: skipped, limit: limit)
+    }
+
+    /// 本番の `FollowPage(follows:snapshot:limit:)` と同じ規則でページを作る。
+    /// 「実際に読んだ件数」= 返す件数 + 壊れていて飛ばした件数 とし、それが limit 未満なら読み切り。
+    ///
+    /// DocumentSnapshot はテストで生成できないため lastDocument は常に nil を返す。
+    /// ViewModel の続き判定は `isExhausted` だけを見るので支障ない。
+    private static func makePage(_ follows: [Follow], skipped: Int, limit: Int) -> FollowPage {
+        FollowPage(follows: follows, lastDocument: nil, isExhausted: follows.count + skipped < limit)
     }
 }
 
