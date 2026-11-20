@@ -66,6 +66,19 @@ service cloud.firestore {
                  && email.matches('[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}'));
     }
 
+    // ご意見の返信用のメールアドレス（feedback の replyEmail・任意）⭐️
+    // - 項目なし・null は通す（返信用の欄が空＝アプリは書かない。古い iOS と Android はそのまま通る）
+    // - あるときは文字列・3〜254 文字（size() は UTF-16 の数）・「@ 以外の半角の見える文字（! から ~）」だけの …@….…
+    // ⚠️ functions/feedbackMail.js の REPLY_EMAIL_PATTERN・アプリの確かめと同じ形にすること（2026-11-20 の決定）
+    // ⚠️ 上の isValidEmail（users の email）とは形が違う。使い回さない
+    function isValidReplyEmail(value) {
+      return value == null
+             || (value is string
+                 && value.size() >= 3
+                 && value.size() <= 254
+                 && value.matches('[\\x21-\\x3F\\x41-\\x7E]+@[\\x21-\\x3F\\x41-\\x7E]+[.][\\x21-\\x3F\\x41-\\x7E]+'));
+    }
+
     // 画像の URL の形 ⭐️（アプリが受け取る Storage のダウンロード URL の形）
     // - 空（項目なし・null・""）は通す（"" は、形の全体を (…)? で包んで通す）
     // - 文字列でない値は、matches が評価の誤りになって断られる
@@ -558,7 +571,8 @@ service cloud.firestore {
                     && request.resource.data.keys().hasAll(['userId', 'message', 'createdAt'])
                     && request.resource.data.message is string
                     && request.resource.data.message.size() >= 1
-                    && request.resource.data.message.size() <= 1000;
+                    && request.resource.data.message.size() <= 1000
+                    && isValidReplyEmail(request.resource.data.get('replyEmail', null));
 
       // 更新・削除は不可
       allow update, delete: if false;

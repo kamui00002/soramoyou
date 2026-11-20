@@ -11,6 +11,7 @@
 //   - onPublicProfileUpdated  publicProfiles/{uid}→ 「おすすめの空」に新しく入った投稿の投稿者へ「選ばれました」
 //   - publishDailyPick        毎朝 7:00（JST）    → 公開投稿から「今日のおすすめのそらもよう」を選び、選ばれた投稿者へ通知
 //   - notifyFeedbackToDiscord feedback/{id}       → 開発者の Discord へ「ご意見・ご要望が届いた」（Webhook）
+//   - mailFeedbackToSupport   feedback/{id}       → 開発者の Gmail（soramoyou.app・自分宛て）へ、ご意見と返信先（Gmail の SMTP）
 //   - notifyReportToDiscord   reports/{id}        → 開発者の Discord へ「投稿が通報された」（Webhook・ガイドライン 1.2）
 //
 // 設計メモ:
@@ -39,6 +40,7 @@ const logger = require("firebase-functions/logger");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
+const { getAuth } = require("firebase-admin/auth");
 
 initializeApp();
 const db = getFirestore();
@@ -537,15 +539,21 @@ exports.publishDailyPick = onSchedule(dailyPickCore.SCHEDULE_OPTIONS, async () =
 // Webhook URL は Secret Manager に格納し、コード/リポジトリには実値を絶対に置かない（漏洩防止）。
 //   セットアップ: `firebase functions:secrets:set DISCORD_WEBHOOK_URL`（対話で値を入力）
 // region は setGlobalOptions（asia-northeast1）を継承するため、ここでは secrets のみ指定する。
+// 本文の組み立ては純粋関数（functions/feedbackDiscord.js）に分け、node:test で検証している。
+// 返信用のメールアドレスは Discord に出さない（「あり／なし」だけ。アドレスは下の mailFeedbackToSupport が Gmail へ）。
+
+const { buildFeedbackDiscordPayload } = require("./feedbackDiscord");
+const {
+  SUPPORT_ADDRESS,
+  resolveAuthLookup,
+  chooseRecipient,
+  buildFeedbackMail,
+} = require("./feedbackMail");
 
 const DISCORD_WEBHOOK_URL = defineSecret("DISCORD_WEBHOOK_URL");
 
-// 種別 rawValue → 日本語表示名（iOS 側 FeedbackCategory と対応）。
-const FEEDBACK_CATEGORY_LABELS = {
-  bug: "不具合 🐛",
-  request: "要望 ✨",
-  other: "その他 💬",
-};
+/** ご意見の知らせに載せる Firebase コンソールのリンクのプロジェクト ID（下の REPORT_CONSOLE_PROJECT_ID と同じ値）。 */
+const FEEDBACK_CONSOLE_PROJECT_ID = "soramoyou-ios";
 
 exports.notifyFeedbackToDiscord = onDocumentCreated(
   { document: "feedback/{feedbackId}", secrets: [DISCORD_WEBHOOK_URL] },
@@ -559,46 +567,7 @@ exports.notifyFeedbackToDiscord = onDocumentCreated(
     const data = snapshot.data() || {};
     const feedbackId = event.params.feedbackId;
 
-    // 各フィールドを取り出す（任意項目は未設定なら代替表記）。message は rules で 1〜1000 文字保証済み。
-    const message = (data.message || "(本文なし)").toString();
-    const categoryRaw = data.category ? data.category.toString() : null;
-    const category = categoryRaw
-      ? FEEDBACK_CATEGORY_LABELS[categoryRaw] || categoryRaw
-      : "未指定";
-    const appVersion = data.appVersion ? data.appVersion.toString() : "不明";
-    const deviceInfo = data.deviceInfo ? data.deviceInfo.toString() : "不明";
-    const userId = data.userId ? data.userId.toString() : "不明";
-
-    // createdAt（serverTimestamp）を ISO 文字列へ。未到達でも落ちないようにする。
-    let timestamp;
-    try {
-      timestamp =
-        data.createdAt && typeof data.createdAt.toDate === "function"
-          ? data.createdAt.toDate().toISOString()
-          : new Date().toISOString();
-    } catch (_e) {
-      timestamp = new Date().toISOString();
-    }
-
-    // Discord Embed を組み立てる。field.value は最大 1024 文字なので本文は 1000 文字に丸める。
-    const payload = {
-      username: "そらもよう フィードバック",
-      embeds: [
-        {
-          title: "📮 新しいご意見・ご要望が届きました",
-          color: 0x4a90d9, // そらもようの空色
-          fields: [
-            { name: "種別", value: category, inline: true },
-            { name: "アプリ", value: appVersion, inline: true },
-            { name: "端末", value: deviceInfo, inline: true },
-            { name: "本文", value: message.slice(0, 1000) },
-            { name: "ユーザーID", value: userId, inline: false },
-          ],
-          footer: { text: `feedbackId: ${feedbackId}` },
-          timestamp,
-        },
-      ],
-    };
+    const payload = buildFeedbackDiscordPayload({ feedbackId, feedback: data, projectId: FEEDBACK_CONSOLE_PROJECT_ID });
 
     // Node 20 はグローバル fetch が使えるため外部 HTTP ライブラリ不要。
     const webhookUrl = DISCORD_WEBHOOK_URL.value();
@@ -618,6 +587,83 @@ exports.notifyFeedbackToDiscord = onDocumentCreated(
     } catch (err) {
       logger.error("Discord 通知中に例外が発生しました", { feedbackId, error: err.message });
       throw err;
+    }
+  }
+);
+
+// MARK: - フィードバック → 開発者の Gmail（返信先つき）⭐️☁️
+//
+// ご意見に返事をするための宛先（返信用の欄、空なら登録メール）を、開発者の Gmail（soramoyou.app・自分宛て）へ届ける。
+// Claude は本番を読まずに、このメールを Gmail で読んで返信の下書きを作る（手順は開発者の手元の手順書（公開しないノート））。
+// Discord の知らせ（上の notifyFeedbackToDiscord）とは別の関数にする＝片方が落ちても、もう片方は届く。
+//   - 宛先も差出人も soramoyou.app だけ。送った人のアドレスは Reply-To にだけ入れる（利用者のアドレスへは送らない）
+//   - 登録メールは、返信用の欄が使えないときだけ Auth から引く（引く範囲を広げない）
+//   - メールの中身の組み立ては純粋関数（functions/feedbackMail.js）。ログにはアドレス・本文・SMTP の応答文を出さない
+//   - 送るのは Gmail の SMTP（アプリ パスワード）。1 日 500 通まで
+//   セットアップ: Google アカウントの 2 段階認証 → アプリ パスワードを作る →
+//     `firebase functions:secrets:set SUPPORT_GMAIL_APP_PASSWORD --project soramoyou-ios`（対話で値を入力）
+//   ⚠️ deploy の順: Hosting（プライバシーポリシー）→ Rules → secret → この関数。
+//      関数を出した時点で、欄の無い古い iOS と Android のご意見でも登録メールが Gmail へ送られ始めるため、
+//      ポリシーの公開と Play Console のデータ セーフティの確かめを関数より前に済ませる
+//   ⚠️ Google のパスワードを変えるとアプリ パスワードは消える（作り直して secret を入れ直す）
+//   ⚠️ 関数を専用のサービス アカウントへ移すとき（監査 IAM の段 3）は、Auth のユーザーを読む権限を入れる
+
+/** Gmail のアプリ パスワード（Secret Manager）。値はリポジトリとログに置かない。 */
+const SUPPORT_GMAIL_APP_PASSWORD = defineSecret("SUPPORT_GMAIL_APP_PASSWORD");
+
+exports.mailFeedbackToSupport = onDocumentCreated(
+  { document: "feedback/{feedbackId}", secrets: [SUPPORT_GMAIL_APP_PASSWORD] },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) {
+      logger.warn("フィードバックのスナップショットが空でした（メール）");
+      return;
+    }
+
+    const data = snapshot.data() || {};
+    const feedbackId = event.params.feedbackId;
+
+    // 返信先を選ぶ。欄が正しい形なら Auth は引かない（判断は台本と同じ resolveAuthLookup）
+    const authLookup = await resolveAuthLookup({
+      replyEmail: data.replyEmail,
+      uid: data.userId,
+      getUser: (uid) => getAuth().getUser(uid),
+    });
+    const recipient = chooseRecipient({ replyEmail: data.replyEmail, authLookup });
+    const mail = buildFeedbackMail({ feedbackId, feedback: data, recipient, projectId: FEEDBACK_CONSOLE_PROJECT_ID });
+
+    // アプリ パスワードは空白と改行を落とす（Google は 4 文字ずつ空白で区切って見せる・secret の末尾の改行の罠）
+    const appPassword = SUPPORT_GMAIL_APP_PASSWORD.value().replace(/\s+/g, "");
+    if (appPassword.length === 0) {
+      logger.error("Gmail のアプリ パスワードが空でした", { feedbackId });
+      throw new Error("SUPPORT_GMAIL_APP_PASSWORD is empty");
+    }
+
+    // nodemailer はこの関数でだけ使うので、ここで読む（ほかの関数の起動を重くしない）
+    const nodemailer = require("nodemailer");
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: SUPPORT_ADDRESS, pass: appPassword },
+      // メールの中身はクライアントの値から作るので、ファイルと URL を読みに行かせない
+      disableFileAccess: true,
+      disableUrlAccess: true,
+      // 待ち時間（ミリ秒）。nodemailer の既定（接続 2 分・あいさつ 30 秒・無通信 10 分）のままだと、
+      // 関数の時間切れ（既定 60 秒）が先に来て、下の code つきのログが出ないため短くする
+      connectionTimeout: 15000,
+      greetingTimeout: 10000,
+      socketTimeout: 20000,
+    });
+
+    try {
+      await transporter.sendMail(mail);
+      logger.info("ご意見のメールを送りました", { feedbackId, source: recipient.source, field: recipient.fieldState });
+    } catch (err) {
+      // SMTP の応答文にはアドレスなどが入りうるので、code と応答の番号だけを残す
+      const code = String((err && (err.code || err.name)) || "不明");
+      const responseCode = err && typeof err.responseCode === "number" ? err.responseCode : null;
+      logger.error("ご意見のメールを送れませんでした", { feedbackId, code, responseCode });
+      // 元のエラーを投げると本文がログに出るので、code だけの新しいエラーにする（既定ではリトライされない）
+      throw new Error(`feedback mail failed: ${code}`);
     }
   }
 );
