@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
 
 /**
  * 通報は「投稿 ID・通報した人・通報された投稿者・理由・サーバー時刻の作成日時」の 5 項目だけを `reports` に自動 ID で作る
- * （firestore.rules:367-378、FirestoreService.swift:1143-1155）。ブロックは自分の `users/{uid}.blockedUserIds` への
+ * （firestore.rules の reports、FirestoreService.swift:1143-1155）。ブロックは自分の `users/{uid}.blockedUserIds` への
  * 1 要素の追加か削除だけ（FirestoreService.swift:1174-1193。`updatedAt` も書かない）。
  *
  * 陽性対照（先に赤を確かめたもの）：2 要素以上を一度に追加・削除するブロック、`updatedAt` など他のキーを同時に書くブロック、

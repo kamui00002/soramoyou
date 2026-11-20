@@ -10,7 +10,7 @@ package com.yoshidometoru.soramoyou.contract.model
  *   （`inappropriate`・`spam`・`harassment`・`copyright`・`other`）
  * - 表示名：同 :19-32（不適切なコンテンツ・スパム・迷惑行為・嫌がらせ・誹謗中傷・著作権侵害・その他）
  *
- * 書くだけの値なので、文字列から引く `fromRaw` は持たない（Android は `reports` を読まない。firestore.rules:369 は読み取りを全て拒否する）。
+ * 書くだけの値なので、文字列から引く `fromRaw` は持たない（Android は `reports` を読まない。firestore.rules は reports の読み取りを全て拒否する）。
  * 契約（[com.yoshidometoru.soramoyou.contract.document.ShapeContracts.REPORT_CREATE]）は、この [raw] の集合だけを通す。
  */
 enum class ReportReason(val raw: String, val displayName: String) {

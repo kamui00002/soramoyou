@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
  *
  * 根拠（読んだ現物）:
  * - iOS 版：Soramoyou/Soramoyou/ViewModels/PostViewModel.swift:194-207（`#(\w+)` の 1 番目の捕獲を、出現順・重複込みで配列にする）
- * - rules：firestore.rules:34-37（`hashtags.size() <= 30`）
+ * - rules：firestore.rules の `isValidHashtags`（`hashtags.size() <= 30`）
  *
  * 期待値の作り方：下の全ベクタを Swift 6.4（macOS 27）で iOS と同じコードに流して実測した（推測ではない）。
  * 実測の結果と使ったコードは手元（git の外）の `20.1-golden_swift64.tsv`・`20.1-golden.swift`

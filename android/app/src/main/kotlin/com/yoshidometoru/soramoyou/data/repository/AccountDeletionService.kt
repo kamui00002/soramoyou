@@ -87,8 +87,8 @@ interface AccountDeletionService {
  * - 取得は全てサーバーから（[ReadSource.SERVER]。読み取り口も退会の形には SERVER を強制する）。通信が切れたときにキャッシュの一部を
  *   「全件」と誤認して、残りを消さずに認証のアカウントまで消してしまわないため
  * - 既に無いものの削除が成功になるのは、rules がパスだけで判定する文書（`publicProfiles`・`users`・`users/{uid}/favorites`：
- *   firestore.rules:213・:163・:179）と、Storage の「既に無い」（`NotFound`。消せたものとみなす）だけ。`follows`・`posts`・`drafts`・
- *   `likes`・`comments` の削除の rules は `resource.data` を見る（:249-251・:283・:305-306・:326-327・:359-361）ので、無い文書の削除は
+ *   firestore.rules のそれぞれの delete）と、Storage の「既に無い」（`NotFound`。消せたものとみなす）だけ。`follows`・`posts`・`drafts`・
+ *   `likes`・`comments` の削除の rules（それぞれの delete）は `resource.data` を見るので、無い文書の削除は
  *   rules の評価が拒否になり `PermissionDenied` が返る。どれも取った直後の存在する文書を消すが、
  *   取ってから消すまでの間に別の操作（相手のフォロワー削除・別の端末でのいいねの取り消しなど）で消えると、その段階は
  *   `StageFailed(段階, PermissionDenied)` で止まる。もう一度呼べば取り直すので回復する。退会の画面（31.5）は、この失敗を「権限がない」と

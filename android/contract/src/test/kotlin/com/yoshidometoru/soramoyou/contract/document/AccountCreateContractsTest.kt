@@ -218,7 +218,7 @@ class AccountCreateContractsTest {
 
     @Test
     fun `USER_CREATEのメールアドレスは文字列で長さ1から254`() {
-        // rules の isValidEmail（firestore.rules:46-51）の size() の部分。正規表現は EmailValidator（13.1）が入力の段階で見る
+        // rules の isValidEmail の size() の部分。正規表現は EmailValidator（13.1）が入力の段階で見る
         assertEquals(emptyList(), validateUser(validUser() + ("email" to FsValue.Str("a".repeat(254)))), "254 は上端")
         assertEquals(
             listOf<Violation>(Violation.OutOfRange("email", "length 255 not in 1..254")),
@@ -306,7 +306,7 @@ class AccountCreateContractsTest {
 
     @Test
     fun `PUBLIC_PROFILE_CREATEのidはドキュメントIDと一致しなければ範囲外`() {
-        // rules :206（issue #133）
+        // rules の publicProfiles の create（issue #133）
         val violations = validateProfile(validProfile() + ("id" to FsValue.Str(otherUid.value)))
         assertEquals(1, violations.size, violations.toString())
         val v = violations.single()

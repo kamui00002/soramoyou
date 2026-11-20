@@ -19,8 +19,8 @@ private const val GRAPHEME_JDK_MIN = 20
  * 根拠（読んだ現物）:
  * - パスワード 6 文字：Soramoyou/Soramoyou/Services/AuthService.swift:51（`password.count >= 6`。Swift の `count` は書記素クラスタの数）
  * - 表示名 50・自己紹介 200：Soramoyou/Soramoyou/ViewModels/ProfileViewModel.swift:743-744（`editingDisplayName.count <= 50`・`editingBio.count <= 200`）
- * - キャプション 2000・ハッシュタグ 30・画像 1〜10：firestore.rules:31・:36・:61-62
- * - フィードバック 1000：firestore.rules:394、Soramoyou/Soramoyou/Models/Feedback.swift:62
+ * - キャプション 2000・ハッシュタグ 30・画像 1〜10：firestore.rules の `isValidCaption`・`isValidHashtags`・`isValidPost`
+ * - フィードバック 1000：firestore.rules の feedback の create、Soramoyou/Soramoyou/Models/Feedback.swift:62
  * - 空白だけの判定：iOS は `trimmingCharacters(in: .whitespacesAndNewlines)` で判定する（Feedback.swift:62、PostViewModel.swift:859）
  *
  * 書記素の期待値は、同じ文字列を Swift 6.4（macOS 27）の `String.count` に流して実測した値である（実装の出力ではない）。
@@ -66,11 +66,11 @@ class TextLimitsTest {
         assertEquals(6, TextLimits.PASSWORD_MIN)          // AuthService.swift:51
         assertEquals(50, TextLimits.DISPLAY_NAME_MAX)     // ProfileViewModel.swift:743
         assertEquals(200, TextLimits.BIO_MAX)             // ProfileViewModel.swift:744
-        assertEquals(2000, TextLimits.CAPTION_MAX)        // firestore.rules:31
-        assertEquals(30, TextLimits.HASHTAGS_MAX)         // firestore.rules:36
-        assertEquals(1000, TextLimits.FEEDBACK_MAX)       // firestore.rules:394
-        assertEquals(1, TextLimits.IMAGES_MIN)            // firestore.rules:61
-        assertEquals(10, TextLimits.IMAGES_MAX)           // firestore.rules:62
+        assertEquals(2000, TextLimits.CAPTION_MAX)        // firestore.rules の isValidCaption
+        assertEquals(30, TextLimits.HASHTAGS_MAX)         // firestore.rules の isValidHashtags
+        assertEquals(1000, TextLimits.FEEDBACK_MAX)       // firestore.rules の feedback の create
+        assertEquals(1, TextLimits.IMAGES_MIN)            // firestore.rules の isValidPost
+        assertEquals(10, TextLimits.IMAGES_MAX)           // firestore.rules の isValidPost
     }
 
     // ---- 書記素クラスタの数え方（iOS の String.count と一致すること） ----

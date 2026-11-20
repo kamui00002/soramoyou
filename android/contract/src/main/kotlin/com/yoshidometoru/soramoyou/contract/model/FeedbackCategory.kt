@@ -10,7 +10,7 @@ package com.yoshidometoru.soramoyou.contract.model
  * - 表示名：同 :21-28（不具合・要望・その他）
  *
  * 種別は任意の項目（選ばなければ `category` のキーを書かない）。書くだけの値なので、文字列から引く `fromRaw` は持たない
- * （Android は `feedback` を読まない。firestore.rules:385 は読み取りを全て拒否する）。
+ * （Android は `feedback` を読まない。firestore.rules は feedback の読み取りを全て拒否する）。
  * 契約（[com.yoshidometoru.soramoyou.contract.document.ShapeContracts.FEEDBACK_CREATE]）は、この [raw] の集合だけを通す。
  */
 enum class FeedbackCategory(val raw: String, val displayName: String) {

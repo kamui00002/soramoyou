@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
 
 /**
  * フィードバックは「自分の uid・本文・サーバー時刻の作成日時」の 3 項目に、値があるときだけ種別・アプリのバージョン・端末情報を
- * 足した文書を、ドキュメント ID＝UUID で `feedback` に作る（firestore.rules:383-397、Feedback.swift:60-86、FeedbackViewModel.swift:38-51）。
+ * 足した文書を、ドキュメント ID＝UUID で `feedback` に作る（firestore.rules の feedback、Feedback.swift:60-86、FeedbackViewModel.swift:38-51）。
  * メールアドレスと表示名は付けない（要件 13.4）。
  *
  * 本文の判定は、rules（`message.size()`＝UTF-16 の単位で 1〜1000）に、空白だけの禁止（iOS の `trimmingCharacters(in: .whitespacesAndNewlines)`

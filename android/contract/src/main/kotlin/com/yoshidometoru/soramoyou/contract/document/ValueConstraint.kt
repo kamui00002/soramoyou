@@ -100,7 +100,7 @@ sealed interface ValueConstraint {
 
     /**
      * 文字列が空でなく、書き込み先のドキュメント ID が「認証済みユーザーの uid ＋ `_` ＋ この値」である（いいね文書の `postId`）。
-     * rules（firestore.rules:322）の `likeId == request.auth.uid + '_' + request.resource.data.postId` と同じ形。
+     * rules（firestore.rules の likes の create）の `likeId ==request.auth.uid + '_' + request.resource.data.postId` と同じ形。
      * 空の値を拒むのは、ドキュメント ID が `{uid}_` のときにも一致してしまうため。
      */
     data object DocumentIdIsAuthUidAndValue : ValueConstraint {
@@ -125,7 +125,7 @@ sealed interface ValueConstraint {
      * 投稿の画像の Storage のパスが、`{top}/{投稿者の uid}/{公開範囲}/{ファイル名}` の形である（要件 7.3。タスク 20.4）。
      *
      * 根拠：
-     * - storage.rules の `match /posts/{userId}/public/{imageId}` など（:43・:64・:76）と、サムネイルの `match /thumbnails/{userId}/...`（:100〜）。
+     * - storage.rules の `match /posts/{userId}/public/{imageId}` などと、サムネイルの `match /thumbnails/{userId}/...`。
      *   公開範囲のセグメントは `public`・`followers`・`private` で、`Visibility.raw` と 1 対 1（iOS：PostViewModel.swift:706-716）
      * - iOS のパスの作り方（PostViewModel.swift:728-735）：本体 `posts/{uid}/{公開範囲}/{UUID}.jpg`、
      *   サムネイル `thumbnails/{uid}/{公開範囲}/{UUID}_thumb.jpg`
