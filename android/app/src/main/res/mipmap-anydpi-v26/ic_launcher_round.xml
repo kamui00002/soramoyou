@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⭐️ ランチャーの丸いアイコン（roundIcon）。中身は ic_launcher.xml と同じ：iOS の元絵を背景の層に全面で敷き、前景は透明にする（利用者の決定。レビュー R08。LauncherIconManifestTest で固定） -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 丸く切り抜くのは端末のマスクが行うので、ic_launcher.xml と別の絵は要らない（層の指定を同じにそろえる）。
+         表示されるのは 108dp のうち中央の約 72dp で、外側は欠ける -->
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <!-- 前景の層は使わないので透明にする -->
+    <foreground android:drawable="@android:color/transparent" />
+</adaptive-icon>

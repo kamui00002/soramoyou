@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⭐️ ウィンドウの背景の色（ダーク）。夜の空のいちばん上の色にする（android-ui-ios-parity タスク 6.1・要件 1.2・1.8。WindowThemeTest で固定） -->
+<resources>
+    <!-- 夜の空のいちばん上の色。端末がダークの設定のとき、values/colors.xml の同じ名前の色の代わりに使われる。
+         - 元の値は DesignTokens.Colors.nightSkyGradient の先頭 Color(red = 0.15f, green = 0.20f, blue = 0.35f)（iOS の夜の空の上の色の写し）
+         - Compose の sRGB の色は、各成分を「x × 255 + 0.5 を整数へ切り捨て」で 8 ビットに持つ。
+           0.15 → 38（26）・0.20 → 51（33）・0.35 → 89（59）なので、Compose が描く空の上の色と同じ #263359 になる
+         - XML からは Kotlin の値を参照できないので、ここに値を写す。写し間違いと、DesignTokens だけを変えたときの食い違いは、
+           WindowThemeTest が skyPaletteOf(true) の空のいちばん上の色と比べて見つける
+         - 不透明（先頭の FF）。窓の背景が半透明だと、起動の直後に下の画面が透けて見える -->
+    <color name="window_sky">#FF263359</color>
+</resources>

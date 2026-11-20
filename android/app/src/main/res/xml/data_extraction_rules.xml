@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⭐️ クラウドのバックアップと機種変更の引き継ぎ（端末間の移行）から、アプリのデータを全て除く規則（Android 12 以降・レビュー R13）。
+     AndroidManifest.xml の android:dataExtractionRules から読まれる（2026-11-05 の利用者の決定・設計書の Security Considerations）。
+     - <include> は書かない（1 つでも書くと「書いたものだけを含める」に意味が変わる）
+     - 領域（domain）は文書の文法にある 9 種を全部並べる（root だけで他の領域まで覆えるかは、文書から言い切れないため）
+     - 節（cloud-backup・device-transfer）が無いと、その経路は全部有効になる（文書）ので、両方を置く
+     出典：developer.android.com の「Back up user data with Auto Backup」の「XML config syntax」。BackupExclusionManifestTest で固定 -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
+    </device-transfer>
+</data-extraction-rules>

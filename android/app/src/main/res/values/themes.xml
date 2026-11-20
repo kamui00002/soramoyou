@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⭐️ アプリのウィンドウのテーマ（ライト）。アクションバーを外し、窓の背景を昼の空のいちばん上の色にする（android-ui-ios-parity タスク 6.1・要件 1.1・1.6・1.8・9.1。WindowThemeTest で固定） -->
+<resources>
+    <!-- 親はプラットフォームの android:Theme.Material.Light.NoActionBar にする（設計書の P12）。
+         - 依存を足さずに、アクションバー（画面の上の帯）を外せる。帯が残ると、窓全体に敷く空の背景の上に、
+           不透明な帯が 1 本出てしまう（要件 1.6）。帯の中の「そらもよう」の文字が消えることは、設計書の D8 で要件 9.1 の対象外とした
+         - 画面は全て Compose で描き、Material 3 の色と書体は SoramoyouTheme が渡す。ここの親が効くのは、窓の枠（帯の有無・窓の背景）だけ
+         - 端末がダークの設定のときは、values-night/themes.xml の同じ名前のテーマ（親は android:Theme.Material.NoActionBar）に替わる
+         テーマの名前と親の名前が使えること（aapt2 が親を見つけて組み立てられること）は、JVM の単体テストでは確かめられない。
+         組み立て（:app のビルド）が通ることで確かめる -->
+    <style name="Theme.Soramoyou" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- 窓の背景は、空のいちばん上の単色（values/colors.xml の window_sky）にする。
+             - Compose が最初の画面を描く前と、画面の切り替えの途中に、白い窓の色が透けて見えないようにする
+             - API 31 以上の起動画面は、windowBackground が単色ならその色を背景に使う（設計書 R2）。グラデーションの図形にしないのはこのため
+             ステータスバーとナビゲーションバーの色と明暗はここに書かない（MainActivity の enableEdgeToEdge が透明にして決める・タスク 6.2） -->
+        <item name="android:windowBackground">@color/window_sky</item>
+    </style>
+</resources>
