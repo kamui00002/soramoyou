@@ -127,7 +127,7 @@ object ShapeContracts {
      *
      * 根拠：
      * - rules（firestore.rules の users の update）：所有者だけが更新でき、`id` と（あれば）`email` を変えない。変えた `photoURL` は
-     *   画像の URL の形（iOS #224。[IMAGE_URL]）
+     *   画像の URL の形でなければならない（iOS #224。[IMAGE_URL]）
      * - iOS は `User` 全体を `setData(merge: true)` で書く（設計書の要件 10.6 の注）。Android は要件どおり、変えた項目と
      *   `updatedAt` だけを部分更新する（手元の古いカウンタで上書きしない）
      *
@@ -144,7 +144,7 @@ object ShapeContracts {
      *
      * 根拠：
      * - rules（firestore.rules の publicProfiles の update）：所有者だけが更新でき、`id` を変えない（＋おすすめの空の形の検査。Android は書かない）、
-     *   変えた `photoURL` は画像の URL の形（iOS #224。[IMAGE_URL]）
+     *   変えた `photoURL` は画像の URL の形でなければならない（iOS #224。[IMAGE_URL]）
      * - iOS（FirestoreService.swift:1327-1342 `updatePublicProfileFields`）：`updatedAt` を常に書き、値のある表示名・アイコン・
      *   自己紹介だけを足す。iOS は空にできない（キーを削除しない）が、Android は空にした項目をキーの削除にする（設計書 QD）
      *

@@ -8,8 +8,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 /**
- * 投稿の画像（`images[].url`・`thumbnail`）とプロフィールのアイコン（`photoURL`）は、
- * 本番のビルドは本番の Storage のダウンロード URL の形だけを、検証用のビルドはエミュレータの Storage の形だけを通す。
+ * 投稿の画像（`images[].url`・`thumbnail`）とプロフィールのアイコン（`photoURL`）の URL は、
+ * 本番のビルドでは本番の Storage のダウンロード URL の形だけが、検証用のビルドではエミュレータの Storage の形だけが通る。
  */
 class RemoteImageUrlTest {
 
