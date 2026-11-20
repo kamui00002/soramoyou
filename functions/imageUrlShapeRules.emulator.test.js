@@ -17,10 +17,15 @@
 //   検証2: posts の作成で通らない形。images[0].url の 1 か所だけを変える（対照は検証1 の同じ形の作成）
 //   検証3: posts の作成で、見る位置（thumbnail・原画像・10 番目）と原画像の数（11 個）
 //   検証4: posts の更新。images・originalImages を変える更新は形を見る／変えない更新
-//          （持ち主のキャプションだけ・他人のいいね +1）は、既にある URL の形に関係なく通る
+//          （持ち主のキャプションだけ・他人のいいね +1）は、既にある URL の形に関係なく通る。
+//          写真 10 枚と原画像 10 個（ルールの許す最大の数）に替える更新も通る
 //   検証5: users の作成と更新（photoURL）。名前だけの更新・photoURL を消す更新・他人のフォロー数 +1 も
 //   検証6: publicProfiles の作成と更新（photoURL）
 //   検証7: comments の作成と更新（authorPhotoURL）
+//   検証8: posts の作成で、公開範囲が public でないときの写真の形（url・thumbnail は空。対照は同じ形の public）
+//   検証9: posts の更新で、公開範囲が public でないときの写真の形。images を変える更新と、公開範囲を public 以外へ
+//          変える更新は形を見る／どちらも変えない更新（持ち主のキャプションだけ・他人のいいね +1）は通る。
+//          写真 10 枚と原画像 10 個（ルールの許す最大の数）を空の形に替える更新も通る
 //
 // ■ 書き方の約束（profileVisibilityRules.emulator.test.js・followsBlockRules.emulator.test.js と同じ型）
 //   - 要求は firebase-admin でなく、アプリの SDK と同じ REST の入口に fetch で送る（firebase-admin はルールを通らない）。
@@ -42,32 +47,81 @@
 //        検証3 の別のホストを使う 4 件、検証4 の通らない 2 件、検証5〜7 の作成と更新の通らない 6 件）→ 結果を書く
 //    ② 正規表現の頭の https を https? にする（赤になるはず: 検証2 の http の 1 件）→ 結果を書く
 //    ③ 正規表現のバケットの部分を [^/]+ にする（赤になるはず: 検証2 のバケット違いの 1 件）→ 結果を書く
-//    ④ 写真と原画像の配列で、0〜9 番目を並べた行のうち 9（10 個目）の行をそれぞれ消す
+//    ④ 形を見る写真の配列（isValidImageList）と原画像の配列で、0〜9 番目を並べた行のうち 9（10 個目）の行をそれぞれ消す
 //       （赤になるはず: 検証3 の写真の 10 番目・原画像の 10 番目の 2 件）→ 結果を書く
-//    ⑤ 写真と原画像の配列の数の上限（size() <= 10）を 2 か所とも消す
+//    ⑤ 配列の数の上限（size() <= 10）を 3 か所とも消す（形を見る写真の配列・空の配列・原画像の配列）
 //       （赤になるはず: 検証3 の原画像 11 個の 1 件。写真の枚数は投稿の作成・更新の条件でも 10 枚までなので、
 //        写真の 11 枚は赤にならない）→ 結果を書く
 //    ⑥ 4 か所の更新で、見る鍵を diff の affectedKeys() から request.resource.data.keys() に替える
-//       （赤になるはず: 検証4 のキャプションだけ・検証5 と検証6 の名前だけ・検証7 の本文だけ、の 4 件）→ 結果を書く
-//    ⑦ 正規表現の (:443)? を消す（赤になるはず: 5 件。検証1 の :443 付きの作成と 10 枚＋10 個の作成の 2 件、
-//       検証5〜7 の :443 付きの作成の 3 件）→ 結果を書く
+//       （赤になるはず: 6 件。検証4 のキャプションだけ・検証5 と検証6 の名前だけ・検証7 の本文だけ・検証9 のキャプションだけ・
+//        検証9 の public へ変える更新が写真の形に関係なく通る 1 件）→ 結果を書く
+//    ⑦ 正規表現の (:443)? を消す（赤になるはず: 8 件。検証1 の :443 付きの作成と 10 枚＋10 個の作成の 2 件、
+//       検証5〜7 の :443 付きの作成の 3 件、検証4 の 10 枚＋10 個に替える更新の 1 件、検証8 の public の対照の 1 件、
+//       検証9 の public へ変えて url を書く更新の 1 件）→ 結果を書く
 //    ⑧ 空として通す値から "" を外す（形の全体を包む (…)? を外す）
-//       （赤になるはず: 検証1 の URL を書かない投稿の形の 1 件）→ 結果を書く
+//       （赤になるはず: 9 件。検証1 の URL を書かない投稿の形の 1 件、原画像の url が "" の検証8 の通る形 5 件と public の対照の 1 件、
+//        検証9 の 10 枚＋10 個に替える更新の 2 件）→ 結果を書く
 //    ⑨ users・publicProfiles・comments の作成から、URL の形を見る条件を外す
 //       （赤になるはず: 検証5・検証6・検証7 の作成の断る側の 3 件）→ 結果を書く
-//    【結果 2026-10-29】リポジトリの firestore.rules は触らず、一時フォルダの写しを壊して読ませた
-//      （エミュレーターは 1 回だけ起こし、写しを差し替えて回した）
+//    【結果 2026-11-10】リポジトリの firestore.rules は触らず、一時フォルダの写しを壊して読ませた
+//      （壊し方ごとにエミュレーターを起こし直した。赤のテスト名も予言と 1 件ずつ照らした）
 //      ① 赤 16 件＝予言どおり
 //      ② 赤 1 件＝予言どおり
 //      ③ 赤 1 件＝予言どおり
 //      ④ 赤 2 件＝予言どおり
 //      ⑤ 赤 1 件＝予言どおり
-//      ⑥ 赤 4 件＝予言どおり
-//      ⑦ 赤 5 件＝予言どおり
-//      ⑧ 赤 1 件＝予言どおり
+//      ⑥ 赤 6 件＝予言どおり
+//      ⑦ 赤 8 件＝予言どおり
+//      ⑧ 赤 9 件＝予言どおり
 //      ⑨ 赤 3 件＝予言どおり
 //      どの壊し方でも、予言に無い赤は 0 件
-//      壊さないルールでは 49/49 緑（隣の profileVisibilityRules 35/35・followsBlockRules 20/20 も緑）
+//
+//    検証8・検証9 の陽性対照（壊し方と、赤になるはずのもの。ここに書いたもの以外の赤は 0 件のはず）:
+//    ⑩ 写真の配列の分岐・公開範囲の門の足し・空の配列の関数を外す（＝足す前のルール）
+//       （赤になるはず: 12 件。検証8 の通らない 6 件、検証9 の通らない 6 件）→ 結果を書く
+//    ⑪ 門から公開範囲の条件を外す（images が変わったときだけ見る形に戻す）
+//       （赤になるはず: 3 件。検証9 の公開範囲だけを変えて通らない 3 件）→ 結果を書く
+//    ⑫ 門の visibility != 'public' を外す（public へ変える更新でも images を見る）
+//       （赤になるはず: 検証9 の public へ変える更新が写真の形に関係なく通る 1 件）→ 結果を書く
+//    ⑬ 空の配列の 1 個の条件から url の行を外す
+//       （赤になるはず: 5 件。検証8 の url だけに値がある 3 件、検証9 の url だけに値がある 2 件）→ 結果を書く
+//    ⑭ 空の配列の 1 個の条件から thumbnail の行を外す
+//       （赤になるはず: 3 件。検証8 の thumbnail だけに値がある 2 件、検証9 の 1 件）→ 結果を書く
+//    ⑮ 写真の配列の分岐の visibility == 'public' を visibility != 'private' にする
+//       （赤になるはず: 8 件。検証8 の followers で通らない 4 件、検証9 の followers で通らない 4 件）→ 結果を書く
+//    ⑯ 空の判定から value == '' を外す
+//       （赤になるはず: 9 件。検証8 の通る形のうち空文字を使う 4 件、検証9 の 5 件）→ 結果を書く
+//    ⑰ 空の判定から value == null を外す
+//       （赤になるはず: 10 件。検証8 の通る形のうち public でない 5 件、検証9 の 5 件）→ 結果を書く
+//    ⑱ 形を見る写真の配列（isValidImageList）で 0〜9 番目を並べた行のうち 9（10 個目）の行を消す
+//       （赤になるはず: 検証3 の写真の 10 番目の 1 件）→ 結果を書く
+//    ⑲ posts の更新で、見る鍵を diff の affectedKeys() から request.resource.data.keys() に替える
+//       （赤になるはず: 3 件。検証4 のキャプションだけ、検証9 のキャプションだけ、検証9 の public へ変える更新が
+//        写真の形に関係なく通る 1 件）→ 結果を書く
+//    ⑳ 写真の配列の分岐で public の側を外す（どの公開範囲でも空の配列を求める）
+//       （赤になるはず: 7 件。検証1 の :443 付き・:443 なし・10 枚＋10 個の 3 件、検証4 の写真を :443 なしへ替える 1 件と
+//        10 枚＋10 個に替える 1 件、検証8 の public の対照 1 件、検証9 の public へ変えて url を書く 1 件）→ 結果を書く
+//    ㉑ 空の配列（isEmptyImageList）で 0〜9 番目を並べた行のうち 9（10 個目）の行を消す
+//       （赤になるはず: 検証8 の 10 番目の 1 件）→ 結果を書く
+//    【結果 2026-11-10】リポジトリの firestore.rules は触らず、一時フォルダの写しを壊して読ませた
+//      （壊し方ごとにエミュレーターを起こし直した。赤のテスト名も予言と 1 件ずつ照らした）
+//      壊さないルールでは 78/78 緑（隣の profileVisibilityRules 35/35・followsBlockRules 20/20 も緑）
+//      ⑩ 赤 12 件＝予言どおり
+//      ⑪ 赤 3 件＝予言どおり
+//      ⑫ 赤 1 件＝予言どおり
+//      ⑬ 赤 5 件＝予言どおり
+//      ⑭ 赤 3 件＝予言どおり
+//      ⑮ 赤 8 件＝予言どおり
+//      ⑯ 赤 9 件＝予言どおり
+//      ⑰ 赤 10 件＝予言どおり
+//      ⑱ 赤 1 件＝予言どおり
+//      ⑲ 赤 3 件＝予言どおり
+//      ⑳ 赤 7 件＝予言どおり
+//      ㉑ 赤 1 件＝予言どおり
+//      どの壊し方でも、予言に無い赤は 0 件
+//      写真と原画像を 1〜10 個にした作成と更新は、public・followers・private のどれでも 200
+//      最大の数（写真 10 枚・原画像 10 個・キャプションとハッシュタグあり）での、ルールの式の数の余裕（上限 1000）:
+//        public は作成 約 100・更新 約 60、followers と private は作成 約 115・更新 約 80
 //
 
 "use strict";
@@ -232,13 +286,30 @@ function imageList(n, { thumbnail = true, override = () => undefined } = {}) {
   return arr(values);
 }
 
+/**
+ * 公開範囲が public でない投稿でアプリが書く写真の形（url は ""・thumbnail の項目なし・置き場あり）。
+ * url・thumbnail は REST の値か OMIT で差し替える
+ */
+function pathOnlyEntry(visibility, order = 0, { url = str(""), thumbnail = OMIT } = {}) {
+  const fields = {
+    width: int(1080),
+    height: int(1440),
+    order: int(order),
+    storagePath: str(`posts/u1/${visibility}/${order}.jpg`),
+    thumbnailStoragePath: str(`thumbnails/u1/${visibility}/${order}_thumb.jpg`),
+  };
+  if (url !== OMIT) fields.url = url;
+  if (thumbnail !== OMIT) fields.thumbnail = thumbnail;
+  return map(fields);
+}
+
 /** 投稿の中身（アプリの Post.toFirestoreData と同じ主な項目）。images・originalImages は REST の値。originalImages は OMIT で入れない */
-function postFields(uid, postId, { images = imageList(1), originalImages = imageList(1) } = {}) {
+function postFields(uid, postId, { images = imageList(1), originalImages = imageList(1), visibility = "public" } = {}) {
   const fields = {
     postId: str(postId),
     userId: str(uid),
     images,
-    visibility: str("public"),
+    visibility: str(visibility),
     likesCount: int(3),
     commentsCount: int(2),
     createdAt: now(),
@@ -298,6 +369,11 @@ async function createPostWithFirstUrl(name, url) {
   return createPost(name, { images: arr([imageEntry(url, str(GOOD))]) });
 }
 
+/** 写真 1 枚の投稿を、公開範囲を指定して作る（原画像はアプリの書く形に固定し、写真の 1 個だけを変える） */
+async function createPostWithEntry(name, visibility, entry) {
+  return createPost(name, { visibility, images: arr([entry]), originalImages: arr([pathOnlyEntry(visibility)]) });
+}
+
 // MARK: - 下ごしらえ（更新の的）
 
 // 検証4: 投稿
@@ -307,6 +383,25 @@ const POST_EDIT_IMAGES_GOOD = key("post-edit-images-good");
 const POST_EDIT_IMAGES_BAD = key("post-edit-images-bad");
 const POST_EDIT_ORIGINALS_GOOD = key("post-edit-originals-good");
 const POST_EDIT_ORIGINALS_BAD = key("post-edit-originals-bad");
+const POST_EDIT_10 = key("post-edit-10");
+
+// 検証9: 公開範囲ごとの投稿（名前は 今の公開範囲 → 更新の中身）
+const POST_F_URL_CAPTION = key("post-f-url-caption");
+const POST_F_URL_LIKE = key("post-f-url-like");
+const POST_F_URL_TO_PRIVATE = key("post-f-url-to-private");
+const POST_F_EDIT_GOOD = key("post-f-edit-good");
+const POST_F_EDIT_BAD_URL = key("post-f-edit-bad-url");
+const POST_F_EDIT_BAD_THUMBNAIL = key("post-f-edit-bad-thumbnail");
+const POST_F_TO_PRIVATE = key("post-f-to-private");
+const POST_F_TO_PUBLIC = key("post-f-to-public");
+const POST_F_TO_PUBLIC_URL = key("post-f-to-public-url");
+const POST_F_OTHER_SHAPE_TO_PUBLIC = key("post-f-other-shape-to-public");
+const POST_P_TO_F_PATH_ONLY = key("post-p-to-f-path-only");
+const POST_P_TO_F_KEEP = key("post-p-to-f-keep");
+const POST_P_TO_PRIVATE_KEEP = key("post-p-to-private-keep");
+const POST_P_TO_F_URL = key("post-p-to-f-url");
+const POST_F_EDIT_10 = key("post-f-edit-10");
+const POST_PRIVATE_EDIT_10 = key("post-private-edit-10");
 
 // 検証5・検証6: users・publicProfiles（文書 ID = uid なので、的ごとに別の人）
 const USER_EDIT_GOOD = key("user-edit-good");
@@ -329,8 +424,38 @@ test.before(async () => {
   for (const postId of [POST_BAD_EXISTING_CAPTION, POST_BAD_EXISTING_LIKE]) {
     await seed(POSTS, postId, postFields(POSTER, postId, { images: badImages, originalImages: badImages }));
   }
-  for (const postId of [POST_EDIT_IMAGES_GOOD, POST_EDIT_IMAGES_BAD, POST_EDIT_ORIGINALS_GOOD, POST_EDIT_ORIGINALS_BAD]) {
+  for (const postId of [
+    POST_EDIT_IMAGES_GOOD,
+    POST_EDIT_IMAGES_BAD,
+    POST_EDIT_ORIGINALS_GOOD,
+    POST_EDIT_ORIGINALS_BAD,
+    POST_EDIT_10,
+  ]) {
     await seed(POSTS, postId, postFields(POSTER, postId));
+  }
+
+  const seedPost = (postId, visibility, images) =>
+    seed(POSTS, postId, postFields(POSTER, postId, { visibility, images, originalImages: OMIT }));
+  const withUrls = arr([imageEntry(str(GOOD), str(GOOD))]);
+  const pathOnly = (visibility) => arr([pathOnlyEntry(visibility)]);
+  for (const postId of [POST_F_URL_CAPTION, POST_F_URL_LIKE, POST_F_URL_TO_PRIVATE]) {
+    await seedPost(postId, "followers", withUrls);
+  }
+  for (const postId of [
+    POST_F_EDIT_GOOD,
+    POST_F_EDIT_BAD_URL,
+    POST_F_EDIT_BAD_THUMBNAIL,
+    POST_F_TO_PRIVATE,
+    POST_F_TO_PUBLIC,
+    POST_F_TO_PUBLIC_URL,
+    POST_F_EDIT_10,
+  ]) {
+    await seedPost(postId, "followers", pathOnly("followers"));
+  }
+  await seedPost(POST_PRIVATE_EDIT_10, "private", pathOnly("private"));
+  await seedPost(POST_F_OTHER_SHAPE_TO_PUBLIC, "followers", badImages);
+  for (const postId of [POST_P_TO_F_PATH_ONLY, POST_P_TO_F_KEEP, POST_P_TO_PRIVATE_KEEP, POST_P_TO_F_URL]) {
+    await seedPost(postId, "public", withUrls);
   }
 
   for (const uid of [USER_EDIT_GOOD, USER_EDIT_BAD]) {
@@ -488,6 +613,12 @@ test("検証4: 持ち主が原画像を、url のホストが違うものに替�
   assert.equal(await updateDoc(POSTER, POSTS, POST_EDIT_ORIGINALS_BAD, { originalImages }), 403);
 });
 
+// ルールの許す最大の数（写真 10 枚・原画像 10 個）に替える更新
+test("検証4: 持ち主が写真 10 枚と原画像 10 個をすべて正しい形に替える更新は通る", async () => {
+  const fields = { images: imageList(10), originalImages: imageList(10) };
+  assert.equal(await updateDoc(POSTER, POSTS, POST_EDIT_10, fields), 200);
+});
+
 // MARK: - 検証5: users（photoURL）
 
 test("検証5: users の作成で、photoURL が :443 付きの形なら作れる", async () => {
@@ -587,4 +718,147 @@ test("検証7: comments の更新で、authorPhotoURL を :443 なしの形に�
 
 test("検証7: comments の更新で、authorPhotoURL をホストが違うものに替えられない", async () => {
   assert.equal(await updateDoc(COMMENTER, COMMENTS, COMMENT_EDIT_BAD, { authorPhotoURL: str(BAD.otherHost) }), 403);
+});
+
+// MARK: - 検証8: posts の作成で、公開範囲が public でないときの写真の形
+
+test("検証8: followers の投稿の作成で、写真の url が空文字・thumbnail なしで置き場があれば作れる", async () => {
+  assert.equal(await createPostWithEntry("create-f-path-only", "followers", pathOnlyEntry("followers")), 200);
+});
+
+test("検証8: private の投稿の作成で、写真の url が空文字・thumbnail なしで置き場があれば作れる", async () => {
+  assert.equal(await createPostWithEntry("create-p-path-only", "private", pathOnlyEntry("private")), 200);
+});
+
+test("検証8: followers の投稿の作成で、写真の url が null・thumbnail なしなら作れる", async () => {
+  assert.equal(await createPostWithEntry("create-f-null", "followers", pathOnlyEntry("followers", 0, { url: NULL })), 200);
+});
+
+test("検証8: followers の投稿の作成で、写真の url なし・thumbnail が空文字なら作れる", async () => {
+  const entry = pathOnlyEntry("followers", 0, { url: OMIT, thumbnail: str("") });
+  assert.equal(await createPostWithEntry("create-f-omit-empty", "followers", entry), 200);
+});
+
+// 10 番目の断る側の対照（10 個まで全部見ても通る）
+test("検証8: followers の投稿の作成で、写真 10 枚と原画像 10 個がすべて url 空文字なら作れる", async () => {
+  const list = (n) => arr(Array.from({ length: n }, (_, i) => pathOnlyEntry("followers", i)));
+  assert.equal(await createPost("create-f-10-10", { visibility: "followers", images: list(10), originalImages: list(10) }), 200);
+});
+
+// 検証8・検証9 の断る側の対照（公開範囲だけが違う）
+test("検証8: public の投稿の作成で、写真の url・thumbnail に値があれば作れる", async () => {
+  const entry = pathOnlyEntry("public", 0, { url: str(GOOD), thumbnail: str(GOOD) });
+  assert.equal(await createPostWithEntry("create-public-urls", "public", entry), 200);
+});
+
+test("検証8: followers の投稿の作成で、写真の url に値があると作れない", async () => {
+  const entry = pathOnlyEntry("followers", 0, { url: str(GOOD) });
+  assert.equal(await createPostWithEntry("create-f-url", "followers", entry), 403);
+});
+
+test("検証8: followers の投稿の作成で、写真の thumbnail に値があると作れない", async () => {
+  const entry = pathOnlyEntry("followers", 0, { thumbnail: str(GOOD) });
+  assert.equal(await createPostWithEntry("create-f-thumbnail", "followers", entry), 403);
+});
+
+test("検証8: followers の投稿の作成で、写真の url・thumbnail の両方に値があると作れない", async () => {
+  const entry = pathOnlyEntry("followers", 0, { url: str(GOOD), thumbnail: str(GOOD) });
+  assert.equal(await createPostWithEntry("create-f-both", "followers", entry), 403);
+});
+
+test("検証8: private の投稿の作成で、写真の url に値があると作れない", async () => {
+  const entry = pathOnlyEntry("private", 0, { url: str(GOOD) });
+  assert.equal(await createPostWithEntry("create-p-url", "private", entry), 403);
+});
+
+test("検証8: private の投稿の作成で、写真の thumbnail に値があると作れない", async () => {
+  const entry = pathOnlyEntry("private", 0, { thumbnail: str(GOOD) });
+  assert.equal(await createPostWithEntry("create-p-thumbnail", "private", entry), 403);
+});
+
+test("検証8: followers の投稿の作成で、写真 10 枚の 10 番目の url にだけ値があると作れない", async () => {
+  const images = arr(
+    Array.from({ length: 10 }, (_, i) =>
+      i === 9 ? pathOnlyEntry("followers", i, { url: str(GOOD) }) : pathOnlyEntry("followers", i)
+    )
+  );
+  assert.equal(await createPost("create-f-10th-url", { visibility: "followers", images, originalImages: OMIT }), 403);
+});
+
+// MARK: - 検証9: posts の更新で、公開範囲が public でないときの写真の形
+
+test("検証9: 持ち主がキャプションだけを変える更新は、公開範囲が followers でも通る", async () => {
+  assert.equal(await updateDoc(POSTER, POSTS, POST_F_URL_CAPTION, { caption: str("書き直した") }), 200);
+});
+
+test("検証9: 他人のいいね +1 は、公開範囲が followers でも通る", async () => {
+  assert.equal(await updateDoc(OTHER, POSTS, POST_F_URL_LIKE, { likesCount: int(4) }), 200);
+});
+
+test("検証9: followers の投稿の写真を、url 空文字の形に替える更新は通る", async () => {
+  const images = arr([pathOnlyEntry("followers", 1)]);
+  assert.equal(await updateDoc(POSTER, POSTS, POST_F_EDIT_GOOD, { images }), 200);
+});
+
+test("検証9: followers の投稿の写真を、url に値がある形に替える更新は通らない", async () => {
+  const images = arr([pathOnlyEntry("followers", 1, { url: str(GOOD) })]);
+  assert.equal(await updateDoc(POSTER, POSTS, POST_F_EDIT_BAD_URL, { images }), 403);
+});
+
+test("検証9: followers の投稿の写真を、thumbnail に値がある形に替える更新は通らない", async () => {
+  const images = arr([pathOnlyEntry("followers", 1, { thumbnail: str(GOOD) })]);
+  assert.equal(await updateDoc(POSTER, POSTS, POST_F_EDIT_BAD_THUMBNAIL, { images }), 403);
+});
+
+test("検証9: public から followers へ変えて、写真も url 空文字の形に替える更新は通る", async () => {
+  const fields = { visibility: str("followers"), images: arr([pathOnlyEntry("followers")]) };
+  assert.equal(await updateDoc(POSTER, POSTS, POST_P_TO_F_PATH_ONLY, fields), 200);
+});
+
+test("検証9: public から followers へ変えて、写真を url に値がある形に替える更新は通らない", async () => {
+  const fields = { visibility: str("followers"), images: arr([pathOnlyEntry("followers", 0, { url: str(GOOD) })]) };
+  assert.equal(await updateDoc(POSTER, POSTS, POST_P_TO_F_URL, fields), 403);
+});
+
+test("検証9: 写真の url に値がある投稿を、公開範囲だけ public から followers へ変える更新は通らない", async () => {
+  assert.equal(await updateDoc(POSTER, POSTS, POST_P_TO_F_KEEP, { visibility: str("followers") }), 403);
+});
+
+test("検証9: 写真の url に値がある投稿を、公開範囲だけ public から private へ変える更新は通らない", async () => {
+  assert.equal(await updateDoc(POSTER, POSTS, POST_P_TO_PRIVATE_KEEP, { visibility: str("private") }), 403);
+});
+
+test("検証9: 写真の url に値がある投稿を、公開範囲だけ followers から private へ変える更新は通らない", async () => {
+  assert.equal(await updateDoc(POSTER, POSTS, POST_F_URL_TO_PRIVATE, { visibility: str("private") }), 403);
+});
+
+test("検証9: 写真の url が空文字の投稿を、公開範囲だけ followers から private へ変える更新は通る", async () => {
+  assert.equal(await updateDoc(POSTER, POSTS, POST_F_TO_PRIVATE, { visibility: str("private") }), 200);
+});
+
+test("検証9: 写真の url が空文字の投稿を、公開範囲だけ followers から public へ変える更新は通る", async () => {
+  assert.equal(await updateDoc(POSTER, POSTS, POST_F_TO_PUBLIC, { visibility: str("public") }), 200);
+});
+
+test("検証9: followers から public へ変えて、写真を url・thumbnail に値がある形に替える更新は通る", async () => {
+  const fields = {
+    visibility: str("public"),
+    images: arr([pathOnlyEntry("public", 0, { url: str(GOOD), thumbnail: str(GOOD) })]),
+  };
+  assert.equal(await updateDoc(POSTER, POSTS, POST_F_TO_PUBLIC_URL, fields), 200);
+});
+
+test("検証9: 公開範囲だけ followers から public へ変える更新は、既にある写真の URL の形に関係なく通る", async () => {
+  assert.equal(await updateDoc(POSTER, POSTS, POST_F_OTHER_SHAPE_TO_PUBLIC, { visibility: str("public") }), 200);
+});
+
+// ルールの許す最大の数（写真 10 枚・原画像 10 個）に替える更新
+test("検証9: followers の投稿の写真 10 枚と原画像 10 個を、すべて url 空文字の形に替える更新は通る", async () => {
+  const list = () => arr(Array.from({ length: 10 }, (_, i) => pathOnlyEntry("followers", i)));
+  assert.equal(await updateDoc(POSTER, POSTS, POST_F_EDIT_10, { images: list(), originalImages: list() }), 200);
+});
+
+test("検証9: private の投稿の写真 10 枚と原画像 10 個を、すべて url 空文字の形に替える更新は通る", async () => {
+  const list = () => arr(Array.from({ length: 10 }, (_, i) => pathOnlyEntry("private", i)));
+  assert.equal(await updateDoc(POSTER, POSTS, POST_PRIVATE_EDIT_10, { images: list(), originalImages: list() }), 200);
 });

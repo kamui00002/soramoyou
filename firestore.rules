@@ -77,6 +77,11 @@ service cloud.firestore {
              || value.matches('(https://firebasestorage[.]googleapis[.]com(:443)?/v0/b/soramoyou-ios[.]firebasestorage[.]app/o/[A-Za-z0-9_.~%-]+([?][A-Za-z0-9_.~%=&-]*)?)?');
     }
 
+    // 画像の URL が空（項目なし・null・""）かどうか
+    function isEmptyImageUrl(value) {
+      return value == null || value == '';
+    }
+
     // 写真の配列の i 番目。i 番目が無ければ true
     function isValidImageEntryAt(entries, i) {
       return entries.size() <= i || isValidImageEntry(entries[i]);
@@ -105,6 +110,31 @@ service cloud.firestore {
                  && isValidImageEntryAt(value, 7)
                  && isValidImageEntryAt(value, 8)
                  && isValidImageEntryAt(value, 9));
+    }
+
+    // 写真の配列の i 番目が url・thumbnail とも空か。i 番目が無ければ true
+    function isEmptyImageEntryAt(entries, i) {
+      return entries.size() <= i
+             || (entries[i] is map
+                 && isEmptyImageUrl(entries[i].get('url', null))
+                 && isEmptyImageUrl(entries[i].get('thumbnail', null)));
+    }
+
+    // 写真の配列が全部空の形か。項目なし・null は通す。10 個まで（並べ方は isValidImageList と同じ）
+    function isEmptyImageList(value) {
+      return value == null
+             || (value is list
+                 && value.size() <= 10
+                 && isEmptyImageEntryAt(value, 0)
+                 && isEmptyImageEntryAt(value, 1)
+                 && isEmptyImageEntryAt(value, 2)
+                 && isEmptyImageEntryAt(value, 3)
+                 && isEmptyImageEntryAt(value, 4)
+                 && isEmptyImageEntryAt(value, 5)
+                 && isEmptyImageEntryAt(value, 6)
+                 && isEmptyImageEntryAt(value, 7)
+                 && isEmptyImageEntryAt(value, 8)
+                 && isEmptyImageEntryAt(value, 9));
     }
 
     // 原画像の配列の i 番目（url）。i 番目が無ければ true
@@ -139,9 +169,17 @@ service cloud.firestore {
     }
 
     // 投稿の images・originalImages の URL の形（渡し方は hasValidImageUrlField と同じ）
+    // images は、images が変わったときと、公開範囲が public 以外へ変わったときに見る
+    // 公開範囲が public でない投稿の写真は、url・thumbnail とも空の形で書く
+    // （1 つの要求で評価できる式の数に上限があるので、公開範囲の分岐は写真ごとでなく配列ごとに 1 回にする）
     function hasValidPostImages(checkedKeys) {
       let data = request.resource.data;
-      return (!('images' in checkedKeys) || isValidImageList(data.get('images', null)))
+      let checksImages = 'images' in checkedKeys
+                         || ('visibility' in checkedKeys && data.visibility != 'public');
+      return (!checksImages
+              || (data.visibility == 'public'
+                  ? isValidImageList(data.get('images', null))
+                  : isEmptyImageList(data.get('images', null))))
              && (!('originalImages' in checkedKeys) || isValidOriginalList(data.get('originalImages', null)));
     }
 
@@ -435,7 +473,7 @@ service cloud.firestore {
 
       // 更新権限:
       // 1. 所有者による編集（カウント改ざん不可）。images・originalImages の URL の形は、
-      //    その項目が変わったときだけ見る ⭐️
+      //    その項目が変わったときだけ見る（images は、公開範囲が public 以外へ変わったときも見る）⭐️
       // 2. 認証済みユーザーによるカウント更新（いいね/コメントのトランザクション）
       allow update: if (isOwner(resource.data.userId)
                         && request.resource.data.userId == resource.data.userId
