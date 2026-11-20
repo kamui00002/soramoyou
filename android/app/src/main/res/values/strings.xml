@@ -1,0 +1,436 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⭐️ 画面の文言（日本語）。iOS 版と同じ表示名に揃える -->
+<resources>
+    <string name="app_name">そらもよう</string>
+
+    <!-- ── 共通の状態表示（ui/component/StateContents.kt）──
+         iOS 版に同じ場面があるものは、iOS の文言をそのまま使う（UiStringsTest が iOS のソースと突き合わせる） -->
+    <!-- iOS: Views/Components/LoadingStateView.swift:23（.initial） -->
+    <string name="state_loading">読み込み中...</string>
+    <!-- iOS: Views/Components/AsyncContentView.swift:84（既定の 0 件の見出し） -->
+    <string name="state_empty_title">データがありません</string>
+    <!-- iOS: Views/Components/ErrorStateView.swift:45（.unknown の見出し） -->
+    <string name="state_error_title">エラーが発生しました</string>
+    <!-- iOS: Views/Components/ErrorStateView.swift:183（再試行のボタン） -->
+    <string name="action_retry">再試行</string>
+    <!-- iOS: Views/Components/ErrorStateView.swift:39（.network の見出し） -->
+    <string name="offline_title">ネットワークに接続できません</string>
+    <!-- 以下 3 つは Android だけの文言（iOS には接続の有無を常に見る部品が無く、同じ場面が無い） -->
+    <string name="offline_message">接続が戻ると、再試行できます</string>
+    <string name="reconnected_title">接続が戻りました</string>
+    <string name="reconnected_message">再試行してください</string>
+
+    <!-- ── 認証の失敗（feature/auth/AuthErrorMessages.kt・タスク 8.1・要件 2.7）──
+         名前は auth_error_<AuthErrorKind の小文字>。iOS: Services/AuthService.swift:208-231（AuthError.errorDescription）の文言をそのまま使う。
+         auth_error_unknown だけは iOS: Utils/ErrorHandler.swift:129 の既定の文言（設計書 :759）。
+         AuthErrorMessagesTest が iOS のソースと突き合わせる -->
+    <!-- iOS: AuthService.swift:211 -->
+    <string name="auth_error_invalid_input">メールアドレスとパスワードを入力してください</string>
+    <!-- iOS: AuthService.swift:213 -->
+    <string name="auth_error_invalid_email">有効なメールアドレスを入力してください</string>
+    <!-- iOS: AuthService.swift:215 -->
+    <string name="auth_error_weak_password">パスワードは6文字以上で入力してください</string>
+    <!-- iOS: AuthService.swift:217 -->
+    <string name="auth_error_email_already_in_use">このメールアドレスは既に使用されています</string>
+    <!-- iOS: AuthService.swift:219 -->
+    <string name="auth_error_wrong_password">メールアドレスまたはパスワードが正しくありません</string>
+    <!-- iOS: AuthService.swift:221 -->
+    <string name="auth_error_user_not_found">このメールアドレスのアカウントが見つかりません</string>
+    <!-- iOS: AuthService.swift:223 -->
+    <string name="auth_error_network">ネットワークエラーが発生しました。接続を確認してください</string>
+    <!-- iOS: AuthService.swift:225 -->
+    <string name="auth_error_too_many_requests">リクエストが多すぎます。しばらく待ってから再試行してください</string>
+    <!-- iOS: AuthService.swift:227 -->
+    <string name="auth_error_requires_recent_login">セキュリティのため、再ログインが必要です。パスワードを入力してください</string>
+    <!-- iOS: ErrorHandler.swift:129 -->
+    <string name="auth_error_unknown">エラーが発生しました。もう一度お試しください。</string>
+
+    <!-- ── ログイン・設定・フィードの見出し（タスク 8.3）──
+         iOS 版の同じ場面の文言をそのまま使う（SessionScreensStringsTest が iOS のソースと突き合わせる） -->
+    <!-- iOS: Views/LoginView.swift:75 -->
+    <string name="login_title">おかえりなさい</string>
+    <!-- iOS: Views/LoginView.swift:88 -->
+    <string name="login_email_placeholder">メールアドレス</string>
+    <!-- iOS: Views/LoginView.swift:100 -->
+    <string name="login_password_placeholder">パスワード</string>
+    <!-- iOS: Views/LoginView.swift:136 -->
+    <string name="action_sign_in">ログイン</string>
+    <!-- iOS: Views/SettingsView.swift:69 -->
+    <string name="settings_title">設定</string>
+    <!-- iOS: Views/SettingsView.swift:101（確認のダイアログの実行のボタン。設定画面のボタンも同じ文言） -->
+    <string name="action_sign_out">ログアウト</string>
+    <!-- iOS: Views/SettingsView.swift:99 -->
+    <string name="sign_out_confirm_title">ログアウト</string>
+    <!-- iOS: Views/SettingsView.swift:114 -->
+    <string name="sign_out_confirm_message">本当にログアウトしますか？</string>
+    <!-- iOS: Views/SettingsView.swift:100 -->
+    <string name="action_cancel">キャンセル</string>
+    <!-- iOS: Views/MainTabView.swift:29（Tab.home.title） -->
+    <string name="feed_title">ホーム</string>
+
+    <!-- ── 新規登録（feature/auth/SignUpScreen.kt・タスク 14.4・要件 2.3・2.5〜2.7・2.11）──
+         iOS 版の同じ場面の文言をそのまま使う（SessionScreensStringsTest が iOS のソースと突き合わせる）。
+         メールアドレスの欄は login_email_placeholder（iOS の SignUpView.swift:92 も同じ文言）。
+         6 文字に足りない理由は auth_error_weak_password、戻るのボタンは action_back を使う -->
+    <!-- iOS: Views/WelcomeView.swift:112（新規登録の入口。Android はログインの画面のボタンの下に置く） -->
+    <string name="action_sign_up">新規登録</string>
+    <!-- iOS: Views/SignUpView.swift:74 -->
+    <string name="signup_title">はじめまして</string>
+    <!-- iOS: Views/SignUpView.swift:79 -->
+    <string name="signup_subtitle">空の写真を共有しましょう</string>
+    <!-- iOS: Views/SignUpView.swift:104 -->
+    <string name="signup_password_placeholder">パスワード（6文字以上）</string>
+    <!-- iOS: Views/SignUpView.swift:120 -->
+    <string name="signup_confirm_password_placeholder">パスワード確認</string>
+    <!-- iOS: Views/SignUpView.swift:133（確認が一致するとき・しないとき） -->
+    <string name="signup_passwords_match">パスワードが一致しています</string>
+    <string name="signup_passwords_mismatch">パスワードが一致しません</string>
+    <!-- iOS: Views/SignUpView.swift:168 -->
+    <string name="action_create_account">アカウントを作成</string>
+    <!-- iOS: Views/SignUpView.swift:201 -->
+    <string name="signup_terms_notice">登録することで、利用規約とプライバシーポリシーに同意したことになります。</string>
+    <!-- iOS: Views/SettingsView.swift:448（法的情報の節の項目。Android は登録の画面にも同じ文言のリンクを置く） -->
+    <string name="privacy_policy_title">プライバシーポリシー</string>
+    <!-- iOS: Views/SettingsView.swift:460（法的情報の節でプライバシーポリシーの次の項目。Android は登録の画面にも同じ文言のリンクを置く） -->
+    <string name="terms_of_service_title">利用規約</string>
+    <!-- Android だけの文言（設定と新規登録の画面で、法的情報のページを開けるアプリが無いとき。全体レビュー 4 回目 Q06）。
+         退会の受付ページの account_delete_request_page_open_failed と同じ文言で、同じことを ExternalPageOpenerTest が突き合わせる -->
+    <string name="external_page_open_failed">ブラウザを開けませんでした。次のアドレスを開いてください：%1$s</string>
+    <!-- 以下 2 つは Android だけの文言（iOS はアカウント文書の作成に失敗しても、作成の失敗と同じく失敗の文言を出して画面に留まる：
+         ViewModels/AuthViewModel.swift:112-117。Android はセッションを保ったまま失敗を出し、押すまでフィードへ切り替えない：要件 2.11） -->
+    <string name="signup_bootstrap_failed">アカウントは作成できましたが、プロフィールの準備に失敗しました。このまま続けられます。</string>
+    <string name="action_continue">続ける</string>
+
+    <!-- ── フィード（feature/feed・タスク 9.4・要件 4.7〜4.13）── -->
+    <!-- iOS: Views/Components/EmptyStateView.swift:39（.posts の見出し） -->
+    <string name="feed_empty_title">投稿がありません</string>
+    <!-- iOS: Views/Components/ErrorStateView.swift:42（.permission の見出し） -->
+    <string name="state_error_permission">アクセス権限がありません</string>
+    <!-- iOS: Views/HomeView.swift（続きが無いときの一覧の末尾） -->
+    <string name="feed_reached_end">すべての投稿を表示しました</string>
+    <!-- 以下 2 つは Android だけの文言（iOS は複数枚をアイコンだけ・いいね数を数字とハートの絵だけで出す。
+         Android はアイコンの部品を依存に持たないので文字で出し、TalkBack にも同じ文を読ませる） -->
+    <string name="feed_image_count">%1$d枚</string>
+    <string name="feed_likes_count">いいね %1$d</string>
+    <!-- いいねボタンの TalkBack の説明（タスク 18.4・要件 16.5）。Android だけの文言（iOS のハートのボタンには説明が無い） -->
+    <string name="like_action_like">いいねする</string>
+    <string name="like_action_unlike">いいねを取り消す</string>
+
+    <!-- ── 投稿詳細（feature/detail・タスク 10.2・要件 5.2・5.4・5.5）── -->
+    <!-- iOS: Views/GalleryDetailView.swift:602（Text("撮影: \(date.formatted(…))")。DetailStringsTest が突き合わせる） -->
+    <string name="detail_captured_at">撮影: %1$s</string>
+    <!-- 以下 3 つは Android だけの文言（iOS の詳細は投稿日時を出さず、表示できない投稿の画面も無い。戻るはナビゲーションバーの矢印） -->
+    <string name="detail_posted_at">投稿: %1$s</string>
+    <string name="detail_unavailable">この投稿は表示できません</string>
+    <string name="action_back">戻る</string>
+    <!-- 自分の投稿の削除（タスク 24・要件 10.11）。iOS: Views/HomeView.swift:774-791（GalleryDetailView.swift も同じ文言）の
+         確認の見出し・本文・削除のボタン・失敗の見出し。DetailStringsTest が突き合わせる。キャンセルは action_cancel、OK は action_ok -->
+    <string name="action_delete">削除</string>
+    <string name="detail_delete_confirm_title">投稿を削除</string>
+    <string name="detail_delete_confirm_message">この投稿を削除しますか？この操作は取り消せません。</string>
+    <string name="detail_delete_failed_title">削除に失敗しました</string>
+    <!-- 以下 2 つは Android だけの文言（iOS は削除中の表示が無く、オフラインでも削除を押せる） -->
+    <string name="detail_deleting">削除しています</string>
+    <string name="detail_delete_offline">オフラインのため削除できません</string>
+
+    <!-- ── プロフィール（feature/profile・タスク 15.2・要件 10.1〜10.4）── -->
+    <!-- iOS: Views/MainTabView.swift:60（Tab.profile.title。フィードの見出しの入口と、自分のプロフィールの画面の名前） -->
+    <string name="profile_title">プロフィール</string>
+    <!-- iOS: Views/UserProfileView.swift:156（statItem の label） -->
+    <string name="profile_posts_label">投稿</string>
+    <!-- Android だけの文言（iOS の格子のサムネイルは読み上げの名前を持たない。画像だけのボタンなので TalkBack に読ませる） -->
+    <string name="profile_open_post">投稿を開く</string>
+
+    <!-- ── プロフィール編集（feature/profile・タスク 16.3・要件 10.6・10.8・10.10）──
+         iOS 版の同じ場面の文言をそのまま使う（SessionScreensStringsTest が iOS のソースと突き合わせる）。キャンセルは action_cancel -->
+    <!-- iOS: Views/ProfileView.swift:114（メニューの項目。Android はプロフィールの見出しの上のボタン） -->
+    <string name="action_edit_profile">プロフィール編集</string>
+    <!-- iOS: Views/ProfileEditView.swift:93 -->
+    <string name="profile_edit_title">プロフィール編集</string>
+    <!-- iOS: Views/ProfileEditView.swift:39・:43（見出しと入力欄の placeholder） -->
+    <string name="profile_edit_display_name">表示名</string>
+    <!-- iOS: Views/ProfileEditView.swift:59 -->
+    <string name="profile_edit_bio">自己紹介</string>
+    <!-- iOS: Views/ProfileEditView.swift:185 -->
+    <string name="action_change_image">画像を変更</string>
+    <!-- iOS: Views/ProfileEditView.swift:107 -->
+    <string name="action_save">保存</string>
+    <!-- iOS: Views/ProfileEditView.swift:80 -->
+    <string name="profile_edit_too_long">表示名は50文字以内、自己紹介は200文字以内で入力してください</string>
+    <!-- iOS: Services/StorageService.swift:405（StorageServiceError.imageTooLarge） -->
+    <string name="profile_edit_image_too_large">画像サイズが大きすぎます（最大5MB）</string>
+    <!-- 以下 2 つは Android だけの文言（iOS は入力欄に残りの文字数を出さず、読めない写真はピッカーの側で選べない） -->
+    <string name="profile_edit_remaining">残り%1$d文字</string>
+    <string name="profile_edit_image_unreadable">選んだ写真を読み込めませんでした</string>
+    <!-- Android だけの文言（全体レビュー 4 回目 Q04。iOS は共有の ViewModel の isLoading で保存のボタンを止めるだけで文言は無い。投稿の画面の compose_previous_saving と同じ形） -->
+    <string name="profile_edit_previous_saving">前の変更を保存しています</string>
+
+    <!-- ── 用語（iOS 版の表示名と 1 文字も違えない。要件 16.1）──
+         名前は term_<種類>_<iOS の文字列値>。UiStringsTest が iOS のソースを読み、過不足なく一致することを確かめる。
+         公開範囲・時間帯・空の種類は :contract の displayName（タスク 3.2）にもあり、同じテストで一致を確かめる -->
+
+    <!-- 公開範囲 iOS: Models/Visibility.swift:17-23 -->
+    <string name="term_visibility_public">公開</string>
+    <string name="term_visibility_followers">フォロワーのみ</string>
+    <string name="term_visibility_private">非公開</string>
+
+    <!-- 時間帯 iOS: Models/TimeOfDay.swift:17-25 -->
+    <string name="term_time_of_day_morning">朝</string>
+    <string name="term_time_of_day_afternoon">昼</string>
+    <string name="term_time_of_day_evening">夕方</string>
+    <string name="term_time_of_day_night">夜</string>
+
+    <!-- 空の種類 iOS: Models/SkyType.swift:18-27 -->
+    <string name="term_sky_type_clear">晴れ</string>
+    <string name="term_sky_type_cloudy">曇り</string>
+    <string name="term_sky_type_sunset">夕焼け</string>
+    <string name="term_sky_type_sunrise">朝焼け</string>
+    <string name="term_sky_type_storm">嵐</string>
+
+    <!-- フィルター iOS: Models/FilterType.swift:24-37。
+         MVP の画面に出すのは「なし」と 6 種だけ（設計書 Q2。natural・warm・cool・vintage は出さない）だが、用語は全 10 種を揃えておく。
+         「なし」（iOS: Views/EditView.swift:834）は、iOS の FilterType に無いので term_filter_* に入れず、compose_filter_none に置いた（タスク 21.2） -->
+    <string name="term_filter_natural">ナチュラル</string>
+    <string name="term_filter_clear">クリア</string>
+    <string name="term_filter_drama">ドラマ</string>
+    <string name="term_filter_soft">ソフト</string>
+    <string name="term_filter_warm">ウォーム</string>
+    <string name="term_filter_cool">クール</string>
+    <string name="term_filter_vintage">ビンテージ</string>
+    <string name="term_filter_monochrome">モノクロ</string>
+    <string name="term_filter_pastel">パステル</string>
+    <string name="term_filter_vivid">ヴィヴィッド</string>
+
+    <!-- 通報理由 iOS: Models/ReportReason.swift:19-32 -->
+    <string name="term_report_reason_inappropriate">不適切なコンテンツ</string>
+    <string name="term_report_reason_spam">スパム・迷惑行為</string>
+    <string name="term_report_reason_harassment">嫌がらせ・誹謗中傷</string>
+    <string name="term_report_reason_copyright">著作権侵害</string>
+    <string name="term_report_reason_other">その他</string>
+
+    <!-- フィードバックの種別 iOS: Models/Feedback.swift:22-28（FeedbackCategory） -->
+    <string name="term_feedback_category_bug">不具合</string>
+    <string name="term_feedback_category_request">要望</string>
+    <string name="term_feedback_category_other">その他</string>
+    <!-- 投稿の作成（タスク 21.1）。見出しは iOS: Views/MainTabView.swift:30・Views/PostView.swift:71 の「投稿」。
+         上限の案内は iOS: Services/ImagePickerService.swift:360 の文言に、Android が先頭の 10 枚を受け付けたことを足す -->
+    <string name="compose_title">投稿</string>
+    <string name="compose_repick">写真を選び直す</string>
+    <string name="compose_too_many">選択できる画像は最大%1$d枚までです。先頭の%1$d枚を受け付けました</string>
+    <!-- 投稿の作成：写真の選択の段とプレビュー・フィルター（タスク 21.2）。
+         写真の選択のボタンは iOS: Views/PostView.swift:320、編集の段の見出しは Views/EditView.swift:157、
+         フィルターの見出しは Models/EditTab.swift:16、「なし」は Views/EditView.swift:834、位置の「1 / 3」は Views/EditView.swift:564。
+         読めない写真の案内は iOS に画面の文言が無い（ログだけ：Services/ImagePickerService.swift:111）ので、
+         「何枚目」の言い方を ImagePickerService.swift:362（1 始まり）にそろえて Android で足す -->
+    <string name="compose_pick_photos">写真を選択</string>
+    <string name="compose_edit_title">編集</string>
+    <string name="compose_filter_label">フィルター</string>
+    <string name="compose_filter_none">なし</string>
+    <string name="compose_page_indicator">%1$d / %2$d</string>
+    <string name="compose_photo_description">%1$d枚目の写真</string>
+    <string name="compose_checking">写真を確認しています</string>
+    <string name="compose_unreadable">%1$s枚目の画像を読み込めませんでした</string>
+    <string name="compose_unreadable_reason">破損しているか、対応していない形式のため、投稿の対象から外しました</string>
+    <string name="compose_preview_failed">この写真を表示できませんでした</string>
+    <!-- 投稿の作成：投稿情報の段と送信（タスク 23.5）。iOS に同じ場面がある文言は iOS の文言をそのまま使う
+         （SessionScreensStringsTest が突き合わせる）。「次へ」は iOS: Views/EditView.swift:265、ほかは Views/PostInfoView.swift の
+         見出し :151・キャプション :256・ハッシュタグの案内 :280・ハッシュタグ :314・ハッシュタグなし :319・公開設定 :747・
+         投稿ボタン :804-805・完了のダイアログ :193・:199・OK :194・失敗のダイアログの見出し :184。公開範囲の表示名は :contract の Visibility.displayName -->
+    <string name="action_next">次へ</string>
+    <string name="action_ok">OK</string>
+    <string name="compose_info_title">投稿情報</string>
+    <string name="compose_caption_label">キャプション</string>
+    <string name="compose_hashtag_hint">ハッシュタグは「#」で始まる単語で自動的に抽出されます</string>
+    <string name="compose_hashtags_label">ハッシュタグ</string>
+    <string name="compose_hashtags_none">ハッシュタグはありません</string>
+    <string name="compose_visibility_label">公開設定</string>
+    <string name="compose_publish">投稿</string>
+    <string name="compose_publishing">投稿中...</string>
+    <string name="compose_published_message">投稿が完了しました</string>
+    <string name="compose_publish_failed_title">エラー</string>
+    <!-- iOS: ViewModels/PostViewModel.swift:1134（PostError.noImages。画面が先に止めるので、届くのは念のため） -->
+    <string name="compose_error_no_images">画像が選択されていません</string>
+    <!-- 以下は Android だけの文言。iOS は投稿の前にキャプションの長さとハッシュタグの数を確かめず（rules の拒否で初めて失敗する）、
+         投稿の進み具合は棒だけで文言が無い。上限の数（2000・30）は TextLimits と同じ値（profile_edit_too_long と同じく文言に書く） -->
+    <string name="compose_count">%1$d / %2$d</string>
+    <string name="compose_caption_too_long">キャプションは2000文字以内で入力してください</string>
+    <string name="compose_hashtags_too_many">ハッシュタグは30個までにしてください</string>
+    <string name="compose_uploading">画像をアップロードしています（%1$d / %2$d）</string>
+    <string name="compose_saving">投稿を保存しています</string>
+    <string name="compose_saving_offline">接続が戻ると保存を続けます</string>
+    <string name="compose_previous_saving">前の投稿を保存しています</string>
+    <string name="compose_error_publish_in_progress">前の投稿を保存しています。保存が終わってから、もう一度投稿してください</string>
+    <!-- 投稿の作成：編集のツール・トリミングと回転・装備・下書き（Kiro android-edit-tools。鍵は K0〔タスク 2.3〕が全部足し、ほかのタスクは足さない：
+         design.md:735-772。鍵と文言は design.md の表のとおり）。接頭辞は edit_（編集の段）・crop_（トリミング・回転）・loadout_（装備）・
+         drafts_（下書き）。ツールとフィルターの表示名は :contract の displayName にあり、ここには置かない。
+         「編集ツールの並び替え」（loadout_title）は iOS: Views/EditToolsSettingsView.swift:76 の見出しと同じ（design.md:772）。
+         キャンセル・削除・保存・OK・次へは、既にある action_cancel・action_delete・action_save・action_ok・action_next を使う。
+         K0 の時点では、本体のどこもこれらの鍵を使わない（使うのは部品 U2〜U5・A2・I2） -->
+    <string name="edit_tools_label">ツール</string>
+    <string name="edit_undo">元に戻す</string>
+    <string name="edit_redo">やり直し</string>
+    <string name="edit_tool_adjusted">調整済み</string>
+    <!-- ツール名と値（TalkBack 用） -->
+    <string name="edit_slider_description">%1$s、%2$s</string>
+    <string name="edit_slider_reset">0に戻す</string>
+    <string name="edit_loadout_open">ツールの並びを変える</string>
+    <string name="edit_leave_title">編集をやめますか？</string>
+    <string name="edit_leave_message">下書きに保存すると、あとで続きから投稿できます。</string>
+    <string name="edit_leave_save">下書きに保存</string>
+    <string name="edit_leave_discard">破棄</string>
+    <string name="edit_leave_continue">編集を続ける</string>
+    <string name="edit_repick_title">写真を選び直しますか？</string>
+    <string name="edit_repick_message">今の編集の内容は失われます。</string>
+    <!-- 選び直しの確かめのボタン。K0 の表に無く、部品 U5（タスク 11）が足りないと申し送った 2 つを I2（タスク 19.1）が足した。
+         確かめの部品（LeaveDialogs.kt）がこの 2 つに替わるまでは、どこからも使われない -->
+    <string name="edit_repick_confirm">選び直す</string>
+    <string name="edit_repick_cancel">やめる</string>
+    <string name="edit_session_unreadable">編集の途中を読み込めませんでした。写真を選び直してください。</string>
+    <string name="edit_save_draft">下書きに保存</string>
+    <!-- 投稿の変換に失敗した写真が何枚目か（1 始まり）。画面に出すのは A2・I2（design.md:894） -->
+    <string name="compose_error_image_unreadable_at">%1$d枚目の写真を処理できませんでした。</string>
+    <string name="crop_confirm">確定</string>
+    <string name="crop_cancel">キャンセル</string>
+    <string name="crop_rotate_left">左に90°回す</string>
+    <string name="crop_rotate_right">右に90°回す</string>
+    <string name="crop_frame_description">切り抜く範囲</string>
+    <string name="crop_edge_in">%1$sを内側へ</string>
+    <string name="crop_edge_out">%1$sを外側へ</string>
+    <string name="crop_edge_left">左の辺</string>
+    <string name="crop_edge_top">上の辺</string>
+    <string name="crop_edge_right">右の辺</string>
+    <string name="crop_edge_bottom">下の辺</string>
+    <string name="loadout_title">編集ツールの並び替え</string>
+    <string name="loadout_hint">使うツールを選び、並び順を変えられます。</string>
+    <string name="loadout_move_up">%1$sを上へ</string>
+    <string name="loadout_move_down">%1$sを下へ</string>
+    <string name="loadout_need_one">ツールを1個以上選んでください。</string>
+    <string name="loadout_save_failed">保存できませんでした。</string>
+    <string name="drafts_title">下書き</string>
+    <string name="drafts_open_button">下書き（%1$d件）</string>
+    <string name="drafts_empty">下書きはありません。</string>
+    <string name="drafts_item_description">%1$sに保存した下書き、写真%2$d枚</string>
+    <string name="drafts_broken">この下書きは読み込めません。</string>
+    <string name="drafts_delete_title">下書きを削除しますか？</string>
+    <string name="drafts_delete_message">この下書きと写真を端末から消します。</string>
+    <string name="drafts_limit">下書きは%1$d件までです。古い下書きを削除すると保存できます。</string>
+    <string name="drafts_save_failed">下書きを保存できませんでした。端末の空きを確かめてください。</string>
+    <string name="drafts_saving">下書きを保存しています…</string>
+    <string name="drafts_loading">下書きを読み込んでいます…</string>
+    <!-- 通報・ブロック（feature/moderation・タスク 29.2・要件 11.1〜11.7）。iOS 版の投稿詳細の 2 つの画面
+         （Views/HomeView.swift:794-815・:1138-1147、Views/GalleryDetailView.swift:180-292）の文言をそのまま使う
+         （ModerationStringsTest が両方のファイルと突き合わせる）。ただしブロックの確認文（block_confirm_message）だけは、iOS の文の
+         画面の並び「ホーム・ギャラリー・そらとも」を、Android にある画面の「ホーム」にした（Android でブロックした人の投稿を除くのは
+         フィードだけで、ギャラリーとそらともの画面が無い。2026-11-06 の利用者の決定。iOS：HomeView.swift:1204・GalleryDetailView.swift:286。
+         違いが画面の並びだけであることも ModerationStringsTest が確かめる）。通報理由の選択肢は :contract の ReportReason.displayName
+         （term_report_reason_* と同じ。UiStringsTest が突き合わせる）。キャンセルは action_cancel、OK は action_ok -->
+    <string name="action_report_post">この投稿を通報</string>
+    <string name="action_block_user">このユーザーをブロック</string>
+    <string name="report_reason_title">通報理由を選択</string>
+    <string name="report_done_title">通報しました</string>
+    <string name="report_done_message">ご報告ありがとうございます。内容を確認いたします。</string>
+    <string name="block_confirm_title">ユーザーをブロック</string>
+    <string name="block_confirm_message">この人の投稿が、ホームに表示されなくなります。お互いのフォローも外れます。ブロックしたことは相手に知らされません</string>
+    <string name="action_block">ブロック</string>
+    <!-- 以下は Android だけの文言。iOS は「…」をアイコン（ellipsis.circle）で出し、通報・ブロックの失敗を画面に出さず（reportError を
+         どの画面も表示しない）、オフラインでも押せる。Android はアイコンの部品を依存に持たないので「…」を文字で出して TalkBack には
+         説明を読ませ、失敗は削除の失敗と同じ形の見出しで出し（要件 11.6）、オフラインの間は押せなくする（自分の投稿の削除と同じ扱い） -->
+    <string name="action_more">…</string>
+    <string name="action_more_description">その他の操作</string>
+    <string name="report_failed_title">通報に失敗しました</string>
+    <string name="block_failed_title">ブロックに失敗しました</string>
+    <string name="moderation_offline">オフラインのため通報・ブロックできません</string>
+    <!-- 通報・ブロックを送っている間の案内（Android だけの文言。要件 16.2）。iOS は送信中に何も出さないが、Android は投稿詳細の
+         削除中の detail_deleting（「削除しています」）と同じ形で、フィードと投稿詳細に出す（2026-10-14 確かめる係の指摘の直し） -->
+    <string name="report_sending">通報しています</string>
+    <string name="block_sending">ブロックしています</string>
+    <!-- 設定の「ブロック中のユーザー」の項目と、その画面（feature/settings・タスク 29.2・要件 11.5）。iOS 版には同じ画面が無い
+         （Android だけの文言）。失敗の見出しとオフラインの案内は、上の通報・ブロックと同じ形 -->
+    <string name="blocked_users_title">ブロック中のユーザー</string>
+    <string name="blocked_users_empty">ブロック中のユーザーはいません</string>
+    <string name="action_unblock">ブロックを解除</string>
+    <string name="unblock_failed_title">ブロックの解除に失敗しました</string>
+    <string name="unblock_offline">オフラインのためブロックを解除できません</string>
+    <!-- アプリ内フィードバック（feature/feedback・タスク 30・要件 13.1〜13.6）。iOS 版の Views/FeedbackView.swift（画面）・
+         Views/SettingsView.swift（設定の項目）・ViewModels/FeedbackViewModel.swift（本文の範囲の案内）の文言をそのまま使う
+         （FeedbackStringsTest が iOS のソースと突き合わせる）。種別の選択肢は :contract の FeedbackCategory.displayName
+         （term_feedback_category_* と同じ。UiStringsTest が突き合わせる）。文字数の表示は compose_count、閉じるは action_close -->
+    <string name="feedback_title">ご意見・ご要望</string>
+    <string name="feedback_intro">アプリへのご意見・ご要望・不具合報告をお送りください。いただいた声は今後の改善に活かします。</string>
+    <string name="feedback_category_label">種類</string>
+    <string name="feedback_message_label">内容</string>
+    <string name="feedback_message_hint">不具合の状況や、こうなったら嬉しい等を書いてください…</string>
+    <string name="feedback_send">送信する</string>
+    <string name="feedback_message_range">1〜1000文字で入力してください</string>
+    <string name="feedback_done_title">送信しました</string>
+    <string name="feedback_done_message">貴重なご意見をありがとうございます。\n今後の改善に活かします。</string>
+    <string name="action_close">閉じる</string>
+    <!-- 以下は Android だけの文言。iOS は送信に失敗したとき理由の文言だけを出し、オフラインでも送信のボタンを押せる。
+         Android は失敗の見出しを付け（要件 13.6）、オフラインの間は送信を押せなくして案内を出す（Firestore の書き込みは
+         オフラインでは失敗せずに接続を待つので、押せると止まって見える。通報・ブロックと同じ扱い） -->
+    <string name="feedback_failed_title">送信に失敗しました</string>
+    <string name="feedback_offline">オフラインのため送信できません</string>
+    <string name="feedback_sending_offline">接続が戻ると送信します</string>
+    <!-- アカウントの削除（feature/settings・タスク 31.5・要件 2.9・12.1〜12.7）。iOS 版に同じ場面がある文言は、iOS の
+         Views/SettingsView.swift（設定の項目・確認のアラートの見出しと「削除する」・パスワードのアラートの見出しと説明と
+         「確認して削除」・削除中の表示）をそのまま使う（AccountDeletionStringsTest が iOS のソースと突き合わせる）。
+         キャンセルは action_cancel、再試行は action_retry、戻るは action_back、パスワードの欄は login_password_placeholder
+         （iOS の SecureField と同じ「パスワード」） -->
+    <string name="account_delete_title">アカウントを削除</string>
+    <string name="action_delete_account">削除する</string>
+    <string name="account_delete_password_title">パスワードを入力</string>
+    <string name="account_delete_password_message">セキュリティのため、アカウント削除にはパスワードの再入力が必要です。</string>
+    <string name="action_confirm_delete_account">確認して削除</string>
+    <string name="account_deleting">アカウントを削除中...</string>
+    <!-- 以下は Android だけの文言。iOS の確認文（SettingsView.swift の「すべての投稿・下書き・プロフィール情報が完全に削除されます」）は、
+         iOS では投稿の写真とアイコン画像がサーバーに残る実態とも、Android の退会で消えるものの範囲とも合わない（タスク 26 の観察）ので写さない。
+         消えるもの・残るものは、削除の受付ページ（https://soramoyou-ios.web.app/delete-account/ の 3〜5。タスク 26.1）と同じ範囲で書く。
+         Android の退会は投稿の写真とアイコン画像も消す（タスク 26 の判断②）。残るのは、rules でアプリから消せない通報とご意見・ご要望と、
+         Android の退会が触れない iOS 版だけの機能のデータ -->
+    <string name="account_delete_intro">アカウントを削除すると、次のデータがすべて削除されます。</string>
+    <!-- そらとも（iOS 版の機能）のデータは、Android の退会の段階（AccountDeletionService）には無いが、Auth のアカウントが無い人の分を
+         サーバーの定期の後始末（functions/soratomo.js の soratomoHousekeeping・6 時間ごと）が消すので、消えるものに挙げる。
+         両 OS で同じアカウントを使う人が、取り消せない削除の前に知れるように（受付ページの 3. と同じ文言。iOS も main の確認文に、
+         そらともを使える人には 1 文足している。この作業ツリーの iOS の写しはそれより古い） -->
+    <string name="account_delete_removed_items">・投稿（写真を含む）\n・プロフィール（表示名・アイコン画像など）\n・いいね・コメント\n・フォロー・フォロワーの関係\n・下書き・お気に入り\n・アカウント（メールアドレスとログインの情報）\n・そらとも（iOS 版の機能）の投稿（写真を含む）・グループへの参加・ガイドラインへの同意の記録</string>
+    <string name="account_delete_kept_title">削除しても残るデータ</string>
+    <string name="account_delete_kept_items">・通報の記録（不正利用を防ぐため、削除の後も保持します）\n・「ご意見・ご要望」で送った内容\n・iOS 版だけの機能（「空を動かす」・コレクション）のデータ</string>
+    <string name="account_delete_irreversible">削除は取り消せません。</string>
+    <string name="account_delete_request_page_note">通報の記録のほかも消したい場合は、ここでは削除せずに、削除の受付ページの方法（メール）で申し込んでください。アプリで削除した後は、残ったデータだけの削除には応じられません。</string>
+    <string name="action_open_delete_request_page">削除の受付ページを開く</string>
+    <string name="account_delete_request_page_open_failed">ブラウザを開けませんでした。次のアドレスを開いてください：%1$s</string>
+    <string name="account_delete_password_required">パスワードを入力してください</string>
+    <string name="account_delete_confirm_message">アカウントとデータを削除します。この操作は取り消せません。</string>
+    <string name="account_delete_offline">オフラインのため削除できません</string>
+    <string name="account_delete_done">アカウントを削除しました</string>
+    <!-- 削除中の段階の表示（AccountDeletionService.stage）と、止まった段階の名前。名前は「〜を削除しています」「〜の削除で止まりました」の〜に入る -->
+    <string name="account_delete_progress_reauth">本人確認をしています</string>
+    <string name="account_delete_progress">%1$sを削除しています</string>
+    <string name="account_delete_stage_reauth">本人確認</string>
+    <string name="account_delete_stage_public_profile">公開プロフィール</string>
+    <string name="account_delete_stage_follows_as_follower">フォロー</string>
+    <string name="account_delete_stage_follows_as_followee">フォロワー</string>
+    <string name="account_delete_stage_likes">いいね</string>
+    <string name="account_delete_stage_comments">コメント</string>
+    <string name="account_delete_stage_post_images">投稿の写真</string>
+    <string name="account_delete_stage_posts">投稿</string>
+    <string name="account_delete_stage_drafts">下書き</string>
+    <string name="account_delete_stage_favorites">お気に入り</string>
+    <string name="account_delete_stage_profile_image">アイコン画像</string>
+    <string name="account_delete_stage_storage_leftovers">残っている写真</string>
+    <string name="account_delete_stage_user">アカウントの情報</string>
+    <string name="account_delete_stage_auth">アカウント</string>
+    <!-- 削除の失敗。再認証（REAUTH）で止まったときはデータに触れていない。それより後で止まったときは、それより前の段階は消えていて、
+         認証のアカウントはまだ残っている（もう一度削除すると、再認証からやり直して残りを消す：AccountDeletionService）。
+         途中の段階の権限の拒否は、取ってから消すまでに別の操作で消えた文書でも起きるので「権限がない」とは言わない -->
+    <string name="account_delete_failed_reauth_title">本人確認に失敗しました</string>
+    <string name="account_delete_failed_reauth_message">アカウントとデータは、まだ削除していません。</string>
+    <string name="account_delete_wrong_password">パスワードが正しくありません</string>
+    <string name="account_delete_failed_stage_title">%1$sの削除で止まりました</string>
+    <string name="account_delete_failed_stage_message">それより前のデータは削除しました。アカウントはまだ残っています。「再試行」を押すと、残りを削除します。</string>
+    <string name="account_delete_requires_recent_login">データの削除は済んでいます。もう一度パスワードを入れて「再試行」を押すと、アカウントの削除が完了します。</string>
+    <string name="account_delete_failed_title">アカウントを削除できませんでした</string>
+    <!-- 削除中に通信が切れたときの案内（レビュー F19）。フィードバックの送信中のオフライン（feedback_sending_offline）と同じ言い方。
+         Firestore の削除は接続が戻るまで待って続きを消す（AccountDeletionService は再認証の後は取り消さない）。iOS に同じ場面は無い -->
+    <string name="account_delete_deleting_offline">接続が戻ると削除を続けます</string>
+</resources>

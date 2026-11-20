@@ -93,9 +93,26 @@ iOSInjectionProject/
 
 # Firebase
 GoogleService-Info.plist
+# Android 版の Firebase 設定（API キーを含むため git 管理から外す。要件 1.6）
+google-services.json
+# 例外：検証用の変種（emulator）の設定は、エミュレータ専用の demo- のプロジェクトで秘密を含まないので管理する（タスク 11.1）
+!android/app/src/emulator/google-services.json
 firebase-debug.log
 .firebaserc
 serviceAccountKey.json
+
+# Android 版（android/）の秘密情報・ローカル設定・生成物（要件 1.6）
+# local.properties は SDK の場所、keystore.properties は署名鍵の場所と別名を持つ端末ごとの設定（パスワードは環境変数で渡す。タスク 34.1）
+android/local.properties
+android/keystore.properties
+# アプリの署名鍵（Play のアップロード鍵。漏れると第三者が更新版を署名できる）
+*.jks
+*.keystore
+# Gradle・Kotlin・Android Studio が作る生成物とキャッシュ
+android/.gradle/
+android/**/build/
+android/.kotlin/
+android/.idea/
 
 # API Keys
 *.plist

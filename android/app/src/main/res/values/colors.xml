@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⭐️ ウィンドウの背景の色（ライト）。昼の空のいちばん上の色にする（android-ui-ios-parity タスク 6.1・要件 1.1・1.8。WindowThemeTest で固定） -->
+<resources>
+    <!-- 昼の空のいちばん上の色。themes.xml の Theme.Soramoyou が android:windowBackground に使う。
+         - 元の値は DesignTokens.Colors.daySkyGradient の先頭 Color(red = 0.68f, green = 0.85f, blue = 0.90f)（iOS の昼の空の上の色の写し）
+         - Compose の sRGB の色は、各成分を「x × 255 + 0.5 を整数へ切り捨て」で 8 ビットに持つ。
+           0.68 → 173（AD）・0.85 → 217（D9）・0.90 → 230（E6）なので、Compose が描く空の上の色と同じ #ADD9E6 になる
+         - XML からは Kotlin の値を参照できないので、ここに値を写す。写し間違いと、DesignTokens だけを変えたときの食い違いは、
+           WindowThemeTest が skyPaletteOf(false) の空のいちばん上の色と比べて見つける
+         - 不透明（先頭の FF）。窓の背景が半透明だと、起動の直後に下の画面が透けて見える -->
+    <color name="window_sky">#FFADD9E6</color>
+</resources>

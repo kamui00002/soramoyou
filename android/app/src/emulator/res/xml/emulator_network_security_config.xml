@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⭐️ 検証用の変種だけ：開発機のエミュレータ（http）への平文の通信を、仮想端末から見た開発機の住所に限って許す（タスク 11.1） -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

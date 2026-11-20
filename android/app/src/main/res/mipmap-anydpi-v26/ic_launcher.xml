@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⭐️ ランチャーのアイコン（アダプティブアイコン）。iOS の元絵を背景の層に全面で敷き、前景は透明にする（利用者の決定。レビュー R08。LauncherIconManifestTest で固定） -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 背景の層は 108dp の正方形の PNG（mipmap-*dpi/ic_launcher_background.png）。端末のマスク（丸・角丸など）で切り抜かれる。
+         - 表示されるのは 108dp のうち中央の約 72dp で、外側の約 18dp ずつは欠けるか、動かしたときの視差の余白になる。元絵の縁の近くは見えない前提で置く
+         - minSdk が 26 なので、アダプティブアイコンの XML だけで足り、PNG の旧式のアイコン（mipmap-*dpi/ic_launcher.png）は置かない -->
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <!-- 前景の層は使わないので透明にする（層を省くと端末によってはアイコンが出ないため、空の層を明示する） -->
+    <foreground android:drawable="@android:color/transparent" />
+</adaptive-icon>

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⭐️ アプリ本体のマニフェスト。画面は単一の MainActivity（タスク 8.3）の中で Compose が切り替える -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 接続の有無の監視（NetworkMonitor・タスク 4.3）で ConnectivityManager を呼ぶのに要る（インストール時に許可される通常の権限）。
+         firebase-auth なども同じ権限を宣言しているが、自分のコードが直接使うので明示する -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- 起動時に依存の組み立て（AppContainer）と接続先の確認を行う Application（タスク 5.1。ApplicationClassManifestTest で固定） -->
+    <!-- android:theme は、アクションバーの無いプラットフォームのテーマに、空のいちばん上の色の窓の背景を付けたもの（android-ui-ios-parity タスク 6.1。WindowThemeTest で固定）。
+         ライトとダークは res/values と res/values-night の同じ名前のテーマで分ける。画面（activity）には別のテーマを付けず、全ての画面がこの 1 つを使う -->
+    <!-- android:icon・roundIcon は、res/mipmap-anydpi-v26 のアダプティブアイコン（背景に iOS の元絵を全面で敷き、前景は透明・レビュー R08。LauncherIconManifestTest で固定）。
+         無いとランチャーに既定のロボットの絵が出る -->
+    <!-- android:allowBackup・dataExtractionRules は、アプリのデータを、クラウドのバックアップにも
+         機種変更の引き継ぎ（端末間の移行）にも載せない宣言（レビュー R13・2026-11-05 の利用者の決定・設計書の Security Considerations）。
+         Android 11 以下は allowBackup="false" に頼る。Android 12 以降は機種によって allowBackup="false" でも
+         端末間の移行が止まらない（developer.android.com の「Behavior changes: Apps targeting Android 12」）ので、res/xml/data_extraction_rules.xml で
+         クラウドのバックアップと端末間の移行の両方から全ての領域を除く。BackupExclusionManifestTest で固定 -->
+    <application
+        android:name=".SoramoyouApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.Soramoyou">
+
+        <!-- Firebase Analytics の自動の画面計測を切る（タスク 4.1・設計書 Q10）。
+             画面表示は iOS 版と同じく、PostHog に 4 つの画面名だけを手動で送る -->
+        <meta-data
+            android:name="google_analytics_automatic_screen_reporting_enabled"
+            android:value="false" />
+
+        <!-- AdMob のアプリ ID（タスク 32.1・要件 14.2・14.3）。同意の取得（UMP）が、この ID に結びついた同意のメッセージを出す
+             （developers.google.com/admob/android/next-gen/privacy「Add the application ID」）。広告 SDK（Next-Gen）は同じ値を初期化の引数で受け取る。
+             値は直書きせず、app/build.gradle.kts がビルドの種類で選んだもの（debug・クローズドテストは Google のテスト用、本番トラックは本番）を
+             差し込む。AdMobAppIdManifestTest で固定 -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="${admobAppId}" />
+
+        <!-- Android 11 未満の端末でも、システムの写真選択画面を使えるようにする宣言（タスク 21.1・要件 6.1・6.2）。
+             Google Play 開発者サービスが写真選択画面を後から入れる（バックポート）ための合図で、権限は増えない。
+             クラスはアプリに無く、enabled="false" で起動もしない（宣言だけが読まれる）。
+             出典：developer.android.com の「Photo picker」の「Device availability」 -->
+        <service
+            android:name="com.google.android.gms.metadata.ModuleDependencies"
+            android:enabled="false"
+            android:exported="false"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="com.google.android.gms.metadata.MODULE_DEPENDENCIES" />
+            </intent-filter>
+            <meta-data
+                android:name="photopicker_activity:0:required"
+                android:value="" />
+        </service>
+
+        <!-- 起動の入口（タスク 8.3。MainActivityManifestTest で固定）。入口は exported="true" が必要 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>
