@@ -76,6 +76,8 @@ struct SettingsView: View {
                         dismiss()
                     }
                     .foregroundColor(.white)
+                    // アカウントの削除中は押せない（削除が終わると、また押せる）
+                    .disabled(viewModel.isDeletingAccount)
                 }
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
@@ -217,6 +219,8 @@ struct SettingsView: View {
             }
         }
         .navigationViewStyle(.stack)
+        // アカウントの削除中は、下へのスワイプでも閉じさせない（SoratomoComposeView と同じ書き方）
+        .interactiveDismissDisabled(viewModel.isDeletingAccount)
     }
 
     // MARK: - Account Deletion
