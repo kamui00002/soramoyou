@@ -33,7 +33,7 @@
 
 | # | 何を・どこへ |
 |---|---|
-| 1 | Firebase Auth のアカウント作成／ログイン |
+| 1 | Firebase Auth のアカウント作成／ログイン。ご意見の返信用のメールアドレス（`feedback.replyEmail`・任意・iOS 125 以降の予定）も同じ項目で、用途は「App機能」のまま（ご意見への返信＝カスタマーサポート）。返信先（欄、空なら登録メール）は関数 `mailFeedbackToSupport` が開発者の Gmail へ送る |
 | 2 | Firestore の `userId`、Analytics/Crashlytics の `setUserID`（**内部UIDのみ**。email や表示名は渡さない）。そらともでは、グループの参加・通報の記録の uid と、ガイドラインに同意した版と日時（`soratomoUsers` の `guidelineVersion`・`guidelineAgreedAt`）。リアクションを付けた人の uid（投稿の `reactions` のキーと `reactorIds`）と、リアクションの通知を送った相手の uid（`reactionNotices` の `notifiedReactorIds`） |
 | 3 | プロフィールの表示名（`users.displayName`）。そらともの投稿者名・メンバー一覧・リアクションの押した人の一覧と、リアクションの通知の本文にも出す（そらとも専用の名前は無い） |
 | 4 | 投稿画像を Firebase Storage へアップロード。そらともの投稿画像は Storage の `soratomo/` 配下（位置情報などのメタデータは送る前に落とす） |
@@ -53,6 +53,13 @@
 > 付けられるのは決まった 7 種類の絵文字（`functions/soratomoCore.js` の `REACTION_KINDS`）から 1 つだけで、自由な文字は保存しない。
 > 保存するのは付けた人の内部ID・種類の名前・時刻だけ（投稿の `reactions`・`reactorIds`）。通知の記録（`reactionNotices`・`reactionNotifyState`）も内部IDと時刻だけ。
 > 表と `PrivacyInfo.xcprivacy` は 9 種類のまま（2026-10-22 に開発者が承認・soratomo-reactions tasks 14.5）。
+>
+> **ご意見の返信用のメールアドレス（2026-11-20 の PR 1・アプリの欄は PR 2）でも新しい種類は増えない。**
+> メールアドレス（#1）は既に「App機能・ユーザーにリンク」で申告している。返信はカスタマーサポートなので、用途は「App機能」のまま。
+> ⚠️ 確かめる項目（Android のデータ セーフティ）: Android には欄が無いが、空欄のときは登録メールへ返信することがある（関数が登録メールを開発者の Gmail へ送る）。
+> Play Console の「メールアドレス」の目的に、この返信が今の申告で含まれているかを、**PR 1 の関数（`mailFeedbackToSupport`）を deploy する前に**確かめる（まだ確かめていない）。
+> 関数を出した時点で、欄の無い古い iOS と Android のご意見でも登録メールが Gmail へ送られ始めるため（PR 2 を待たない）。
+> deploy の順は Hosting（プライバシーポリシー）→ Rules → secret → 関数。
 
 ---
 

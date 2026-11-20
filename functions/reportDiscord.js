@@ -133,4 +133,7 @@ function buildReportPayload({ report, projectId }) {
 module.exports = {
   REPORT_REASON_LABELS,
   buildReportPayload,
+  // ご意見の知らせ（feedbackMail.js・feedbackDiscord.js）も同じ形のリンクと、同じプロジェクト ID の確かめを使う
+  firestoreConsoleUrl,
+  PROJECT_ID_PATTERN,
 };

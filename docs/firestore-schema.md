@@ -155,12 +155,16 @@
   "category": "string",              // 種別 bug/request/other（任意）
   "appVersion": "string",            // 例 "1.7.4 (57)"（任意・トラブル切り分け用）
   "deviceInfo": "string",            // 例 "iOS 18.5 / iPhone"（任意）
+  "replyEmail": "string",            // 返信用のメールアドレス（任意・入力したときだけ書く。iOS 125 以降の予定・Android は無し）
   "createdAt": "timestamp"           // serverTimestamp
 }
 ```
 - セキュリティ: 作成は認証済みユーザーが自分のIDでのみ（rules `hasAll(['userId','message','createdAt'])` + message 1〜1000文字）。**読み取り・更新・削除は不可**（管理者が Firebase コンソールで閲覧）。
-- email・表示名などの PII は保存しない（userId のみ）。
-- 副作用: ドキュメント作成で Cloud Functions `notifyFeedbackToDiscord`（`functions/index.js`）が発火し、開発者の Discord へ Webhook 通知する。Webhook URL は Secret Manager `DISCORD_WEBHOOK_URL`（コードに実値なし）。デプロイには Blaze ＋ `firebase functions:secrets:set DISCORD_WEBHOOK_URL` が必要。
+- `replyEmail` は項目が無い・null なら通す（古い iOS と Android はそのまま）。あるときは「文字列・3〜254 文字・@ 以外の半角の見える文字（! から ~）だけの `…@….…`」（rules の `isValidReplyEmail`・`functions/feedbackMail.js` の `REPLY_EMAIL_PATTERN`・アプリの確かめは同じ形にする。2026-11-20 決定）。
+- 個人情報: 返信用のメールアドレス（`replyEmail`・任意）だけは保存する。表示名などは保存しない。登録メールは保存せず、返信先が要るときに関数が Auth から引く（下の `mailFeedbackToSupport`）。
+- 副作用: ドキュメント作成で Cloud Functions が 2 本発火する（`functions/index.js`。別の関数なので、片方が落ちても片方は届く）。
+  - `notifyFeedbackToDiscord`: 開発者の Discord へ Webhook 通知する（本文は `functions/feedbackDiscord.js`）。返信用のメールアドレスは載せず「返信用アドレス：あり／なし」だけ。Firestore コンソールの文書へのリンクを付ける。Webhook URL は Secret Manager `DISCORD_WEBHOOK_URL`（コードに実値なし）。デプロイには Blaze ＋ `firebase functions:secrets:set DISCORD_WEBHOOK_URL` が必要。
+  - `mailFeedbackToSupport`: 開発者の Gmail（soramoyou.app・自分宛て）へ、ご意見と返信先を送る（本文は `functions/feedbackMail.js`）。返信先は `replyEmail` が正しい形ならそれ、無ければ Auth の登録メール（欄が使えないときだけ `getAuth().getUser(uid)` で引く）。宛先も差出人も soramoyou.app だけで、返信先は Reply-To にだけ入れる。Gmail の SMTP（アプリ パスワード＝Secret Manager `SUPPORT_GMAIL_APP_PASSWORD`・依存 nodemailer）。返信の手順は開発者の手元の手順書（公開しないノート）。関数より前の分は `scripts/feedback-recipient.js <feedbackId>`（利用者が流す・読むだけ）。
 
 ## reports コレクション（投稿の通報）☁️
 ```json
