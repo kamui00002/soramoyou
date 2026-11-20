@@ -1,4 +1,4 @@
-// ⭐️ 退会の手順の本体：再認証 → iOS の順序に画像の 3 段階を足したデータの削除 → 認証のアカウントの削除 → 端末内のデータの消去（設計書の部品 AccountDeletionService。タスク 31.2・31.6・要件 12.3〜12.5・12.7）
+// ⭐️ 退会の手順の本体：再認証 → iOS と同じ順のデータの削除（画像の 3 段階を含む）→ 認証のアカウントの削除 → 端末内のデータの消去（設計書の部品 AccountDeletionService。タスク 31.2・31.6・要件 12.3〜12.5・12.7）
 package com.yoshidometoru.soramoyou.data.repository
 
 import com.yoshidometoru.soramoyou.contract.AppError
@@ -48,9 +48,9 @@ interface AccountDeletionService {
 
     /**
      * いまログインしているユーザーのアカウントとデータを消す。順は [DeletionStage] の宣言の順（設計書の AccountDeletionService の節。iOS の
-     * `deleteUserData`：FirestoreService.swift:874-951 と、その呼び出し元 `performReauthAndDelete`：SettingsViewModel.swift:232-260 に、
-     * 投稿の画像〔POST_IMAGES〕とアイコン画像〔PROFILE_IMAGE〕の 2 段階を足したもの。タスク 26 の判断②。さらに、文書から拾えなかった画像〔STORAGE_LEFTOVERS〕を
-     * タスク 31.6 で足した）。
+     * `deleteUserData`：FirestoreService.swift:874-951 と、その呼び出し元 `performReauthAndDelete`：SettingsViewModel.swift:232-260 と同じ順。
+     * 投稿の画像〔POST_IMAGES〕とアイコン画像〔PROFILE_IMAGE〕の 2 段階はタスク 26 の判断②、文書から拾えなかった画像〔STORAGE_LEFTOVERS〕は
+     * タスク 31.6 で足した。iOS の退会も #260 から同じ 3 段階を持つ）。
      *
      * - 最初に [password] で再認証する（REAUTH）。ここで失敗したら、データには一切触れていない
      * - 途中の段階で失敗したら、以降の段階と認証のアカウントの削除を行わずに `StageFailed(止まった段階, 原因)` を返す。
@@ -245,7 +245,7 @@ class DefaultAccountDeletionService(
     }
 
     /**
-     * 自分の投稿の画像（本体・サムネイル・元画像）を Storage から消す。iOS の退会は消さない（Android だけの段階。タスク 26 の判断②）。
+     * 自分の投稿の画像（本体・サムネイル・元画像）を Storage から消す（タスク 26 の判断②。iOS の退会も同じ段階を持つ：#260）。
      * パスの集め方は自分の投稿の削除と同じ [postImagePathsOf]（`storagePath` が無ければ URL から解決し、自分の投稿の画像の形のパスだけを残す）。
      *
      * 投稿の文書は、この段階と POSTS の段階で**それぞれサーバーから取る**（ここで取った一覧を POSTS に渡さない）。

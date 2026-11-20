@@ -158,7 +158,8 @@ enum class ValidationReason {
 /**
  * 退会処理の段階。宣言の順は設計書 :885 の並び。
  * iOS の Firestore 側の退会は FirestoreService.swift:884-945 で、段階名を `stage` 変数に持つ
- * （publicProfiles → follows.follower → follows.followee → likes → comments → posts → drafts → favorites → users の 9 つ。
+ * （publicProfiles → follows.follower → follows.followee → likes → comments → posts → storage.postImages → posts → drafts → favorites →
+ * storage.profileIcon → storage.leftovers → users。画像の 3 つは #260 から。
  * 初期値の `stage = "publicProfiles"` は :884）。この相対的な順は、下の宣言順と同じである。
  * [REAUTH]・[AUTH]・[POST_IMAGES]・[PROFILE_IMAGE] は Firestore の外側の手順で、設計書 :885 で足されている。
  * [STORAGE_LEFTOVERS] も Firestore の外側の手順で、タスク 31.6 で足した（自分の画像のフォルダを一覧して、文書から拾えなかった画像を消す）。

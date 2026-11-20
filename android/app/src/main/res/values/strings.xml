@@ -382,16 +382,16 @@
     <string name="account_delete_password_message">セキュリティのため、アカウント削除にはパスワードの再入力が必要です。</string>
     <string name="action_confirm_delete_account">確認して削除</string>
     <string name="account_deleting">アカウントを削除中...</string>
-    <!-- 以下は Android だけの文言。iOS の確認文（SettingsView.swift の「すべての投稿・下書き・プロフィール情報が完全に削除されます」）は、
-         iOS では投稿の写真とアイコン画像がサーバーに残る実態とも、Android の退会で消えるものの範囲とも合わない（タスク 26 の観察）ので写さない。
+    <!-- 以下は Android だけの文言。iOS の確認文（SettingsView.swift）は、
+         残るもの（通報・ご意見・ご要望など）を言わないので写さない。
          消えるもの・残るものは、削除の受付ページ（https://soramoyou-ios.web.app/delete-account/ の 3〜5。タスク 26.1）と同じ範囲で書く。
          Android の退会は投稿の写真とアイコン画像も消す（タスク 26 の判断②）。残るのは、rules でアプリから消せない通報とご意見・ご要望と、
          Android の退会が触れない iOS 版だけの機能のデータ -->
     <string name="account_delete_intro">アカウントを削除すると、次のデータがすべて削除されます。</string>
     <!-- そらとも（iOS 版の機能）のデータは、Android の退会の段階（AccountDeletionService）には無いが、Auth のアカウントが無い人の分を
          サーバーの定期の後始末（functions/soratomo.js の soratomoHousekeeping・6 時間ごと）が消すので、消えるものに挙げる。
-         両 OS で同じアカウントを使う人が、取り消せない削除の前に知れるように（受付ページの 3. と同じ文言。iOS も main の確認文に、
-         そらともを使える人には 1 文足している。この作業ツリーの iOS の写しはそれより古い） -->
+         両 OS で同じアカウントを使う人が、取り消せない削除の前に知れるように（受付ページの 3. と同じ文言。iOS も確認文に、
+         そらともを使える人には 1 文足している） -->
     <string name="account_delete_removed_items">・投稿（写真を含む）\n・プロフィール（表示名・アイコン画像など）\n・いいね・コメント\n・フォロー・フォロワーの関係\n・下書き・お気に入り\n・アカウント（メールアドレスとログインの情報）\n・そらとも（iOS 版の機能）の投稿（写真を含む）・グループへの参加・ガイドラインへの同意の記録</string>
     <string name="account_delete_kept_title">削除しても残るデータ</string>
     <string name="account_delete_kept_items">・通報の記録（不正利用を防ぐため、削除の後も保持します）\n・「ご意見・ご要望」で送った内容\n・iOS 版だけの機能（「空を動かす」・コレクション）のデータ</string>
