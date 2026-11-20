@@ -15,17 +15,17 @@
 //     swizzling するため、APNs トークン受け渡しに AppDelegate は不要。
 //
 
-import Foundation
-import FirebaseMessaging
 import FirebaseAuth
 import FirebaseFirestore
-import UserNotifications
+import FirebaseMessaging
+import Foundation
 import UIKit
+import UserNotifications
 
 /// FCM の受信側プラミング（トークン保存・許可要求・APNs 登録）。
 final class PushNotificationManager: NSObject, MessagingDelegate {
     static let shared = PushNotificationManager()
-    private override init() { super.init() }
+    override private init() { super.init() }
 
     /// FirebaseApp.configure() の直後に1回呼ぶ。Messaging の登録トークン通知を受け取れるようにする。
     func configure() {
@@ -63,7 +63,7 @@ final class PushNotificationManager: NSObject, MessagingDelegate {
         case .denied:
             return false
         case .notDetermined:
-            let granted = (try? await center.requestAuthorization(options: [.alert, .badge, .sound])) ?? false
+            let granted = await (try? center.requestAuthorization(options: [.alert, .badge, .sound])) ?? false
             if granted { await registerOnMain() }
             return granted
         @unknown default:
@@ -86,22 +86,98 @@ final class PushNotificationManager: NSObject, MessagingDelegate {
     /// ログアウト時に、現在のユーザーの users/{uid}.fcmToken を削除する。
     /// 共有端末で別アカウントにこの端末のトークンが残り、旧ユーザー宛の通知が誤配信されるのを防ぐ。
     /// ⚠️ Auth がまだ有効なうち（authService.signOut の前）に呼ぶこと（rules の所有者更新を通すため）。
+    /// ⚠️ 電波が無いと削除は返事をしない。`tokenClearTimeout` を過ぎたら待つのをやめて戻る（ログアウトを止めない）。
+    ///    そのときは users/{uid} に宛先が残り、共有端末で前の人宛の通知が届く余地が残る（承知の上での引き換え）。
     func clearTokenForCurrentUser() async {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        do {
+        let timeout = Self.tokenClearTimeout
+        // 操作には uid だけを渡し、Firestore の参照は中で作る（Sendable でない値を持ち込まない）
+        let outcome = await Self.wait(atMost: timeout) {
             try await Firestore.firestore().collection("users").document(uid).updateData([
                 "fcmToken": FieldValue.delete(),
-                "fcmTokenUpdatedAt": FieldValue.delete()
+                "fcmTokenUpdatedAt": FieldValue.delete(),
             ])
-        } catch {
+        }
+        // ログは返ってきた結果を見てここで 1 回だけ出す（時間切れの後に遅れて来た失敗では出さない）
+        switch outcome {
+        case .finished:
+            break
+        case let .failed(error):
             print("❌ FCMトークン削除失敗 uid=\(uid) error=\(error.localizedDescription)")
+        case .timedOut:
+            print("❌ FCMトークン削除が \(timeout) 以内に終わらない（電波が無い可能性）。待たずにログアウトを進める uid=\(uid)")
+        }
+    }
+
+    // MARK: - 時間切れつきの待ち
+
+    /// ログアウトのときにトークン削除を待つ時間の上限
+    static let tokenClearTimeout: Duration = .seconds(3)
+
+    /// 時間切れつきで待った操作の結果
+    enum WaitOutcome {
+        /// 時間内に終わった
+        case finished
+        /// 時間内に失敗した
+        case failed(Error)
+        /// 時間内に終わらなかった（操作は止めずに置いていく）
+        case timedOut
+    }
+
+    /// 操作の終わりを `timeout` まで待つ。投げずに結果を返す（投げると signOut の catch に入り、ログアウトが止まる）
+    /// - 操作と時計を別々の Task で動かし、先に終わった方の結果を 1 回だけ返す
+    /// - 時間切れのあとも操作の Task は止めない（返事は捨てる）
+    /// - ⚠️ withTaskGroup では作らない。グループは抜ける前に全部の子の終わりを待ち、
+    ///   Firestore の async は取り消しに反応しないので、時間切れでも抜けられない（テストの陽性対照で実測済み）
+    static func wait(
+        atMost timeout: Duration,
+        for operation: @escaping @Sendable () async throws -> Void
+    ) async -> WaitOutcome {
+        await withCheckedContinuation { continuation in
+            let once = WaitResumeOnce(continuation)
+            let timer = Task {
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+                once.resume(.timedOut)
+            }
+            Task {
+                defer { timer.cancel() }
+                do {
+                    try await operation()
+                    once.resume(.finished)
+                } catch {
+                    once.resume(.failed(error))
+                }
+            }
+        }
+    }
+
+    /// continuation を 1 回だけ再開する（時間切れと操作の終わりの、先に来た方だけを通す）
+    private final class WaitResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<WaitOutcome, Never>?
+
+        init(_ continuation: CheckedContinuation<WaitOutcome, Never>) {
+            self.continuation = continuation
+        }
+
+        /// 最初の呼び出しだけ continuation を再開する。2 回目以降は何もしない
+        func resume(_ outcome: WaitOutcome) {
+            lock.lock()
+            let pending = continuation
+            continuation = nil
+            lock.unlock()
+            pending?.resume(returning: outcome)
         }
     }
 
     // MARK: - MessagingDelegate
 
     /// 登録トークンが発行・更新されたときに呼ばれる。ログイン中なら Firestore に保存する。
-    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+    func messaging(_: Messaging, didReceiveRegistrationToken fcmToken: String?) {
         guard let fcmToken else { return }
         saveToken(fcmToken)
     }
@@ -119,7 +195,7 @@ final class PushNotificationManager: NSObject, MessagingDelegate {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         Firestore.firestore().collection("users").document(uid).setData([
             "fcmToken": token,
-            "fcmTokenUpdatedAt": FieldValue.serverTimestamp()
+            "fcmTokenUpdatedAt": FieldValue.serverTimestamp(),
         ], merge: true) { error in
             if let error {
                 // 失敗を握りつぶさない。print に加えてテレメトリへ送る。
