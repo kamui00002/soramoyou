@@ -9,8 +9,8 @@ import kotlin.test.assertTrue
 /**
  * iOS 版に同じ場面がある短い文言は、iOS の SettingsView の書き方の中にそのまま現れることを確かめる
  * （FeedbackStringsTest と同じ考え方。期待値は strings.xml から取る）。
- * iOS の確認文（「すべての投稿・下書き・プロフィール情報が完全に削除されます」）は、iOS の実態とも Android の範囲とも合わないので
- * 写していない（strings.xml の注記）。代わりに Android の説明が、消えるもの・残るもの・取り消せないことを言っていることを確かめる。
+ * iOS の確認文（SettingsView.swift）は残るものを言わないので写していない（strings.xml の注記）。
+ * 代わりに Android の説明が、消えるもの・残るもの・取り消せないことを言っていることを確かめる。
  */
 class AccountDeletionStringsTest {
 

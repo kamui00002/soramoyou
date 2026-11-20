@@ -9,8 +9,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * いいね文書は「押した人の uid・投稿 ID・作成日時」の 3 項目だけで、ドキュメント ID は `{uid}_{postId}`（firestore.rules:320-323）。
- * 投稿側は `likesCount` の ±1 の加算だけ（firestore.rules:85-104 の isCountOnlyUpdate。`updatedAt` を同時に書くと拒否される）。
+ * いいね文書は「押した人の uid・投稿 ID・作成日時」の 3 項目だけで、ドキュメント ID は `{uid}_{postId}`（firestore.rules の likes の create）。
+ * 投稿側は `likesCount` の ±1 の加算だけ（firestore.rules の isCountOnlyUpdate。`updatedAt` を同時に書くと拒否される）。
  *
  * 陽性対照（先に赤を確かめたもの）：更新日時を同時に含むいいね数の更新、±1 以外の増減、
  * 他人の uid・ドキュメント ID と食い違う投稿 ID・4 項目目のキーを持ついいね文書が違反になること。

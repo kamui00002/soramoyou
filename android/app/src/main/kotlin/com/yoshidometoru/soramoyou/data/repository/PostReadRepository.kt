@@ -19,7 +19,7 @@ sealed interface PostLookup {
     /**
      * 投稿が無い（削除済み）。
      * ⚠️ 削除済みの投稿は、多くの場合 [NoPermission] として届く（2026-10-05 にエミュレータの REST で実測：認証なしで 403・管理者で 404。本番では未実測）。
-     * 投稿の読み取りのルールは `resource.data.visibility` を見ている（firestore.rules:265）ので、文書が無いと
+     * 投稿の読み取りのルールは `resource.data.visibility` を見ている（firestore.rules の posts の read）ので、文書が無いと
      * `resource` が null で評価が失敗し、読み取りが拒否されるため。
      */
     data object Deleted : PostLookup

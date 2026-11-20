@@ -80,7 +80,7 @@ sealed interface QuerySpec {
         companion object {
             /**
              * 1 回に取る件数（iOS の followsPageSize・reactionsPageSize と同じ 50 件）。
-             * follows の rules は list に `request.query.limit <= 50` を課し、上限なしの取得は拒否される（firestore.rules:237）。
+             * follows の rules は list に `request.query.limit <= 50` を課し、上限なしの取得は拒否される（firestore.rules の follows の list）。
              */
             const val PAGE_SIZE: Int = 50
         }

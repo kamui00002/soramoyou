@@ -61,7 +61,7 @@ value class DocRef private constructor(val path: String) {
 
         /**
          * `follows/{followId}`（フォロー関係。タスク 31.2 の退会で消す）。ID は iOS が作る `{followerId}_{followeeId}` の形
-         * （firestore.rules:242）だが、退会では**サーバーから取った文書の ID をそのまま**渡す（組み立て直さない。形の違う旧データも消すため）。
+         * （firestore.rules の follows の create）だが、退会では**サーバーから取った文書の ID をそのまま**渡す（組み立て直さない。形の違う旧データも消すため）。
          */
         fun follow(followId: String): DocRef = DocRef("follows/${segment(followId)}")
 
@@ -70,7 +70,7 @@ value class DocRef private constructor(val path: String) {
 
         /**
          * `users/{uid}/favorites/{favoriteId}`（お気に入り。タスク 31.2 の退会で消す）。ID はサーバーから取った文書の ID
-         * （iOS は投稿の ID にしている：firestore.rules:170）をそのまま渡す。持ち主の uid と ID の両方が 1 つの区切りであること。
+         * （iOS は投稿の ID にしている：firestore.rules の favorites の create）をそのまま渡す。持ち主の uid と ID の両方が 1 つの区切りであること。
          */
         fun favorite(uid: Uid, favoriteId: String): DocRef =
             DocRef("users/${segment(uid.value)}/favorites/${segment(favoriteId)}")

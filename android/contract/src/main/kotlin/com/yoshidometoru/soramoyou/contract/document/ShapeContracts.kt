@@ -62,7 +62,7 @@ object ShapeContracts {
      * `users/{uid}` の作成（`USER_CREATE`）。
      *
      * 根拠：
-     * - rules（firestore.rules:150-152）：`isOwner(userId)` ＋ `hasAll(['id','createdAt'])` ＋ `isValidEmail(email)`。
+     * - rules（firestore.rules の users の create）：`isOwner(userId)` ＋ `hasAll(['id','createdAt'])` ＋ `isValidEmail(email)`。
      *   `id` の一致は、この契約の `EqualsDocumentId` で縛る。
      * - iOS の書き込み（User.swift:106-144 `toFirestoreData`。:108-110・:113-115・:137-144）：`id`・`createdAt`・`updatedAt`・（あれば）`email`・
      *   3 つのカウンタ・3 つの通知設定を、常に書く。
@@ -96,7 +96,7 @@ object ShapeContracts {
      * `publicProfiles/{uid}` の作成（`PUBLIC_PROFILE_CREATE`）。
      *
      * 根拠：
-     * - rules（firestore.rules:204-207）：`isOwner(userId)` ＋ `hasAll(['id','createdAt'])` ＋ `id == userId`（:206・#133）
+     * - rules（firestore.rules の publicProfiles の create）：`isOwner(userId)` ＋ `hasAll(['id','createdAt'])` ＋ `id == userId`（#133）
      *   ＋ `recommendedPostIds` の型の検査（無ければ許可）＋ `photoURL` が画像の URL の形（iOS #224。[IMAGE_URL]）。
      * - iOS の書き込み（PublicProfile.swift:80-116 `toFirestoreData`。:82-84・:87-97・:107-109）：`id`・`createdAt`・`updatedAt`・
      *   （値があれば）`displayName`・`photoURL`・`bio`・3 つのカウンタ。
@@ -126,8 +126,8 @@ object ShapeContracts {
      * `users/{uid}` のプロフィールの更新（`USER_PROFILE_UPDATE`）。
      *
      * 根拠：
-     * - rules（firestore.rules:158-161）：所有者だけが更新でき、`id` と（あれば）`email` を変えない。変えた `photoURL` は
-     *   画像の URL の形（iOS #224。[IMAGE_URL]）
+     * - rules（firestore.rules の users の update）：所有者だけが更新でき、`id` と（あれば）`email` を変えない。変えた `photoURL` は
+     *   画像の URL の形でなければならない（iOS #224。[IMAGE_URL]）
      * - iOS は `User` 全体を `setData(merge: true)` で書く（設計書の要件 10.6 の注）。Android は要件どおり、変えた項目と
      *   `updatedAt` だけを部分更新する（手元の古いカウンタで上書きしない）
      *
@@ -143,8 +143,8 @@ object ShapeContracts {
      * `publicProfiles/{uid}` のプロフィールの更新（`PUBLIC_PROFILE_UPDATE`）。
      *
      * 根拠：
-     * - rules（firestore.rules:209-211）：所有者だけが更新でき、`id` を変えない（＋おすすめの空の形の検査。Android は書かない）、
-     *   変えた `photoURL` は画像の URL の形（iOS #224。[IMAGE_URL]）
+     * - rules（firestore.rules の publicProfiles の update）：所有者だけが更新でき、`id` を変えない（＋おすすめの空の形の検査。Android は書かない）、
+     *   変えた `photoURL` は画像の URL の形でなければならない（iOS #224。[IMAGE_URL]）
      * - iOS（FirestoreService.swift:1327-1342 `updatePublicProfileFields`）：`updatedAt` を常に書き、値のある表示名・アイコン・
      *   自己紹介だけを足す。iOS は空にできない（キーを削除しない）が、Android は空にした項目をキーの削除にする（設計書 QD）
      *
@@ -159,7 +159,7 @@ object ShapeContracts {
      * `likes/{uid}_{postId}` の作成（`LIKE_CREATE`）。
      *
      * 根拠：
-     * - rules（firestore.rules:320-323）：`userId == auth.uid` ＋ ドキュメント ID が `auth.uid + '_' + postId` ＋ `hasAll(['userId','postId','createdAt'])`
+     * - rules（firestore.rules の likes の create）：`userId == auth.uid` ＋ ドキュメント ID が `auth.uid + '_' + postId` ＋ `hasAll(['userId','postId','createdAt'])`
      * - iOS の書き込み（Like.swift:36-38）：この 3 項目だけ。`createdAt` は端末の時刻（設計書 QC）
      *
      * 書かないもの（契約に無いので違反になる）：3 項目以外の全て（要件 9.3）。
@@ -177,7 +177,7 @@ object ShapeContracts {
      * `posts/{postId}` のいいね数の更新（`POST_LIKE_COUNTER`）。他人の投稿にも書く。
      *
      * 根拠：
-     * - rules（firestore.rules:85-104 `isCountOnlyUpdate`）：変わるキーは `likesCount`・`commentsCount` だけ、キー数が同じ、
+     * - rules（firestore.rules の `isCountOnlyUpdate`）：変わるキーは `likesCount`・`commentsCount` だけ、キー数が同じ、
      *   `likesCount` の変化は ±1 だけ
      * - iOS（FirestoreService.swift:1562, 1567）：`likesCount` の `increment(±1)` だけ
      *
@@ -196,7 +196,7 @@ object ShapeContracts {
      * `posts/{postId}` のコメント数の減算（`POST_COMMENT_COUNTER`）。退会で自分のコメントを 1 件消すたびに、他人の投稿にも書く（タスク 31.3）。
      *
      * 根拠：
-     * - rules（firestore.rules:85-104 `isCountOnlyUpdate`）：変わるキーは `likesCount`・`commentsCount` だけ、キー数が同じ、
+     * - rules（firestore.rules の `isCountOnlyUpdate`）：変わるキーは `likesCount`・`commentsCount` だけ、キー数が同じ、
      *   `commentsCount` の変化は ±1 だけ
      * - iOS（FirestoreService.swift:1069・1083 `deleteReaction`）：退会のときに `commentsCount` の `increment(-1)` だけを書く
      *
@@ -252,9 +252,9 @@ object ShapeContracts {
      * `posts/{postId}` の作成（`POST_CREATE`）。
      *
      * 根拠：
-     * - rules（firestore.rules:55-63 `isValidPost`・:271-273）：`hasAll(['userId','images','visibility','createdAt'])`、
+     * - rules（firestore.rules の `isValidPost`・posts の create）：`hasAll(['userId','images','visibility','createdAt'])`、
      *   `userId == auth.uid`、`caption` は 2000 以下（`size()` は UTF-16 の単位）、`hashtags` は 30 以下、`visibility` は 3 値、`images` は 1〜10 件
-     * - rules（:85-104 `isCountOnlyUpdate`）：`likesCount`・`commentsCount` が無いと、誰もいいねできない投稿になる。だから作成時に整数の 0 を書く
+     * - rules（`isCountOnlyUpdate`）：`likesCount`・`commentsCount` が無いと、誰もいいねできない投稿になる。だから作成時に整数の 0 を書く
      * - iOS の読み取り（Post.swift:214-335）：`postId`・`userId` が文字列、`images` がマップの配列でないとデコードに失敗する
      * - iOS の書き込み（Post.swift の `toFirestoreData`・PostViewModel.swift:884-920）：`postId`・`userId`・`images`・`visibility`・
      *   2 つのカウンタ・`createdAt`・`updatedAt` を常に、`caption`・`hashtags`・`capturedAt`・`timeOfDay` などを値があるときだけ書く
@@ -299,7 +299,7 @@ object ShapeContracts {
      * `users/{uid}` の全投稿数の更新（`USER_POSTS_COUNT`）。
      *
      * 根拠：iOS の `recountPostsCount`（FirestoreService.swift:678-700）は、投稿を数え直した値（集計）を `postsCount` だけで上書きする。
-     * rules（firestore.rules:158-161）は所有者の更新で `id`・`email` を変えない。
+     * rules（firestore.rules の users の update）は所有者の更新で `id`・`email` を変えない。
      * 加算ではなく値で書く（数え直しなので、手元の古い値で他の端末の投稿を消すことにならない）。負の値は書かない。
      *
      * 書かないもの：`postsCount` 以外の全て（`updatedAt` も iOS は書かない）。
@@ -325,7 +325,7 @@ object ShapeContracts {
      * `reports/{自動ID}` の作成（`REPORT_CREATE`）。
      *
      * 根拠：
-     * - rules（firestore.rules:367-378）：読み取りは全て拒否。作成は認証済みで、`reporterId == auth.uid` ＋
+     * - rules（firestore.rules の reports）：読み取りは全て拒否。作成は認証済みで、`reporterId == auth.uid` ＋
      *   `hasAll(['postId','reporterId','reportedUserId','reason','createdAt'])`
      * - iOS の書き込み（FirestoreService.swift:1143-1155 `reportPost`）：この 5 項目だけ。`createdAt` は `FieldValue.serverTimestamp()`。
      *   理由は `ReportReason.rawValue`（ReportReason.swift:11-16）
@@ -354,7 +354,7 @@ object ShapeContracts {
      * `users/{uid}` のブロック中のユーザーの追加・削除（`USER_BLOCKED_IDS`）。
      *
      * 根拠：
-     * - rules（firestore.rules:158-161）：所有者だけが更新でき、`id` と（あれば）`email` を変えない
+     * - rules（firestore.rules の users の update）：所有者だけが更新でき、`id` と（あれば）`email` を変えない
      * - iOS の書き込み（FirestoreService.swift:1174-1194 `blockUser`・`unblockUser`）：`blockedUserIds` に
      *   `FieldValue.arrayUnion([uid])`／`arrayRemove([uid])` を **1 要素だけ**。`updatedAt` も書かない
      *
@@ -379,7 +379,7 @@ object ShapeContracts {
      * `feedback/{UUID}` の作成（`FEEDBACK_CREATE`）。ドキュメント ID は大文字の UUID（Feedback.swift:44）だが、契約は縛らない。
      *
      * 根拠：
-     * - rules（firestore.rules:383-397）：読み取りは全て拒否。作成は認証済みで、`userId == auth.uid` ＋
+     * - rules（firestore.rules の feedback）：読み取りは全て拒否。作成は認証済みで、`userId == auth.uid` ＋
      *   `hasAll(['userId','message','createdAt'])` ＋ `message` が文字列で `size()` が 1〜1000（**UTF-16 の単位**）
      * - iOS の書き込み（Feedback.swift:70-86 `toFirestoreData`・FeedbackViewModel.swift:38-51）：`userId`・`message`・`createdAt`
      *   （`FieldValue.serverTimestamp()`）を常に、`category`・`appVersion`・`deviceInfo` を値があるときだけ。

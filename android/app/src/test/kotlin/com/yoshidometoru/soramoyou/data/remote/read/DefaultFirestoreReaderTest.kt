@@ -97,7 +97,7 @@ class DefaultFirestoreReaderTest {
     @Test
     fun `退会の取得のうち、自分がフォローした側は、followsのfollowerIdが自分のものを並び順なしで50件取る形に展開する`() {
         // 並び順を付けない：付けると複合インデックスが要り、deploy 漏れで退会が丸ごと失敗する経路が増える（iOS FirestoreService.swift:956-958）。
-        // 件数を付ける：follows の rules は list に limit <= 50 を課し、上限なしの取得は PERMISSION_DENIED になる（firestore.rules:237）
+        // 件数を付ける：follows の rules は list に limit <= 50 を課し、上限なしの取得は PERMISSION_DENIED になる（firestore.rules の follows の list）
         assertEquals(
             QueryPlan(
                 collection = "follows",

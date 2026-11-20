@@ -11,10 +11,10 @@ import java.util.Locale
  * - [PASSWORD_MIN]：Soramoyou/Soramoyou/Services/AuthService.swift:51（`password.count >= 6`）
  * - [DISPLAY_NAME_MAX]・[BIO_MAX]：Soramoyou/Soramoyou/ViewModels/ProfileViewModel.swift:743-744
  *   （`editingDisplayName.count <= 50`・`editingBio.count <= 200`）
- * - [CAPTION_MAX]：firestore.rules:31（`caption.size() <= 2000`）
- * - [HASHTAGS_MAX]：firestore.rules:36（`hashtags.size() <= 30`）
- * - [FEEDBACK_MAX]：firestore.rules:394（`message.size() <= 1000`）、Soramoyou/Soramoyou/Models/Feedback.swift:62
- * - [IMAGES_MIN]・[IMAGES_MAX]：firestore.rules:61-62（`images.size() >= 1`・`<= 10`）
+ * - [CAPTION_MAX]：firestore.rules の `isValidCaption`（`caption.size() <= 2000`）
+ * - [HASHTAGS_MAX]：firestore.rules の `isValidHashtags`（`hashtags.size() <= 30`）
+ * - [FEEDBACK_MAX]：firestore.rules の feedback の create（`message.size() <= 1000`）、Soramoyou/Soramoyou/Models/Feedback.swift:62
+ * - [IMAGES_MIN]・[IMAGES_MAX]：firestore.rules の `isValidPost`（`images.size() >= 1`・`<= 10`）
  *
  * このうち、判定の関数があるのは、パスワード・表示名・自己紹介（13.1）、ハッシュタグの数（[isHashtagCountWithinLimit]）、
  * キャプションの長さ（[isCaptionWithinLimit]）、フィードバックの本文の長さ（[isFeedbackWithinLimit]・タスク 28）である。
@@ -155,7 +155,7 @@ object TextLimits {
 
     /**
      * 投稿のハッシュタグが [HASHTAGS_MAX]（30）個以下なら true（要件 7.8）。31 個以上なら投稿を確定させない。
-     * rules（firestore.rules:35-37）の `hashtags.size() <= 30` と同じく、配列の長さ（重複も 1 個ずつ）で数える。
+     * rules（firestore.rules の `isValidHashtags`）の `hashtags.size() <= 30` と同じく、配列の長さ（重複も 1 個ずつ）で数える。
      * 0 個は true（0 個のときは `hashtags` のキー自体を書かない）。
      * iOS 版には投稿前のこの判定が無く、31 個以上は rules の拒否で初めて失敗する。Android は送る前に止める。
      */
@@ -171,7 +171,7 @@ object TextLimits {
 
     /**
      * 前後の空白を取り除いた後のキャプション [trimmedCaption] が [CAPTION_MAX]（2000）以下なら true（要件 7.6）。
-     * rules（firestore.rules:31）の `caption.size() <= 2000` と同じく **UTF-16 の単位**で数える（絵文字の多くは 1 つで 2。
+     * rules（firestore.rules の `isValidCaption`）の `caption.size() <= 2000` と同じく **UTF-16 の単位**で数える（絵文字の多くは 1 つで 2。
      * 書記素で数える表示名・自己紹介の上限とは数え方が違う）。保存するのは取り除いた後の値なので、取り除いた後で判定する。
      * iOS 版には投稿前のこの判定が無く、超えると rules の拒否で初めて失敗する。Android は送る前に止める。
      */
@@ -179,7 +179,7 @@ object TextLimits {
 
     /**
      * 前後の空白を取り除いた後のフィードバックの本文 [trimmedMessage] が [FEEDBACK_MAX]（1000）以下なら true（要件 13.3）。
-     * rules（firestore.rules:393-394）の `message.size() <= 1000` と同じく **UTF-16 の単位**で数える（絵文字の多くは 1 つで 2）。
+     * rules（firestore.rules の feedback の create）の `message.size() <= 1000` と同じく **UTF-16 の単位**で数える（絵文字の多くは 1 つで 2）。
      * iOS（FeedbackViewModel.swift:42-43）は書記素（`trimmed.count <= 1000`）で数えるので、絵文字の多い本文は iOS では通っても
      * rules が断る。Android は送る前に rules と同じ数え方で止める。保存するのは取り除いた後の値なので、取り除いた後で判定する。
      * 空白だけかどうか（要件 13.3）は別で、[isBlank] で判定する。

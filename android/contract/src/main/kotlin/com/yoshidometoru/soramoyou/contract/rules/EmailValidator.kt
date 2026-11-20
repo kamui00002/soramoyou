@@ -5,8 +5,8 @@ package com.yoshidometoru.soramoyou.contract.rules
  * 新規登録で入力されたメールアドレスを、Firebase Authentication のアカウントを作る前に検証する。
  *
  * 通す条件は、次の 3 つを**すべて**満たすことである（`firestore.rules` の `isValidEmail` と iOS 版の、両方を満たす）。
- * 1. 長さが 1〜254（`firestore.rules:49-50` の `size() > 0` と `size() <= 254`）
- * 2. rules の正規表現に、文字列全体で一致する（`firestore.rules:51`。`matches` は全体一致）
+ * 1. 長さが 1〜254（`isValidEmail` の `size() > 0` と `size() <= 254`）
+ * 2. rules の正規表現に、文字列全体で一致する（`isValidEmail` の `matches` は全体一致）
  * 3. 最後のドット以降（トップレベルドメイン。以下 TLD）が 64 文字以下（iOS 版の `[A-Za-z]{2,64}`。
  *    Soramoyou/Soramoyou/Services/AuthService.swift:138）
  *
@@ -37,14 +37,14 @@ interface EmailValidator {
 
     companion object Default : EmailValidator {
 
-        /** rules の長さの上限（firestore.rules:50）。 */
+        /** rules の長さの上限（firestore.rules の `isValidEmail`）。 */
         private const val LENGTH_MAX = 254
 
         /** iOS の TLD の上限（AuthService.swift:138 の `{2,64}`）。 */
         private const val TLD_LENGTH_MAX = 64
 
         /**
-         * rules の正規表現そのもの（firestore.rules:51）。Kotlin の `Regex.matches` は全体一致なので、
+         * rules の正規表現そのもの（firestore.rules の `isValidEmail`）。Kotlin の `Regex.matches` は全体一致なので、
          * `containsMatchIn`（一部一致）や `IGNORE_CASE` は使わない。使うと「前後に余計な文字がある」「全角が通る」が起きる。
          */
         private val RULES_PATTERN = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")

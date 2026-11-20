@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
  * [EmailValidator] が、`firestore.rules` の `isValidEmail` と iOS 版の両方を満たすときだけ通すことを確かめる。
  *
  * 根拠（読んだ現物）:
- * - Firestore Security Rules：firestore.rules:46-52（`size() > 0`・`size() <= 254`・
+ * - Firestore Security Rules：firestore.rules の `isValidEmail`（`size() > 0`・`size() <= 254`・
  *   `matches('[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}')`。`matches` は文字列全体の一致）
  * - iOS 版：Soramoyou/Soramoyou/Services/AuthService.swift:137-141
  *   （`[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,64}` を `NSPredicate` の `SELF MATCHES` で評価。長さの上限は無い）
@@ -151,7 +151,7 @@ class EmailValidatorTest {
 
     @Test
     fun `TLDが65文字のアドレスはrulesの正規表現では通るがiOSの上限で弾く`() {
-        // 弾く理由が「正規表現」でなく「iOS の上限 64」であることを固定する。rules の正規表現（firestore.rules:51）を
+        // 弾く理由が「正規表現」でなく「iOS の上限 64」であることを固定する。rules の正規表現（firestore.rules の `isValidEmail`）を
         // このテストの中に写して、同じ入力が rules 側では通ることを確かめる
         val rulesPattern = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
         val tld65 = "x@example." + "a".repeat(65)

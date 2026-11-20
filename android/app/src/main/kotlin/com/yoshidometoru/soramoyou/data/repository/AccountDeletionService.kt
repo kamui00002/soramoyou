@@ -1,4 +1,4 @@
-// ⭐️ 退会の手順の本体：再認証 → iOS の順序に画像の 3 段階を足したデータの削除 → 認証のアカウントの削除 → 端末内のデータの消去（設計書の部品 AccountDeletionService。タスク 31.2・31.6・要件 12.3〜12.5・12.7）
+// ⭐️ 退会の手順の本体：再認証 → iOS と同じ順のデータの削除（画像の 3 段階を含む）→ 認証のアカウントの削除 → 端末内のデータの消去（設計書の部品 AccountDeletionService。タスク 31.2・31.6・要件 12.3〜12.5・12.7）
 package com.yoshidometoru.soramoyou.data.repository
 
 import com.yoshidometoru.soramoyou.contract.AppError
@@ -48,9 +48,9 @@ interface AccountDeletionService {
 
     /**
      * いまログインしているユーザーのアカウントとデータを消す。順は [DeletionStage] の宣言の順（設計書の AccountDeletionService の節。iOS の
-     * `deleteUserData`：FirestoreService.swift:874-951 と、その呼び出し元 `performReauthAndDelete`：SettingsViewModel.swift:232-260 に、
-     * 投稿の画像〔POST_IMAGES〕とアイコン画像〔PROFILE_IMAGE〕の 2 段階を足したもの。タスク 26 の判断②。さらに、文書から拾えなかった画像〔STORAGE_LEFTOVERS〕を
-     * タスク 31.6 で足した）。
+     * `deleteUserData`：FirestoreService.swift:874-951 と、その呼び出し元 `performReauthAndDelete`：SettingsViewModel.swift:232-260 と同じ順。
+     * 投稿の画像〔POST_IMAGES〕とアイコン画像〔PROFILE_IMAGE〕の 2 段階はタスク 26 の判断②、文書から拾えなかった画像〔STORAGE_LEFTOVERS〕は
+     * タスク 31.6 で足した。iOS の退会も #260 から同じ 3 段階を持つ）。
      *
      * - 最初に [password] で再認証する（REAUTH）。ここで失敗したら、データには一切触れていない
      * - 途中の段階で失敗したら、以降の段階と認証のアカウントの削除を行わずに `StageFailed(止まった段階, 原因)` を返す。
@@ -87,8 +87,8 @@ interface AccountDeletionService {
  * - 取得は全てサーバーから（[ReadSource.SERVER]。読み取り口も退会の形には SERVER を強制する）。通信が切れたときにキャッシュの一部を
  *   「全件」と誤認して、残りを消さずに認証のアカウントまで消してしまわないため
  * - 既に無いものの削除が成功になるのは、rules がパスだけで判定する文書（`publicProfiles`・`users`・`users/{uid}/favorites`：
- *   firestore.rules:213・:163・:179）と、Storage の「既に無い」（`NotFound`。消せたものとみなす）だけ。`follows`・`posts`・`drafts`・
- *   `likes`・`comments` の削除の rules は `resource.data` を見る（:249-251・:283・:305-306・:326-327・:359-361）ので、無い文書の削除は
+ *   firestore.rules のそれぞれの delete）と、Storage の「既に無い」（`NotFound`。消せたものとみなす）だけ。`follows`・`posts`・`drafts`・
+ *   `likes`・`comments` の削除の rules（それぞれの delete）は `resource.data` を見るので、無い文書の削除は
  *   rules の評価が拒否になり `PermissionDenied` が返る。どれも取った直後の存在する文書を消すが、
  *   取ってから消すまでの間に別の操作（相手のフォロワー削除・別の端末でのいいねの取り消しなど）で消えると、その段階は
  *   `StageFailed(段階, PermissionDenied)` で止まる。もう一度呼べば取り直すので回復する。退会の画面（31.5）は、この失敗を「権限がない」と
@@ -245,7 +245,7 @@ class DefaultAccountDeletionService(
     }
 
     /**
-     * 自分の投稿の画像（本体・サムネイル・元画像）を Storage から消す。iOS の退会は消さない（Android だけの段階。タスク 26 の判断②）。
+     * 自分の投稿の画像（本体・サムネイル・元画像）を Storage から消す（タスク 26 の判断②。iOS の退会も同じ段階を持つ：#260）。
      * パスの集め方は自分の投稿の削除と同じ [postImagePathsOf]（`storagePath` が無ければ URL から解決し、自分の投稿の画像の形のパスだけを残す）。
      *
      * 投稿の文書は、この段階と POSTS の段階で**それぞれサーバーから取る**（ここで取った一覧を POSTS に渡さない）。
