@@ -13,6 +13,8 @@ import UIKit
 class FeedbackViewModel: ObservableObject {
     @Published var message = ""
     @Published var category: FeedbackCategory = .bug
+    /// 返信用のメールアドレス（任意）。空のままなら送らない（サーバーが登録メールを返信先にする）
+    @Published var replyEmail = ""
     @Published var isSending = false
     @Published var errorMessage: String?
     /// 送信完了（成功画面の表示に使う）
@@ -46,6 +48,15 @@ class FeedbackViewModel: ObservableObject {
             return false
         }
 
+        // 返信用のメールアドレス（任意）：前後の空白と改行を削る（Rules と関数は削らずに確かめるので、削るのはここの役目）。
+        // 空なら書かない。形が合わなければ送らない（Rules も断るので、送ってもご意見ごと失敗する）
+        let trimmedReplyEmail = replyEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedReplyEmail.isEmpty, !Feedback.isValidReplyEmail(trimmedReplyEmail) {
+            // 半角での打ち間違い（@ や点が抜けた等）・全角・貼り付けで混ざった見えない文字のどれでも当てはまる文にする
+            errorMessage = "返信用のメールアドレスの形が正しくありません。半角の name@example.com の形で入力してください（貼り付けたときは、打ち直すと直ることがあります）"
+            return false
+        }
+
         isSending = true
         errorMessage = nil
 
@@ -54,7 +65,8 @@ class FeedbackViewModel: ObservableObject {
             message: trimmed,
             category: category.rawValue,
             appVersion: Self.currentAppVersion(),
-            deviceInfo: Self.currentDeviceInfo()
+            deviceInfo: Self.currentDeviceInfo(),
+            replyEmail: trimmedReplyEmail.isEmpty ? nil : trimmedReplyEmail
         )
 
         do {

@@ -622,3 +622,74 @@ test("見張りの陽性対照: Rules の数字・形・呼び出しを 1 か所
     "firestore.rules に function isValidReplyEmail( が見つからない",
   ]);
 });
+
+// MARK: - 見張り: iOS の Feedback.swift の形・長さが関数と同じか
+
+// ⚠️ アプリ（iOS の Feedback.swift の REPLY_EMAIL_*）と関数の片方だけを変えたら、ここが落ちる。
+//    feedbackDiscord.test.js の種別の見張りと同じ型。Swift の形は raw 文字列（#"…"#）なので、
+//    中の文字は REPLY_EMAIL_PATTERN.source（JS の正規表現のソース）と 1 文字も違わないはず。
+//    Android の欄はまだ無い（宿題）ので、Android は見ていない。
+const SWIFT_FEEDBACK_PATH = path.join(__dirname, "..", "Soramoyou", "Soramoyou", "Models", "Feedback.swift");
+const SWIFT_VALIDATOR = "static func isValidReplyEmail(";
+
+/**
+ * Feedback.swift の文字から、長さの下限・上限と形を取り出す。読めない項目は null。
+ * @param {string} swiftText
+ */
+function readSwiftReplyEmailShape(swiftText) {
+  const min = swiftText.match(/static let REPLY_EMAIL_MIN_LENGTH = (\d+)/);
+  const max = swiftText.match(/static let REPLY_EMAIL_MAX_LENGTH = (\d+)/);
+  const pattern = swiftText.match(/static let REPLY_EMAIL_PATTERN = #"(.*)"#/);
+  return {
+    min: min ? Number(min[1]) : null,
+    max: max ? Number(max[1]) : null,
+    pattern: pattern ? pattern[1] : null,
+  };
+}
+
+/** 見張りの本体。食い違いがあれば、その中身を並べて返す（無ければ空の配列） */
+function swiftReplyEmailMismatches(swiftText) {
+  const shape = readSwiftReplyEmailShape(swiftText);
+  const want = { min: REPLY_EMAIL_MIN_LENGTH, max: REPLY_EMAIL_MAX_LENGTH, pattern: REPLY_EMAIL_PATTERN.source };
+  const out = [];
+  for (const key of ["min", "max", "pattern"]) {
+    if (shape[key] !== want[key]) out.push(`${key}: swift=${shape[key]} / 関数=${want[key]}`);
+  }
+  if (!swiftText.includes(SWIFT_VALIDATOR)) out.push(`Feedback.swift に ${SWIFT_VALIDATOR} が無い`);
+  return out;
+}
+
+test("見張り: iOS の Feedback.swift は、関数と同じ長さ（3〜254）と同じ形", () => {
+  const swift = fs.readFileSync(SWIFT_FEEDBACK_PATH, "utf8");
+  // 読めたこと自体を確かめる（書き方が変わって何も取れないまま緑になるのを防ぐ）
+  const shape = readSwiftReplyEmailShape(swift);
+  assert.ok(shape.min !== null && shape.max !== null && shape.pattern !== null, JSON.stringify(shape));
+  assert.deepEqual(swiftReplyEmailMismatches(swift), []);
+});
+
+test("見張りの陽性対照: Feedback.swift の数字・形・関数の名前を 1 か所変えた写しでは、食い違いを見つける", () => {
+  const swift = fs.readFileSync(SWIFT_FEEDBACK_PATH, "utf8");
+  const broken = (from, to) => {
+    assert.ok(swift.includes(from), `写しを壊せない（${from} が無い）`);
+    return swift.replace(from, to);
+  };
+
+  // 上限を 255 に
+  assert.deepEqual(swiftReplyEmailMismatches(broken("REPLY_EMAIL_MAX_LENGTH = 254", "REPLY_EMAIL_MAX_LENGTH = 255")), [
+    `max: swift=255 / 関数=${REPLY_EMAIL_MAX_LENGTH}`,
+  ]);
+  // 下限を 1 に
+  assert.deepEqual(swiftReplyEmailMismatches(broken("REPLY_EMAIL_MIN_LENGTH = 3", "REPLY_EMAIL_MIN_LENGTH = 1")), [
+    `min: swift=1 / 関数=${REPLY_EMAIL_MIN_LENGTH}`,
+  ]);
+  // 形の範囲を 1 文字ずらす（@ の 1 つ前までを、@ まで含める）
+  assert.equal(swiftReplyEmailMismatches(broken(String.raw`\x21-\x3F`, String.raw`\x21-\x40`)).length, 1);
+  // 形の行が無くなった（名前を変えた）
+  assert.deepEqual(swiftReplyEmailMismatches(broken("static let REPLY_EMAIL_PATTERN = ", "static let EMAIL_PATTERN = ")), [
+    `pattern: swift=null / 関数=${REPLY_EMAIL_PATTERN.source}`,
+  ]);
+  // 確かめの関数の名前が変わった
+  assert.deepEqual(swiftReplyEmailMismatches(broken(SWIFT_VALIDATOR, "static func isValidEmail(")), [
+    `Feedback.swift に ${SWIFT_VALIDATOR} が無い`,
+  ]);
+});
