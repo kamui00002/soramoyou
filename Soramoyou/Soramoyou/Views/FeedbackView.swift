@@ -99,6 +99,8 @@ struct FeedbackView: View {
                 Text("返信用のメールアドレス（任意）")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundColor(DesignTokens.Colors.textSecondary)
+                    // VoiceOver では読ませない（下の欄が同じ名前を名乗るので、2 回読むのを防ぐ）
+                    .accessibilityHidden(true)
                 TextField("例: name@example.com", text: $viewModel.replyEmail)
                     .font(.system(size: 15, design: .rounded))
                     // メール用のキーボード・頭を大文字にしない・自動修正しない（アドレスが勝手に書き換わらないように）
