@@ -73,7 +73,7 @@ struct FeedbackView: View {
                 TextField("不具合の状況や、こうなったら嬉しい等を書いてください…",
                           text: $viewModel.message, axis: .vertical)
                     .font(.system(size: 15, design: .rounded))
-                    .lineLimit(5...12)
+                    .lineLimit(5 ... 12)
                     .disabled(viewModel.isSending)
                     .padding(14)
                     .background(
@@ -91,6 +91,41 @@ struct FeedbackView: View {
                     .foregroundColor(viewModel.message.count > viewModel.maxLength ? .red : DesignTokens.Colors.textTertiary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .monospacedDigit()
+            }
+
+            // 返信用のメールアドレス（任意）
+            // 直接束縛（上の本文と同じ理由）。形の確かめは送信のときに FeedbackViewModel が行う
+            VStack(alignment: .leading, spacing: 6) {
+                Text("返信用のメールアドレス（任意）")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                    // VoiceOver では読ませない（下の欄が同じ名前を名乗るので、2 回読むのを防ぐ）
+                    .accessibilityHidden(true)
+                TextField("例: name@example.com", text: $viewModel.replyEmail)
+                    .font(.system(size: 15, design: .rounded))
+                    // メール用のキーボード・頭を大文字にしない・自動修正しない（アドレスが勝手に書き換わらないように）
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    // iOS が自分のアドレスを入力の候補に出せるようにする
+                    .textContentType(.emailAddress)
+                    // VoiceOver では例の文字でなく、欄の名前を読ませる
+                    .accessibilityLabel("返信用のメールアドレス（任意）")
+                    .disabled(viewModel.isSending)
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(.ultraThinMaterial)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(DesignTokens.Colors.glassBorderSecondary, lineWidth: 1)
+                            )
+                    )
+
+                // 空欄のときの扱い（2026-11-20 の決定の文。プライバシーポリシーの「ご意見・ご要望への返信」と同じ中身）
+                Text("空欄のときは、ご登録のメールアドレスにお返事することがあります")
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
 
             // エラー表示
@@ -123,8 +158,8 @@ struct FeedbackView: View {
                     RoundedRectangle(cornerRadius: 14)
                         .fill(
                             canSubmit
-                            ? LinearGradient(colors: [DesignTokens.Colors.skyBlue, DesignTokens.Colors.selectionAccent], startPoint: .leading, endPoint: .trailing)
-                            : LinearGradient(colors: [Color.gray.opacity(0.4), Color.gray.opacity(0.3)], startPoint: .leading, endPoint: .trailing)
+                                ? LinearGradient(colors: [DesignTokens.Colors.skyBlue, DesignTokens.Colors.selectionAccent], startPoint: .leading, endPoint: .trailing)
+                                : LinearGradient(colors: [Color.gray.opacity(0.4), Color.gray.opacity(0.3)], startPoint: .leading, endPoint: .trailing)
                         )
                 )
             }
