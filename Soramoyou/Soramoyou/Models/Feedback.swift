@@ -7,23 +7,23 @@
 //  読み取りは管理者のみ（Firebase コンソール）。
 //
 
-import Foundation
 import FirebaseFirestore
+import Foundation
 
 /// フィードバックの種別（任意・送信時のトリアージ用）
 enum FeedbackCategory: String, CaseIterable, Identifiable {
-    case bug      // 不具合
-    case request  // 要望
-    case other    // その他
+    case bug // 不具合
+    case request // 要望
+    case other // その他
 
     var id: String { rawValue }
 
     /// 画面表示名
     var displayName: String {
         switch self {
-        case .bug: return "不具合"
-        case .request: return "要望"
-        case .other: return "その他"
+        case .bug: "不具合"
+        case .request: "要望"
+        case .other: "その他"
         }
     }
 }
@@ -71,16 +71,16 @@ struct Feedback: Identifiable {
         var data: [String: Any] = [
             "userId": userId,
             "message": message,
-            "createdAt": FieldValue.serverTimestamp()
+            "createdAt": FieldValue.serverTimestamp(),
         ]
         // 任意項目は値があるときだけ書き込む（hasAll は追加キーを許容）
-        if let category = category {
+        if let category {
             data["category"] = category
         }
-        if let appVersion = appVersion {
+        if let appVersion {
             data["appVersion"] = appVersion
         }
-        if let deviceInfo = deviceInfo {
+        if let deviceInfo {
             data["deviceInfo"] = deviceInfo
         }
         return data

@@ -25,7 +25,8 @@ class FeedbackViewModel: ObservableObject {
     let maxLength = 1000
 
     init(firestoreService: FirestoreServiceProtocol = FirestoreService(),
-         authService: AuthServiceProtocol = AuthService()) {
+         authService: AuthServiceProtocol = AuthService())
+    {
         self.firestoreService = firestoreService
         self.authService = authService
     }

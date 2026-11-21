@@ -73,7 +73,7 @@ struct FeedbackView: View {
                 TextField("不具合の状況や、こうなったら嬉しい等を書いてください…",
                           text: $viewModel.message, axis: .vertical)
                     .font(.system(size: 15, design: .rounded))
-                    .lineLimit(5...12)
+                    .lineLimit(5 ... 12)
                     .disabled(viewModel.isSending)
                     .padding(14)
                     .background(
@@ -123,8 +123,8 @@ struct FeedbackView: View {
                     RoundedRectangle(cornerRadius: 14)
                         .fill(
                             canSubmit
-                            ? LinearGradient(colors: [DesignTokens.Colors.skyBlue, DesignTokens.Colors.selectionAccent], startPoint: .leading, endPoint: .trailing)
-                            : LinearGradient(colors: [Color.gray.opacity(0.4), Color.gray.opacity(0.3)], startPoint: .leading, endPoint: .trailing)
+                                ? LinearGradient(colors: [DesignTokens.Colors.skyBlue, DesignTokens.Colors.selectionAccent], startPoint: .leading, endPoint: .trailing)
+                                : LinearGradient(colors: [Color.gray.opacity(0.4), Color.gray.opacity(0.3)], startPoint: .leading, endPoint: .trailing)
                         )
                 )
             }

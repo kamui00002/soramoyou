@@ -5,12 +5,11 @@
 //  Feedback モデルの Firestore マッピング・バリデーション検証
 //
 
-import XCTest
 import FirebaseFirestore
 @testable import Soramoyou
+import XCTest
 
 final class FeedbackTests: XCTestCase {
-
     /// 必須キー（userId/message/createdAt）と任意項目がある場合に書き込まれる
     func testToFirestoreDataIncludesRequiredAndOptionalFields() {
         let feedback = Feedback(
@@ -25,7 +24,7 @@ final class FeedbackTests: XCTestCase {
 
         XCTAssertEqual(data["userId"] as? String, "u1")
         XCTAssertEqual(data["message"] as? String, "アプリ最高です")
-        XCTAssertNotNil(data["createdAt"])  // serverTimestamp sentinel
+        XCTAssertNotNil(data["createdAt"]) // serverTimestamp sentinel
         XCTAssertEqual(data["category"] as? String, "request")
         XCTAssertEqual(data["appVersion"] as? String, "1.7.4 (57)")
         XCTAssertEqual(data["deviceInfo"] as? String, "iOS 18.5 / iPhone")

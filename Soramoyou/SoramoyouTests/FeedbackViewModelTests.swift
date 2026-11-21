@@ -5,12 +5,11 @@
 //  フィードバック送信 ViewModel の検証
 //
 
-import XCTest
 @testable import Soramoyou
+import XCTest
 
 @MainActor
 final class FeedbackViewModelTests: XCTestCase {
-
     /// 正常系: 本文と種別を載せて送信し、didSubmit が立つ
     func testSubmitSendsFeedbackAndSetsDidSubmit() async {
         let firestore = MockFirestoreServiceForFeedback()
@@ -25,7 +24,7 @@ final class FeedbackViewModelTests: XCTestCase {
         XCTAssertTrue(success)
         XCTAssertTrue(viewModel.didSubmit)
         XCTAssertEqual(firestore.captured?.userId, "u1")
-        XCTAssertEqual(firestore.captured?.message, "空の色が綺麗でした")  // 前後空白はトリム
+        XCTAssertEqual(firestore.captured?.message, "空の色が綺麗でした") // 前後空白はトリム
         XCTAssertEqual(firestore.captured?.category, "request")
     }
 
